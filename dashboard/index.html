@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Influence - Creator Outreach</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Influence Outreach</div>
+    <div class="auth" id="auth-status">checking auth…</div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section>
+        <h3>Brands</h3>
+        <form id="brand-form" class="inline-form">
+          <input type="text" id="brand-name" placeholder="New brand name" required />
+          <button type="submit">Add</button>
+        </form>
+        <ul id="brand-list" class="list"></ul>
+      </section>
+
+      <section>
+        <h3>Campaigns</h3>
+        <form id="campaign-form" class="inline-form">
+          <select id="campaign-brand"></select>
+          <input type="text" id="campaign-name" placeholder="Campaign name" required />
+          <button type="submit">Add</button>
+        </form>
+        <ul id="campaign-list" class="list"></ul>
+      </section>
+    </aside>
+
+    <section class="main">
+      <div class="main-header">
+        <h2 id="campaign-title">Select a campaign</h2>
+        <div id="campaign-stats" class="stats"></div>
+      </div>
+
+      <form id="creator-form" class="card" hidden>
+        <h3>Add creator</h3>
+        <div class="row">
+          <input type="url" id="ig-url" placeholder="https://www.instagram.com/username/" required />
+          <input type="email" id="ig-email" placeholder="email (optional)" />
+        </div>
+        <div class="row">
+          <input type="text" id="ig-first-name" placeholder="First name (optional)" />
+          <input type="text" id="ig-full-name" placeholder="Full name (optional)" />
+        </div>
+        <button type="submit">Add creator</button>
+        <p class="hint">If email is left blank, the Chrome extension will extract it from the Instagram bio.</p>
+      </form>
+
+      <div id="creator-table-wrap" class="card" hidden>
+        <div class="card-header">
+          <h3>Creators</h3>
+          <button id="refresh-btn" class="ghost">Refresh</button>
+        </div>
+        <table id="creator-table">
+          <thead>
+            <tr>
+              <th>Instagram</th>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Status</th>
+              <th>Opens</th>
+              <th>Last activity</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
