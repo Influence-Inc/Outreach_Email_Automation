@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Influence Extractor</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; width: 360px; margin: 0; padding: 12px; color: #1f2937; }
+    h1 { font-size: 14px; margin: 0 0 8px; }
+    label { font-size: 11px; color: #6b7280; display: block; margin-top: 8px; }
+    input, button { width: 100%; padding: 6px 8px; box-sizing: border-box; font-size: 13px; }
+    input { border: 1px solid #d1d5db; border-radius: 6px; }
+    button { margin-top: 10px; border: 0; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; }
+    button.ghost { background: #fff; color: #2563eb; border: 1px solid #2563eb; }
+    .row { display: flex; gap: 6px; }
+    .row > * { flex: 1; }
+    .pending { margin-top: 12px; max-height: 220px; overflow-y: auto; border-top: 1px solid #e5e7eb; padding-top: 8px; }
+    .item { padding: 6px 0; border-bottom: 1px solid #f3f4f6; font-size: 12px; }
+    .item .url { color: #2563eb; }
+    .item .meta { color: #6b7280; }
+    #status { font-size: 12px; color: #4b5563; margin-top: 8px; min-height: 16px; }
+    #status.error { color: #b91c1c; }
+    #status.success { color: #047857; }
+  </style>
+</head>
+<body>
+  <h1>Influence Creator Extractor</h1>
+
+  <label>Backend URL</label>
+  <input id="backend-url" placeholder="http://localhost:3000" />
+
+  <label>Extension API key (optional)</label>
+  <input id="api-key" type="password" placeholder="X-Extension-Key" />
+
+  <div class="row">
+    <button id="save-btn" class="ghost">Save</button>
+    <button id="extract-btn">Extract current profile</button>
+  </div>
+
+  <button id="auto-btn">Process pending queue</button>
+
+  <div id="status"></div>
+
+  <div class="pending">
+    <strong style="font-size:12px;">Pending creators</strong>
+    <div id="pending-list"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
