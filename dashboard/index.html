@@ -57,8 +57,12 @@
       <div id="creator-table-wrap" class="card" hidden>
         <div class="card-header">
           <h3>Creators</h3>
-          <button id="refresh-btn" class="ghost">Refresh</button>
+          <div class="actions">
+            <button id="fetch-emails-btn">Fetch emails</button>
+            <button id="refresh-btn" class="ghost">Refresh</button>
+          </div>
         </div>
+        <p id="fetch-status" class="hint" hidden></p>
         <table id="creator-table">
           <thead>
             <tr>

@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { sendOutreach } = require('../services/outreach');
+const { scrapeProfile } = require('../services/igScraper');
 
 const router = express.Router();
 
@@ -95,6 +96,109 @@ router.patch('/:id', async (req, res, next) => {
     );
     res.json(row);
   } catch (err) { next(err); }
+});
+
+router.post('/:id/fetch-email', async (req, res) => {
+  try {
+    const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    if (!creator) return res.status(404).json({ error: 'not found' });
+
+    const scraped = await scrapeProfile({
+      instagramUrl: creator.instagram_url,
+      instagramUsername: creator.instagram_username,
+    });
+
+    const updates = [
+      `instagram_username = COALESCE(creators.instagram_username, $2)`,
+      `full_name = COALESCE($3, full_name)`,
+      `first_name = COALESCE($4, first_name)`,
+      `updated_at = NOW()`,
+    ];
+    const params = [creator.id, scraped.username, scraped.fullName, scraped.firstName];
+
+    if (scraped.email) {
+      params.push(scraped.email);
+      updates.push(`email = $${params.length}`);
+      updates.push(
+        `status = CASE WHEN status IN ('pending_extraction','no_email') THEN 'email_found' ELSE status END`,
+      );
+    } else if (creator.status === 'pending_extraction') {
+      updates.push(`status = 'no_email'`);
+    }
+
+    const updated = await db.one(
+      `UPDATE creators SET ${updates.join(', ')} WHERE id = $1 RETURNING *`,
+      params,
+    );
+
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail)
+       VALUES ($1, $2, $3)`,
+      [
+        creator.id,
+        scraped.email ? 'email_found' : 'no_email',
+        { source: scraped.source, isBusiness: scraped.isBusiness },
+      ],
+    );
+
+    res.json({ ok: true, creator: updated, source: scraped.source });
+  } catch (err) {
+    console.error('fetch-email failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/bulk/fetch-email', async (req, res) => {
+  try {
+    const { campaign_id } = req.body || {};
+    if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+    const pending = await db.many(
+      `SELECT id FROM creators
+       WHERE campaign_id = $1 AND status IN ('pending_extraction','no_email')
+       ORDER BY created_at ASC`,
+      [campaign_id],
+    );
+    const results = [];
+    for (const row of pending) {
+      try {
+        const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [row.id]);
+        const scraped = await scrapeProfile({
+          instagramUrl: creator.instagram_url,
+          instagramUsername: creator.instagram_username,
+        });
+        const params = [creator.id, scraped.fullName, scraped.firstName];
+        const updates = [
+          `full_name = COALESCE($2, full_name)`,
+          `first_name = COALESCE($3, first_name)`,
+          `updated_at = NOW()`,
+        ];
+        if (scraped.email) {
+          params.push(scraped.email);
+          updates.push(`email = $${params.length}`);
+          updates.push(`status = 'email_found'`);
+        } else {
+          updates.push(`status = 'no_email'`);
+        }
+        await db.query(
+          `UPDATE creators SET ${updates.join(', ')} WHERE id = $1`,
+          params,
+        );
+        await db.query(
+          `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, $2, $3)`,
+          [creator.id, scraped.email ? 'email_found' : 'no_email', { source: scraped.source }],
+        );
+        results.push({ id: creator.id, email: scraped.email, source: scraped.source });
+      } catch (err) {
+        results.push({ id: row.id, error: err.message });
+      }
+      // Be polite to Instagram; small randomized delay.
+      await new Promise((r) => setTimeout(r, 1500 + Math.random() * 1500));
+    }
+    res.json({ ok: true, processed: results.length, results });
+  } catch (err) {
+    console.error('bulk fetch-email failed:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.post('/:id/send-outreach', async (req, res, next) => {

@@ -52,6 +52,7 @@ body {
   padding: 16px; margin-bottom: 16px;
 }
 .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.card-header .actions { display: flex; gap: 8px; }
 .card h3 { margin: 0 0 12px; font-size: 15px; }
 .row { display: flex; gap: 8px; margin-bottom: 8px; }
 .row > * { flex: 1; }

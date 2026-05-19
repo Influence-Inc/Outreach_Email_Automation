@@ -181,6 +181,29 @@ el('creator-form').addEventListener('submit', async (e) => {
 
 el('refresh-btn').addEventListener('click', refreshCreators);
 
+el('fetch-emails-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('fetch-emails-btn');
+  const status = el('fetch-status');
+  btn.disabled = true;
+  status.hidden = false;
+  status.textContent = 'Fetching emails for all pending creators…';
+  try {
+    const result = await api('/api/creators/bulk/fetch-email', {
+      method: 'POST',
+      body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
+    });
+    const found = result.results.filter((r) => r.email).length;
+    status.textContent = `Done. Processed ${result.processed}, found ${found} email(s).`;
+    await refreshCreators();
+    await refreshCampaigns();
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 (async () => {
   await refreshAuth();
   await refreshBrands();
