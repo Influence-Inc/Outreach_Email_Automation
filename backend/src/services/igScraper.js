@@ -117,6 +117,20 @@ async function fetchHtmlProfile(username) {
   if (!resp.ok) throw new Error(`html ${resp.status}`);
   const html = await resp.text();
 
+  // When IG blocks the request (datacenter IP, expired/missing cookie, etc.)
+  // it serves a generic login-wall page. That page still contains structured
+  // metadata for Instagram-the-brand — e.g. `"full_name":"Influence®"` — which
+  // the field regexes below would happily pick up and persist as the creator's
+  // name. Require the actual username to appear in the JSON blob; otherwise
+  // treat the response as blocked.
+  const usernameInPage = new RegExp(
+    `"username":"${username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`,
+    'i',
+  ).test(html);
+  if (!usernameInPage) {
+    throw new Error('blocked or login-wall response (username not found in page)');
+  }
+
   // The page embeds JSON in <script> tags. We don't need full parsing - grep.
   let email = null;
   let emailSource = null;
