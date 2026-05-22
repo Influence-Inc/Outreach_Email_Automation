@@ -188,6 +188,31 @@ el('creator-form').addEventListener('submit', async (e) => {
 
 el('refresh-btn').addEventListener('click', refreshCreators);
 
+el('send-emails-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+  const pendingCount = c ? c.email_found_count : '?';
+  if (!confirm(`Send outreach to ${pendingCount} pending creator(s)? This sends real emails.`)) return;
+  const btn = el('send-emails-btn');
+  const status = el('fetch-status');
+  btn.disabled = true;
+  status.hidden = false;
+  status.textContent = 'Sending outreach emails…';
+  try {
+    const result = await api('/api/creators/bulk/send-outreach', {
+      method: 'POST',
+      body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
+    });
+    status.textContent = `Done. Sent ${result.sent}, failed ${result.failed} (of ${result.processed}).`;
+    await refreshCreators();
+    await refreshCampaigns();
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 el('fetch-emails-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
   const btn = el('fetch-emails-btn');

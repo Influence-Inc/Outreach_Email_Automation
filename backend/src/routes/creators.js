@@ -151,6 +151,41 @@ router.post('/bulk/fetch-email', async (req, res) => {
   }
 });
 
+router.post('/bulk/send-outreach', async (req, res) => {
+  try {
+    const { campaign_id } = req.body || {};
+    if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+    const pending = await db.many(
+      `SELECT id FROM creators
+       WHERE campaign_id = $1
+         AND status = 'email_found'
+         AND email IS NOT NULL
+         AND outreach_sent_at IS NULL
+       ORDER BY created_at ASC`,
+      [campaign_id],
+    );
+    const results = [];
+    let sent = 0;
+    let failed = 0;
+    for (const row of pending) {
+      try {
+        const r = await sendOutreach(row.id);
+        results.push({ id: row.id, ok: true, trackingId: r.trackingId });
+        sent += 1;
+      } catch (err) {
+        results.push({ id: row.id, ok: false, error: err.message });
+        failed += 1;
+      }
+      // Pace sends to avoid tripping Gmail's per-second send limit.
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+    res.json({ ok: true, processed: results.length, sent, failed, results });
+  } catch (err) {
+    console.error('bulk send-outreach failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/:id/fetch-email', async (req, res) => {
   try {
     const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
