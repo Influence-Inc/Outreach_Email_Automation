@@ -21,7 +21,7 @@ app.use('/api/creators', creators);
 app.use('/auth', auth);
 app.use('/track', tracking);
 
-app.use('/', express.static(path.join(__dirname, '..', '..', 'dashboard')));
+app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
