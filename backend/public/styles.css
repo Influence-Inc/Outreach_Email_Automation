@@ -61,6 +61,9 @@ input[type=text], input[type=email], input[type=url], select, textarea {
   font-family: inherit;
 }
 textarea { width: 100%; resize: vertical; box-sizing: border-box; }
+td.editable { cursor: text; }
+td.editable:hover { background: #f3f4f6; }
+td.editable input { width: 100%; box-sizing: border-box; padding: 4px 6px; font: inherit; }
 button {
   padding: 8px 14px; border: 0; background: #2563eb; color: #fff;
   border-radius: 6px; cursor: pointer; font-size: 14px;

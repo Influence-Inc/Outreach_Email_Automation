@@ -103,6 +103,61 @@ async function selectCampaign(id) {
   await refreshCreators();
 }
 
+function makeEditable(td, { value, placeholder, onSave }) {
+  td.classList.add('editable');
+  td.title = 'Click to edit';
+  td.addEventListener('click', () => {
+    if (td.querySelector('input')) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = value || '';
+    input.placeholder = placeholder || '';
+    td.innerHTML = '';
+    td.appendChild(input);
+    input.focus();
+    input.select();
+
+    let finished = false;
+    const restore = () => {
+      if (finished) return;
+      finished = true;
+      refreshCreators();
+    };
+    const commit = async () => {
+      if (finished) return;
+      finished = true;
+      const next = input.value.trim();
+      if (next === (value || '')) {
+        refreshCreators();
+        return;
+      }
+      if (!next) {
+        // empty input = treat as cancel; clearing requires deleting the row.
+        refreshCreators();
+        return;
+      }
+      try {
+        await onSave(next);
+      } catch (err) {
+        alert(err.message);
+      }
+      refreshCreators();
+      await refreshCampaigns();
+    };
+
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        commit();
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        restore();
+      }
+    });
+    input.addEventListener('blur', commit);
+  });
+}
+
 async function refreshCreators() {
   if (!state.selectedCampaignId) return;
   const rows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
@@ -120,31 +175,32 @@ async function refreshCreators() {
       <td><span class="meta">${fmtDate(lastActivity)}</span></td>
       <td></td>
     `;
-    const actions = tr.querySelector('td:last-child');
+    const cells = tr.querySelectorAll('td');
+    const nameTd = cells[1];
+    const emailTd = cells[2];
+    const actions = cells[cells.length - 1];
 
-    const editName = document.createElement('button');
-    editName.className = 'small ghost';
-    editName.textContent = '✎';
-    editName.title = 'Edit name';
-    editName.onclick = async () => {
-      const next = prompt("Account name (e.g. 'Navdeep Sethi')", r.full_name || '');
-      if (next == null) return;
-      const trimmed = next.trim();
-      if (!trimmed) return;
-      try {
-        await api(`/api/creators/${r.id}`, {
+    makeEditable(nameTd, {
+      value: r.full_name || r.first_name || '',
+      placeholder: 'Account name',
+      onSave: (v) =>
+        api(`/api/creators/${r.id}`, {
           method: 'PATCH',
           body: JSON.stringify({
-            full_name: trimmed,
-            first_name: trimmed.split(/\s+/)[0],
+            full_name: v,
+            first_name: v.split(/\s+/)[0],
           }),
-        });
-        await refreshCreators();
-      } catch (err) {
-        alert(err.message);
-      }
-    };
-    actions.appendChild(editName);
+        }),
+    });
+    makeEditable(emailTd, {
+      value: r.email || '',
+      placeholder: 'creator@email.com',
+      onSave: (v) =>
+        api(`/api/creators/${r.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ email: v }),
+        }),
+    });
 
     if (r.status === 'email_found') {
       const btn = document.createElement('button');
