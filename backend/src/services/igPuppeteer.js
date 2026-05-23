@@ -16,22 +16,16 @@ let browserPromise = null;
 
 function getBrowser() {
   if (!browserPromise) {
-    const launchOpts = {
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-      ],
-    };
-    // In Docker we install Chromium via apt and skip the puppeteer download;
-    // honor PUPPETEER_EXECUTABLE_PATH so we use that system binary.
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-      launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-    }
     browserPromise = puppeteer
-      .launch(launchOpts)
+      .launch({
+        headless: 'new',
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-blink-features=AutomationControlled',
+        ],
+      })
       .catch((err) => {
         // Reset so a subsequent call can retry.
         browserPromise = null;
