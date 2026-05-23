@@ -210,40 +210,19 @@ async function scrapeProfile({ instagramUrl, instagramUsername }) {
     isBusiness: null,
   };
 
-  // Strategy 0 (preferred): headless browser. The HTTP strategies below only
-  // work on profiles whose SSR HTML happens to embed the data; modern IG is a
-  // React SPA where that information is only present after client hydration.
-  // Puppeteer renders the page with the user's sessionid cookie and runs the
-  // extension's DOM-extraction logic.
+  // Strategy 1: JSON endpoint.
   try {
-    const { scrapeWithPuppeteer } = require('./igPuppeteer');
-    const browser = await scrapeWithPuppeteer(username);
-    if (browser && browser.data) {
-      if (browser.data.fullName) result.fullName = browser.data.fullName;
-      if (browser.data.email) {
-        result.email = browser.data.email;
-        result.source = 'puppeteer';
+    const api = await fetchWebProfileInfo(username);
+    if (api) {
+      result.isBusiness = api.isBusiness;
+      if (api.fullName) result.fullName = api.fullName;
+      if (api.email) {
+        result.email = api.email;
+        result.source = api.emailSource;
       }
     }
   } catch (err) {
-    console.warn(`[ig-scraper] puppeteer failed for ${username}: ${err.message}`);
-  }
-
-  // Strategy 1: JSON endpoint.
-  if (!result.email || !result.fullName) {
-    try {
-      const api = await fetchWebProfileInfo(username);
-      if (api) {
-        if (result.isBusiness == null) result.isBusiness = api.isBusiness;
-        if (api.fullName && !result.fullName) result.fullName = api.fullName;
-        if (api.email && !result.email) {
-          result.email = api.email;
-          result.source = api.emailSource;
-        }
-      }
-    } catch (err) {
-      console.warn(`[ig-scraper] web_profile_info failed for ${username}: ${err.message}`);
-    }
+    console.warn(`[ig-scraper] web_profile_info failed for ${username}: ${err.message}`);
   }
 
   // Strategy 2: HTML page (fills in whatever JSON couldn't).
@@ -275,22 +254,9 @@ async function probeProfile(username) {
   const result = {
     username,
     cookie: igCookieStatus(),
-    puppeteer: null,
     web_profile_info: null,
     html: null,
   };
-
-  try {
-    const { scrapeWithPuppeteer } = require('./igPuppeteer');
-    const r = await scrapeWithPuppeteer(username);
-    result.puppeteer = {
-      status: r.status,
-      pageState: r.pageState,
-      extracted: r.data,
-    };
-  } catch (err) {
-    result.puppeteer = { error: err.message };
-  }
 
   try {
     const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
