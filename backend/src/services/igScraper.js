@@ -54,9 +54,26 @@ function findEmail(text) {
 }
 
 function igCookieHeader() {
-  const sessionId = process.env.IG_SESSION_COOKIE;
-  return sessionId ? `sessionid=${sessionId}` : '';
+  const raw = process.env.IG_SESSION_COOKIE;
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  // Accept three formats:
+  //   1. bare sessionid value: "12345%3AAbCd..."
+  //   2. one named cookie: "sessionid=12345%3AAbCd..."
+  //   3. full cookie header pasted from DevTools: "sessionid=...; csrftoken=...; ds_user_id=..."
+  if (trimmed.includes('=')) return trimmed;
+  return `sessionid=${trimmed}`;
 }
+
+function igCookieStatus() {
+  const raw = process.env.IG_SESSION_COOKIE;
+  if (!raw) return { present: false };
+  const header = igCookieHeader();
+  const cookies = header.split(/;\s*/).map((c) => c.split('=')[0]).filter(Boolean);
+  return { present: true, rawLength: raw.length, cookieNames: cookies };
+}
+
+console.log('[ig-scraper] cookie status at boot:', JSON.stringify(igCookieStatus()));
 
 async function fetchWebProfileInfo(username) {
   const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
@@ -233,4 +250,66 @@ async function scrapeProfile({ instagramUrl, instagramUsername }) {
   return result;
 }
 
-module.exports = { scrapeProfile, parseUsername };
+async function probeProfile(username) {
+  const result = {
+    username,
+    cookie: igCookieStatus(),
+    web_profile_info: null,
+    html: null,
+  };
+
+  try {
+    const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
+    const headers = {
+      'X-IG-App-ID': IG_APP_ID,
+      'User-Agent': USER_AGENT,
+      Accept: '*/*',
+      Referer: `https://www.instagram.com/${username}/`,
+    };
+    const cookie = igCookieHeader();
+    if (cookie) headers.Cookie = cookie;
+    const resp = await fetch(url, { headers });
+    const text = await resp.text();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    result.web_profile_info = {
+      status: resp.status,
+      contentType: resp.headers.get('content-type'),
+      bodyLength: text.length,
+      bodyPreview: text.slice(0, 300),
+      hasUserBlock: Boolean(parsed && parsed.data && parsed.data.user),
+    };
+  } catch (err) {
+    result.web_profile_info = { error: err.message };
+  }
+
+  try {
+    const url = `https://www.instagram.com/${encodeURIComponent(username)}/`;
+    const headers = {
+      'User-Agent': USER_AGENT,
+      Accept: 'text/html,application/xhtml+xml',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+    const cookie = igCookieHeader();
+    if (cookie) headers.Cookie = cookie;
+    const resp = await fetch(url, { headers });
+    const text = await resp.text();
+    const usernameMatch = new RegExp(
+      `"username":"${username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`,
+      'i',
+    ).test(text);
+    const titleMatch = text.match(/<title>([^<]*)<\/title>/i);
+    result.html = {
+      status: resp.status,
+      bodyLength: text.length,
+      title: titleMatch ? titleMatch[1] : null,
+      usernameFoundInBody: usernameMatch,
+    };
+  } catch (err) {
+    result.html = { error: err.message };
+  }
+
+  return result;
+}
+
+module.exports = { scrapeProfile, parseUsername, probeProfile, igCookieStatus };
