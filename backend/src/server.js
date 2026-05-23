@@ -9,12 +9,25 @@ const tracking = require('./routes/tracking');
 const auth = require('./routes/auth');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
+const { probeProfile, igCookieStatus } = require('./services/igScraper');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+app.get('/api/debug/ig-probe', async (req, res) => {
+  const username = String(req.query.username || '').trim();
+  if (!username) return res.status(400).json({ error: 'username query param required' });
+  try {
+    res.json(await probeProfile(username));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/debug/ig-cookie', (_req, res) => res.json(igCookieStatus()));
 
 app.use('/api/campaigns', campaigns);
 app.use('/api/creators', creators);
