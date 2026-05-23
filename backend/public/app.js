@@ -113,7 +113,7 @@ async function refreshCreators() {
     const lastActivity = r.replied_at || r.followup_sent_at || r.outreach_sent_at || r.updated_at;
     tr.innerHTML = `
       <td><a href="${r.instagram_url}" target="_blank" rel="noopener">@${r.instagram_username || r.instagram_url}</a></td>
-      <td>${r.first_name || ''} ${r.full_name && r.full_name !== r.first_name ? `<br/><span class="meta">${r.full_name}</span>` : ''}</td>
+      <td class="name-cell">${r.full_name ? r.full_name : '<span class="meta">—</span>'}</td>
       <td>${r.email || '<span class="meta">—</span>'}</td>
       <td><span class="tag ${r.status}">${r.status.replace(/_/g, ' ')}</span></td>
       <td>${r.open_count}${r.last_open_at ? `<br/><span class="meta">${fmtDate(r.last_open_at)}</span>` : ''}</td>
@@ -121,6 +121,31 @@ async function refreshCreators() {
       <td></td>
     `;
     const actions = tr.querySelector('td:last-child');
+
+    const editName = document.createElement('button');
+    editName.className = 'small ghost';
+    editName.textContent = '✎';
+    editName.title = 'Edit name';
+    editName.onclick = async () => {
+      const next = prompt("Account name (e.g. 'Navdeep Sethi')", r.full_name || '');
+      if (next == null) return;
+      const trimmed = next.trim();
+      if (!trimmed) return;
+      try {
+        await api(`/api/creators/${r.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            full_name: trimmed,
+            first_name: trimmed.split(/\s+/)[0],
+          }),
+        });
+        await refreshCreators();
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+    actions.appendChild(editName);
+
     if (r.status === 'email_found') {
       const btn = document.createElement('button');
       btn.className = 'small';
@@ -172,13 +197,19 @@ el('sync-btn').addEventListener('click', async () => {
 el('creator-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!state.selectedCampaignId) return;
+  const fullName = el('ig-fullname').value.trim();
   const payload = {
     campaign_id: state.selectedCampaignId,
     instagram_url: el('ig-url').value.trim(),
   };
+  if (fullName) {
+    payload.full_name = fullName;
+    payload.first_name = fullName.split(/\s+/)[0];
+  }
   try {
     await api('/api/creators', { method: 'POST', body: JSON.stringify(payload) });
     el('ig-url').value = '';
+    el('ig-fullname').value = '';
     await refreshCreators();
     await refreshCampaigns();
   } catch (err) {
