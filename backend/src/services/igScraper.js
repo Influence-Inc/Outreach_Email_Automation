@@ -299,11 +299,30 @@ async function probeProfile(username) {
       'i',
     ).test(text);
     const titleMatch = text.match(/<title>([^<]*)<\/title>/i);
+    // Substring search (not JSON pattern) — catches the username regardless of
+    // how IG escapes/embeds it in the response.
+    const usernameAnywhere = text.toLowerCase().includes(username.toLowerCase());
+    // Tell us whether IG thinks the request is authenticated.
+    // Real IG pages embed { "viewer": { "id": "..." } } when logged in,
+    // and { "viewer": null } (or omit viewer) when logged out.
+    const viewerLoggedIn = /"viewer":\s*\{\s*"id"\s*:\s*"\d+"/i.test(text);
+    const viewerNull = /"viewer":\s*null/i.test(text);
+    // Login-wall sentinels.
+    const hasLoginForm =
+      /action="\/accounts\/login\//i.test(text) ||
+      /aria-label="Log in"/i.test(text) ||
+      /loginForm/.test(text);
+    const respondedFinalUrl = resp.url;
     result.html = {
       status: resp.status,
+      finalUrl: respondedFinalUrl,
       bodyLength: text.length,
       title: titleMatch ? titleMatch[1] : null,
       usernameFoundInBody: usernameMatch,
+      usernameAnywhereInBody: usernameAnywhere,
+      viewerLoggedIn,
+      viewerNull,
+      hasLoginForm,
     };
   } catch (err) {
     result.html = { error: err.message };
