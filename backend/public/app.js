@@ -321,6 +321,135 @@ el('send-emails-btn').addEventListener('click', async () => {
   }
 });
 
+// --- Extension bridge ----------------------------------------------------
+// The Chrome extension content script announces itself on load with a
+// window.postMessage({type: 'OEA_EXTENSION_READY'}). Track that so we can
+// tell the user when the extension isn't installed.
+const extensionBridge = { ready: false };
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window) return;
+  if (event.origin !== window.location.origin) return;
+  const msg = event.data;
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'OEA_EXTENSION_READY') {
+    extensionBridge.ready = true;
+    return;
+  }
+  if (msg.type === 'OEA_SCRAPE_PROGRESS') {
+    handleScrapeProgress(msg);
+  }
+});
+
+function showScrapeProgress(text) {
+  el('scrape-progress').hidden = false;
+  el('scrape-progress-text').textContent = text;
+}
+
+function hideScrapeProgress() {
+  el('scrape-progress').hidden = true;
+  el('scrape-progress-text').textContent = '';
+}
+
+let scrapeAffectedRowIds = new Set();
+
+function handleScrapeProgress(msg) {
+  if (msg.event === 'start') {
+    showScrapeProgress(`Scraping 0/${msg.total}…`);
+    scrapeAffectedRowIds = new Set();
+  } else if (msg.event === 'creator-start') {
+    showScrapeProgress(
+      `Scraping ${msg.index}/${msg.total} — @${msg.username || msg.creatorId}…`,
+    );
+  } else if (msg.event === 'creator-done') {
+    scrapeAffectedRowIds.add(msg.creatorId);
+    let tail;
+    if (msg.outcome === 'email_found') {
+      tail = `got ${msg.email} for @${msg.username || msg.creatorId}`;
+    } else if (msg.outcome === 'no_email') {
+      tail = `no email for @${msg.username || msg.creatorId}`;
+    } else {
+      tail = `error on @${msg.username || msg.creatorId}: ${msg.error || 'unknown'}`;
+    }
+    showScrapeProgress(`Scraping ${msg.index}/${msg.total} — ${tail}`);
+  } else if (msg.event === 'done') {
+    const s = msg.summary || {};
+    showScrapeProgress(
+      `Done. ${s.processed || 0} processed · ${s.emailFound || 0} found · ${s.noEmail || 0} no email · ${s.errors || 0} errors. ` +
+      `[hide]`,
+    );
+    el('scrape-cancel-btn').textContent = 'Hide';
+    refreshCreators();
+    refreshCampaigns();
+  } else if (msg.event === 'aborted') {
+    showScrapeProgress(`Aborted at ${msg.index}/${msg.total}.`);
+    el('scrape-cancel-btn').textContent = 'Hide';
+    refreshCreators();
+    refreshCampaigns();
+  } else if (msg.event === 'error') {
+    showScrapeProgress(`Extension error: ${msg.error}`);
+    el('scrape-cancel-btn').textContent = 'Hide';
+  }
+}
+
+el('scrape-cancel-btn').addEventListener('click', () => {
+  if (el('scrape-cancel-btn').textContent === 'Hide') {
+    hideScrapeProgress();
+    el('scrape-cancel-btn').textContent = 'Cancel';
+    return;
+  }
+  window.postMessage({ type: 'OEA_ABORT_SCRAPE_QUEUE' }, window.location.origin);
+  showScrapeProgress('Cancelling after current creator…');
+});
+
+el('run-extension-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('run-extension-btn');
+  btn.disabled = true;
+  el('scrape-cancel-btn').textContent = 'Cancel';
+  try {
+    const rows = await api(
+      `/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`,
+    );
+    if (!rows.length) {
+      showScrapeProgress('No creators in this campaign.');
+      el('scrape-cancel-btn').textContent = 'Hide';
+      return;
+    }
+    const creators = rows.map((r) => ({
+      id: r.id,
+      instagramUrl: r.instagram_url,
+      instagramUsername: r.instagram_username,
+    }));
+    showScrapeProgress(`Starting scrape for ${creators.length} creator(s)…`);
+    window.postMessage(
+      {
+        type: 'OEA_RUN_SCRAPE_QUEUE',
+        payload: {
+          apiBase: window.location.origin,
+          creators,
+          pacingMs: 5000,
+        },
+      },
+      window.location.origin,
+    );
+    // If the extension never responds within 2s, assume it isn't installed.
+    setTimeout(() => {
+      if (!extensionBridge.ready) {
+        showScrapeProgress(
+          'Extension not detected. Load the unpacked extension at chrome://extensions then reload this page.',
+        );
+        el('scrape-cancel-btn').textContent = 'Hide';
+      }
+    }, 2000);
+  } catch (err) {
+    showScrapeProgress(`Failed: ${err.message}`);
+    el('scrape-cancel-btn').textContent = 'Hide';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 el('fetch-emails-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
   const btn = el('fetch-emails-btn');

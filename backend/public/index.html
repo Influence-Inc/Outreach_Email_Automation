@@ -44,11 +44,16 @@
           <h3>Creators</h3>
           <div class="actions">
             <button id="fetch-emails-btn">Fetch emails</button>
+            <button id="run-extension-btn" title="Open each profile in Chrome and scrape via the installed extension">Run via Extension</button>
             <button id="send-emails-btn">Send emails</button>
             <button id="refresh-btn" class="ghost">Refresh</button>
           </div>
         </div>
         <p id="fetch-status" class="hint" hidden></p>
+        <div id="scrape-progress" class="hint" hidden>
+          <span id="scrape-progress-text"></span>
+          <button id="scrape-cancel-btn" class="small ghost" type="button">Cancel</button>
+        </div>
         <table id="creator-table">
           <thead>
             <tr>

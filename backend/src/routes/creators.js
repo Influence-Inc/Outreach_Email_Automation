@@ -176,8 +176,14 @@ router.post('/bulk/send-outreach', async (req, res) => {
         results.push({ id: row.id, ok: false, error: err.message });
         failed += 1;
       }
-      // Pace sends to avoid tripping Gmail's per-second send limit.
-      await new Promise((r) => setTimeout(r, 1200));
+      // Pace sends to protect sender-domain reputation. Default 60s with
+      // ±20% jitter; tune via SEND_PACING_MS env var. Skipped after the last
+      // creator to avoid an unnecessary trailing wait.
+      if (row !== pending[pending.length - 1]) {
+        const baseMs = Number(process.env.SEND_PACING_MS) || 60_000;
+        const jitterMs = Math.floor(baseMs * 0.2 * (Math.random() * 2 - 1));
+        await new Promise((r) => setTimeout(r, Math.max(0, baseMs + jitterMs)));
+      }
     }
     res.json({ ok: true, processed: results.length, sent, failed, results });
   } catch (err) {
