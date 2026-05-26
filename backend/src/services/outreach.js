@@ -4,10 +4,9 @@ const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
 
 async function loadCreatorContext(creatorId) {
   return db.one(
-    `SELECT c.*, ca.name AS campaign_name, b.name AS brand_name
+    `SELECT c.*, ca.name AS campaign_name, ca.brand_name AS brand_name
      FROM creators c
      JOIN campaigns ca ON ca.id = c.campaign_id
-     JOIN brands b ON b.id = ca.brand_id
      WHERE c.id = $1`,
     [creatorId],
   );
