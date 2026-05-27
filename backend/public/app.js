@@ -86,7 +86,13 @@ async function refreshCampaigns() {
   }
 }
 
+function showView(name) {
+  el('campaign-view').hidden = name !== 'campaign';
+  el('sequences-view').hidden = name !== 'sequences';
+}
+
 async function selectCampaign(id) {
+  showView('campaign');
   state.selectedCampaignId = id;
   await refreshCampaigns();
   const c = state.campaigns.find((x) => x.id === id);
@@ -600,6 +606,10 @@ el('new-sequence-btn').addEventListener('click', () => {
   editor.setAttribute('data-new', '1');
   item.appendChild(editor);
   root.prepend(item);
+});
+
+el('open-sequences-btn').addEventListener('click', () => {
+  showView('sequences');
 });
 
 // --- Per-campaign template editor ----------------------------------------
