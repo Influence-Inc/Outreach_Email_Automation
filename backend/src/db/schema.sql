@@ -76,3 +76,9 @@ ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS templates JSONB NOT NULL DEFAULT 
 
 -- Track which follow-up step a creator is on. 0 = no follow-ups sent yet.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS followup_step INTEGER NOT NULL DEFAULT 0;
+
+-- Seed the legacy single-bump cadence as a visible "Default" sequence so it
+-- shows up in the sidebar / campaign picker. Idempotent.
+INSERT INTO follow_up_sequences (name, steps)
+VALUES ('Default (48h follow-up)', '[{"delayHours":48,"label":"First bump"}]'::jsonb)
+ON CONFLICT (name) DO NOTHING;
