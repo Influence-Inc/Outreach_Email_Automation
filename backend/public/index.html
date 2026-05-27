@@ -24,75 +24,92 @@
       </section>
 
       <section class="sidebar-section">
-        <div class="sidebar-header">
-          <h3>Follow-up Rules</h3>
-          <button id="new-sequence-btn" class="ghost small" type="button">+ New</button>
-        </div>
-        <p class="hint">Named delay schedules. Each campaign picks one.</p>
-        <div id="sequences-list" class="tree"></div>
+        <button id="open-sequences-btn" class="sidebar-nav-link" type="button">
+          <span>Follow-up Rules</span>
+          <span class="meta">→</span>
+        </button>
       </section>
     </aside>
 
     <section class="main">
-      <div class="main-header">
-        <h2 id="campaign-title">Select a campaign</h2>
-        <div id="campaign-stats" class="stats"></div>
+      <div id="campaign-view">
+        <div class="main-header">
+          <h2 id="campaign-title">Select a campaign</h2>
+          <div id="campaign-stats" class="stats"></div>
+        </div>
+
+        <form id="creator-form" class="card" hidden>
+          <h3>Add creator Instagram links</h3>
+          <textarea id="ig-urls" rows="4" placeholder="Paste one or more Instagram URLs, one per line:&#10;https://www.instagram.com/username1/&#10;https://www.instagram.com/username2/" required></textarea>
+          <div class="row" style="justify-content: space-between; align-items: center; margin-top: 0.5rem;">
+            <p id="add-status" class="hint" style="margin: 0;">Paste one URL per line. Click "Fetch emails" after adding to look up emails.</p>
+            <button type="submit">Add creators</button>
+          </div>
+        </form>
+
+        <div id="templates-card" class="card" hidden>
+          <div class="card-header">
+            <h3>Email templates</h3>
+            <div class="actions">
+              <button id="templates-save-btn" type="button">Save templates</button>
+            </div>
+          </div>
+          <p class="hint">Placeholders: <code>{firstName}</code>, <code>{brandName}</code>, <code>{campaignName}</code>. Leaving a field blank falls back to the global default.</p>
+          <div class="row" style="align-items: center; gap: 8px; margin: 8px 0;">
+            <label for="templates-sequence">Follow-up sequence:</label>
+            <select id="templates-sequence"></select>
+            <span id="templates-sequence-summary" class="meta"></span>
+          </div>
+          <div id="templates-editors"></div>
+          <p id="templates-save-status" class="hint" hidden></p>
+        </div>
+
+        <div id="creator-table-wrap" class="card" hidden>
+          <div class="card-header">
+            <h3>Creators</h3>
+            <div class="actions">
+              <button id="run-extension-btn" title="Open each profile in Chrome and scrape via the installed extension">Run via Extension</button>
+              <button id="send-emails-btn">Send emails</button>
+              <button id="refresh-btn" class="ghost">Refresh</button>
+            </div>
+          </div>
+          <p id="fetch-status" class="hint" hidden></p>
+          <div id="scrape-progress" class="hint" hidden>
+            <span id="scrape-progress-text"></span>
+            <button id="scrape-cancel-btn" class="small ghost" type="button">Cancel</button>
+          </div>
+          <table id="creator-table">
+            <thead>
+              <tr>
+                <th>Instagram</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Opens</th>
+                <th>Last activity</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
 
-      <form id="creator-form" class="card" hidden>
-        <h3>Add creator Instagram links</h3>
-        <textarea id="ig-urls" rows="4" placeholder="Paste one or more Instagram URLs, one per line:&#10;https://www.instagram.com/username1/&#10;https://www.instagram.com/username2/" required></textarea>
-        <div class="row" style="justify-content: space-between; align-items: center; margin-top: 0.5rem;">
-          <p id="add-status" class="hint" style="margin: 0;">Paste one URL per line. Click "Fetch emails" after adding to look up emails.</p>
-          <button type="submit">Add creators</button>
+      <div id="sequences-view" hidden>
+        <div class="main-header">
+          <h2>Follow-up Rules</h2>
+          <p class="hint" style="margin: 0;">Named delay schedules. Each campaign picks one in its Email templates panel.</p>
         </div>
-      </form>
 
-      <div id="templates-card" class="card" hidden>
-        <div class="card-header">
-          <h3>Email templates</h3>
-          <div class="actions">
-            <button id="templates-save-btn" type="button">Save templates</button>
+        <div class="card">
+          <div class="card-header">
+            <h3>Sequences</h3>
+            <div class="actions">
+              <button id="new-sequence-btn" type="button">+ New sequence</button>
+            </div>
           </div>
+          <div id="sequences-list"></div>
         </div>
-        <p class="hint">Placeholders: <code>{firstName}</code>, <code>{brandName}</code>, <code>{campaignName}</code>. Leaving a field blank falls back to the global default.</p>
-        <div class="row" style="align-items: center; gap: 8px; margin: 8px 0;">
-          <label for="templates-sequence">Follow-up sequence:</label>
-          <select id="templates-sequence"></select>
-          <span id="templates-sequence-summary" class="meta"></span>
-        </div>
-        <div id="templates-editors"></div>
-        <p id="templates-save-status" class="hint" hidden></p>
-      </div>
-
-      <div id="creator-table-wrap" class="card" hidden>
-        <div class="card-header">
-          <h3>Creators</h3>
-          <div class="actions">
-            <button id="run-extension-btn" title="Open each profile in Chrome and scrape via the installed extension">Run via Extension</button>
-            <button id="send-emails-btn">Send emails</button>
-            <button id="refresh-btn" class="ghost">Refresh</button>
-          </div>
-        </div>
-        <p id="fetch-status" class="hint" hidden></p>
-        <div id="scrape-progress" class="hint" hidden>
-          <span id="scrape-progress-text"></span>
-          <button id="scrape-cancel-btn" class="small ghost" type="button">Cancel</button>
-        </div>
-        <table id="creator-table">
-          <thead>
-            <tr>
-              <th>Instagram</th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Status</th>
-              <th>Opens</th>
-              <th>Last activity</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
       </div>
     </section>
   </main>
