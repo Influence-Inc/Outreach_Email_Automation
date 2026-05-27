@@ -22,6 +22,15 @@
         <p class="hint" id="sync-status">Synced from campaigns.influence.technology</p>
         <div id="brand-tree" class="tree"></div>
       </section>
+
+      <section class="sidebar-section">
+        <div class="sidebar-header">
+          <h3>Follow-up Rules</h3>
+          <button id="new-sequence-btn" class="ghost small" type="button">+ New</button>
+        </div>
+        <p class="hint">Named delay schedules. Each campaign picks one.</p>
+        <div id="sequences-list" class="tree"></div>
+      </section>
     </aside>
 
     <section class="main">
@@ -38,6 +47,23 @@
           <button type="submit">Add creators</button>
         </div>
       </form>
+
+      <div id="templates-card" class="card" hidden>
+        <div class="card-header">
+          <h3>Email templates</h3>
+          <div class="actions">
+            <button id="templates-save-btn" type="button">Save templates</button>
+          </div>
+        </div>
+        <p class="hint">Placeholders: <code>{firstName}</code>, <code>{brandName}</code>, <code>{campaignName}</code>. Leaving a field blank falls back to the global default.</p>
+        <div class="row" style="align-items: center; gap: 8px; margin: 8px 0;">
+          <label for="templates-sequence">Follow-up sequence:</label>
+          <select id="templates-sequence"></select>
+          <span id="templates-sequence-summary" class="meta"></span>
+        </div>
+        <div id="templates-editors"></div>
+        <p id="templates-save-status" class="hint" hidden></p>
+      </div>
 
       <div id="creator-table-wrap" class="card" hidden>
         <div class="card-header">

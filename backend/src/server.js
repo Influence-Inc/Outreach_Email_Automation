@@ -5,6 +5,7 @@ const cors = require('cors');
 
 const campaigns = require('./routes/campaigns');
 const creators = require('./routes/creators');
+const sequences = require('./routes/sequences');
 const tracking = require('./routes/tracking');
 const auth = require('./routes/auth');
 const scheduler = require('./services/scheduler');
@@ -31,6 +32,7 @@ app.get('/api/debug/ig-cookie', (_req, res) => res.json(igCookieStatus()));
 
 app.use('/api/campaigns', campaigns);
 app.use('/api/creators', creators);
+app.use('/api/sequences', sequences);
 app.use('/auth', auth);
 app.use('/track', tracking);
 

@@ -30,17 +30,23 @@ function fill(template, vars) {
   return template.replace(/\{(\w+)\}/g, (_, key) => (vars[key] != null ? String(vars[key]) : ''));
 }
 
-function renderOutreach(vars) {
+// Campaign overrides shape:
+//   { outreach: {subject, body}, followups: [{subject, body}, ...] }
+// Missing pieces fall back to the hardcoded defaults above.
+function renderOutreach(vars, overrides) {
+  const tpl = overrides && overrides.outreach;
   return {
-    subject: fill(OUTREACH_SUBJECT, vars),
-    body: fill(OUTREACH_BODY, vars),
+    subject: fill(tpl && tpl.subject ? tpl.subject : OUTREACH_SUBJECT, vars),
+    body: fill(tpl && tpl.body ? tpl.body : OUTREACH_BODY, vars),
   };
 }
 
-function renderFollowup(vars) {
+function renderFollowup(vars, overrides, stepIndex = 0) {
+  const list = overrides && Array.isArray(overrides.followups) ? overrides.followups : [];
+  const tpl = list[stepIndex];
   return {
-    subject: fill(FOLLOWUP_SUBJECT, vars),
-    body: fill(FOLLOWUP_BODY, vars),
+    subject: fill(tpl && tpl.subject ? tpl.subject : FOLLOWUP_SUBJECT, vars),
+    body: fill(tpl && tpl.body ? tpl.body : FOLLOWUP_BODY, vars),
   };
 }
 

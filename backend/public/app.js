@@ -3,6 +3,7 @@ const API = '';
 const state = {
   campaigns: [],
   selectedCampaignId: null,
+  sequences: [],
 };
 
 async function api(path, options = {}) {
@@ -100,6 +101,8 @@ async function selectCampaign(id) {
   `;
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
+  el('templates-card').hidden = false;
+  renderTemplatesCard(c);
   await refreshCreators();
 }
 
@@ -450,7 +453,263 @@ el('run-extension-btn').addEventListener('click', async () => {
   }
 });
 
+// --- Follow-up sequences (sidebar) ---------------------------------------
+
+function describeSteps(steps) {
+  if (!Array.isArray(steps) || !steps.length) return 'no steps';
+  return steps.map((s) => `${s.delayHours}h`).join(' → ');
+}
+
+async function refreshSequences() {
+  state.sequences = await api('/api/sequences');
+  renderSequencesList();
+  // Also refresh the per-campaign editor's sequence dropdown if it's visible.
+  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+  if (c && !el('templates-card').hidden) renderTemplatesCard(c);
+}
+
+function renderSequencesList() {
+  const root = el('sequences-list');
+  root.innerHTML = '';
+  if (!state.sequences.length) {
+    root.innerHTML = '<p class="hint">No sequences yet. Click "+ New" to add one.</p>';
+    return;
+  }
+  for (const seq of state.sequences) {
+    const item = document.createElement('div');
+    item.className = 'sequence-item';
+    item.innerHTML = `
+      <div class="sequence-summary">
+        <b>${seq.name}</b>
+        <span class="meta">${describeSteps(seq.steps)}</span>
+      </div>
+    `;
+    const summary = item.querySelector('.sequence-summary');
+    summary.style.cursor = 'pointer';
+    summary.onclick = () => {
+      const existing = item.querySelector('.sequence-editor');
+      if (existing) { existing.remove(); return; }
+      item.appendChild(buildSequenceEditor(seq));
+    };
+    root.appendChild(item);
+  }
+}
+
+function buildSequenceEditor(seq) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sequence-editor';
+  const steps = Array.isArray(seq.steps) ? seq.steps.map((s) => ({ ...s })) : [];
+
+  function render() {
+    wrap.innerHTML = `
+      <label>Name <input type="text" class="seq-name" value="${seq.name || ''}" /></label>
+      <div class="seq-steps"></div>
+      <div class="row" style="gap: 8px; margin-top: 6px;">
+        <button type="button" class="ghost small seq-add">+ Step</button>
+        <button type="button" class="small seq-save">Save</button>
+        ${seq.id ? '<button type="button" class="ghost small seq-delete">Delete</button>' : ''}
+        <span class="hint seq-status"></span>
+      </div>
+    `;
+    const stepsEl = wrap.querySelector('.seq-steps');
+    steps.forEach((step, i) => {
+      const row = document.createElement('div');
+      row.className = 'row seq-step-row';
+      row.innerHTML = `
+        <span class="meta">#${i + 1}</span>
+        <input type="number" min="0" step="1" value="${step.delayHours ?? ''}" placeholder="delay h" class="seq-step-delay" />
+        <input type="text" value="${step.label || ''}" placeholder="label (optional)" class="seq-step-label" />
+        <button type="button" class="ghost small seq-step-remove">✕</button>
+      `;
+      row.querySelector('.seq-step-delay').oninput = (e) => {
+        steps[i].delayHours = Number(e.target.value);
+      };
+      row.querySelector('.seq-step-label').oninput = (e) => {
+        steps[i].label = e.target.value;
+      };
+      row.querySelector('.seq-step-remove').onclick = () => {
+        steps.splice(i, 1);
+        render();
+      };
+      stepsEl.appendChild(row);
+    });
+    wrap.querySelector('.seq-add').onclick = () => {
+      steps.push({ delayHours: 24 });
+      render();
+    };
+    wrap.querySelector('.seq-save').onclick = async (ev) => {
+      ev.stopPropagation();
+      const btn = ev.currentTarget;
+      const name = wrap.querySelector('.seq-name').value.trim();
+      const status = wrap.querySelector('.seq-status');
+      if (!name) { status.textContent = 'name required'; return; }
+      const cleaned = steps
+        .map((s) => ({
+          delayHours: Number(s.delayHours),
+          ...(s.label ? { label: s.label } : {}),
+        }))
+        .filter((s) => Number.isFinite(s.delayHours) && s.delayHours >= 0);
+      if (!cleaned.length) { status.textContent = 'at least one step required'; return; }
+      btn.disabled = true;
+      try {
+        if (seq.id) {
+          await api(`/api/sequences/${seq.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ name, steps: cleaned }),
+          });
+        } else {
+          await api('/api/sequences', {
+            method: 'POST',
+            body: JSON.stringify({ name, steps: cleaned }),
+          });
+        }
+        await refreshSequences();
+      } catch (err) {
+        status.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    const delBtn = wrap.querySelector('.seq-delete');
+    if (delBtn) {
+      delBtn.onclick = async (ev) => {
+        ev.stopPropagation();
+        if (!confirm(`Delete sequence "${seq.name}"? Any campaign using it will lose its assignment.`)) return;
+        try {
+          await api(`/api/sequences/${seq.id}`, { method: 'DELETE' });
+          await refreshSequences();
+          await refreshCampaigns();
+        } catch (err) {
+          wrap.querySelector('.seq-status').textContent = err.message;
+        }
+      };
+    }
+    wrap.onclick = (ev) => ev.stopPropagation();
+  }
+  render();
+  return wrap;
+}
+
+el('new-sequence-btn').addEventListener('click', () => {
+  const root = el('sequences-list');
+  if (root.querySelector('.sequence-editor[data-new]')) return;
+  const item = document.createElement('div');
+  item.className = 'sequence-item';
+  const editor = buildSequenceEditor({ name: '', steps: [{ delayHours: 24 }] });
+  editor.setAttribute('data-new', '1');
+  item.appendChild(editor);
+  root.prepend(item);
+});
+
+// --- Per-campaign template editor ----------------------------------------
+
+function renderTemplatesCard(campaign) {
+  const select = el('templates-sequence');
+  select.innerHTML = '<option value="">(no follow-ups)</option>';
+  for (const seq of state.sequences) {
+    const opt = document.createElement('option');
+    opt.value = String(seq.id);
+    opt.textContent = `${seq.name} (${describeSteps(seq.steps)})`;
+    if (campaign.sequence_id === seq.id) opt.selected = true;
+    select.appendChild(opt);
+  }
+  el('templates-sequence-summary').textContent = '';
+
+  const templates = (campaign.templates && typeof campaign.templates === 'object')
+    ? campaign.templates : {};
+
+  const renderEditors = () => {
+    const editors = el('templates-editors');
+    editors.innerHTML = '';
+    editors.appendChild(buildTemplateEditor('outreach', 'Outreach email', templates.outreach || {}));
+
+    const selectedId = Number(select.value) || null;
+    const seq = state.sequences.find((s) => s.id === selectedId);
+    const stepCount = seq ? seq.steps.length : 0;
+    const followups = Array.isArray(templates.followups) ? templates.followups : [];
+
+    for (let i = 0; i < stepCount; i++) {
+      const step = seq.steps[i];
+      const label = step.label ? `Follow-up #${i + 1} — ${step.label} (after ${step.delayHours}h)`
+                              : `Follow-up #${i + 1} (after ${step.delayHours}h)`;
+      editors.appendChild(buildTemplateEditor(`followup-${i}`, label, followups[i] || {}));
+    }
+
+    if (!seq) {
+      const note = document.createElement('p');
+      note.className = 'hint';
+      note.textContent = 'Pick a sequence above to edit per-step follow-up emails.';
+      editors.appendChild(note);
+    }
+  };
+
+  select.onchange = renderEditors;
+  renderEditors();
+  el('templates-save-status').hidden = true;
+}
+
+function buildTemplateEditor(key, label, tpl) {
+  const card = document.createElement('div');
+  card.className = 'template-block';
+  card.dataset.key = key;
+  card.innerHTML = `
+    <h4>${label}</h4>
+    <label>Subject
+      <input type="text" class="tpl-subject" value="${(tpl.subject || '').replace(/"/g, '&quot;')}" placeholder="e.g. Paid collaboration with {brandName}" />
+    </label>
+    <label>Body
+      <textarea class="tpl-body" rows="6" placeholder="Hi {firstName}, ...">${tpl.body || ''}</textarea>
+    </label>
+  `;
+  return card;
+}
+
+el('templates-save-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('templates-save-btn');
+  const status = el('templates-save-status');
+  status.hidden = false;
+  status.textContent = 'Saving…';
+  btn.disabled = true;
+  try {
+    const select = el('templates-sequence');
+    const sequence_id = select.value ? Number(select.value) : null;
+
+    const templates = { outreach: null, followups: [] };
+    const editors = el('templates-editors').querySelectorAll('.template-block');
+    for (const block of editors) {
+      const subject = block.querySelector('.tpl-subject').value.trim();
+      const body = block.querySelector('.tpl-body').value;
+      const entry = (subject || body) ? { subject, body } : null;
+      if (block.dataset.key === 'outreach') {
+        templates.outreach = entry;
+      } else if (block.dataset.key.startsWith('followup-')) {
+        const idx = Number(block.dataset.key.split('-')[1]);
+        templates.followups[idx] = entry;
+      }
+    }
+    // Drop trailing empty followups for tidiness.
+    while (templates.followups.length && !templates.followups[templates.followups.length - 1]) {
+      templates.followups.pop();
+    }
+    if (!templates.outreach) delete templates.outreach;
+    if (!templates.followups.length) delete templates.followups;
+
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ sequence_id, templates }),
+    });
+    status.textContent = 'Saved.';
+    await refreshCampaigns();
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 (async () => {
   await refreshAuth();
+  await refreshSequences();
   await refreshCampaigns();
 })();

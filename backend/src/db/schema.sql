@@ -56,3 +56,23 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   token_type    TEXT,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Named follow-up sequences (library). Each step has a delay-from-previous
+-- in hours. The per-step subject/body lives on the campaign, not here, so the
+-- same sequence can be reused across campaigns with different copy.
+CREATE TABLE IF NOT EXISTS follow_up_sequences (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  steps       JSONB NOT NULL DEFAULT '[]'::jsonb, -- [{delayHours: int, label?: string}, ...]
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Per-campaign extensions. Added separately so the upstream sync upsert
+-- (which only touches name/brand_name/slug/data) doesn't clobber them.
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS sequence_id INTEGER REFERENCES follow_up_sequences(id) ON DELETE SET NULL;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS templates JSONB NOT NULL DEFAULT '{}'::jsonb;
+  -- shape: { outreach: {subject, body}, followups: [{subject, body}, ...] }
+
+-- Track which follow-up step a creator is on. 0 = no follow-ups sent yet.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS followup_step INTEGER NOT NULL DEFAULT 0;

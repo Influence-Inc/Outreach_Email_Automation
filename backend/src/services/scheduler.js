@@ -1,8 +1,8 @@
 const db = require('../db');
-const { sendFollowup, markReplied } = require('./outreach');
+const { sendFollowup, markReplied, resolveSequenceSteps } = require('./outreach');
 const { threadHasReply } = require('./gmail');
 
-const followupDelayHours = () => Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
+const legacyDelayHours = () => Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
 const intervalMs = () =>
   Number(process.env.SCHEDULER_INTERVAL_MINUTES || 15) * 60 * 1000;
 
@@ -28,18 +28,37 @@ async function checkRepliesAndFollowups() {
       }
     }
 
-    // Find creators due for follow-up.
-    const due = await db.many(
-      `SELECT id FROM creators
-       WHERE status = 'outreach_sent'
-       AND followup_sent_at IS NULL
-       AND outreach_sent_at < NOW() - ($1::text || ' hours')::interval`,
-      [String(followupDelayHours())],
+    // Multi-step follow-up due check. We pull every creator still in the
+    // outreach/follow-up flow that hasn't replied, then decide per-row whether
+    // the next step is due based on their campaign's sequence (or the legacy
+    // fixed delay if the campaign has none).
+    const candidates = await db.many(
+      `SELECT c.id, c.followup_step, c.outreach_sent_at, c.followup_sent_at,
+              seq.steps AS sequence_steps
+       FROM creators c
+       JOIN campaigns ca ON ca.id = c.campaign_id
+       LEFT JOIN follow_up_sequences seq ON seq.id = ca.sequence_id
+       WHERE c.status IN ('outreach_sent', 'followup_sent')`,
     );
-    for (const c of due) {
+
+    const now = Date.now();
+    for (const c of candidates) {
       try {
+        const steps = resolveSequenceSteps({ sequence_steps: c.sequence_steps });
+        const nextIndex = c.followup_step || 0;
+        if (nextIndex >= steps.length) continue;
+
+        const step = steps[nextIndex] || {};
+        const delayHours = Number(step.delayHours) > 0
+          ? Number(step.delayHours)
+          : legacyDelayHours();
+        const lastSentAt = c.followup_sent_at || c.outreach_sent_at;
+        if (!lastSentAt) continue;
+        const dueAt = new Date(lastSentAt).getTime() + delayHours * 3600_000;
+        if (now < dueAt) continue;
+
         const result = await sendFollowup(c.id);
-        console.log(`follow-up for ${c.id}:`, result);
+        console.log(`follow-up for ${c.id} (step ${nextIndex + 1}/${steps.length}):`, result);
       } catch (err) {
         console.error(`follow-up failed for creator ${c.id}:`, err.message);
       }
@@ -53,7 +72,7 @@ function start() {
   if (timer) return;
   console.log(
     `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 15} min, ` +
-      `follow-up after ${followupDelayHours()}h`,
+      `legacy follow-up delay ${legacyDelayHours()}h (per-campaign sequence overrides this)`,
   );
   timer = setInterval(() => {
     checkRepliesAndFollowups().catch((err) => console.error('scheduler tick failed:', err));
