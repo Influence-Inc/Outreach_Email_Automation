@@ -1,5 +1,5 @@
 const db = require('../db');
-const { sendFollowup, markReplied, resolveSequenceSteps } = require('./outreach');
+const { sendFollowup, markReplied, resolveFollowupSteps } = require('./outreach');
 const { threadHasReply } = require('./gmail');
 
 const legacyDelayHours = () => Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
@@ -30,21 +30,25 @@ async function checkRepliesAndFollowups() {
 
     // Multi-step follow-up due check. We pull every creator still in the
     // outreach/follow-up flow that hasn't replied, then decide per-row whether
-    // the next step is due based on their campaign's sequence (or the legacy
-    // fixed delay if the campaign has none).
+    // the next step is due based on their campaign's active template
+    // (campaign template_id, or the row marked is_default).
     const candidates = await db.many(
       `SELECT c.id, c.followup_step, c.outreach_sent_at, c.followup_sent_at,
-              seq.steps AS sequence_steps
+              et.followups AS template_followups
        FROM creators c
        JOIN campaigns ca ON ca.id = c.campaign_id
-       LEFT JOIN follow_up_sequences seq ON seq.id = ca.sequence_id
+       LEFT JOIN email_templates et
+         ON et.id = COALESCE(
+           ca.template_id,
+           (SELECT id FROM email_templates WHERE is_default LIMIT 1)
+         )
        WHERE c.status IN ('outreach_sent', 'followup_sent')`,
     );
 
     const now = Date.now();
     for (const c of candidates) {
       try {
-        const steps = resolveSequenceSteps({ sequence_steps: c.sequence_steps });
+        const steps = resolveFollowupSteps({ template_followups: c.template_followups });
         const nextIndex = c.followup_step || 0;
         if (nextIndex >= steps.length) continue;
 
@@ -72,7 +76,7 @@ function start() {
   if (timer) return;
   console.log(
     `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 15} min, ` +
-      `legacy follow-up delay ${legacyDelayHours()}h (per-campaign sequence overrides this)`,
+      `legacy follow-up delay ${legacyDelayHours()}h (per-template followups override this)`,
   );
   timer = setInterval(() => {
     checkRepliesAndFollowups().catch((err) => console.error('scheduler tick failed:', err));

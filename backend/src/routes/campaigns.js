@@ -8,7 +8,7 @@ router.get('/', async (_req, res, next) => {
   try {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
-              c.sequence_id, c.templates,
+              c.template_id,
               COUNT(cr.id)::int AS creator_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'pending_extraction')::int AS pending_extraction_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
@@ -42,34 +42,30 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Update per-campaign sequence assignment and/or template overrides. Only
-// these two fields are user-editable; everything else comes from upstream sync.
+// Update the campaign's selected email template. Everything else comes
+// from upstream sync.
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { sequence_id, templates } = req.body || {};
-    const sets = [];
-    const params = [req.params.id];
-
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'sequence_id')) {
-      params.push(sequence_id === null || sequence_id === '' ? null : Number(sequence_id));
-      sets.push(`sequence_id = $${params.length}`);
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'template_id')) {
+      return res.status(400).json({ error: 'template_id is required' });
     }
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'templates')) {
-      if (templates && typeof templates !== 'object') {
-        return res.status(400).json({ error: 'templates must be an object' });
-      }
-      params.push(JSON.stringify(templates || {}));
-      sets.push(`templates = $${params.length}::jsonb`);
+    const raw = req.body.template_id;
+    const templateId = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+    if (templateId !== null && !Number.isFinite(templateId)) {
+      return res.status(400).json({ error: 'template_id must be a number or null' });
     }
-    if (!sets.length) return res.status(400).json({ error: 'no editable fields supplied' });
-
     const row = await db.one(
-      `UPDATE campaigns SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
-      params,
+      `UPDATE campaigns SET template_id = $2 WHERE id = $1 RETURNING *`,
+      [req.params.id, templateId],
     );
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(row);
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err && err.code === '23503') {
+      return res.status(400).json({ error: 'template_id does not reference an existing template' });
+    }
+    next(err);
+  }
 });
 
 module.exports = router;

@@ -82,3 +82,26 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS followup_step INTEGER NOT NULL DEF
 INSERT INTO follow_up_sequences (name, steps)
 VALUES ('Default (48h follow-up)', '[{"delayHours":48,"label":"First bump"}]'::jsonb)
 ON CONFLICT (name) DO NOTHING;
+
+-- New unified Email Templates model. Each template bundles the outreach
+-- email + a list of follow-up steps; each step has its own delayHours,
+-- subject, and body. Supersedes the older follow_up_sequences +
+-- per-campaign templates JSONB design (those columns remain unused for
+-- now and can be dropped in a later migration).
+CREATE TABLE IF NOT EXISTS email_templates (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  outreach    JSONB NOT NULL DEFAULT '{"subject":"","body":""}'::jsonb,
+  followups   JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- [{delayHours: int, label?: string, subject?: string, body?: string}, ...]
+  is_default  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Only one template can be marked default at a time.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_one_default
+  ON email_templates ((TRUE)) WHERE is_default;
+
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES email_templates(id) ON DELETE SET NULL;
+

@@ -3,8 +3,7 @@ const API = '';
 const state = {
   campaigns: [],
   selectedCampaignId: null,
-  sequences: [],
-  templateDefaults: { outreach: { subject: '', body: '' }, followup: { subject: '', body: '' } },
+  templates: [],
 };
 
 async function api(path, options = {}) {
@@ -88,7 +87,7 @@ async function refreshCampaigns() {
 
 function showView(name) {
   el('campaign-view').hidden = name !== 'campaign';
-  el('sequences-view').hidden = name !== 'sequences';
+  el('templates-view').hidden = name !== 'templates';
 }
 
 async function selectCampaign(id) {
@@ -108,8 +107,8 @@ async function selectCampaign(id) {
   `;
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
-  el('templates-card').hidden = false;
-  renderTemplatesCard(c);
+  el('campaign-template-card').hidden = false;
+  renderCampaignTemplatePicker(c);
   await refreshCreators();
 }
 
@@ -460,214 +459,7 @@ el('run-extension-btn').addEventListener('click', async () => {
   }
 });
 
-// --- Follow-up sequences (sidebar) ---------------------------------------
-
-function describeSteps(steps) {
-  if (!Array.isArray(steps) || !steps.length) return 'no steps';
-  return steps.map((s) => `${s.delayHours}h`).join(' → ');
-}
-
-async function refreshSequences() {
-  state.sequences = await api('/api/sequences');
-  renderSequencesList();
-  // Also refresh the per-campaign editor's sequence dropdown if it's visible.
-  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
-  if (c && !el('templates-card').hidden) renderTemplatesCard(c);
-}
-
-function renderSequencesList() {
-  const root = el('sequences-list');
-  root.innerHTML = '';
-  if (!state.sequences.length) {
-    root.innerHTML = '<p class="hint">No sequences yet. Click "+ New" to add one.</p>';
-    return;
-  }
-  for (const seq of state.sequences) {
-    const item = document.createElement('div');
-    item.className = 'sequence-item';
-    item.innerHTML = `
-      <div class="sequence-summary">
-        <b>${seq.name}</b>
-        <span class="meta">${describeSteps(seq.steps)}</span>
-      </div>
-    `;
-    const summary = item.querySelector('.sequence-summary');
-    summary.style.cursor = 'pointer';
-    summary.onclick = () => {
-      const existing = item.querySelector('.sequence-editor');
-      if (existing) { existing.remove(); return; }
-      item.appendChild(buildSequenceEditor(seq));
-    };
-    root.appendChild(item);
-  }
-}
-
-function buildSequenceEditor(seq) {
-  const wrap = document.createElement('div');
-  wrap.className = 'sequence-editor';
-  const steps = Array.isArray(seq.steps) ? seq.steps.map((s) => ({ ...s })) : [];
-
-  function render() {
-    wrap.innerHTML = `
-      <label>Name <input type="text" class="seq-name" value="${seq.name || ''}" /></label>
-      <div class="seq-steps"></div>
-      <div class="row" style="gap: 8px; margin-top: 6px;">
-        <button type="button" class="ghost small seq-add">+ Step</button>
-        <button type="button" class="small seq-save">Save</button>
-        ${seq.id ? '<button type="button" class="ghost small seq-delete">Delete</button>' : ''}
-        <span class="hint seq-status"></span>
-      </div>
-    `;
-    const stepsEl = wrap.querySelector('.seq-steps');
-    steps.forEach((step, i) => {
-      const row = document.createElement('div');
-      row.className = 'row seq-step-row';
-      row.innerHTML = `
-        <span class="meta">#${i + 1}</span>
-        <input type="number" min="0" step="1" value="${step.delayHours ?? ''}" placeholder="delay h" class="seq-step-delay" />
-        <input type="text" value="${step.label || ''}" placeholder="label (optional)" class="seq-step-label" />
-        <button type="button" class="ghost small seq-step-remove">✕</button>
-      `;
-      row.querySelector('.seq-step-delay').oninput = (e) => {
-        steps[i].delayHours = Number(e.target.value);
-      };
-      row.querySelector('.seq-step-label').oninput = (e) => {
-        steps[i].label = e.target.value;
-      };
-      row.querySelector('.seq-step-remove').onclick = () => {
-        steps.splice(i, 1);
-        render();
-      };
-      stepsEl.appendChild(row);
-    });
-    wrap.querySelector('.seq-add').onclick = () => {
-      steps.push({ delayHours: 24 });
-      render();
-    };
-    wrap.querySelector('.seq-save').onclick = async (ev) => {
-      ev.stopPropagation();
-      const btn = ev.currentTarget;
-      const name = wrap.querySelector('.seq-name').value.trim();
-      const status = wrap.querySelector('.seq-status');
-      if (!name) { status.textContent = 'name required'; return; }
-      const cleaned = steps
-        .map((s) => ({
-          delayHours: Number(s.delayHours),
-          ...(s.label ? { label: s.label } : {}),
-        }))
-        .filter((s) => Number.isFinite(s.delayHours) && s.delayHours >= 0);
-      if (!cleaned.length) { status.textContent = 'at least one step required'; return; }
-      btn.disabled = true;
-      try {
-        if (seq.id) {
-          await api(`/api/sequences/${seq.id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ name, steps: cleaned }),
-          });
-        } else {
-          await api('/api/sequences', {
-            method: 'POST',
-            body: JSON.stringify({ name, steps: cleaned }),
-          });
-        }
-        await refreshSequences();
-      } catch (err) {
-        status.textContent = err.message;
-      } finally {
-        btn.disabled = false;
-      }
-    };
-    const delBtn = wrap.querySelector('.seq-delete');
-    if (delBtn) {
-      delBtn.onclick = async (ev) => {
-        ev.stopPropagation();
-        if (!confirm(`Delete sequence "${seq.name}"? Any campaign using it will lose its assignment.`)) return;
-        try {
-          await api(`/api/sequences/${seq.id}`, { method: 'DELETE' });
-          await refreshSequences();
-          await refreshCampaigns();
-        } catch (err) {
-          wrap.querySelector('.seq-status').textContent = err.message;
-        }
-      };
-    }
-    wrap.onclick = (ev) => ev.stopPropagation();
-  }
-  render();
-  return wrap;
-}
-
-el('new-sequence-btn').addEventListener('click', () => {
-  const root = el('sequences-list');
-  if (root.querySelector('.sequence-editor[data-new]')) return;
-  const item = document.createElement('div');
-  item.className = 'sequence-item';
-  const editor = buildSequenceEditor({ name: '', steps: [{ delayHours: 24 }] });
-  editor.setAttribute('data-new', '1');
-  item.appendChild(editor);
-  root.prepend(item);
-});
-
-el('open-sequences-btn').addEventListener('click', () => {
-  showView('sequences');
-});
-
-// --- Per-campaign template editor ----------------------------------------
-
-function renderTemplatesCard(campaign) {
-  const select = el('templates-sequence');
-  select.innerHTML = '<option value="">(no follow-ups)</option>';
-  for (const seq of state.sequences) {
-    const opt = document.createElement('option');
-    opt.value = String(seq.id);
-    opt.textContent = `${seq.name} (${describeSteps(seq.steps)})`;
-    if (campaign.sequence_id === seq.id) opt.selected = true;
-    select.appendChild(opt);
-  }
-  el('templates-sequence-summary').textContent = '';
-
-  const templates = (campaign.templates && typeof campaign.templates === 'object')
-    ? campaign.templates : {};
-
-  const renderEditors = () => {
-    const editors = el('templates-editors');
-    editors.innerHTML = '';
-    editors.appendChild(buildTemplateEditor(
-      'outreach',
-      'Outreach email (initial)',
-      templates.outreach || {},
-      state.templateDefaults.outreach,
-    ));
-
-    const selectedId = Number(select.value) || null;
-    const seq = state.sequences.find((s) => s.id === selectedId);
-    const stepCount = seq ? seq.steps.length : 0;
-    const followups = Array.isArray(templates.followups) ? templates.followups : [];
-
-    for (let i = 0; i < stepCount; i++) {
-      const step = seq.steps[i];
-      const label = step.label ? `Follow-up #${i + 1} — ${step.label} (after ${step.delayHours}h)`
-                              : `Follow-up #${i + 1} (after ${step.delayHours}h)`;
-      editors.appendChild(buildTemplateEditor(
-        `followup-${i}`,
-        label,
-        followups[i] || {},
-        state.templateDefaults.followup,
-      ));
-    }
-
-    if (!seq) {
-      const note = document.createElement('p');
-      note.className = 'hint';
-      note.textContent = 'Pick a sequence above to edit per-step follow-up emails.';
-      editors.appendChild(note);
-    }
-  };
-
-  select.onchange = renderEditors;
-  renderEditors();
-  el('templates-save-status').hidden = true;
-}
+// --- Email Templates -----------------------------------------------------
 
 function escapeHtml(s) {
   return String(s == null ? '' : s)
@@ -677,97 +469,317 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-// Pre-fills with the campaign's override if present, otherwise the global
-// default so the user can see and tweak the real copy that's being sent.
-// Clearing the field and saving falls back to the global default.
-function buildTemplateEditor(key, label, tpl, defaults) {
-  const card = document.createElement('details');
-  card.className = 'template-block';
-  card.dataset.key = key;
-  const hasOverride = (tpl.subject && tpl.subject !== '') || (tpl.body && tpl.body !== '');
-  const subject = tpl.subject != null && tpl.subject !== ''
-    ? tpl.subject : (defaults && defaults.subject) || '';
-  const body = tpl.body != null && tpl.body !== ''
-    ? tpl.body : (defaults && defaults.body) || '';
-  card.innerHTML = `
+function describeFollowups(followups) {
+  if (!Array.isArray(followups) || !followups.length) return 'no follow-ups';
+  return followups.map((s) => `${s.delayHours}h`).join(' → ');
+}
+
+async function refreshTemplates() {
+  state.templates = await api('/api/templates');
+  renderTemplatesList();
+  // Re-render the campaign view's dropdown if it's currently visible.
+  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+  if (c && !el('campaign-template-card').hidden) renderCampaignTemplatePicker(c);
+}
+
+function renderTemplatesList() {
+  const root = el('templates-list');
+  root.innerHTML = '';
+  if (!state.templates.length) {
+    root.innerHTML = '<p class="hint">No templates yet. Click "+ New template" to add one.</p>';
+    return;
+  }
+  for (const t of state.templates) root.appendChild(buildTemplateBlock(t));
+}
+
+// Renders one template as a collapsible <details> with the full editor.
+// `template.id` is omitted for unsaved drafts.
+function buildTemplateBlock(template) {
+  const block = document.createElement('details');
+  block.className = 'template-block template-row';
+  if (template.id) block.dataset.templateId = String(template.id);
+  if (!template.id) block.setAttribute('open', '');
+
+  const draft = {
+    name: template.name || '',
+    is_default: !!template.is_default,
+    outreach: {
+      subject: (template.outreach && template.outreach.subject) || '',
+      body: (template.outreach && template.outreach.body) || '',
+    },
+    followups: Array.isArray(template.followups)
+      ? template.followups.map((s) => ({
+          delayHours: Number(s.delayHours) || 0,
+          label: s.label || '',
+          subject: s.subject || '',
+          body: s.body || '',
+        }))
+      : [],
+  };
+
+  block.innerHTML = `
     <summary>
-      <span class="template-block-title">${escapeHtml(label)}</span>
-      <span class="template-block-badge">${hasOverride ? 'customized' : 'using default'}</span>
+      <span class="template-block-title"></span>
+      <span class="template-block-meta">
+        <span class="badge default" hidden>default</span>
+        <span class="meta steps-summary"></span>
+      </span>
     </summary>
-    <div class="template-block-body">
-      <label>Subject
-        <input type="text" class="tpl-subject" value="${escapeHtml(subject)}" />
+    <div class="template-block-body"></div>
+  `;
+  const titleEl = block.querySelector('.template-block-title');
+  const badgeEl = block.querySelector('.badge.default');
+  const summaryMeta = block.querySelector('.steps-summary');
+  const body = block.querySelector('.template-block-body');
+
+  function refreshSummary() {
+    titleEl.textContent = draft.name || '(unnamed)';
+    badgeEl.hidden = !draft.is_default;
+    summaryMeta.textContent = describeFollowups(draft.followups);
+  }
+
+  function renderFollowups() {
+    const list = body.querySelector('.followups-list');
+    list.innerHTML = '';
+    if (!draft.followups.length) {
+      const empty = document.createElement('p');
+      empty.className = 'hint';
+      empty.textContent = 'No follow-ups configured. Click "+ Add follow-up" to add one.';
+      list.appendChild(empty);
+      return;
+    }
+    draft.followups.forEach((step, i) => {
+      const row = document.createElement('details');
+      row.className = 'followup-row';
+      row.setAttribute('open', '');
+      row.innerHTML = `
+        <summary>
+          <span class="followup-row-title">Follow-up #${i + 1}</span>
+          <span class="meta followup-row-meta"></span>
+          <button type="button" class="ghost small followup-remove">Remove</button>
+        </summary>
+        <div class="followup-row-body">
+          <div class="row" style="gap: 12px; flex-wrap: wrap;">
+            <label style="flex: 0 0 120px;">Delay (h)
+              <input type="number" min="0" step="1" class="fup-delay" value="${step.delayHours}" />
+            </label>
+            <label style="flex: 1; min-width: 200px;">Label (optional)
+              <input type="text" class="fup-label" value="${escapeHtml(step.label)}" placeholder="e.g. First bump" />
+            </label>
+          </div>
+          <label>Subject
+            <input type="text" class="fup-subject" value="${escapeHtml(step.subject)}" placeholder="Re: ..." />
+          </label>
+          <label>Body
+            <textarea class="fup-body" rows="8" placeholder="Hi {firstName}, ...">${escapeHtml(step.body)}</textarea>
+          </label>
+        </div>
+      `;
+      const metaEl = row.querySelector('.followup-row-meta');
+      const updateMeta = () => {
+        const lbl = step.label ? ` — ${step.label}` : '';
+        metaEl.textContent = `after ${step.delayHours}h${lbl}`;
+      };
+      updateMeta();
+      row.querySelector('.fup-delay').oninput = (ev) => {
+        step.delayHours = Number(ev.target.value) || 0;
+        updateMeta();
+        refreshSummary();
+      };
+      row.querySelector('.fup-label').oninput = (ev) => { step.label = ev.target.value; updateMeta(); };
+      row.querySelector('.fup-subject').oninput = (ev) => { step.subject = ev.target.value; };
+      row.querySelector('.fup-body').oninput = (ev) => { step.body = ev.target.value; };
+      row.querySelector('.followup-remove').onclick = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        draft.followups.splice(i, 1);
+        renderFollowups();
+        refreshSummary();
+      };
+      list.appendChild(row);
+    });
+  }
+
+  body.innerHTML = `
+    <p class="hint">Placeholders: <code>{firstName}</code>, <code>{brandName}</code>, <code>{campaignName}</code>.</p>
+    <div class="row" style="gap: 12px; flex-wrap: wrap;">
+      <label style="flex: 1; min-width: 200px;">Template name
+        <input type="text" class="tpl-name" value="${escapeHtml(draft.name)}" placeholder="e.g. Standard outreach" />
       </label>
-      <label>Body
-        <textarea class="tpl-body" rows="10">${escapeHtml(body)}</textarea>
+      <label class="checkbox-label" style="align-self: end;">
+        <input type="checkbox" class="tpl-is-default" ${draft.is_default ? 'checked' : ''} />
+        Mark as default
       </label>
-      <p class="hint" style="margin: 4px 0 0;">Clear and save to revert to the global default.</p>
+    </div>
+
+    <h4 style="margin-top: 16px;">Outreach email (initial)</h4>
+    <label>Subject
+      <input type="text" class="out-subject" value="${escapeHtml(draft.outreach.subject)}" placeholder="Paid collaboration with {brandName}" />
+    </label>
+    <label>Body
+      <textarea class="out-body" rows="10" placeholder="Hi {firstName}, ...">${escapeHtml(draft.outreach.body)}</textarea>
+    </label>
+
+    <h4 style="margin-top: 16px;">Follow-ups (in order)</h4>
+    <div class="followups-list"></div>
+    <div style="margin-top: 8px;">
+      <button type="button" class="ghost small add-followup">+ Add follow-up</button>
+    </div>
+
+    <div class="row" style="gap: 8px; margin-top: 16px; justify-content: flex-end; align-items: center;">
+      <span class="hint tpl-status" style="margin-right: auto;"></span>
+      ${template.id ? '<button type="button" class="ghost tpl-delete">Delete</button>' : ''}
+      <button type="button" class="tpl-save">${template.id ? 'Save changes' : 'Create template'}</button>
     </div>
   `;
-  return card;
+  body.querySelector('.tpl-name').oninput = (ev) => {
+    draft.name = ev.target.value;
+    refreshSummary();
+  };
+  body.querySelector('.tpl-is-default').onchange = (ev) => {
+    draft.is_default = ev.target.checked;
+    refreshSummary();
+  };
+  body.querySelector('.out-subject').oninput = (ev) => { draft.outreach.subject = ev.target.value; };
+  body.querySelector('.out-body').oninput = (ev) => { draft.outreach.body = ev.target.value; };
+  body.querySelector('.add-followup').onclick = (ev) => {
+    ev.preventDefault();
+    draft.followups.push({ delayHours: 48, label: '', subject: '', body: '' });
+    renderFollowups();
+    refreshSummary();
+  };
+
+  body.querySelector('.tpl-save').onclick = async (ev) => {
+    ev.preventDefault();
+    const btn = ev.currentTarget;
+    const status = body.querySelector('.tpl-status');
+    if (!draft.name.trim()) { status.textContent = 'name required'; return; }
+    btn.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      const payload = {
+        name: draft.name.trim(),
+        is_default: draft.is_default,
+        outreach: { subject: draft.outreach.subject, body: draft.outreach.body },
+        followups: draft.followups.map((s) => ({
+          delayHours: Number(s.delayHours) || 0,
+          label: s.label || '',
+          subject: s.subject || '',
+          body: s.body || '',
+        })),
+      };
+      if (template.id) {
+        await api(`/api/templates/${template.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      } else {
+        await api('/api/templates', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      await refreshTemplates();
+    } catch (err) {
+      status.textContent = `Failed: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  const delBtn = body.querySelector('.tpl-delete');
+  if (delBtn) {
+    delBtn.onclick = async (ev) => {
+      ev.preventDefault();
+      if (!confirm(`Delete template "${template.name}"? Campaigns using it will fall back to the default.`)) return;
+      try {
+        await api(`/api/templates/${template.id}`, { method: 'DELETE' });
+        await refreshTemplates();
+        await refreshCampaigns();
+      } catch (err) {
+        body.querySelector('.tpl-status').textContent = `Failed: ${err.message}`;
+      }
+    };
+  }
+
+  refreshSummary();
+  renderFollowups();
+  return block;
 }
 
-el('templates-save-btn').addEventListener('click', async () => {
-  if (!state.selectedCampaignId) return;
-  const btn = el('templates-save-btn');
-  const status = el('templates-save-status');
-  status.hidden = false;
-  status.textContent = 'Saving…';
-  btn.disabled = true;
-  try {
-    const select = el('templates-sequence');
-    const sequence_id = select.value ? Number(select.value) : null;
-
-    const templates = { outreach: null, followups: [] };
-    const editors = el('templates-editors').querySelectorAll('.template-block');
-    for (const block of editors) {
-      const subject = block.querySelector('.tpl-subject').value.trim();
-      const body = block.querySelector('.tpl-body').value;
-      const entry = (subject || body) ? { subject, body } : null;
-      if (block.dataset.key === 'outreach') {
-        templates.outreach = entry;
-      } else if (block.dataset.key.startsWith('followup-')) {
-        const idx = Number(block.dataset.key.split('-')[1]);
-        templates.followups[idx] = entry;
-      }
-    }
-    // Drop trailing empty followups for tidiness.
-    while (templates.followups.length && !templates.followups[templates.followups.length - 1]) {
-      templates.followups.pop();
-    }
-    if (!templates.outreach) delete templates.outreach;
-    if (!templates.followups.length) delete templates.followups;
-
-    const updated = await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ sequence_id, templates }),
-    });
-    status.textContent = 'Saved.';
-    await refreshCampaigns();
-    const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
-    if (c) {
-      // Merge any fields the list query doesn't surface (e.g. fresh templates).
-      if (updated) { c.templates = updated.templates; c.sequence_id = updated.sequence_id; }
-      renderTemplatesCard(c);
-    }
-  } catch (err) {
-    status.textContent = `Failed: ${err.message}`;
-  } finally {
-    btn.disabled = false;
-  }
+el('new-template-btn').addEventListener('click', () => {
+  const root = el('templates-list');
+  if (root.querySelector('.template-row:not([data-template-id])')) return;
+  const block = buildTemplateBlock({
+    name: '',
+    is_default: false,
+    outreach: { subject: '', body: '' },
+    followups: [],
+  });
+  root.prepend(block);
 });
 
-async function refreshTemplateDefaults() {
-  try {
-    state.templateDefaults = await api('/api/templates/defaults');
-  } catch (err) {
-    console.error('failed to load template defaults:', err);
+el('open-templates-btn').addEventListener('click', () => {
+  showView('templates');
+});
+
+// --- Per-campaign template picker ----------------------------------------
+
+function renderCampaignTemplatePicker(campaign) {
+  const select = el('campaign-template-select');
+  select.innerHTML = '';
+  if (!state.templates.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No templates available';
+    select.appendChild(opt);
+    select.disabled = true;
+    el('campaign-template-summary').textContent = 'Create a template first';
+    return;
   }
+  select.disabled = false;
+
+  const defaultTpl = state.templates.find((t) => t.is_default);
+  const defaultLabel = defaultTpl ? `Default (${defaultTpl.name})` : 'Default';
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = `Use default — ${defaultLabel}`;
+  select.appendChild(noneOpt);
+
+  for (const t of state.templates) {
+    const opt = document.createElement('option');
+    opt.value = String(t.id);
+    const stepCount = Array.isArray(t.followups) ? t.followups.length : 0;
+    opt.textContent = `${t.name} · ${stepCount} follow-up${stepCount === 1 ? '' : 's'}`;
+    if (campaign.template_id === t.id) opt.selected = true;
+    select.appendChild(opt);
+  }
+
+  const refreshSummary = () => {
+    const picked = select.value
+      ? state.templates.find((t) => t.id === Number(select.value))
+      : defaultTpl;
+    el('campaign-template-summary').textContent = picked
+      ? describeFollowups(picked.followups)
+      : '(no follow-ups configured)';
+  };
+  refreshSummary();
+
+  select.onchange = async () => {
+    const value = select.value ? Number(select.value) : null;
+    refreshSummary();
+    try {
+      const updated = await api(`/api/campaigns/${encodeURIComponent(campaign.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ template_id: value }),
+      });
+      campaign.template_id = updated.template_id;
+      await refreshCampaigns();
+    } catch (err) {
+      el('campaign-template-summary').textContent = `Failed: ${err.message}`;
+    }
+  };
 }
+
+el('campaign-template-open-btn').addEventListener('click', () => {
+  showView('templates');
+});
 
 (async () => {
   await refreshAuth();
-  await refreshTemplateDefaults();
-  await refreshSequences();
+  await refreshTemplates();
   await refreshCampaigns();
 })();

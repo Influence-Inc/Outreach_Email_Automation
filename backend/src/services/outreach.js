@@ -2,17 +2,25 @@ const db = require('../db');
 const { renderOutreach, renderFollowup } = require('./templates');
 const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
 
+// Joins each creator with the active template for their campaign: that
+// campaign's template_id, or whichever template is marked is_default, or
+// null (in which case render* will fall back to hardcoded copy).
 async function loadCreatorContext(creatorId) {
   return db.one(
     `SELECT c.*,
             ca.name AS campaign_name,
             ca.brand_name AS brand_name,
-            ca.templates AS campaign_templates,
-            ca.sequence_id AS campaign_sequence_id,
-            seq.steps AS sequence_steps
+            et.id AS template_id,
+            et.name AS template_name,
+            et.outreach AS template_outreach,
+            et.followups AS template_followups
      FROM creators c
      JOIN campaigns ca ON ca.id = c.campaign_id
-     LEFT JOIN follow_up_sequences seq ON seq.id = ca.sequence_id
+     LEFT JOIN email_templates et
+       ON et.id = COALESCE(
+         ca.template_id,
+         (SELECT id FROM email_templates WHERE is_default LIMIT 1)
+       )
      WHERE c.id = $1`,
     [creatorId],
   );
@@ -26,23 +34,24 @@ function templateVars(creator) {
   };
 }
 
+function activeTemplate(creator) {
+  return {
+    outreach: creator.template_outreach || null,
+    followups: Array.isArray(creator.template_followups) ? creator.template_followups : [],
+  };
+}
+
 async function sendOutreach(creatorId) {
   const creator = await loadCreatorContext(creatorId);
   if (!creator) throw new Error(`Creator ${creatorId} not found`);
   if (!creator.email) throw new Error(`Creator ${creatorId} has no email`);
   if (creator.outreach_sent_at) throw new Error(`Outreach already sent to creator ${creatorId}`);
 
-  const { subject, body } = renderOutreach(templateVars(creator), creator.campaign_templates);
-
+  const { subject, body } = renderOutreach(activeTemplate(creator), templateVars(creator));
   const trackingId = newTrackingId();
 
   try {
-    const sent = await sendEmail({
-      to: creator.email,
-      subject,
-      body,
-      trackingId,
-    });
+    const sent = await sendEmail({ to: creator.email, subject, body, trackingId });
 
     await db.query(
       `UPDATE creators
@@ -58,16 +67,14 @@ async function sendOutreach(creatorId) {
     await db.query(
       `INSERT INTO email_events (creator_id, type, message_id, detail)
        VALUES ($1, 'sent_outreach', $2, $3)`,
-      [
-        creatorId,
-        trackingId,
-        {
-          gmailMessageId: sent.gmailMessageId,
-          threadId: sent.threadId,
-          rfc822MessageId: sent.rfc822MessageId,
-          subject,
-        },
-      ],
+      [creatorId, trackingId, {
+        gmailMessageId: sent.gmailMessageId,
+        threadId: sent.threadId,
+        rfc822MessageId: sent.rfc822MessageId,
+        subject,
+        templateId: creator.template_id || null,
+        templateName: creator.template_name || null,
+      }],
     );
 
     return { ok: true, trackingId, threadId: sent.threadId };
@@ -85,13 +92,12 @@ async function sendOutreach(creatorId) {
   }
 }
 
-// Resolves the sequence the creator's campaign uses. Falls back to a
-// single-step sequence with FOLLOWUP_DELAY_HOURS so legacy campaigns
-// (no sequence_id, no templates) keep their old behavior.
-function resolveSequenceSteps(creator) {
-  if (Array.isArray(creator.sequence_steps) && creator.sequence_steps.length) {
-    return creator.sequence_steps;
-  }
+// Returns the list of follow-up steps the campaign should run. Falls back
+// to one step at FOLLOWUP_DELAY_HOURS if the active template has none —
+// matches the pre-template behaviour.
+function resolveFollowupSteps(creator) {
+  const list = activeTemplate(creator).followups;
+  if (list.length) return list;
   const legacyDelay = Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
   return [{ delayHours: legacyDelay }];
 }
@@ -101,13 +107,12 @@ async function sendFollowup(creatorId) {
   if (!creator) throw new Error(`Creator ${creatorId} not found`);
   if (!creator.outreach_sent_at) throw new Error(`Cannot follow up before outreach`);
 
-  const steps = resolveSequenceSteps(creator);
+  const steps = resolveFollowupSteps(creator);
   const nextStepIndex = creator.followup_step || 0;
   if (nextStepIndex >= steps.length) {
     throw new Error(`No more follow-up steps for creator ${creatorId}`);
   }
 
-  // Re-check for reply via Gmail before sending.
   if (creator.outreach_thread_id) {
     const hasReply = await threadHasReply(creator.outreach_thread_id);
     if (hasReply) {
@@ -117,15 +122,14 @@ async function sendFollowup(creatorId) {
   }
 
   const { subject, body } = renderFollowup(
+    activeTemplate(creator),
     templateVars(creator),
-    creator.campaign_templates,
     nextStepIndex,
   );
 
   const trackingId = newTrackingId();
 
   try {
-    // Thread on the most recent prior send (outreach or previous follow-up).
     const lastEvent = await db.one(
       `SELECT detail FROM email_events
        WHERE creator_id = $1 AND type IN ('sent_outreach', 'sent_followup')
@@ -166,6 +170,8 @@ async function sendFollowup(creatorId) {
         subject,
         step: newStep,
         totalSteps: steps.length,
+        templateId: creator.template_id || null,
+        templateName: creator.template_name || null,
       }],
     );
 
@@ -193,4 +199,4 @@ async function markReplied(creatorId) {
   );
 }
 
-module.exports = { sendOutreach, sendFollowup, markReplied, resolveSequenceSteps };
+module.exports = { sendOutreach, sendFollowup, markReplied, resolveFollowupSteps };

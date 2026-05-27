@@ -5,13 +5,13 @@ const cors = require('cors');
 
 const campaigns = require('./routes/campaigns');
 const creators = require('./routes/creators');
-const sequences = require('./routes/sequences');
+const templates = require('./routes/templates');
 const tracking = require('./routes/tracking');
 const auth = require('./routes/auth');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
-const { getDefaults: getTemplateDefaults } = require('./services/templates');
+const { seedDefaultIfEmpty } = require('./services/emailTemplates');
 
 const app = express();
 app.use(cors());
@@ -31,12 +31,9 @@ app.get('/api/debug/ig-probe', async (req, res) => {
 
 app.get('/api/debug/ig-cookie', (_req, res) => res.json(igCookieStatus()));
 
-// Global default templates (used as the starting text in the campaign editor).
-app.get('/api/templates/defaults', (_req, res) => res.json(getTemplateDefaults()));
-
 app.use('/api/campaigns', campaigns);
 app.use('/api/creators', creators);
-app.use('/api/sequences', sequences);
+app.use('/api/templates', templates);
 app.use('/auth', auth);
 app.use('/track', tracking);
 
@@ -51,6 +48,10 @@ const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
   console.log(`Backend listening on http://localhost:${port}`);
   scheduler.start();
+
+  seedDefaultIfEmpty().catch((err) =>
+    console.error('seedDefaultIfEmpty failed:', err.message),
+  );
 
   // Pull brands + campaigns from campaigns.influence.technology on boot.
   syncCampaigns()
