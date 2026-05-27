@@ -11,6 +11,7 @@ const auth = require('./routes/auth');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
+const { getDefaults: getTemplateDefaults } = require('./services/templates');
 
 const app = express();
 app.use(cors());
@@ -29,6 +30,9 @@ app.get('/api/debug/ig-probe', async (req, res) => {
 });
 
 app.get('/api/debug/ig-cookie', (_req, res) => res.json(igCookieStatus()));
+
+// Global default templates (used as the starting text in the campaign editor).
+app.get('/api/templates/defaults', (_req, res) => res.json(getTemplateDefaults()));
 
 app.use('/api/campaigns', campaigns);
 app.use('/api/creators', creators);

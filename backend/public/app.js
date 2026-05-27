@@ -4,6 +4,7 @@ const state = {
   campaigns: [],
   selectedCampaignId: null,
   sequences: [],
+  templateDefaults: { outreach: { subject: '', body: '' }, followup: { subject: '', body: '' } },
 };
 
 async function api(path, options = {}) {
@@ -621,7 +622,12 @@ function renderTemplatesCard(campaign) {
   const renderEditors = () => {
     const editors = el('templates-editors');
     editors.innerHTML = '';
-    editors.appendChild(buildTemplateEditor('outreach', 'Outreach email', templates.outreach || {}));
+    editors.appendChild(buildTemplateEditor(
+      'outreach',
+      'Outreach email (initial)',
+      templates.outreach || {},
+      state.templateDefaults.outreach,
+    ));
 
     const selectedId = Number(select.value) || null;
     const seq = state.sequences.find((s) => s.id === selectedId);
@@ -632,7 +638,12 @@ function renderTemplatesCard(campaign) {
       const step = seq.steps[i];
       const label = step.label ? `Follow-up #${i + 1} — ${step.label} (after ${step.delayHours}h)`
                               : `Follow-up #${i + 1} (after ${step.delayHours}h)`;
-      editors.appendChild(buildTemplateEditor(`followup-${i}`, label, followups[i] || {}));
+      editors.appendChild(buildTemplateEditor(
+        `followup-${i}`,
+        label,
+        followups[i] || {},
+        state.templateDefaults.followup,
+      ));
     }
 
     if (!seq) {
@@ -648,18 +659,34 @@ function renderTemplatesCard(campaign) {
   el('templates-save-status').hidden = true;
 }
 
-function buildTemplateEditor(key, label, tpl) {
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Pre-fills with the campaign's override if present, otherwise the global
+// default so the user can see and tweak the real copy that's being sent.
+// Clearing the field and saving falls back to the global default.
+function buildTemplateEditor(key, label, tpl, defaults) {
   const card = document.createElement('div');
   card.className = 'template-block';
   card.dataset.key = key;
+  const subject = tpl.subject != null && tpl.subject !== ''
+    ? tpl.subject : (defaults && defaults.subject) || '';
+  const body = tpl.body != null && tpl.body !== ''
+    ? tpl.body : (defaults && defaults.body) || '';
   card.innerHTML = `
-    <h4>${label}</h4>
+    <h4>${escapeHtml(label)}</h4>
     <label>Subject
-      <input type="text" class="tpl-subject" value="${(tpl.subject || '').replace(/"/g, '&quot;')}" placeholder="e.g. Paid collaboration with {brandName}" />
+      <input type="text" class="tpl-subject" value="${escapeHtml(subject)}" />
     </label>
     <label>Body
-      <textarea class="tpl-body" rows="6" placeholder="Hi {firstName}, ...">${tpl.body || ''}</textarea>
+      <textarea class="tpl-body" rows="10">${escapeHtml(body)}</textarea>
     </label>
+    <p class="hint" style="margin: 4px 0 0;">Clear and save to revert to the global default.</p>
   `;
   return card;
 }
@@ -708,8 +735,17 @@ el('templates-save-btn').addEventListener('click', async () => {
   }
 });
 
+async function refreshTemplateDefaults() {
+  try {
+    state.templateDefaults = await api('/api/templates/defaults');
+  } catch (err) {
+    console.error('failed to load template defaults:', err);
+  }
+}
+
 (async () => {
   await refreshAuth();
+  await refreshTemplateDefaults();
   await refreshSequences();
   await refreshCampaigns();
 })();

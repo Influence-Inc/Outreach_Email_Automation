@@ -50,4 +50,11 @@ function renderFollowup(vars, overrides, stepIndex = 0) {
   };
 }
 
-module.exports = { renderOutreach, renderFollowup };
+function getDefaults() {
+  return {
+    outreach: { subject: OUTREACH_SUBJECT, body: OUTREACH_BODY },
+    followup: { subject: FOLLOWUP_SUBJECT, body: FOLLOWUP_BODY },
+  };
+}
+
+module.exports = { renderOutreach, renderFollowup, getDefaults };
