@@ -88,7 +88,36 @@ async function refreshCampaigns() {
 function showView(name) {
   el('campaign-view').hidden = name !== 'campaign';
   el('templates-view').hidden = name !== 'templates';
+  closeSidebarOnMobile();
 }
+
+// --- Mobile sidebar drawer -----------------------------------------------
+
+function isMobileLayout() {
+  return window.matchMedia('(max-width: 720px)').matches;
+}
+
+function setSidebarOpen(open) {
+  const sidebar = el('sidebar');
+  const backdrop = el('sidebar-backdrop');
+  sidebar.classList.toggle('open', open);
+  backdrop.classList.toggle('open', open);
+  backdrop.hidden = !open;
+}
+
+function closeSidebarOnMobile() {
+  if (isMobileLayout()) setSidebarOpen(false);
+}
+
+el('sidebar-toggle').addEventListener('click', () => {
+  const isOpen = el('sidebar').classList.contains('open');
+  setSidebarOpen(!isOpen);
+});
+el('sidebar-backdrop').addEventListener('click', () => setSidebarOpen(false));
+// Close drawer if the viewport grows back to desktop width.
+window.addEventListener('resize', () => {
+  if (!isMobileLayout()) setSidebarOpen(false);
+});
 
 async function selectCampaign(id) {
   showView('campaign');

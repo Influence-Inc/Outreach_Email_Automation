@@ -8,12 +8,18 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Influence Outreach</div>
+    <div class="topbar-left">
+      <button id="sidebar-toggle" class="icon-btn" type="button" aria-label="Toggle sidebar">
+        <span class="hamburger"></span>
+      </button>
+      <div class="brand">Influence Outreach</div>
+    </div>
     <div class="auth" id="auth-status">checking auth…</div>
   </header>
 
   <main class="layout">
-    <aside class="sidebar">
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+    <aside class="sidebar" id="sidebar">
       <section>
         <div class="sidebar-header">
           <h3>Brands &amp; Campaigns</h3>
@@ -71,20 +77,22 @@
             <span id="scrape-progress-text"></span>
             <button id="scrape-cancel-btn" class="small ghost" type="button">Cancel</button>
           </div>
-          <table id="creator-table">
-            <thead>
-              <tr>
-                <th>Instagram</th>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Status</th>
-                <th>Opens</th>
-                <th>Last activity</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+          <div class="table-scroll">
+            <table id="creator-table">
+              <thead>
+                <tr>
+                  <th>Instagram</th>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Status</th>
+                  <th>Opens</th>
+                  <th>Last activity</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
       </div>
 

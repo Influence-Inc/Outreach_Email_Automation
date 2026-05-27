@@ -9,19 +9,55 @@ body {
   display: flex; justify-content: space-between; align-items: center;
   padding: 14px 24px;
   background: #111827; color: #fff;
+  gap: 12px;
 }
+.topbar-left { display: flex; align-items: center; gap: 12px; }
 .brand { font-weight: 600; font-size: 16px; }
 .auth a { color: #93c5fd; }
+.auth { font-size: 13px; }
+
+/* Hamburger button — hidden on desktop, shown on narrow screens. */
+.icon-btn {
+  display: none;
+  background: transparent;
+  border: 0;
+  padding: 6px;
+  cursor: pointer;
+  width: 36px; height: 36px;
+  border-radius: 6px;
+}
+.icon-btn:hover { background: rgba(255,255,255,0.08); }
+.hamburger,
+.hamburger::before,
+.hamburger::after {
+  display: block;
+  width: 20px; height: 2px;
+  background: #fff;
+  border-radius: 2px;
+  position: relative;
+  transition: transform 0.15s;
+}
+.hamburger::before { content: ''; position: absolute; top: -6px; left: 0; }
+.hamburger::after  { content: ''; position: absolute; top:  6px; left: 0; }
+
 .layout {
   display: grid;
   grid-template-columns: 320px 1fr;
   min-height: calc(100vh - 56px);
+  position: relative;
 }
 .sidebar {
   background: #fff;
   border-right: 1px solid #e5e7eb;
   padding: 16px;
   overflow-y: auto;
+}
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.4);
+  z-index: 19;
 }
 .sidebar section { margin-bottom: 28px; }
 .sidebar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
@@ -182,3 +218,61 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
 /* Per-campaign template picker card */
 #campaign-template-card .row { flex-wrap: wrap; }
 #campaign-template-card select { padding: 6px 8px; font-size: 13px; border: 1px solid #d1d5db; border-radius: 4px; min-width: 280px; }
+
+/* Horizontal scroll wrapper for tables on narrow screens. */
+.table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* --- Responsive: tablet and below ---------------------------------------- */
+@media (max-width: 900px) {
+  .main { padding: 16px; }
+  .main-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .stats { flex-wrap: wrap; gap: 10px 16px; }
+  .card-header { flex-wrap: wrap; gap: 8px; }
+  .card-header .actions { flex-wrap: wrap; }
+}
+
+/* --- Responsive: phones (sidebar becomes a slide-in drawer) ------------- */
+@media (max-width: 720px) {
+  .topbar { padding: 10px 14px; }
+  .icon-btn { display: inline-flex; align-items: center; justify-content: center; }
+  .auth { font-size: 12px; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: fixed;
+    top: 56px;
+    left: 0;
+    bottom: 0;
+    width: min(85vw, 320px);
+    z-index: 20;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.08);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-backdrop { display: block; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+  .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
+
+  .main { padding: 14px; }
+  .card { padding: 12px; }
+  .card-header h3 { font-size: 14px; }
+
+  .row { flex-direction: column; }
+  .row > * { width: 100%; }
+
+  button { padding: 10px 14px; font-size: 14px; }
+
+  /* Stretch buttons inside card headers so they're easy to tap */
+  .card-header .actions { width: 100%; }
+  .card-header .actions button { flex: 1 1 auto; min-width: 0; }
+
+  /* Tables can't reflow; horizontal scroll wrapper handles overflow. */
+  table { min-width: 720px; }
+
+  /* Template page tweaks */
+  .template-block-body { padding: 10px; }
+  .template-block-meta { flex-wrap: wrap; justify-content: flex-end; }
+  #campaign-template-card select { min-width: 0; width: 100%; }
+}
