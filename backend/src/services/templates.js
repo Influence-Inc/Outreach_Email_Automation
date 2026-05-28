@@ -28,8 +28,15 @@ Best,
 ${SENDER_NAME}
 useinfluence.xyz`;
 
+// Only substitute placeholders that the caller actually defined. Unknown
+// {...} sequences (e.g. {{grey}} markers used by the rich-body renderer
+// downstream) are left intact instead of being replaced with empty strings.
 function fill(template, vars) {
-  return template.replace(/\{(\w+)\}/g, (_, key) => (vars[key] != null ? String(vars[key]) : ''));
+  return template.replace(/\{(\w+)\}/g, (match, key) =>
+    Object.prototype.hasOwnProperty.call(vars, key)
+      ? String(vars[key] == null ? '' : vars[key])
+      : match,
+  );
 }
 
 // `template` is an email_templates row (or null). Renders the outreach email,
