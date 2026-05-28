@@ -631,7 +631,7 @@ function buildTemplateBlock(template) {
 
   body.innerHTML = `
     <p class="hint">
-      Placeholders: <code>{firstName}</code>, <code>{brandName}</code>, <code>{campaignName}</code>.
+      Placeholders: <code>{firstName}</code>, <code>{brandName}</code>, <code>{campaignName}</code>, <code>{submitPostsUrl}</code>, <code>{submitForReviewUrl}</code>.
       Formatting: <code>[click here](https://example.com)</code> for links, <code>{{grey}}text{{/grey}}</code> for grey.
     </p>
     <div class="row" style="gap: 12px; flex-wrap: wrap;">

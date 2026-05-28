@@ -4,12 +4,15 @@ const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
 
 // Joins each creator with the active template for their campaign: that
 // campaign's template_id, or whichever template is marked is_default, or
-// null (in which case render* will fall back to hardcoded copy).
+// null (in which case render* will fall back to hardcoded copy). Also
+// pulls the raw upstream campaign payload (ca.data) so we can look up the
+// creator's submissionLinks at render time.
 async function loadCreatorContext(creatorId) {
   return db.one(
     `SELECT c.*,
             ca.name AS campaign_name,
             ca.brand_name AS brand_name,
+            ca.data AS campaign_data,
             et.id AS template_id,
             et.name AS template_name,
             et.outreach AS template_outreach,
@@ -26,11 +29,53 @@ async function loadCreatorContext(creatorId) {
   );
 }
 
+// Normalize an Instagram URL/username for comparison: lowercase, drop
+// protocol + www + trailing slashes so "https://www.instagram.com/foo/"
+// and "instagram.com/foo" match.
+function normIgUrl(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/+$/, '');
+}
+
+function normIgUser(value) {
+  return String(value || '').trim().toLowerCase().replace(/^@/, '');
+}
+
+// Walk the upstream campaign payload's creators[] and find the entry
+// matching our local creator by Instagram URL or username. The upstream
+// field naming isn't documented in this repo; we probe the common
+// candidates so a future rename on the upstream side has a chance of
+// still working.
+function findUpstreamCreator(campaignData, localCreator) {
+  if (!campaignData) return null;
+  const creators = Array.isArray(campaignData.creators) ? campaignData.creators : [];
+  if (!creators.length) return null;
+
+  const wantUrl = normIgUrl(localCreator.instagram_url);
+  const wantUser = normIgUser(localCreator.instagram_username);
+
+  for (const u of creators) {
+    const upUrl = normIgUrl(u.instagramUrl || u.instagram_url || u.url || u.profileUrl);
+    if (wantUrl && upUrl && upUrl === wantUrl) return u;
+    const upUser = normIgUser(u.instagramUsername || u.instagram_username || u.username || u.handle);
+    if (wantUser && upUser && upUser === wantUser) return u;
+  }
+  return null;
+}
+
 function templateVars(creator) {
+  const upstream = findUpstreamCreator(creator.campaign_data, creator);
+  const links = (upstream && upstream.submissionLinks) || {};
   return {
     firstName: creator.first_name || 'there',
     brandName: creator.brand_name,
     campaignName: creator.campaign_name,
+    submitPostsUrl: links.submitPostsUrl || '',
+    submitForReviewUrl: links.submitForReviewUrl || '',
   };
 }
 
