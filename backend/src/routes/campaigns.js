@@ -92,34 +92,58 @@ router.patch('/:id', async (req, res, next) => {
   }
 });
 
+/**
+ * POST /:id/recalculate-offers
+ *
+ * Re-runs the 6-offer CPM math (+ optional Claude notes) for every creator
+ * in the campaign that has ig_scraped_data. Requires max_cpm to be set on
+ * the campaign.
+ *
+ * Returns: { ok: true, updated: N }
+ */
 router.post('/:id/recalculate-offers', async (req, res, next) => {
   try {
-    const campaign = await db.one(`SELECT id, max_cpm FROM campaigns WHERE id = $1`, [req.params.id]);
-    if (!campaign) return res.status(404).json({ error: 'not found' });
-    if (!campaign.max_cpm) {
-      return res.status(400).json({ error: 'max_cpm not set for this campaign — set it first' });
+    // Fetch the campaign to get max_cpm.
+    const campaign = await db.one(`SELECT * FROM campaigns WHERE id = $1`, [req.params.id]);
+    if (!campaign) return res.status(404).json({ error: 'campaign not found' });
+
+    const maxCpm = campaign.max_cpm != null ? Number(campaign.max_cpm) : null;
+    if (maxCpm == null || !Number.isFinite(maxCpm) || maxCpm <= 0) {
+      return res.status(400).json({
+        error: 'Campaign max_cpm must be set to a positive number before recalculating offers.',
+      });
     }
 
+    // Fetch all creators in this campaign that have scraped IG data.
     const creators = await db.many(
       `SELECT id, instagram_username, ig_scraped_data, quoted_rate
        FROM creators
-       WHERE campaign_id = $1 AND ig_scraped_data IS NOT NULL`,
+       WHERE campaign_id = $1
+         AND ig_scraped_data IS NOT NULL`,
       [req.params.id],
     );
 
+    if (!creators.length) {
+      return res.json({ ok: true, updated: 0 });
+    }
+
     let updated = 0;
-    for (const c of creators) {
-      const offers = await computeSixOffers(
-        c.ig_scraped_data,
-        Number(campaign.max_cpm),
-        c.quoted_rate != null ? Number(c.quoted_rate) : null,
-        c.instagram_username || '',
-      );
-      await db.query(
-        `UPDATE creators SET suggested_offers = $2, updated_at = NOW() WHERE id = $1`,
-        [c.id, JSON.stringify(offers)],
-      );
-      updated += 1;
+    for (const creator of creators) {
+      try {
+        const igData       = creator.ig_scraped_data;
+        const quotedRate   = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
+        const handle       = creator.instagram_username || '';
+
+        const offers = await computeSixOffers(igData, maxCpm, quotedRate, handle);
+
+        await db.query(
+          `UPDATE creators SET suggested_offers = $2, updated_at = NOW() WHERE id = $1`,
+          [creator.id, JSON.stringify(offers)],
+        );
+        updated += 1;
+      } catch (innerErr) {
+        console.error(`[recalculate-offers] Failed for creator ${creator.id}:`, innerErr.message);
+      }
     }
 
     res.json({ ok: true, updated });

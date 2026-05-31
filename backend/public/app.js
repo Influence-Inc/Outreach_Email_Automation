@@ -749,11 +749,6 @@ el('open-templates-btn').addEventListener('click', () => {
   showView('templates');
 });
 
-el('open-negotiation-btn').addEventListener('click', () => {
-  showView('negotiation');
-  loadNegotiationView();
-});
-
 // --- Per-campaign template picker ----------------------------------------
 
 function renderCampaignTemplatePicker(campaign) {
@@ -816,23 +811,30 @@ el('campaign-template-open-btn').addEventListener('click', () => {
   showView('templates');
 });
 
-// --- Creator Negotiation view --------------------------------------------
+// --- Creator Negotiation -------------------------------------------------
+
+el('open-negotiation-btn').addEventListener('click', () => {
+  showView('negotiation');
+  loadNegotiationView();
+});
 
 async function loadNegotiationView() {
   const root = el('negotiation-campaigns-list');
   root.innerHTML = '<p class="hint">Loading…</p>';
+
   try {
-    if (!state.campaigns.length) await refreshCampaigns();
+    // Fetch creators for all campaigns in parallel.
     const results = await Promise.all(
-      state.campaigns.map(async (c) => {
+      state.campaigns.map(async (campaign) => {
         try {
-          const creators = await api(`/api/creators?campaign_id=${encodeURIComponent(c.id)}`);
+          const creators = await api(`/api/creators?campaign_id=${encodeURIComponent(campaign.id)}`);
+          // Only include creators that have negotiation-relevant data.
           const relevant = creators.filter(
-            (r) => r.suggested_offers || r.ig_scraped_data,
+            (c) => c.suggested_offers != null || c.ig_scraped_data != null,
           );
-          return { campaign: c, creators: relevant };
-        } catch {
-          return { campaign: c, creators: [] };
+          return { campaign, creators: relevant };
+        } catch (_err) {
+          return { campaign, creators: [] };
         }
       }),
     );
@@ -845,16 +847,21 @@ async function loadNegotiationView() {
 function renderNegotiationCampaigns(results) {
   const root = el('negotiation-campaigns-list');
   root.innerHTML = '';
-  const nonEmpty = results.filter((r) => r.creators.length > 0);
-  if (!nonEmpty.length) {
+
+  const hasAny = results.some((r) => r.creators.length > 0);
+  if (!hasAny) {
     root.innerHTML = `
       <div class="card">
-        <p class="hint" style="margin:0;">No creators have shared rates yet. Once influence-negotiation scrapes an Instagram profile and sends offers, they will appear here.</p>
+        <p class="hint" style="margin:0;">No creator negotiation data yet. Data appears here once creators share their rates via the influence-negotiation backend (<code>POST /api/negotiation/push</code>).</p>
       </div>`;
     return;
   }
-  for (const r of results) {
-    root.appendChild(buildNegCampaignBlock(r.campaign, r.creators));
+
+  for (const { campaign, creators } of results) {
+    // Show all campaigns that have at least one relevant creator, plus any
+    // that have max_cpm set (so admin can configure them even before push data).
+    if (!creators.length && campaign.max_cpm == null) continue;
+    root.appendChild(buildNegCampaignBlock(campaign, creators));
   }
 }
 
@@ -863,202 +870,302 @@ function buildNegCampaignBlock(campaign, creators) {
   block.className = 'neg-campaign-block';
   if (creators.length > 0) block.setAttribute('open', '');
 
+  const creatorWord = creators.length === 1 ? 'creator' : 'creators';
   block.innerHTML = `
     <summary>
       <span class="neg-campaign-title">${escapeHtml(campaign.brand_name)} · ${escapeHtml(campaign.name)}</span>
-      <span class="neg-campaign-meta">${creators.length} creator${creators.length === 1 ? '' : 's'} with offers</span>
+      <span class="neg-campaign-meta">${creators.length} ${creatorWord} with data</span>
     </summary>
     <div class="neg-campaign-body">
       <div class="neg-cpm-row">
-        <label class="neg-cpm-label">Max CPM ($)
-          <input type="number" class="neg-cpm-input" min="0" step="0.5"
-            value="${campaign.max_cpm != null ? campaign.max_cpm : ''}"
-            placeholder="e.g. 15" />
-        </label>
-        <button type="button" class="neg-cpm-save small">Save &amp; Recalculate Offers</button>
+        <label class="neg-cpm-label" for="neg-cpm-${escapeHtml(campaign.id)}">Max CPM ($)</label>
+        <input
+          id="neg-cpm-${escapeHtml(campaign.id)}"
+          class="neg-cpm-input"
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder="e.g. 25"
+          value="${campaign.max_cpm != null ? escapeHtml(String(campaign.max_cpm)) : ''}"
+        />
+        <button type="button" class="neg-recalc-btn small">Save &amp; Recalculate Offers</button>
         <span class="neg-cpm-status hint"></span>
       </div>
-      <div class="neg-creator-list"></div>
+      <div class="neg-creators-list"></div>
     </div>
   `;
 
-  const creatorList = block.querySelector('.neg-creator-list');
+  const creatorsList = block.querySelector('.neg-creators-list');
   const cpmInput = block.querySelector('.neg-cpm-input');
-  const cpmSaveBtn = block.querySelector('.neg-cpm-save');
+  const recalcBtn = block.querySelector('.neg-recalc-btn');
   const cpmStatus = block.querySelector('.neg-cpm-status');
 
-  cpmSaveBtn.addEventListener('click', async () => {
-    const raw = cpmInput.value;
-    const val = raw === '' ? null : Number(raw);
-    if (val !== null && (Number.isNaN(val) || val < 0)) {
-      cpmStatus.textContent = 'Enter a valid positive number.';
-      return;
-    }
-    cpmSaveBtn.disabled = true;
-    cpmStatus.textContent = 'Saving…';
-    try {
-      const updated = await api(`/api/campaigns/${encodeURIComponent(campaign.id)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ max_cpm: val }),
-      });
-      campaign.max_cpm = updated.max_cpm;
-      if (val != null) {
-        cpmStatus.textContent = 'Recalculating…';
-        const r = await api(`/api/campaigns/${encodeURIComponent(campaign.id)}/recalculate-offers`, { method: 'POST' });
-        cpmStatus.textContent = `Saved. Recalculated offers for ${r.updated} creator(s).`;
-        await rebuildCreatorList();
-      } else {
-        cpmStatus.textContent = 'Max CPM cleared.';
-      }
-    } catch (err) {
-      cpmStatus.textContent = `Failed: ${escapeHtml(err.message)}`;
-    } finally {
-      cpmSaveBtn.disabled = false;
-    }
-  });
-
-  async function rebuildCreatorList() {
-    creatorList.innerHTML = '<p class="hint">Refreshing…</p>';
-    try {
-      const fresh = await api(`/api/creators?campaign_id=${encodeURIComponent(campaign.id)}`);
-      const relevant = fresh.filter((r) => r.suggested_offers || r.ig_scraped_data);
-      creatorList.innerHTML = '';
-      for (const c of relevant) creatorList.appendChild(buildNegCreatorBlock(c));
-    } catch (err) {
-      creatorList.innerHTML = `<p class="hint">Refresh failed: ${escapeHtml(err.message)}</p>`;
+  // Render creator blocks.
+  function renderCreators(list) {
+    creatorsList.innerHTML = '';
+    for (const creator of list) {
+      creatorsList.appendChild(buildNegCreatorBlock(creator, refreshCreatorBlock));
     }
   }
 
-  for (const c of creators) creatorList.appendChild(buildNegCreatorBlock(c));
+  // Re-fetch and re-render a single creator block after offer selection.
+  async function refreshCreatorBlock(creatorId) {
+    try {
+      const updated = await api(`/api/creators/${creatorId}/offers`);
+      // Merge updated offers/selection back into creators array.
+      const idx = creators.findIndex((c) => c.id === creatorId);
+      if (idx !== -1) {
+        creators[idx] = { ...creators[idx], ...updated };
+        renderCreators(creators);
+      }
+    } catch (err) {
+      cpmStatus.textContent = `Refresh failed: ${err.message}`;
+    }
+  }
+
+  renderCreators(creators);
+
+  recalcBtn.addEventListener('click', async () => {
+    const rawCpm = cpmInput.value.trim();
+    const maxCpm = rawCpm === '' ? null : Number(rawCpm);
+    if (maxCpm != null && (!Number.isFinite(maxCpm) || maxCpm <= 0)) {
+      cpmStatus.textContent = 'Enter a positive number.';
+      return;
+    }
+    recalcBtn.disabled = true;
+    cpmStatus.textContent = 'Saving…';
+    try {
+      // 1. Save max_cpm on the campaign.
+      await api(`/api/campaigns/${encodeURIComponent(campaign.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ max_cpm: maxCpm }),
+      });
+      campaign.max_cpm = maxCpm;
+
+      // 2. Trigger offer recalculation for all creators in this campaign.
+      cpmStatus.textContent = 'Recalculating offers…';
+      const result = await api(`/api/campaigns/${encodeURIComponent(campaign.id)}/recalculate-offers`, {
+        method: 'POST',
+      });
+
+      // 3. Re-fetch updated creators.
+      const freshCreators = await api(`/api/creators?campaign_id=${encodeURIComponent(campaign.id)}`);
+      const relevant = freshCreators.filter(
+        (c) => c.suggested_offers != null || c.ig_scraped_data != null,
+      );
+      creators.length = 0;
+      relevant.forEach((c) => creators.push(c));
+      renderCreators(creators);
+
+      cpmStatus.textContent = `Done — ${result.updated} creator${result.updated === 1 ? '' : 's'} updated.`;
+    } catch (err) {
+      cpmStatus.textContent = `Failed: ${escapeHtml(err.message)}`;
+    } finally {
+      recalcBtn.disabled = false;
+    }
+  });
+
   return block;
 }
 
-function buildNegCreatorBlock(creator) {
+function buildNegCreatorBlock(creator, onOfferSelected) {
   const block = document.createElement('details');
   block.className = 'neg-creator-block';
 
   const handle = creator.instagram_username || String(creator.id);
-  const rateLabel = creator.quoted_rate != null
-    ? `<span class="neg-creator-rate">Rate: $${Number(creator.quoted_rate).toLocaleString()}</span>`
+  const rateBadge = creator.quoted_rate != null
+    ? `<span class="neg-creator-rate">Quoted: $${escapeHtml(String(Number(creator.quoted_rate).toFixed(2)))}</span>`
     : '';
 
   block.innerHTML = `
     <summary>
       <span class="neg-creator-handle">@${escapeHtml(handle)}</span>
-      ${rateLabel}
+      ${rateBadge}
     </summary>
-    <div class="neg-creator-body">
-      ${buildIgDataSection(creator)}
-      ${buildOffersSection(creator)}
-    </div>
+    <div class="neg-creator-body"></div>
   `;
 
-  wireOfferButtons(block, creator);
-  return block;
-}
+  const body = block.querySelector('.neg-creator-body');
 
-function buildIgDataSection(creator) {
-  const d = creator.ig_scraped_data;
-  if (!d) return '';
-  const fmt = (v) => v != null ? Number(v).toLocaleString() : '—';
-  return `
-    <details class="neg-section-block">
-      <summary>IG Scraped Data</summary>
-      <div class="neg-ig-grid">
-        <div class="neg-ig-stat"><div class="neg-ig-stat-label">Min Views</div><div class="neg-ig-stat-value">${fmt(d.min_views)}</div></div>
-        <div class="neg-ig-stat"><div class="neg-ig-stat-label">P10</div><div class="neg-ig-stat-value">${fmt(d.p10)}</div></div>
-        <div class="neg-ig-stat"><div class="neg-ig-stat-label">P25 (Typical floor)</div><div class="neg-ig-stat-value">${fmt(d.p25)}</div></div>
-        <div class="neg-ig-stat"><div class="neg-ig-stat-label">P50 (Median)</div><div class="neg-ig-stat-value">${fmt(d.p50)}</div></div>
-        <div class="neg-ig-stat"><div class="neg-ig-stat-label">P75</div><div class="neg-ig-stat-value">${fmt(d.p75)}</div></div>
-        <div class="neg-ig-stat"><div class="neg-ig-stat-label">Reels Analyzed</div><div class="neg-ig-stat-value">${fmt(d.reel_count)}</div></div>
-      </div>
-    </details>`;
-}
+  // ── IG Scraped Data sub-section ──────────────────────────────────────────
+  const igSection = document.createElement('details');
+  igSection.className = 'neg-section-block';
+  const ig = creator.ig_scraped_data || {};
 
-function buildOffersSection(creator) {
+  // Compute average from views_raw if available.
+  let avgViews = null;
+  if (Array.isArray(ig.views_raw) && ig.views_raw.length > 0) {
+    const sum = ig.views_raw.reduce((a, b) => a + b, 0);
+    avgViews = Math.round(sum / ig.views_raw.length);
+  }
+
+  const igStats = [
+    { label: 'Min Views',      value: ig.min_views != null ? Number(ig.min_views).toLocaleString() : '—' },
+    { label: 'P10',            value: ig.p10       != null ? Number(ig.p10).toLocaleString()       : '—' },
+    { label: 'Typical Floor',  value: ig.p25       != null ? Number(ig.p25).toLocaleString()       : '—' },
+    { label: 'Median',         value: ig.p50       != null ? Number(ig.p50).toLocaleString()       : '—' },
+    { label: 'P75',            value: ig.p75       != null ? Number(ig.p75).toLocaleString()       : '—' },
+    { label: 'Reel Count',     value: ig.reel_count != null ? Number(ig.reel_count).toLocaleString() : '—' },
+  ];
+  if (avgViews != null) {
+    igStats.push({ label: 'Avg Views', value: avgViews.toLocaleString() });
+  }
+
+  igSection.innerHTML = `
+    <summary>IG Scraped Data</summary>
+    <div class="neg-ig-grid">
+      ${igStats.map((s) => `
+        <div class="neg-ig-stat">
+          <div class="neg-ig-stat-label">${escapeHtml(s.label)}</div>
+          <div class="neg-ig-stat-value">${escapeHtml(s.value)}</div>
+        </div>`).join('')}
+    </div>
+  `;
+  body.appendChild(igSection);
+
+  // ── 6 Suggested Offers sub-section ───────────────────────────────────────
+  const offersSection = document.createElement('details');
+  offersSection.className = 'neg-section-block';
+  offersSection.setAttribute('open', '');
+
   const offers = Array.isArray(creator.suggested_offers) ? creator.suggested_offers : [];
+  const selectedId = creator.selected_offer_id || null;
+  const customOffer = creator.custom_offer || null;
+
   if (!offers.length) {
-    return `
-      <details class="neg-section-block" open>
-        <summary>6 Suggested Offers</summary>
-        <p class="hint" style="padding:8px 0;">No offers yet. Set a Max CPM above and click "Save &amp; Recalculate Offers".</p>
-      </details>`;
+    offersSection.innerHTML = `
+      <summary>6 Suggested Offers</summary>
+      <p class="hint" style="padding: 10px 0;">No offers yet — set max CPM above and click "Save &amp; Recalculate Offers".</p>
+    `;
+    body.appendChild(offersSection);
+    return block;
   }
 
-  const viewOffers = offers.filter((o) => o.offer_type === 'view_based');
-  const videoOffers = offers.filter((o) => o.offer_type === 'video_based');
-  const selectedId = creator.selected_offer_id;
-  const customOffer = creator.custom_offer;
+  const viewOffers  = offers.filter((o) => o.offer_type === 'view_based');
+  const videoOffers = offers.filter((o) => o.offer_type === 'video_flat');
 
-  function offerCard(o) {
-    const isSel = o.offer_id === selectedId;
-    const display = (isSel && customOffer) ? { ...o, ...customOffer } : o;
-    const isView = display.offer_type === 'view_based';
+  function buildOfferCard(offer) {
+    const isSelected = offer.offer_id === selectedId;
+    const isView     = offer.offer_type === 'view_based';
+    const typeBadge  = isView ? 'view' : 'video';
+
     const detail = isView
-      ? `${(display.view_guarantee || 0).toLocaleString()} view guarantee`
-      : `${display.num_videos} video(s) × $${Number(display.flat_per_video || 0).toFixed(0)}/video`;
-    const satisfies = display.satisfies_creator_rate === true
-      ? '<div class="neg-offer-satisfies">✓ Meets creator rate</div>'
-      : (display.satisfies_creator_rate === false
-        ? '<div class="neg-offer-satisfies" style="color:#991b1b;">✗ Below creator rate</div>'
-        : '');
-    return `
-      <div class="neg-offer-card${isSel ? ' selected' : ''}" data-offer-id="${escapeHtml(o.offer_id)}">
-        <div class="neg-offer-header">
-          <span class="neg-offer-type-badge ${isView ? 'view' : 'video'}">${isView ? 'View-based' : 'Flat deal'}</span>
-          ${isSel ? '<span class="neg-offer-selected-badge">Selected</span>' : ''}
-        </div>
-        <div class="neg-offer-label">${escapeHtml(display.label)}</div>
-        <div class="neg-offer-amount">$${Number(display.flat_fee || 0).toLocaleString()}</div>
-        <div class="neg-offer-detail">${detail}</div>
-        ${display.notes ? `<div class="neg-offer-note">${escapeHtml(display.notes)}</div>` : ''}
-        ${satisfies}
-        <button type="button" class="neg-select-offer-btn small${isSel ? ' ghost' : ''}"
-          data-offer-id="${escapeHtml(o.offer_id)}" data-creator-id="${creator.id}">
-          ${isSel ? 'Re-select' : 'Select'}
-        </button>
-      </div>`;
+      ? `Guarantee: ${Number(offer.view_guarantee).toLocaleString()} views`
+      : `${offer.num_videos} video${offer.num_videos > 1 ? 's' : ''} · $${Number(offer.flat_per_video).toFixed(2)} each`;
+
+    const satisfies = offer.satisfies_creator_rate
+      ? `<div class="neg-offer-satisfies">✓ Meets quoted rate</div>`
+      : '';
+
+    const noteHtml = offer.notes
+      ? `<div class="neg-offer-note">${escapeHtml(offer.notes)}</div>`
+      : '';
+
+    const selectedBadge = isSelected
+      ? `<span class="neg-offer-selected-badge">Selected</span>`
+      : '';
+
+    const card = document.createElement('div');
+    card.className = `neg-offer-card${isSelected ? ' selected' : ''}`;
+    card.dataset.offerId = offer.offer_id;
+    card.innerHTML = `
+      <div class="neg-offer-header">
+        <span class="neg-offer-type-badge ${typeBadge}">${isView ? 'View' : 'Video'}</span>
+        ${selectedBadge}
+      </div>
+      <div class="neg-offer-label">${escapeHtml(offer.label)}</div>
+      <div class="neg-offer-amount">$${Number(offer.flat_fee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+      <div class="neg-offer-detail">${escapeHtml(detail)}</div>
+      ${noteHtml}
+      ${satisfies}
+      <button type="button" class="neg-select-offer-btn small${isSelected ? ' ghost' : ''}" data-offer-id="${escapeHtml(offer.offer_id)}" data-creator-id="${escapeHtml(String(creator.id))}">
+        ${isSelected ? 'Reselect' : 'Select'}
+      </button>
+    `;
+    return card;
   }
 
-  const editForm = selectedId ? `
-    <div class="neg-offer-edit-form" data-creator-id="${creator.id}">
+  // Build the edit form shown below offers when one is selected.
+  function buildEditForm() {
+    if (!selectedId) return null;
+    const base = customOffer || offers.find((o) => o.offer_id === selectedId);
+    if (!base) return null;
+
+    const isView = base.offer_type === 'view_based';
+    const form = document.createElement('div');
+    form.className = 'neg-offer-edit-form';
+    form.innerHTML = `
       <h4>Edit selected offer</h4>
       <div class="neg-edit-row">
-        <label>Total Fee ($)<input type="number" min="0" step="1" class="neg-edit-flat-fee"
-          value="${escapeHtml(String((customOffer || {}).flat_fee || (offers.find((o) => o.offer_id === selectedId) || {}).flat_fee || ''))}" /></label>
-        ${(offers.find((o) => o.offer_id === selectedId) || {}).offer_type === 'view_based'
-          ? `<label>View Guarantee<input type="number" min="0" step="25000" class="neg-edit-view-guarantee"
-              value="${escapeHtml(String((customOffer || {}).view_guarantee || (offers.find((o) => o.offer_id === selectedId) || {}).view_guarantee || ''))}" /></label>`
-          : `<label># Videos<input type="number" min="1" step="1" class="neg-edit-num-videos"
-              value="${escapeHtml(String((customOffer || {}).num_videos || (offers.find((o) => o.offer_id === selectedId) || {}).num_videos || ''))}" /></label>`
+        <label>
+          Flat fee ($)
+          <input type="number" min="0" step="0.01" class="neg-edit-flat-fee" value="${escapeHtml(String(base.flat_fee || 0))}" />
+        </label>
+        ${isView
+          ? `<label>
+               View guarantee
+               <input type="number" min="0" step="25000" class="neg-edit-guarantee" value="${escapeHtml(String(base.view_guarantee || 0))}" />
+             </label>`
+          : `<label>
+               Number of videos
+               <input type="number" min="1" step="1" class="neg-edit-num-videos" value="${escapeHtml(String(base.num_videos || 1))}" />
+             </label>`
         }
       </div>
       <div class="neg-edit-row">
-        <label style="flex:1;">Notes<textarea class="neg-edit-notes" rows="2">${escapeHtml((customOffer || {}).notes || (offers.find((o) => o.offer_id === selectedId) || {}).notes || '')}</textarea></label>
+        <label style="flex: 1;">
+          Notes
+          <textarea class="neg-edit-notes" rows="2">${escapeHtml(base.notes || '')}</textarea>
+        </label>
       </div>
       <div class="neg-edit-footer">
-        <button type="button" class="neg-save-edit-btn small" data-creator-id="${creator.id}">Save Edit</button>
+        <button type="button" class="neg-save-edit-btn small" data-creator-id="${escapeHtml(String(creator.id))}" data-offer-type="${escapeHtml(base.offer_type)}">Save edit</button>
         <span class="neg-edit-status hint"></span>
       </div>
-    </div>` : '';
+    `;
+    return form;
+  }
 
-  return `
-    <details class="neg-section-block" open>
-      <summary>6 Suggested Offers</summary>
-      <div class="neg-offers-sections">
-        <div class="neg-offers-section-header">View-Based Offers</div>
-        <div class="neg-offers-row">${viewOffers.map(offerCard).join('')}</div>
-        <div class="neg-offers-section-header" style="margin-top:16px;">Video-Count Flat Deals</div>
-        <div class="neg-offers-row">${videoOffers.map(offerCard).join('')}</div>
-      </div>
-      ${editForm}
-    </details>`;
-}
+  offersSection.innerHTML = '<summary>6 Suggested Offers</summary>';
+  const offersBody = document.createElement('div');
+  offersBody.className = 'neg-offers-sections';
 
-function wireOfferButtons(block, creator) {
-  block.querySelectorAll('.neg-select-offer-btn').forEach((btn) => {
+  // View-based row.
+  if (viewOffers.length) {
+    const header = document.createElement('div');
+    header.className = 'neg-offers-section-header';
+    header.textContent = 'View-Based Offers';
+    offersBody.appendChild(header);
+    const row = document.createElement('div');
+    row.className = 'neg-offers-row';
+    viewOffers.forEach((o) => row.appendChild(buildOfferCard(o)));
+    offersBody.appendChild(row);
+  }
+
+  // Video-flat row.
+  if (videoOffers.length) {
+    const header = document.createElement('div');
+    header.className = 'neg-offers-section-header';
+    header.textContent = 'Video-Count Flat Offers';
+    offersBody.appendChild(header);
+    const row = document.createElement('div');
+    row.className = 'neg-offers-row';
+    videoOffers.forEach((o) => row.appendChild(buildOfferCard(o)));
+    offersBody.appendChild(row);
+  }
+
+  // Edit form.
+  const editForm = buildEditForm();
+  if (editForm) offersBody.appendChild(editForm);
+
+  offersSection.appendChild(offersBody);
+  body.appendChild(offersSection);
+
+  // ── Wire up buttons ───────────────────────────────────────────────────────
+
+  offersSection.querySelectorAll('.neg-select-offer-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const offerId = btn.dataset.offerId;
+      const offerId   = btn.dataset.offerId;
       const creatorId = btn.dataset.creatorId;
       btn.disabled = true;
       try {
@@ -1066,10 +1173,7 @@ function wireOfferButtons(block, creator) {
           method: 'POST',
           body: JSON.stringify({ offer_id: offerId }),
         });
-        const fresh = await api(`/api/creators/${creatorId}`);
-        const newBlock = buildNegCreatorBlock(fresh);
-        block.replaceWith(newBlock);
-        newBlock.setAttribute('open', '');
+        if (typeof onOfferSelected === 'function') await onOfferSelected(Number(creatorId));
       } catch (err) {
         alert(`Failed to select offer: ${err.message}`);
         btn.disabled = false;
@@ -1077,35 +1181,43 @@ function wireOfferButtons(block, creator) {
     });
   });
 
-  block.querySelectorAll('.neg-save-edit-btn').forEach((btn) => {
+  offersSection.querySelectorAll('.neg-save-edit-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const creatorId = btn.dataset.creatorId;
-      const form = btn.closest('.neg-offer-edit-form');
-      const status = form.querySelector('.neg-edit-status');
-      const edits = {};
-      const feeEl = form.querySelector('.neg-edit-flat-fee');
-      const viewEl = form.querySelector('.neg-edit-view-guarantee');
-      const vidEl = form.querySelector('.neg-edit-num-videos');
-      const notesEl = form.querySelector('.neg-edit-notes');
-      if (feeEl) edits.flat_fee = Number(feeEl.value);
-      if (viewEl) edits.view_guarantee = Number(viewEl.value);
-      if (vidEl) edits.num_videos = Number(vidEl.value);
-      if (notesEl) edits.notes = notesEl.value;
+      const offerType = btn.dataset.offerType;
+      const form      = btn.closest('.neg-offer-edit-form');
+      const statusEl  = form.querySelector('.neg-edit-status');
+
+      const flatFeeInput = form.querySelector('.neg-edit-flat-fee');
+      const payload = {
+        flat_fee: flatFeeInput ? Number(flatFeeInput.value) : undefined,
+        notes:    form.querySelector('.neg-edit-notes')?.value ?? '',
+      };
+      if (offerType === 'view_based') {
+        const g = form.querySelector('.neg-edit-guarantee');
+        if (g) payload.view_guarantee = Number(g.value);
+      } else {
+        const n = form.querySelector('.neg-edit-num-videos');
+        if (n) payload.num_videos = Number(n.value);
+      }
+
       btn.disabled = true;
-      status.textContent = 'Saving…';
+      statusEl.textContent = 'Saving…';
       try {
         await api(`/api/creators/${creatorId}/offers/custom`, {
           method: 'PATCH',
-          body: JSON.stringify(edits),
+          body: JSON.stringify(payload),
         });
-        status.textContent = 'Saved.';
+        statusEl.textContent = 'Saved.';
       } catch (err) {
-        status.textContent = `Failed: ${escapeHtml(err.message)}`;
+        statusEl.textContent = `Failed: ${escapeHtml(err.message)}`;
       } finally {
         btn.disabled = false;
       }
     });
   });
+
+  return block;
 }
 
 (async () => {
