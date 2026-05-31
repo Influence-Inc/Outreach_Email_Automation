@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { syncCampaigns } = require('../services/campaignsApi');
+const { computeSixOffers } = require('../services/offerCalculator');
 
 const router = express.Router();
 
@@ -89,6 +90,40 @@ router.patch('/:id', async (req, res, next) => {
     }
     next(err);
   }
+});
+
+router.post('/:id/recalculate-offers', async (req, res, next) => {
+  try {
+    const campaign = await db.one(`SELECT id, max_cpm FROM campaigns WHERE id = $1`, [req.params.id]);
+    if (!campaign) return res.status(404).json({ error: 'not found' });
+    if (!campaign.max_cpm) {
+      return res.status(400).json({ error: 'max_cpm not set for this campaign — set it first' });
+    }
+
+    const creators = await db.many(
+      `SELECT id, instagram_username, ig_scraped_data, quoted_rate
+       FROM creators
+       WHERE campaign_id = $1 AND ig_scraped_data IS NOT NULL`,
+      [req.params.id],
+    );
+
+    let updated = 0;
+    for (const c of creators) {
+      const offers = await computeSixOffers(
+        c.ig_scraped_data,
+        Number(campaign.max_cpm),
+        c.quoted_rate != null ? Number(c.quoted_rate) : null,
+        c.instagram_username || '',
+      );
+      await db.query(
+        `UPDATE creators SET suggested_offers = $2, updated_at = NOW() WHERE id = $1`,
+        [c.id, JSON.stringify(offers)],
+      );
+      updated += 1;
+    }
+
+    res.json({ ok: true, updated });
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

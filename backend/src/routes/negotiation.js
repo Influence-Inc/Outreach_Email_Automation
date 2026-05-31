@@ -62,15 +62,19 @@ router.post('/push', async (req, res, next) => {
       });
     }
 
+    const { quoted_rate } = req.body || {};
+    const quotedRate = quoted_rate != null ? Number(quoted_rate) : null;
+
     const updatedIds = [];
     for (const row of rows) {
       await db.query(
         `UPDATE creators
          SET ig_scraped_data  = $2,
              suggested_offers = $3,
+             quoted_rate      = COALESCE($4, quoted_rate),
              updated_at       = NOW()
          WHERE id = $1`,
-        [row.id, JSON.stringify(ig_scraped_data), JSON.stringify(suggested_offers)],
+        [row.id, JSON.stringify(ig_scraped_data), JSON.stringify(suggested_offers), quotedRate],
       );
       updatedIds.push(row.id);
     }

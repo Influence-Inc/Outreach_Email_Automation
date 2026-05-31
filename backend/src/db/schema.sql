@@ -124,3 +124,6 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS selected_offer_id TEXT;
 
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS custom_offer JSONB;
   -- admin-edited version of the selected offer (overrides suggested_offers entry)
+
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS quoted_rate NUMERIC(10,2);
+  -- rate quoted by the creator (pushed from influence-negotiation)

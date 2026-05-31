@@ -88,6 +88,7 @@ async function refreshCampaigns() {
 function showView(name) {
   el('campaign-view').hidden = name !== 'campaign';
   el('templates-view').hidden = name !== 'templates';
+  el('negotiation-view').hidden = name !== 'negotiation';
   closeSidebarOnMobile();
 }
 
@@ -748,6 +749,11 @@ el('open-templates-btn').addEventListener('click', () => {
   showView('templates');
 });
 
+el('open-negotiation-btn').addEventListener('click', () => {
+  showView('negotiation');
+  loadNegotiationView();
+});
+
 // --- Per-campaign template picker ----------------------------------------
 
 function renderCampaignTemplatePicker(campaign) {
@@ -809,6 +815,298 @@ function renderCampaignTemplatePicker(campaign) {
 el('campaign-template-open-btn').addEventListener('click', () => {
   showView('templates');
 });
+
+// --- Creator Negotiation view --------------------------------------------
+
+async function loadNegotiationView() {
+  const root = el('negotiation-campaigns-list');
+  root.innerHTML = '<p class="hint">Loading…</p>';
+  try {
+    if (!state.campaigns.length) await refreshCampaigns();
+    const results = await Promise.all(
+      state.campaigns.map(async (c) => {
+        try {
+          const creators = await api(`/api/creators?campaign_id=${encodeURIComponent(c.id)}`);
+          const relevant = creators.filter(
+            (r) => r.suggested_offers || r.ig_scraped_data,
+          );
+          return { campaign: c, creators: relevant };
+        } catch {
+          return { campaign: c, creators: [] };
+        }
+      }),
+    );
+    renderNegotiationCampaigns(results);
+  } catch (err) {
+    root.innerHTML = `<p class="hint">Failed to load: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderNegotiationCampaigns(results) {
+  const root = el('negotiation-campaigns-list');
+  root.innerHTML = '';
+  const nonEmpty = results.filter((r) => r.creators.length > 0);
+  if (!nonEmpty.length) {
+    root.innerHTML = `
+      <div class="card">
+        <p class="hint" style="margin:0;">No creators have shared rates yet. Once influence-negotiation scrapes an Instagram profile and sends offers, they will appear here.</p>
+      </div>`;
+    return;
+  }
+  for (const r of results) {
+    root.appendChild(buildNegCampaignBlock(r.campaign, r.creators));
+  }
+}
+
+function buildNegCampaignBlock(campaign, creators) {
+  const block = document.createElement('details');
+  block.className = 'neg-campaign-block';
+  if (creators.length > 0) block.setAttribute('open', '');
+
+  block.innerHTML = `
+    <summary>
+      <span class="neg-campaign-title">${escapeHtml(campaign.brand_name)} · ${escapeHtml(campaign.name)}</span>
+      <span class="neg-campaign-meta">${creators.length} creator${creators.length === 1 ? '' : 's'} with offers</span>
+    </summary>
+    <div class="neg-campaign-body">
+      <div class="neg-cpm-row">
+        <label class="neg-cpm-label">Max CPM ($)
+          <input type="number" class="neg-cpm-input" min="0" step="0.5"
+            value="${campaign.max_cpm != null ? campaign.max_cpm : ''}"
+            placeholder="e.g. 15" />
+        </label>
+        <button type="button" class="neg-cpm-save small">Save &amp; Recalculate Offers</button>
+        <span class="neg-cpm-status hint"></span>
+      </div>
+      <div class="neg-creator-list"></div>
+    </div>
+  `;
+
+  const creatorList = block.querySelector('.neg-creator-list');
+  const cpmInput = block.querySelector('.neg-cpm-input');
+  const cpmSaveBtn = block.querySelector('.neg-cpm-save');
+  const cpmStatus = block.querySelector('.neg-cpm-status');
+
+  cpmSaveBtn.addEventListener('click', async () => {
+    const raw = cpmInput.value;
+    const val = raw === '' ? null : Number(raw);
+    if (val !== null && (Number.isNaN(val) || val < 0)) {
+      cpmStatus.textContent = 'Enter a valid positive number.';
+      return;
+    }
+    cpmSaveBtn.disabled = true;
+    cpmStatus.textContent = 'Saving…';
+    try {
+      const updated = await api(`/api/campaigns/${encodeURIComponent(campaign.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ max_cpm: val }),
+      });
+      campaign.max_cpm = updated.max_cpm;
+      if (val != null) {
+        cpmStatus.textContent = 'Recalculating…';
+        const r = await api(`/api/campaigns/${encodeURIComponent(campaign.id)}/recalculate-offers`, { method: 'POST' });
+        cpmStatus.textContent = `Saved. Recalculated offers for ${r.updated} creator(s).`;
+        await rebuildCreatorList();
+      } else {
+        cpmStatus.textContent = 'Max CPM cleared.';
+      }
+    } catch (err) {
+      cpmStatus.textContent = `Failed: ${escapeHtml(err.message)}`;
+    } finally {
+      cpmSaveBtn.disabled = false;
+    }
+  });
+
+  async function rebuildCreatorList() {
+    creatorList.innerHTML = '<p class="hint">Refreshing…</p>';
+    try {
+      const fresh = await api(`/api/creators?campaign_id=${encodeURIComponent(campaign.id)}`);
+      const relevant = fresh.filter((r) => r.suggested_offers || r.ig_scraped_data);
+      creatorList.innerHTML = '';
+      for (const c of relevant) creatorList.appendChild(buildNegCreatorBlock(c));
+    } catch (err) {
+      creatorList.innerHTML = `<p class="hint">Refresh failed: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  for (const c of creators) creatorList.appendChild(buildNegCreatorBlock(c));
+  return block;
+}
+
+function buildNegCreatorBlock(creator) {
+  const block = document.createElement('details');
+  block.className = 'neg-creator-block';
+
+  const handle = creator.instagram_username || String(creator.id);
+  const rateLabel = creator.quoted_rate != null
+    ? `<span class="neg-creator-rate">Rate: $${Number(creator.quoted_rate).toLocaleString()}</span>`
+    : '';
+
+  block.innerHTML = `
+    <summary>
+      <span class="neg-creator-handle">@${escapeHtml(handle)}</span>
+      ${rateLabel}
+    </summary>
+    <div class="neg-creator-body">
+      ${buildIgDataSection(creator)}
+      ${buildOffersSection(creator)}
+    </div>
+  `;
+
+  wireOfferButtons(block, creator);
+  return block;
+}
+
+function buildIgDataSection(creator) {
+  const d = creator.ig_scraped_data;
+  if (!d) return '';
+  const fmt = (v) => v != null ? Number(v).toLocaleString() : '—';
+  return `
+    <details class="neg-section-block">
+      <summary>IG Scraped Data</summary>
+      <div class="neg-ig-grid">
+        <div class="neg-ig-stat"><div class="neg-ig-stat-label">Min Views</div><div class="neg-ig-stat-value">${fmt(d.min_views)}</div></div>
+        <div class="neg-ig-stat"><div class="neg-ig-stat-label">P10</div><div class="neg-ig-stat-value">${fmt(d.p10)}</div></div>
+        <div class="neg-ig-stat"><div class="neg-ig-stat-label">P25 (Typical floor)</div><div class="neg-ig-stat-value">${fmt(d.p25)}</div></div>
+        <div class="neg-ig-stat"><div class="neg-ig-stat-label">P50 (Median)</div><div class="neg-ig-stat-value">${fmt(d.p50)}</div></div>
+        <div class="neg-ig-stat"><div class="neg-ig-stat-label">P75</div><div class="neg-ig-stat-value">${fmt(d.p75)}</div></div>
+        <div class="neg-ig-stat"><div class="neg-ig-stat-label">Reels Analyzed</div><div class="neg-ig-stat-value">${fmt(d.reel_count)}</div></div>
+      </div>
+    </details>`;
+}
+
+function buildOffersSection(creator) {
+  const offers = Array.isArray(creator.suggested_offers) ? creator.suggested_offers : [];
+  if (!offers.length) {
+    return `
+      <details class="neg-section-block" open>
+        <summary>6 Suggested Offers</summary>
+        <p class="hint" style="padding:8px 0;">No offers yet. Set a Max CPM above and click "Save &amp; Recalculate Offers".</p>
+      </details>`;
+  }
+
+  const viewOffers = offers.filter((o) => o.offer_type === 'view_based');
+  const videoOffers = offers.filter((o) => o.offer_type === 'video_based');
+  const selectedId = creator.selected_offer_id;
+  const customOffer = creator.custom_offer;
+
+  function offerCard(o) {
+    const isSel = o.offer_id === selectedId;
+    const display = (isSel && customOffer) ? { ...o, ...customOffer } : o;
+    const isView = display.offer_type === 'view_based';
+    const detail = isView
+      ? `${(display.view_guarantee || 0).toLocaleString()} view guarantee`
+      : `${display.num_videos} video(s) × $${Number(display.flat_per_video || 0).toFixed(0)}/video`;
+    const satisfies = display.satisfies_creator_rate === true
+      ? '<div class="neg-offer-satisfies">✓ Meets creator rate</div>'
+      : (display.satisfies_creator_rate === false
+        ? '<div class="neg-offer-satisfies" style="color:#991b1b;">✗ Below creator rate</div>'
+        : '');
+    return `
+      <div class="neg-offer-card${isSel ? ' selected' : ''}" data-offer-id="${escapeHtml(o.offer_id)}">
+        <div class="neg-offer-header">
+          <span class="neg-offer-type-badge ${isView ? 'view' : 'video'}">${isView ? 'View-based' : 'Flat deal'}</span>
+          ${isSel ? '<span class="neg-offer-selected-badge">Selected</span>' : ''}
+        </div>
+        <div class="neg-offer-label">${escapeHtml(display.label)}</div>
+        <div class="neg-offer-amount">$${Number(display.flat_fee || 0).toLocaleString()}</div>
+        <div class="neg-offer-detail">${detail}</div>
+        ${display.notes ? `<div class="neg-offer-note">${escapeHtml(display.notes)}</div>` : ''}
+        ${satisfies}
+        <button type="button" class="neg-select-offer-btn small${isSel ? ' ghost' : ''}"
+          data-offer-id="${escapeHtml(o.offer_id)}" data-creator-id="${creator.id}">
+          ${isSel ? 'Re-select' : 'Select'}
+        </button>
+      </div>`;
+  }
+
+  const editForm = selectedId ? `
+    <div class="neg-offer-edit-form" data-creator-id="${creator.id}">
+      <h4>Edit selected offer</h4>
+      <div class="neg-edit-row">
+        <label>Total Fee ($)<input type="number" min="0" step="1" class="neg-edit-flat-fee"
+          value="${escapeHtml(String((customOffer || {}).flat_fee || (offers.find((o) => o.offer_id === selectedId) || {}).flat_fee || ''))}" /></label>
+        ${(offers.find((o) => o.offer_id === selectedId) || {}).offer_type === 'view_based'
+          ? `<label>View Guarantee<input type="number" min="0" step="25000" class="neg-edit-view-guarantee"
+              value="${escapeHtml(String((customOffer || {}).view_guarantee || (offers.find((o) => o.offer_id === selectedId) || {}).view_guarantee || ''))}" /></label>`
+          : `<label># Videos<input type="number" min="1" step="1" class="neg-edit-num-videos"
+              value="${escapeHtml(String((customOffer || {}).num_videos || (offers.find((o) => o.offer_id === selectedId) || {}).num_videos || ''))}" /></label>`
+        }
+      </div>
+      <div class="neg-edit-row">
+        <label style="flex:1;">Notes<textarea class="neg-edit-notes" rows="2">${escapeHtml((customOffer || {}).notes || (offers.find((o) => o.offer_id === selectedId) || {}).notes || '')}</textarea></label>
+      </div>
+      <div class="neg-edit-footer">
+        <button type="button" class="neg-save-edit-btn small" data-creator-id="${creator.id}">Save Edit</button>
+        <span class="neg-edit-status hint"></span>
+      </div>
+    </div>` : '';
+
+  return `
+    <details class="neg-section-block" open>
+      <summary>6 Suggested Offers</summary>
+      <div class="neg-offers-sections">
+        <div class="neg-offers-section-header">View-Based Offers</div>
+        <div class="neg-offers-row">${viewOffers.map(offerCard).join('')}</div>
+        <div class="neg-offers-section-header" style="margin-top:16px;">Video-Count Flat Deals</div>
+        <div class="neg-offers-row">${videoOffers.map(offerCard).join('')}</div>
+      </div>
+      ${editForm}
+    </details>`;
+}
+
+function wireOfferButtons(block, creator) {
+  block.querySelectorAll('.neg-select-offer-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const offerId = btn.dataset.offerId;
+      const creatorId = btn.dataset.creatorId;
+      btn.disabled = true;
+      try {
+        await api(`/api/creators/${creatorId}/offers/select`, {
+          method: 'POST',
+          body: JSON.stringify({ offer_id: offerId }),
+        });
+        const fresh = await api(`/api/creators/${creatorId}`);
+        const newBlock = buildNegCreatorBlock(fresh);
+        block.replaceWith(newBlock);
+        newBlock.setAttribute('open', '');
+      } catch (err) {
+        alert(`Failed to select offer: ${err.message}`);
+        btn.disabled = false;
+      }
+    });
+  });
+
+  block.querySelectorAll('.neg-save-edit-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const creatorId = btn.dataset.creatorId;
+      const form = btn.closest('.neg-offer-edit-form');
+      const status = form.querySelector('.neg-edit-status');
+      const edits = {};
+      const feeEl = form.querySelector('.neg-edit-flat-fee');
+      const viewEl = form.querySelector('.neg-edit-view-guarantee');
+      const vidEl = form.querySelector('.neg-edit-num-videos');
+      const notesEl = form.querySelector('.neg-edit-notes');
+      if (feeEl) edits.flat_fee = Number(feeEl.value);
+      if (viewEl) edits.view_guarantee = Number(viewEl.value);
+      if (vidEl) edits.num_videos = Number(vidEl.value);
+      if (notesEl) edits.notes = notesEl.value;
+      btn.disabled = true;
+      status.textContent = 'Saving…';
+      try {
+        await api(`/api/creators/${creatorId}/offers/custom`, {
+          method: 'PATCH',
+          body: JSON.stringify(edits),
+        });
+        status.textContent = 'Saved.';
+      } catch (err) {
+        status.textContent = `Failed: ${escapeHtml(err.message)}`;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+}
 
 (async () => {
   await refreshAuth();
