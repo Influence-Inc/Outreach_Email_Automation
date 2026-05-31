@@ -8,7 +8,7 @@ router.get('/', async (_req, res, next) => {
   try {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
-              c.template_id,
+              c.template_id, c.max_cpm,
               COUNT(cr.id)::int AS creator_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'pending_extraction')::int AS pending_extraction_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
@@ -42,21 +42,44 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Update the campaign's selected email template. Everything else comes
-// from upstream sync.
+// Update campaign settings: template_id and/or max_cpm.
+// Both are optional independently — at least one must be present.
 router.patch('/:id', async (req, res, next) => {
   try {
-    if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'template_id')) {
-      return res.status(400).json({ error: 'template_id is required' });
+    const body = req.body || {};
+    const hasTemplateId = Object.prototype.hasOwnProperty.call(body, 'template_id');
+    const hasMaxCpm = Object.prototype.hasOwnProperty.call(body, 'max_cpm');
+
+    if (!hasTemplateId && !hasMaxCpm) {
+      return res.status(400).json({ error: 'At least one of template_id or max_cpm is required' });
     }
-    const raw = req.body.template_id;
-    const templateId = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
-    if (templateId !== null && !Number.isFinite(templateId)) {
-      return res.status(400).json({ error: 'template_id must be a number or null' });
+
+    const sets = [];
+    const params = [req.params.id];
+
+    if (hasTemplateId) {
+      const raw = body.template_id;
+      const templateId = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+      if (templateId !== null && !Number.isFinite(templateId)) {
+        return res.status(400).json({ error: 'template_id must be a number or null' });
+      }
+      params.push(templateId);
+      sets.push(`template_id = $${params.length}`);
     }
+
+    if (hasMaxCpm) {
+      const raw = body.max_cpm;
+      const maxCpm = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+      if (maxCpm !== null && (!Number.isFinite(maxCpm) || maxCpm < 0)) {
+        return res.status(400).json({ error: 'max_cpm must be a non-negative number or null' });
+      }
+      params.push(maxCpm);
+      sets.push(`max_cpm = $${params.length}`);
+    }
+
     const row = await db.one(
-      `UPDATE campaigns SET template_id = $2 WHERE id = $1 RETURNING *`,
-      [req.params.id, templateId],
+      `UPDATE campaigns SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
+      params,
     );
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(row);

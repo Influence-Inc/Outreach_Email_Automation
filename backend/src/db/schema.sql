@@ -105,3 +105,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_one_default
 
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES email_templates(id) ON DELETE SET NULL;
 
+-- Offer management: admin-configurable CPM cap per campaign.
+-- Used by influence-negotiation to constrain the 6 AI-suggested offers.
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS max_cpm NUMERIC(8,2);
+
+-- Per-creator IG scrape data and offer state (populated via /api/negotiation/push
+-- from the influence-negotiation backend after each Instagram scrape).
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_scraped_data JSONB;
+  -- shape: {p10, p25, p50, p75, reel_count, min_views, views_raw: number[]}
+
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS suggested_offers JSONB;
+  -- shape: [{offer_id, offer_type, label, num_videos, flat_fee, flat_per_video,
+  --          view_guarantee, cpm_applied, satisfies_creator_rate, notes}, ...]
+  -- 3 view-based + 3 video-count offers, AI-annotated
+
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS selected_offer_id TEXT;
+  -- offer_id from suggested_offers chosen by admin (e.g. "view_2", "video_1")
+
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS custom_offer JSONB;
+  -- admin-edited version of the selected offer (overrides suggested_offers entry)

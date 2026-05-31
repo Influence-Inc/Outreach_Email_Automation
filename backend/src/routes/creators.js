@@ -85,7 +85,6 @@ router.patch('/:id', async (req, res, next) => {
       }
     }
     if (!updates.length) return res.status(400).json({ error: 'no fields to update' });
-    // If an email is now present and creator was pending, advance status.
     if (req.body && req.body.email) {
       updates.push(`status = CASE WHEN status = 'pending_extraction' THEN 'email_found' ELSE status END`);
     }
@@ -141,7 +140,6 @@ router.post('/bulk/fetch-email', async (req, res) => {
       } catch (err) {
         results.push({ id: row.id, error: err.message });
       }
-      // Be polite to Instagram; small randomized delay.
       await new Promise((r) => setTimeout(r, 1500 + Math.random() * 1500));
     }
     res.json({ ok: true, processed: results.length, results });
@@ -176,9 +174,6 @@ router.post('/bulk/send-outreach', async (req, res) => {
         results.push({ id: row.id, ok: false, error: err.message });
         failed += 1;
       }
-      // Pace sends to protect sender-domain reputation. Default 60s with
-      // ±20% jitter; tune via SEND_PACING_MS env var. Skipped after the last
-      // creator to avoid an unnecessary trailing wait.
       if (row !== pending[pending.length - 1]) {
         const baseMs = Number(process.env.SEND_PACING_MS) || 60_000;
         const jitterMs = Math.floor(baseMs * 0.2 * (Math.random() * 2 - 1));
@@ -255,6 +250,107 @@ router.delete('/:id', async (req, res, next) => {
   try {
     await db.query(`DELETE FROM creators WHERE id = $1`, [req.params.id]);
     res.status(204).end();
+  } catch (err) { next(err); }
+});
+
+// ── Offer management ─────────────────────────────────────────────────────────
+
+/**
+ * GET /:id/offers
+ * Returns scraped IG data, all 6 suggested offers, and the admin's current selection.
+ */
+router.get('/:id/offers', async (req, res, next) => {
+  try {
+    const row = await db.one(
+      `SELECT id, instagram_username,
+              ig_scraped_data, suggested_offers,
+              selected_offer_id, custom_offer
+       FROM creators WHERE id = $1`,
+      [req.params.id],
+    );
+    if (!row) return res.status(404).json({ error: 'not found' });
+    res.json(row);
+  } catch (err) { next(err); }
+});
+
+/**
+ * POST /:id/offers/select
+ * Admin picks one of the 6 suggested offers. The chosen offer is copied
+ * into custom_offer so subsequent edits don't mutate suggested_offers.
+ *
+ * Body: { offer_id: string }  e.g. "view_2" or "video_1"
+ */
+router.post('/:id/offers/select', async (req, res, next) => {
+  try {
+    const { offer_id } = req.body || {};
+    if (!offer_id) return res.status(400).json({ error: 'offer_id is required' });
+
+    const creator = await db.one(
+      `SELECT id, suggested_offers FROM creators WHERE id = $1`,
+      [req.params.id],
+    );
+    if (!creator) return res.status(404).json({ error: 'not found' });
+
+    const offers = Array.isArray(creator.suggested_offers) ? creator.suggested_offers : [];
+    const selected = offers.find((o) => o.offer_id === offer_id);
+    if (!selected) {
+      return res.status(400).json({
+        error: `offer_id '${offer_id}' not found in suggested_offers`,
+        available: offers.map((o) => o.offer_id),
+      });
+    }
+
+    const row = await db.one(
+      `UPDATE creators
+         SET selected_offer_id = $2,
+             custom_offer      = $3,
+             updated_at        = NOW()
+       WHERE id = $1
+       RETURNING id, selected_offer_id, custom_offer`,
+      [req.params.id, offer_id, JSON.stringify(selected)],
+    );
+    res.json({ ok: true, ...row });
+  } catch (err) { next(err); }
+});
+
+/**
+ * PATCH /:id/offers/custom
+ * Admin edits the selected offer. Allowed fields:
+ *   flat_fee, flat_per_video, view_guarantee, num_videos, notes
+ * Changes are merged into custom_offer; suggested_offers is untouched.
+ */
+router.patch('/:id/offers/custom', async (req, res, next) => {
+  try {
+    const EDITABLE = ['flat_fee', 'flat_per_video', 'view_guarantee', 'num_videos', 'notes'];
+    const edits = req.body || {};
+
+    const creator = await db.one(
+      `SELECT id, custom_offer FROM creators WHERE id = $1`,
+      [req.params.id],
+    );
+    if (!creator) return res.status(404).json({ error: 'not found' });
+    if (!creator.custom_offer) {
+      return res.status(400).json({
+        error: 'No offer selected yet — POST to /:id/offers/select first',
+      });
+    }
+
+    const merged = { ...creator.custom_offer };
+    for (const key of EDITABLE) {
+      if (Object.prototype.hasOwnProperty.call(edits, key)) {
+        merged[key] = edits[key];
+      }
+    }
+
+    const row = await db.one(
+      `UPDATE creators
+         SET custom_offer = $2,
+             updated_at   = NOW()
+       WHERE id = $1
+       RETURNING id, selected_offer_id, custom_offer`,
+      [req.params.id, JSON.stringify(merged)],
+    );
+    res.json({ ok: true, ...row });
   } catch (err) { next(err); }
 });
 

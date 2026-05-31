@@ -8,6 +8,7 @@ const creators = require('./routes/creators');
 const templates = require('./routes/templates');
 const tracking = require('./routes/tracking');
 const auth = require('./routes/auth');
+const negotiation = require('./routes/negotiation');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
@@ -34,6 +35,7 @@ app.get('/api/debug/ig-cookie', (_req, res) => res.json(igCookieStatus()));
 app.use('/api/campaigns', campaigns);
 app.use('/api/creators', creators);
 app.use('/api/templates', templates);
+app.use('/api/negotiation', negotiation);
 app.use('/auth', auth);
 app.use('/track', tracking);
 
@@ -53,7 +55,6 @@ app.listen(port, () => {
     console.error('seedDefaultIfEmpty failed:', err.message),
   );
 
-  // Pull brands + campaigns from campaigns.influence.technology on boot.
   syncCampaigns()
     .then((r) => console.log(`Synced ${r.upserted} campaigns from upstream`))
     .catch((err) => console.error('Initial campaigns sync failed:', err.message));
