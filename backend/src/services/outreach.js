@@ -1,5 +1,5 @@
 const db = require('../db');
-const { renderOutreach, renderFollowup, renderNegotiationReply } = require('./templates');
+const { renderOutreach, renderFollowup } = require('./templates');
 const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
 
 // Joins each creator with the active template for their campaign: that
@@ -13,8 +13,7 @@ async function loadCreatorContext(creatorId) {
             et.id AS template_id,
             et.name AS template_name,
             et.outreach AS template_outreach,
-            et.followups AS template_followups,
-            et.negotiation_reply AS template_negotiation_reply
+            et.followups AS template_followups
      FROM creators c
      JOIN campaigns ca ON ca.id = c.campaign_id
      LEFT JOIN email_templates et
@@ -39,7 +38,6 @@ function activeTemplate(creator) {
   return {
     outreach: creator.template_outreach || null,
     followups: Array.isArray(creator.template_followups) ? creator.template_followups : [],
-    negotiation_reply: creator.template_negotiation_reply || null,
   };
 }
 
@@ -201,67 +199,4 @@ async function markReplied(creatorId) {
   );
 }
 
-async function sendNegotiationReply1(creatorId) {
-  const creator = await loadCreatorContext(creatorId);
-  if (!creator) throw new Error(`Creator ${creatorId} not found`);
-  if (!creator.email) throw new Error(`Creator ${creatorId} has no email`);
-  if (!creator.outreach_thread_id) throw new Error(`Creator ${creatorId} has no thread`);
-  if (creator.negotiation_reply_sent_at) return { ok: false, reason: 'already_sent' };
-
-  const { subject, body } = renderNegotiationReply(activeTemplate(creator), templateVars(creator));
-  const trackingId = newTrackingId();
-
-  let rfc822 = null;
-  try {
-    const lastEvent = await db.one(
-      `SELECT detail FROM email_events
-       WHERE creator_id = $1 AND type IN ('sent_outreach', 'sent_followup')
-       ORDER BY created_at DESC LIMIT 1`,
-      [creatorId],
-    );
-    rfc822 = lastEvent && lastEvent.detail ? lastEvent.detail.rfc822MessageId : null;
-  } catch (_) {}
-
-  try {
-    const sent = await sendEmail({
-      to: creator.email,
-      subject,
-      body,
-      threadId: creator.outreach_thread_id,
-      inReplyTo: rfc822,
-      references: rfc822,
-      trackingId,
-    });
-
-    await db.query(
-      `UPDATE creators
-       SET negotiation_reply_sent_at = NOW(), updated_at = NOW()
-       WHERE id = $1`,
-      [creatorId],
-    );
-
-    await db.query(
-      `INSERT INTO email_events (creator_id, type, message_id, detail)
-       VALUES ($1, 'sent_negotiation_reply', $2, $3)`,
-      [creatorId, trackingId, {
-        gmailMessageId: sent.gmailMessageId,
-        threadId: sent.threadId,
-        rfc822MessageId: sent.rfc822MessageId,
-        subject,
-        templateId: creator.template_id || null,
-        templateName: creator.template_name || null,
-      }],
-    );
-
-    return { ok: true, trackingId, threadId: sent.threadId };
-  } catch (err) {
-    await db.query(
-      `INSERT INTO email_events (creator_id, type, detail)
-       VALUES ($1, 'failed', $2)`,
-      [creatorId, { phase: 'negotiation_reply', error: err.message }],
-    );
-    throw err;
-  }
-}
-
-module.exports = { sendOutreach, sendFollowup, markReplied, resolveFollowupSteps, sendNegotiationReply1 };
+module.exports = { sendOutreach, sendFollowup, markReplied, resolveFollowupSteps };

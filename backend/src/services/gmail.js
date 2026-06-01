@@ -120,45 +120,4 @@ async function threadHasReply(threadId) {
   return false;
 }
 
-function extractTextFromPayload(payload) {
-  if (!payload) return '';
-  if (payload.body && payload.body.data) {
-    return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
-  }
-  if (Array.isArray(payload.parts)) {
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/plain' && part.body && part.body.data) {
-        return Buffer.from(part.body.data, 'base64url').toString('utf-8');
-      }
-    }
-    for (const part of payload.parts) {
-      const t = extractTextFromPayload(part);
-      if (t) return t;
-    }
-  }
-  return '';
-}
-
-async function getThreadReplyText(threadId) {
-  if (!threadId) return null;
-  const auth = await getAuthorizedClient();
-  const gmail = google.gmail({ version: 'v1', auth });
-  const senderEmail = (process.env.SENDER_EMAIL || '').toLowerCase();
-
-  const thread = await gmail.users.threads.get({
-    userId: 'me',
-    id: threadId,
-    format: 'full',
-  });
-
-  for (const m of thread.data.messages || []) {
-    const headers = (m.payload && m.payload.headers) || [];
-    const from = headers.find((h) => h.name.toLowerCase() === 'from');
-    if (!from || from.value.toLowerCase().includes(senderEmail)) continue;
-    const text = extractTextFromPayload(m.payload);
-    if (text.trim()) return text;
-  }
-  return null;
-}
-
-module.exports = { sendEmail, threadHasReply, getThreadReplyText, newTrackingId };
+module.exports = { sendEmail, threadHasReply, newTrackingId };

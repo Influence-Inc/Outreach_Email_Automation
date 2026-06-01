@@ -545,10 +545,6 @@ function buildTemplateBlock(template) {
           body: s.body || '',
         }))
       : [],
-    negotiation_reply: {
-      subject: (template.negotiation_reply && template.negotiation_reply.subject) || '',
-      body: (template.negotiation_reply && template.negotiation_reply.body) || '',
-    },
   };
 
   block.innerHTML = `
@@ -663,15 +659,6 @@ function buildTemplateBlock(template) {
       <button type="button" class="ghost small add-followup">+ Add follow-up</button>
     </div>
 
-    <h4 style="margin-top: 20px;">Negotiation Reply 1 (auto-sent when creator says "interested")</h4>
-    <p class="hint" style="margin-top: 0; margin-bottom: 8px;">Sent automatically when Claude classifies a creator's reply as "interested" or "quoted rate". Leave blank to use the built-in default.</p>
-    <label>Subject
-      <input type="text" class="neg-reply-subject" value="${escapeHtml(draft.negotiation_reply.subject)}" placeholder="Re: Paid collaboration with {brandName}" />
-    </label>
-    <label>Body
-      <textarea class="neg-reply-body" rows="8" placeholder="Hi {firstName}, ...">${escapeHtml(draft.negotiation_reply.body)}</textarea>
-    </label>
-
     <div class="row" style="gap: 8px; margin-top: 16px; justify-content: flex-end; align-items: center;">
       <span class="hint tpl-status" style="margin-right: auto;"></span>
       ${template.id ? '<button type="button" class="ghost tpl-delete">Delete</button>' : ''}
@@ -688,8 +675,6 @@ function buildTemplateBlock(template) {
   };
   body.querySelector('.out-subject').oninput = (ev) => { draft.outreach.subject = ev.target.value; };
   body.querySelector('.out-body').oninput = (ev) => { draft.outreach.body = ev.target.value; };
-  body.querySelector('.neg-reply-subject').oninput = (ev) => { draft.negotiation_reply.subject = ev.target.value; };
-  body.querySelector('.neg-reply-body').oninput = (ev) => { draft.negotiation_reply.body = ev.target.value; };
   body.querySelector('.add-followup').onclick = (ev) => {
     ev.preventDefault();
     draft.followups.push({ delayHours: 48, label: '', subject: '', body: '' });
@@ -715,7 +700,6 @@ function buildTemplateBlock(template) {
           subject: s.subject || '',
           body: s.body || '',
         })),
-        negotiation_reply: { subject: draft.negotiation_reply.subject, body: draft.negotiation_reply.body },
       };
       if (template.id) {
         await api(`/api/templates/${template.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
@@ -757,7 +741,6 @@ el('new-template-btn').addEventListener('click', () => {
     is_default: false,
     outreach: { subject: '', body: '' },
     followups: [],
-    negotiation_reply: { subject: '', body: '' },
   });
   root.prepend(block);
 });

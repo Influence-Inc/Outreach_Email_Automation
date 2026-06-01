@@ -11,14 +11,6 @@ function normalizeOutreach(o) {
   };
 }
 
-function normalizeNegotiationReply(o) {
-  if (!o || typeof o !== 'object') return { subject: '', body: '' };
-  return {
-    subject: typeof o.subject === 'string' ? o.subject : '',
-    body: typeof o.body === 'string' ? o.body : '',
-  };
-}
-
 function normalizeFollowups(list) {
   if (!Array.isArray(list)) return [];
   return list
@@ -37,7 +29,7 @@ function normalizeFollowups(list) {
 router.get('/', async (_req, res, next) => {
   try {
     const rows = await db.many(
-      `SELECT id, name, outreach, followups, negotiation_reply, is_default, created_at, updated_at
+      `SELECT id, name, outreach, followups, is_default, created_at, updated_at
        FROM email_templates
        ORDER BY is_default DESC, name ASC`,
     );
@@ -47,7 +39,7 @@ router.get('/', async (_req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    const { name, outreach, followups, negotiation_reply, is_default } = req.body || {};
+    const { name, outreach, followups, is_default } = req.body || {};
     if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'name is required' });
     }
@@ -59,13 +51,12 @@ router.post('/', async (req, res, next) => {
         await client.query(`UPDATE email_templates SET is_default = FALSE WHERE is_default`);
       }
       const result = await client.query(
-        `INSERT INTO email_templates (name, outreach, followups, negotiation_reply, is_default)
-         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5) RETURNING *`,
+        `INSERT INTO email_templates (name, outreach, followups, is_default)
+         VALUES ($1, $2::jsonb, $3::jsonb, $4) RETURNING *`,
         [
           name.trim(),
           JSON.stringify(normalizeOutreach(outreach)),
           JSON.stringify(normalizeFollowups(followups)),
-          JSON.stringify(normalizeNegotiationReply(negotiation_reply)),
           Boolean(is_default),
         ],
       );
@@ -102,10 +93,6 @@ router.patch('/:id', async (req, res, next) => {
     if (body.followups !== undefined) {
       params.push(JSON.stringify(normalizeFollowups(body.followups)));
       sets.push(`followups = $${params.length}::jsonb`);
-    }
-    if (body.negotiation_reply !== undefined) {
-      params.push(JSON.stringify(normalizeNegotiationReply(body.negotiation_reply)));
-      sets.push(`negotiation_reply = $${params.length}::jsonb`);
     }
     const settingDefault = Object.prototype.hasOwnProperty.call(body, 'is_default')
       ? Boolean(body.is_default) : null;

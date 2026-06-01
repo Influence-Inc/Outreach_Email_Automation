@@ -1,7 +1,6 @@
 const db = require('../db');
-const { sendFollowup, markReplied, resolveFollowupSteps, sendNegotiationReply1 } = require('./outreach');
-const { threadHasReply, getThreadReplyText } = require('./gmail');
-const { classifyReply } = require('./replyHandler');
+const { sendFollowup, markReplied, resolveFollowupSteps } = require('./outreach');
+const { threadHasReply } = require('./gmail');
 
 const legacyDelayHours = () => Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
 const intervalMs = () =>
@@ -10,58 +9,10 @@ const intervalMs = () =>
 let timer = null;
 let running = false;
 
-async function processNewReplies() {
-  const unprocessed = await db.many(
-    `SELECT c.id, c.outreach_thread_id, c.first_name,
-            ca.brand_name
-     FROM creators c
-     JOIN campaigns ca ON ca.id = c.campaign_id
-     WHERE c.status = 'replied'
-       AND c.reply_classified_as IS NULL
-       AND c.outreach_thread_id IS NOT NULL`,
-  );
-
-  for (const c of unprocessed) {
-    try {
-      const replyText = await getThreadReplyText(c.outreach_thread_id);
-      if (!replyText || !replyText.trim()) {
-        await db.query(
-          `UPDATE creators SET reply_classified_as = 'unclear', reply_body = '', updated_at = NOW() WHERE id = $1`,
-          [c.id],
-        );
-        continue;
-      }
-
-      const { intent, quoted_rate, summary } = await classifyReply(replyText, c.first_name, c.brand_name);
-      console.log(`Creator ${c.id} reply classified as: ${intent} — ${summary}`);
-
-      await db.query(
-        `UPDATE creators
-         SET reply_classified_as = $2,
-             reply_body = $3,
-             quoted_rate = COALESCE($4::numeric, quoted_rate),
-             updated_at = NOW()
-         WHERE id = $1`,
-        [c.id, intent, replyText.substring(0, 5000), quoted_rate],
-      );
-
-      if (intent === 'interested' || intent === 'quoted_rate') {
-        const result = await sendNegotiationReply1(c.id);
-        console.log(`Negotiation reply sent to creator ${c.id}:`, result);
-      }
-    } catch (err) {
-      console.error(`processNewReplies failed for creator ${c.id}:`, err.message);
-    }
-  }
-}
-
 async function checkRepliesAndFollowups() {
   if (running) return;
   running = true;
   try {
-    // Process newly-replied creators: classify intent + send Reply 1 if interested.
-    await processNewReplies();
-
     // Refresh reply status for anything still in outreach_sent.
     const sentOutreach = await db.many(
       `SELECT id, outreach_thread_id FROM creators
@@ -136,4 +87,4 @@ function start() {
   }, 5000);
 }
 
-module.exports = { start, checkRepliesAndFollowups, processNewReplies };
+module.exports = { start, checkRepliesAndFollowups };

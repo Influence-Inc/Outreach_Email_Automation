@@ -28,20 +28,6 @@ Best,
 ${SENDER_NAME}
 useinfluence.xyz`;
 
-const NEGOTIATION_REPLY_SUBJECT = 'Re: Paid collaboration with {brandName}';
-
-const NEGOTIATION_REPLY_BODY = `Hi {firstName},
-
-Thanks for getting back to me! Glad to hear you're interested.
-
-Let me pull up the campaign details for {brandName} and send you over the full brief including deliverables and our rate.
-
-I'll be in touch shortly!
-
-Best,
-${SENDER_NAME}
-useinfluence.xyz`;
-
 // Only substitute placeholders that the caller actually defined. Unknown
 // {...} sequences (e.g. {{grey}} markers used by the rich-body renderer
 // downstream) are left intact instead of being replaced with empty strings.
@@ -73,20 +59,11 @@ function renderFollowup(template, vars, stepIndex = 0) {
   };
 }
 
-function renderNegotiationReply(template, vars) {
-  const tpl = template && template.negotiation_reply ? template.negotiation_reply : {};
-  return {
-    subject: fill(tpl.subject || NEGOTIATION_REPLY_SUBJECT, vars),
-    body: fill(tpl.body || NEGOTIATION_REPLY_BODY, vars),
-  };
-}
-
 function getHardcodedDefaults() {
   return {
     outreach: { subject: OUTREACH_SUBJECT, body: OUTREACH_BODY },
     followup: { subject: FOLLOWUP_SUBJECT, body: FOLLOWUP_BODY },
-    negotiation_reply: { subject: NEGOTIATION_REPLY_SUBJECT, body: NEGOTIATION_REPLY_BODY },
   };
 }
 
-module.exports = { renderOutreach, renderFollowup, renderNegotiationReply, getHardcodedDefaults };
+module.exports = { renderOutreach, renderFollowup, getHardcodedDefaults };

@@ -127,12 +127,3 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS custom_offer JSONB;
 
 -- Creator Negotiation: quoted rate supplied by the creator during negotiation.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS quoted_rate NUMERIC(10,2);
-
--- Reply classification (populated by scheduler after each creator reply)
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS reply_body TEXT;
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS reply_classified_as TEXT;
-  -- 'interested' | 'not_interested' | 'quoted_rate' | 'unclear'
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS negotiation_reply_sent_at TIMESTAMPTZ;
-
--- Negotiation Reply 1 per template — sent automatically when creator replies "interested"
-ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS negotiation_reply JSONB NOT NULL DEFAULT '{"subject":"","body":""}'::jsonb;
