@@ -161,4 +161,61 @@ router.get('/offer', async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/negotiation/replied
+ *
+ * Lists creators who have replied to outreach and are ready to be handed off to
+ * the influence-negotiation worker. Returns everything the worker needs to seed
+ * them and read the thread: email, name, instagram_username, outreach_thread_id,
+ * and the campaign's brand_name.
+ *
+ * The worker de-dupes by email (it skips creators already in its own DB), so
+ * this can be polled every tick safely.
+ *
+ * Query (optional):
+ *   since        ISO timestamp — only creators who replied at/after this time
+ *   campaign_id  restrict to one campaign
+ *
+ * Auth: x-bot-token header must equal NEGOTIATION_API_TOKEN (same as /push).
+ */
+router.get('/replied', async (req, res, next) => {
+  try {
+    if (!authenticate(req, res)) return;
+
+    const params = [];
+    const where = [
+      "cr.status = 'replied'",
+      'cr.email IS NOT NULL',
+      'cr.outreach_thread_id IS NOT NULL',
+    ];
+
+    if (req.query.since) {
+      const since = new Date(req.query.since);
+      if (!Number.isNaN(since.getTime())) {
+        params.push(since.toISOString());
+        where.push(`cr.replied_at >= $${params.length}`);
+      }
+    }
+    if (req.query.campaign_id) {
+      params.push(String(req.query.campaign_id));
+      where.push(`cr.campaign_id = $${params.length}`);
+    }
+
+    const rows = await db.many(
+      `SELECT cr.id, cr.email, cr.first_name, cr.full_name, cr.instagram_username,
+              cr.outreach_thread_id, cr.replied_at,
+              c.id AS campaign_id, c.name AS campaign_name, c.brand_name
+       FROM creators cr
+       JOIN campaigns c ON c.id = cr.campaign_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY cr.replied_at DESC NULLS LAST`,
+      params,
+    );
+
+    res.json({ ok: true, count: rows.length, creators: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
