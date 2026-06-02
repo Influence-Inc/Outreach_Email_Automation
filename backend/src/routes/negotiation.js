@@ -90,4 +90,75 @@ router.post('/push', async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/negotiation/offer
+ *
+ * Lets the influence-negotiation backend pull, for a given creator:
+ *   - the campaign's admin-configured max_cpm, and
+ *   - the admin's approved/edited offer (custom_offer), if one has been selected.
+ *
+ * This closes the loop: the worker can honor the dashboard CPM and email the
+ * exact offer an admin approved, instead of its own computed one.
+ *
+ * Query:
+ *   instagram_handle  string (required) — IG username (without @)
+ *   brand_name        string (optional) — disambiguates when a handle is in
+ *                                         multiple campaigns; matches campaigns.brand_name
+ *
+ * Auth: x-bot-token header must equal NEGOTIATION_API_TOKEN (same as /push).
+ *
+ * Always 200. When no matching creator exists, returns { ok: true, found: false }.
+ * Prefers the row that already has an approved offer, then the most recently updated.
+ */
+router.get('/offer', async (req, res, next) => {
+  try {
+    if (!authenticate(req, res)) return;
+
+    const handle = String(req.query.instagram_handle || '').trim();
+    if (!handle) {
+      return res.status(400).json({ error: 'instagram_handle is required' });
+    }
+    const brand = req.query.brand_name ? String(req.query.brand_name).trim() : null;
+
+    const row = await db.one(
+      `SELECT cr.id AS creator_id, cr.instagram_username, cr.quoted_rate,
+              cr.selected_offer_id, cr.custom_offer,
+              c.id AS campaign_id, c.name AS campaign_name,
+              c.brand_name, c.max_cpm
+       FROM creators cr
+       JOIN campaigns c ON c.id = cr.campaign_id
+       WHERE LOWER(cr.instagram_username) = LOWER($1)
+         AND ($2::text IS NULL OR LOWER(c.brand_name) = LOWER($2))
+       ORDER BY (cr.custom_offer IS NOT NULL) DESC, cr.updated_at DESC
+       LIMIT 1`,
+      [handle, brand],
+    );
+
+    if (!row) {
+      return res.json({ ok: true, found: false });
+    }
+
+    const num = (v) => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+
+    res.json({
+      ok: true,
+      found: true,
+      creator_id: row.creator_id,
+      instagram_username: row.instagram_username,
+      campaign: {
+        id: row.campaign_id,
+        name: row.campaign_name,
+        brand_name: row.brand_name,
+        max_cpm: num(row.max_cpm),
+      },
+      max_cpm: num(row.max_cpm),
+      selected_offer_id: row.selected_offer_id || null,
+      approved_offer: row.custom_offer || null,
+      quoted_rate: num(row.quoted_rate),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
