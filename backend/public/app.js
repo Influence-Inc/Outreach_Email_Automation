@@ -1158,6 +1158,29 @@ function buildNegCreatorBlock(creator, onOfferSelected) {
   const editForm = buildEditForm();
   if (editForm) offersBody.appendChild(editForm);
 
+  // Approval bar — the explicit gate. Selecting/editing an offer stages it;
+  // Approve is what tells the negotiation worker to email it to the creator.
+  const approvalBar = document.createElement('div');
+  approvalBar.className = 'neg-approval-bar';
+  approvalBar.style.cssText = 'margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;';
+  const isApproved = !!creator.offer_approved;
+  const hasSelection = !!selectedId;
+  approvalBar.innerHTML = `
+    <button type="button" class="neg-approve-btn${isApproved ? ' ghost' : ''}"
+            data-creator-id="${escapeHtml(String(creator.id))}"
+            data-approved="${isApproved ? '1' : '0'}" ${hasSelection ? '' : 'disabled'}>
+      ${isApproved ? '✓ Approved — click to undo' : 'Approve &amp; send to creator'}
+    </button>
+    <span class="neg-approve-status hint">${
+      isApproved
+        ? 'The bot will email this offer to the creator on its next check.'
+        : hasSelection
+          ? 'Looks good? Approve to send this offer to the creator.'
+          : 'Select an offer above first.'
+    }</span>
+  `;
+  offersBody.appendChild(approvalBar);
+
   offersSection.appendChild(offersBody);
   body.appendChild(offersSection);
 
@@ -1209,13 +1232,34 @@ function buildNegCreatorBlock(creator, onOfferSelected) {
           body: JSON.stringify(payload),
         });
         statusEl.textContent = 'Saved.';
+        // Editing resets approval — re-render so the Approve button reflects that.
+        if (typeof onOfferSelected === 'function') await onOfferSelected(Number(creatorId));
       } catch (err) {
         statusEl.textContent = `Failed: ${escapeHtml(err.message)}`;
-      } finally {
         btn.disabled = false;
       }
     });
   });
+
+  // Approve / un-approve the selected offer.
+  const approveBtn = offersSection.querySelector('.neg-approve-btn');
+  if (approveBtn) {
+    approveBtn.addEventListener('click', async () => {
+      const creatorId = approveBtn.dataset.creatorId;
+      const currentlyApproved = approveBtn.dataset.approved === '1';
+      approveBtn.disabled = true;
+      try {
+        await api(`/api/creators/${creatorId}/offers/approve`, {
+          method: 'POST',
+          body: JSON.stringify({ approved: !currentlyApproved }),
+        });
+        if (typeof onOfferSelected === 'function') await onOfferSelected(Number(creatorId));
+      } catch (err) {
+        alert(`Failed to approve offer: ${err.message}`);
+        approveBtn.disabled = false;
+      }
+    });
+  }
 
   return block;
 }

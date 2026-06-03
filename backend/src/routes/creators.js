@@ -264,7 +264,7 @@ router.get('/:id/offers', async (req, res, next) => {
     const row = await db.one(
       `SELECT id, instagram_username,
               ig_scraped_data, suggested_offers,
-              selected_offer_id, custom_offer
+              selected_offer_id, custom_offer, offer_approved
        FROM creators WHERE id = $1`,
       [req.params.id],
     );
@@ -304,9 +304,10 @@ router.post('/:id/offers/select', async (req, res, next) => {
       `UPDATE creators
          SET selected_offer_id = $2,
              custom_offer      = $3,
+             offer_approved    = FALSE,
              updated_at        = NOW()
        WHERE id = $1
-       RETURNING id, selected_offer_id, custom_offer`,
+       RETURNING id, selected_offer_id, custom_offer, offer_approved`,
       [req.params.id, offer_id, JSON.stringify(selected)],
     );
     res.json({ ok: true, ...row });
@@ -344,11 +345,47 @@ router.patch('/:id/offers/custom', async (req, res, next) => {
 
     const row = await db.one(
       `UPDATE creators
-         SET custom_offer = $2,
-             updated_at   = NOW()
+         SET custom_offer   = $2,
+             offer_approved = FALSE,
+             updated_at     = NOW()
        WHERE id = $1
-       RETURNING id, selected_offer_id, custom_offer`,
+       RETURNING id, selected_offer_id, custom_offer, offer_approved`,
       [req.params.id, JSON.stringify(merged)],
+    );
+    res.json({ ok: true, ...row });
+  } catch (err) { next(err); }
+});
+
+/**
+ * POST /:id/offers/approve
+ * Admin approves the selected/edited offer — this is the signal the negotiation
+ * worker waits for before emailing the offer (Reply 2) to the creator.
+ *
+ * Body: { approved?: boolean }  (default true; pass false to un-approve)
+ * Requires an offer to have been selected first.
+ */
+router.post('/:id/offers/approve', async (req, res, next) => {
+  try {
+    const approved = req.body && req.body.approved === false ? false : true;
+
+    const creator = await db.one(
+      `SELECT id, custom_offer FROM creators WHERE id = $1`,
+      [req.params.id],
+    );
+    if (!creator) return res.status(404).json({ error: 'not found' });
+    if (approved && !creator.custom_offer) {
+      return res.status(400).json({
+        error: 'No offer selected yet — POST to /:id/offers/select first',
+      });
+    }
+
+    const row = await db.one(
+      `UPDATE creators
+         SET offer_approved = $2,
+             updated_at     = NOW()
+       WHERE id = $1
+       RETURNING id, selected_offer_id, custom_offer, offer_approved`,
+      [req.params.id, approved],
     );
     res.json({ ok: true, ...row });
   } catch (err) { next(err); }

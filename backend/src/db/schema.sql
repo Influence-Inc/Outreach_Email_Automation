@@ -127,3 +127,7 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS custom_offer JSONB;
 
 -- Creator Negotiation: quoted rate supplied by the creator during negotiation.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS quoted_rate NUMERIC(10,2);
+
+-- Admin must explicitly Approve the selected offer before the negotiation worker
+-- emails it to the creator. Selecting or editing an offer resets this to FALSE.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS offer_approved BOOLEAN NOT NULL DEFAULT FALSE;
