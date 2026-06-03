@@ -122,14 +122,14 @@ router.get('/offer', async (req, res, next) => {
 
     const row = await db.one(
       `SELECT cr.id AS creator_id, cr.instagram_username, cr.quoted_rate,
-              cr.selected_offer_id, cr.custom_offer,
+              cr.selected_offer_id, cr.custom_offer, cr.offer_approved,
               c.id AS campaign_id, c.name AS campaign_name,
               c.brand_name, c.max_cpm
        FROM creators cr
        JOIN campaigns c ON c.id = cr.campaign_id
        WHERE LOWER(cr.instagram_username) = LOWER($1)
          AND ($2::text IS NULL OR LOWER(c.brand_name) = LOWER($2))
-       ORDER BY (cr.custom_offer IS NOT NULL) DESC, cr.updated_at DESC
+       ORDER BY (cr.offer_approved AND cr.custom_offer IS NOT NULL) DESC, cr.updated_at DESC
        LIMIT 1`,
       [handle, brand],
     );
@@ -153,7 +153,9 @@ router.get('/offer', async (req, res, next) => {
       },
       max_cpm: num(row.max_cpm),
       selected_offer_id: row.selected_offer_id || null,
-      approved_offer: row.custom_offer || null,
+      // Only hand the worker an offer once an admin has explicitly Approved it.
+      approved_offer: row.offer_approved ? (row.custom_offer || null) : null,
+      offer_approved: !!row.offer_approved,
       quoted_rate: num(row.quoted_rate),
     });
   } catch (err) {
