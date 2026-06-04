@@ -42,9 +42,8 @@ router.post('/push', async (req, res, next) => {
     if (!instagram_handle) {
       return res.status(400).json({ error: 'instagram_handle is required' });
     }
-    if (!ig_scraped_data || !Array.isArray(suggested_offers)) {
-      return res.status(400).json({ error: 'ig_scraped_data (object) and suggested_offers (array) are required' });
-    }
+    // ig_scraped_data and suggested_offers are optional — a rate-only push is
+    // allowed so a creator's rate shows up even before/without a successful scrape.
 
     // Match creators by instagram_username, case-insensitive.
     // A handle may appear in multiple campaigns — update all of them.
@@ -70,16 +69,21 @@ router.post('/push', async (req, res, next) => {
       ? parsedRate
       : null;
 
+    // Only overwrite columns that were actually provided (COALESCE keeps existing
+    // values), so a rate-only push doesn't wipe previously-pushed IG data / offers.
+    const igJson = ig_scraped_data != null ? JSON.stringify(ig_scraped_data) : null;
+    const offersJson = Array.isArray(suggested_offers) ? JSON.stringify(suggested_offers) : null;
+
     const updatedIds = [];
     for (const row of rows) {
       await db.query(
         `UPDATE creators
-         SET ig_scraped_data  = $2,
-             suggested_offers = $3,
+         SET ig_scraped_data  = COALESCE($2, ig_scraped_data),
+             suggested_offers = COALESCE($3, suggested_offers),
              quoted_rate      = COALESCE($4, quoted_rate),
              updated_at       = NOW()
          WHERE id = $1`,
-        [row.id, JSON.stringify(ig_scraped_data), JSON.stringify(suggested_offers), safeRate],
+        [row.id, igJson, offersJson, safeRate],
       );
       updatedIds.push(row.id);
     }
