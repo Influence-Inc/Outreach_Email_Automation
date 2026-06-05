@@ -105,29 +105,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_one_default
 
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES email_templates(id) ON DELETE SET NULL;
 
--- Offer management: admin-configurable CPM cap per campaign.
--- Used by influence-negotiation to constrain the 6 AI-suggested offers.
-ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS max_cpm NUMERIC(8,2);
-
--- Per-creator IG scrape data and offer state (populated via /api/negotiation/push
--- from the influence-negotiation backend after each Instagram scrape).
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_scraped_data JSONB;
-  -- shape: {p10, p25, p50, p75, reel_count, min_views, views_raw: number[]}
-
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS suggested_offers JSONB;
-  -- shape: [{offer_id, offer_type, label, num_videos, flat_fee, flat_per_video,
-  --          view_guarantee, cpm_applied, satisfies_creator_rate, notes}, ...]
-  -- 3 view-based + 3 video-count offers, AI-annotated
-
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS selected_offer_id TEXT;
-  -- offer_id from suggested_offers chosen by admin (e.g. "view_2", "video_1")
-
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS custom_offer JSONB;
-  -- admin-edited version of the selected offer (overrides suggested_offers entry)
-
--- Creator Negotiation: quoted rate supplied by the creator during negotiation.
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS quoted_rate NUMERIC(10,2);
-
--- Admin must explicitly Approve the selected offer before the negotiation worker
--- emails it to the creator. Selecting or editing an offer resets this to FALSE.
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS offer_approved BOOLEAN NOT NULL DEFAULT FALSE;
+-- Creator Negotiation feature removed. Drop its columns if an earlier deploy
+-- created them. DROP ... IF EXISTS is idempotent — safe to run on every boot,
+-- matching this file's "safe to run on every backend boot" design.
+ALTER TABLE campaigns DROP COLUMN IF EXISTS max_cpm;
+ALTER TABLE creators  DROP COLUMN IF EXISTS ig_scraped_data;
+ALTER TABLE creators  DROP COLUMN IF EXISTS suggested_offers;
+ALTER TABLE creators  DROP COLUMN IF EXISTS selected_offer_id;
+ALTER TABLE creators  DROP COLUMN IF EXISTS custom_offer;
+ALTER TABLE creators  DROP COLUMN IF EXISTS quoted_rate;
+ALTER TABLE creators  DROP COLUMN IF EXISTS offer_approved;
