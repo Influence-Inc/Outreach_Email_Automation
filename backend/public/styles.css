@@ -292,34 +292,38 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
 .neg-cpm-label { font-size: 13px; font-weight: 600; color: #374151; white-space: nowrap; }
 .neg-cpm-input { width: 110px; padding: 5px 8px; font-size: 13px; border: 1px solid #d1d5db; border-radius: 4px; }
 
-.neg-offer { min-width: 220px; }
+.neg-offer { min-width: 190px; }
 .neg-offer .neg-stage {
   display: inline-block;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .04em;
+  letter-spacing: .03em;
   color: #4338ca;
   background: #e0e7ff;
-  padding: 2px 6px;
+  padding: 1px 6px;
   border-radius: 10px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
-.neg-offer-select { width: 100%; padding: 5px 8px; font-size: 12px; border: 1px solid #d1d5db; border-radius: 4px; margin-bottom: 6px; }
-.neg-slider { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
-.neg-slider label { font-size: 11px; color: #6b7280; }
+.neg-offer-select { width: 100%; padding: 3px 6px; font-size: 11px; border: 1px solid #d1d5db; border-radius: 4px; margin-bottom: 4px; }
+.neg-slider { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.neg-slider label { font-size: 10px; color: #6b7280; flex: 0 0 64px; white-space: nowrap; }
 .neg-slider label b { color: #111827; }
-.neg-offer input[type="range"] { width: 100%; accent-color: #2563eb; height: 18px; }
+.neg-offer input[type="range"] { flex: 1; min-width: 0; accent-color: #2563eb; height: 14px; margin: 0; }
 .neg-cpm-badge {
   display: inline-block;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: #065f46;
   background: #d1fae5;
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-radius: 10px;
-  margin-bottom: 6px;
+  margin: 4px 0;
 }
-.neg-approve { width: 100%; background: #2563eb; }
+.neg-approve { width: 100%; background: #2563eb; padding: 5px 8px; font-size: 12px; }
 .neg-approve:disabled { opacity: 0.6; cursor: default; }
-.neg-offer-status { display: block; margin-top: 4px; }
+.neg-offer-status { display: block; margin-top: 2px; }
+
+/* Tighter cells for the negotiation columns so the wider table breathes. */
+#creator-table th, #creator-table td { padding: 6px 8px; }
+.neg-offer-cell, .neg-views-cell, .neg-rate-cell { vertical-align: top; }

@@ -215,13 +215,43 @@ function cpmFor(fee, views) {
   return views ? Math.round((fee / views) * 1000 * 100) / 100 : null;
 }
 
+// Parse "50k, 80k, 120000" -> [50000, 80000, 120000]
+function parseViewsList(str) {
+  return String(str)
+    .split(/[\s,]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((t) => {
+      const m = t.toUpperCase().match(/^([\d.]+)\s*([KM]?)$/);
+      if (!m) return NaN;
+      let n = parseFloat(m[1]);
+      if (m[2] === 'K') n *= 1e3;
+      else if (m[2] === 'M') n *= 1e6;
+      return n;
+    })
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
 function renderViewsCell(r, td) {
   const s = r.ig_scraped_data;
-  if (s && s.reel_count) {
-    td.innerHTML = `<b>${fmtViews(s.p50)}</b><br/><span class="meta">median · ${s.reel_count} reels</span>`;
-  } else {
-    td.innerHTML = '<span class="meta">—</span>';
-  }
+  td.innerHTML =
+    s && (s.reel_count || s.p50)
+      ? `<b>${fmtViews(s.p50)}</b><br/><span class="meta">median · ${s.reel_count || 0} reels</span>`
+      : '<span class="meta">—</span>';
+  // Editable: paste real reel view counts to drive accurate offers when the
+  // extension scrape comes up empty.
+  makeEditable(td, {
+    value: s && Array.isArray(s.views_raw) && s.views_raw.length ? s.views_raw.join(', ') : '',
+    placeholder: 'views e.g. 50k, 80k, 120k',
+    onSave: (v) => {
+      const views = parseViewsList(v);
+      if (!views.length) throw new Error('Enter view counts like: 50k, 80k, 120k');
+      return api(`/api/creators/${r.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reel_views: views }),
+      });
+    },
+  });
 }
 
 function renderRateCell(r, td) {
@@ -244,7 +274,30 @@ function buildOfferCell(r, td) {
     ? `<div class="neg-stage">${r.negotiation_status.replace(/_/g, ' ').toLowerCase()}</div>`
     : '';
   if (!offers.length) {
-    td.innerHTML = stage || '<span class="meta">—</span>';
+    td.innerHTML = stage;
+    if (r.quoted_rate != null) {
+      // Have a rate but no offers yet — let the admin generate them on demand
+      // (uses scraped views if present, else synthesizes from the rate).
+      const gen = document.createElement('button');
+      gen.className = 'small neg-approve';
+      gen.textContent = 'Generate offers';
+      gen.onclick = async () => {
+        gen.disabled = true;
+        try {
+          await api(`/api/creators/${r.id}/quoted-rate`, {
+            method: 'POST',
+            body: JSON.stringify({ quoted_rate: Number(r.quoted_rate) }),
+          });
+          await refreshCreators();
+        } catch (e) {
+          gen.disabled = false;
+          alert(e.message);
+        }
+      };
+      td.appendChild(gen);
+    } else if (!stage) {
+      td.innerHTML = '<span class="meta">—</span>';
+    }
     return;
   }
 

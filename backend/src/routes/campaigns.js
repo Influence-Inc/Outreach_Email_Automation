@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { syncCampaigns } = require('../services/campaignsApi');
-const { computeSixOffers } = require('../services/pricing');
+const { offersFor } = require('../services/pricing');
 
 const router = express.Router();
 
@@ -98,14 +98,17 @@ router.post('/:id/recalculate-offers', async (req, res, next) => {
     if (!campaign) return res.status(404).json({ error: 'not found' });
     const maxCpm = campaign.max_cpm != null ? Number(campaign.max_cpm) : Number(process.env.TARGET_CPM || 15);
 
+    // Any creator with a rate can get offers — real scraped stats when present,
+    // otherwise synthesized from the rate.
     const creators = await db.many(
       `SELECT id, ig_scraped_data, quoted_rate FROM creators
-       WHERE campaign_id = $1 AND ig_scraped_data IS NOT NULL AND quoted_rate IS NOT NULL`,
+       WHERE campaign_id = $1 AND quoted_rate IS NOT NULL`,
       [req.params.id],
     );
     let updated = 0;
     for (const c of creators) {
-      const offers = computeSixOffers(c.ig_scraped_data, maxCpm, Number(c.quoted_rate));
+      const offers = offersFor(c.ig_scraped_data, maxCpm, Number(c.quoted_rate));
+      if (!offers) continue;
       await db.query(
         `UPDATE creators SET suggested_offers = $2::jsonb, updated_at = NOW() WHERE id = $1`,
         [c.id, JSON.stringify(offers)],

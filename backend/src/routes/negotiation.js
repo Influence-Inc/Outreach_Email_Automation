@@ -4,7 +4,7 @@
 const express = require('express');
 const db = require('../db');
 const negotiation = require('../services/negotiation');
-const { computeSixOffers } = require('../services/pricing');
+const { offersFor } = require('../services/pricing');
 
 const router = express.Router();
 
@@ -74,11 +74,15 @@ router.post('/:id/quoted-rate', async (req, res, next) => {
 
     const params = [req.params.id, rate];
     let offerSet = '';
-    if (rate !== null && creator.ig_scraped_data) {
+    if (rate !== null) {
       const maxCpm = creator.max_cpm != null ? Number(creator.max_cpm) : Number(process.env.TARGET_CPM || 15);
-      const offers = computeSixOffers(creator.ig_scraped_data, maxCpm, rate);
-      params.push(JSON.stringify(offers));
-      offerSet = `, suggested_offers = $${params.length}::jsonb`;
+      // Uses real scraped stats when present, else synthesizes from the rate so
+      // offers always appear once a rate is known.
+      const offers = offersFor(creator.ig_scraped_data, maxCpm, rate);
+      if (offers) {
+        params.push(JSON.stringify(offers));
+        offerSet = `, suggested_offers = $${params.length}::jsonb`;
+      }
     }
     // Setting a rate advances NULL/AWAITING_RATE into AWAITING_APPROVAL; other
     // stages are left as-is. Clearing the rate touches only the column.

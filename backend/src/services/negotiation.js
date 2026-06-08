@@ -389,9 +389,9 @@ async function applyReply(creator, ctx, result) {
     case 'counter': {
       const rate = result.quoted_rate;
       let offers = null;
-      const stats = creator.ig_scraped_data;
-      if (rate != null && stats) {
-        offers = pricing.computeSixOffers(stats, ctx.maxCpm, Number(rate));
+      if (rate != null) {
+        // Real scraped stats when present, else synthesized from the rate.
+        offers = pricing.offersFor(creator.ig_scraped_data, ctx.maxCpm, Number(rate));
       }
       await db.query(
         `UPDATE creators

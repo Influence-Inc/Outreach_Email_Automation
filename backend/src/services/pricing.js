@@ -83,6 +83,32 @@ function computeSixOffers(stats, maxCpm, quotedRate) {
 // Live CPM for the dashboard sliders.
 const cpmFor = (fee, views) => (views ? +((fee / views) * 1000).toFixed(2) : null);
 
+// When no scraped views exist, synthesize a view distribution from the rate so
+// the admin still gets editable offers anchored near the creator's number.
+function statsFromRate(rate, maxCpm) {
+  const eff = maxCpm * (1 - RISK_BUFFER);
+  const anchor = Math.max(roundTo((Number(rate) / Math.max(eff, 0.01)) * 1000, 25000), 25000);
+  return {
+    p10: Math.round(anchor * 0.7),
+    p25: Math.round(anchor * 0.85),
+    p50: anchor,
+    p75: Math.round(anchor * 1.3),
+    reel_count: 0,
+    min_views: Math.round(anchor * 0.7),
+    views_raw: [],
+    estimated: true,
+  };
+}
+
+// Offers from real scraped stats when available, else synthesized from the
+// rate. Returns null only when there's nothing to anchor on (no stats, no rate).
+function offersFor(stats, maxCpm, rate) {
+  const hasStats = stats && (Number(stats.reel_count) > 0 || Number(stats.p50) > 0);
+  const usable = hasStats ? stats : rate != null ? statsFromRate(rate, maxCpm) : null;
+  if (!usable) return null;
+  return computeSixOffers(usable, maxCpm, rate);
+}
+
 module.exports = {
   TARGET_CPM,
   RISK_BUFFER,
@@ -92,5 +118,7 @@ module.exports = {
   calculatePercentile,
   computeStats,
   computeSixOffers,
+  statsFromRate,
+  offersFor,
   cpmFor,
 };
