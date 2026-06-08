@@ -12,9 +12,22 @@ function defaults() {
   return {
     managerName: process.env.MANAGER_NAME || process.env.SENDER_NAME || 'Jennifer',
     refs: REFERENCE_ACCOUNTS,
-    campaignDeadline: process.env.CAMPAIGN_DEADLINE || 'the end of the month',
+    cadence: process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week',
     brandName: process.env.BRAND_NAME || 'the brand',
   };
+}
+
+// Approximate "all videos posted by" date derived from the posting cadence and
+// the number of videos. Uses the slower bound of the cadence (more time for the
+// creator) plus a small buffer. This is the deterministic fallback; when Claude
+// is available it computes the date itself from today's date.
+function approxDeadline(numVideos, cadence) {
+  const nums = (String(cadence || '').match(/\d+/g) || []).map(Number);
+  const perWeek = nums.length ? Math.max(1, Math.min(...nums)) : 1;
+  const videos = Math.max(1, Number(numVideos) || 2);
+  const weeks = Math.max(1, Math.ceil(videos / perWeek));
+  const d = new Date(Date.now() + (weeks * 7 + 3) * 24 * 3600 * 1000);
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
 // Only replace placeholders the caller actually defined; leave unknown {x} intact.
@@ -46,7 +59,7 @@ Platforms
 We'd like the content to be posted on Instagram primarily, and cross-posted on TikTok & YouTube Shorts.
 
 Timelines
-We're flexible, but we'd ideally like all videos posted by {campaignDeadline}.
+We're flexible, but we'd love a steady pace of around {cadence}, with all videos ideally posted by {deadline}.
 
 Past content references
 {refs}
@@ -57,6 +70,8 @@ If everything sounds good, please let me know your rates :)
 
 function reply1(vars) {
   const v = withDefaults(vars);
+  // Reply 1 pitches a "2 or more video package"; estimate from 2 videos.
+  v.deadline = approxDeadline(2, v.cadence);
   return { subject: fill(REPLY1_SUBJECT, v), body: fill(REPLY1_BODY, v) };
 }
 
@@ -130,6 +145,8 @@ function describeOffer(offer, brandName) {
 // Reply 1 details so the one email covers both.
 function offerEmail(offer, vars, { combine = false } = {}) {
   const v = withDefaults(vars);
+  const videos = offer && offer.offer_type !== 'view_based' ? Number(offer.num_videos || 2) : 2;
+  v.deadline = approxDeadline(videos, v.cadence);
   const lead = combine
     ? fill(REPLY1_BODY, v).replace(/\n\nIf everything sounds good[\s\S]*$/, '\n')
     : `Hi ${v.firstName},\n\nThanks for sharing your rates!\n`;

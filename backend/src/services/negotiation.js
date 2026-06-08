@@ -106,7 +106,7 @@ function ctxFor(creator, extra = {}) {
     firstName: creator.first_name || 'there',
     brandName: creator.brand_name || process.env.BRAND_NAME || 'the brand',
     campaignName: creator.campaign_name || null,
-    campaignDeadline: process.env.CAMPAIGN_DEADLINE || 'the end of the month',
+    cadence: process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week',
     managerName: process.env.MANAGER_NAME || process.env.SENDER_NAME || 'Jennifer',
     refs: templates.REFERENCE_ACCOUNTS,
     maxCpm: creator.max_cpm != null ? Number(creator.max_cpm) : pricing.TARGET_CPM,
@@ -121,10 +121,19 @@ function templateVars(ctx) {
   return {
     firstName: ctx.firstName,
     brandName: ctx.brandName,
-    campaignDeadline: ctx.campaignDeadline,
+    cadence: ctx.cadence,
     refs: ctx.refs,
     managerName: ctx.managerName,
   };
+}
+
+function todayStr() {
+  return new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
 }
 
 function describeStage(stage) {
@@ -153,6 +162,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     `You're negotiating an Instagram collaboration with the creator ${v.firstName} for the brand "${v.brandName}"${
       ctx.campaignName ? ` (campaign: ${ctx.campaignName})` : ''
     }.`,
+    `Today's date is ${todayStr()}. The desired posting cadence is "${v.cadence}". When you mention timelines, compute an APPROXIMATE "all videos posted by" calendar date from today's date, the cadence, and the number of videos in the deal — do NOT print the cadence text where a date belongs.`,
     '',
     `Current stage: ${describeStage(ctx.stage)}`,
     ctx.hasStats
@@ -174,7 +184,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     'Rules:',
     '- "shared_rate": the creator stated a rate/budget/price. Put the numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
     '- "counter": the creator pushed back on a prior offer with a different number/terms. Put any numeric amount in quoted_rate. email=null, send_now=false.',
-    `- "asking_details": interested but no rate yet, or asked for details. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", deadline "${v.campaignDeadline}", references: ${v.refs}, sign "- ${v.managerName}"). send_now=true.`,
+    `- "asking_details": interested but no rate yet, or asked for details. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", references: ${v.refs}, sign "- ${v.managerName}"). In Timelines, propose the cadence "${v.cadence}" and an approximate posted-by date you compute from today's date for a 2-video package. send_now=true.`,
     `- "accepted": they accepted the offer. Write a short warm acceptance email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "declined": not interested / not available now. Write a brief gracious email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "other": anything else (a question, scheduling, etc.). Write a short helpful reply signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
@@ -263,6 +273,9 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
     'An admin has APPROVED exactly one offer. Use its numbers EXACTLY — do not invent or change amounts, and present only this one offer.',
     `Approved offer JSON: ${JSON.stringify(offer)}`,
     `In plain words: ${offerDesc}`,
+    `Today's date is ${todayStr()}. Desired posting cadence: "${v.cadence}". If you mention timelines, give an approximate posted-by date computed from today for this ${
+      offer.offer_type === 'view_based' ? '1-2 post' : `${offer.num_videos}-video`
+    } deal at that cadence; never print the cadence text where a date belongs.`,
     '',
     'Write ONE email by adapting this canonical offer template — keep its warm tone, the "Payment details" section, and the "- ' + v.managerName + '" sign-off:',
     '--- REPLY 2 ---',
@@ -273,7 +286,7 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
           'This is the FIRST reply (the creator gave their rate immediately), so FIRST cover the collaboration details by adapting REPLY 1, THEN present the approved offer in the same email:',
           '--- REPLY 1 ---',
           templates.REPLY1_BODY,
-          `Use brand "${v.brandName}", deadline "${v.campaignDeadline}", references: ${v.refs}.`,
+          `Use brand "${v.brandName}", references: ${v.refs}, and the cadence "${v.cadence}" for timelines.`,
         ].join('\n')
       : '',
     '',
