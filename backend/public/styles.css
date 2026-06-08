@@ -292,8 +292,7 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
 .neg-cpm-label { font-size: 13px; font-weight: 600; color: #374151; white-space: nowrap; }
 .neg-cpm-input { width: 110px; padding: 5px 8px; font-size: 13px; border: 1px solid #d1d5db; border-radius: 4px; }
 
-.neg-offer { min-width: 190px; }
-.neg-offer .neg-stage {
+.neg-stage {
   display: inline-block;
   font-size: 10px;
   font-weight: 700;
@@ -305,25 +304,41 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
   border-radius: 10px;
   margin-bottom: 4px;
 }
-.neg-offer-select { width: 100%; padding: 3px 6px; font-size: 11px; border: 1px solid #d1d5db; border-radius: 4px; margin-bottom: 4px; }
-.neg-slider { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
-.neg-slider label { font-size: 10px; color: #6b7280; flex: 0 0 64px; white-space: nowrap; }
-.neg-slider label b { color: #111827; }
-.neg-offer input[type="range"] { flex: 1; min-width: 0; accent-color: #2563eb; height: 14px; margin: 0; }
-.neg-cpm-badge {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 700;
-  color: #065f46;
-  background: #d1fae5;
-  padding: 1px 6px;
-  border-radius: 10px;
-  margin: 4px 0;
+/* Compact offer cell: stage + one-line summary + a toggle button. */
+.neg-offer-cell { min-width: 150px; }
+.neg-summary { font-size: 11px; line-height: 1.35; margin: 2px 0 5px; color: #4b5563; }
+.neg-summary b { color: #111827; }
+.neg-edit-btn { white-space: nowrap; }
+
+/* Full-width expandable editor row beneath the creator row. */
+.neg-expand-row > td { background: #f8fafc; padding: 14px 16px; }
+.neg-editor { display: flex; flex-direction: column; gap: 12px; max-width: 780px; }
+.neg-editor-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.neg-editor-top .neg-offer-select {
+  min-width: 260px; padding: 6px 10px; font-size: 13px;
+  border: 1px solid #d1d5db; border-radius: 6px; font-family: inherit;
 }
-.neg-approve { width: 100%; background: #2563eb; padding: 5px 8px; font-size: 12px; }
+.neg-slider-row { display: flex; align-items: center; gap: 14px; }
+.neg-slider-row label { flex: 0 0 90px; font-size: 12px; color: #4b5563; }
+.neg-slider-row input[type="range"] { flex: 1; min-width: 220px; accent-color: #2563eb; height: 22px; }
+.neg-slider-row b { flex: 0 0 120px; text-align: right; font-size: 13px; color: #111827; }
+.neg-editor-actions { display: flex; align-items: center; gap: 12px; }
+.neg-cpm-badge {
+  display: inline-block; font-size: 12px; font-weight: 700;
+  color: #065f46; background: #d1fae5; padding: 2px 10px; border-radius: 10px;
+}
+.neg-sat { font-size: 12px; font-weight: 600; }
+.neg-approve { background: #2563eb; padding: 8px 16px; }
 .neg-approve:disabled { opacity: 0.6; cursor: default; }
-.neg-offer-status { display: block; margin-top: 2px; }
+.neg-offer-status { display: inline; }
 
 /* Tighter cells for the negotiation columns so the wider table breathes. */
 #creator-table th, #creator-table td { padding: 6px 8px; }
 .neg-offer-cell, .neg-views-cell, .neg-rate-cell { vertical-align: top; }
+
+/* Editor stacks cleanly on narrow screens. */
+@media (max-width: 720px) {
+  .neg-slider-row { flex-wrap: wrap; }
+  .neg-slider-row input[type="range"] { flex: 1 1 100%; order: 3; }
+  .neg-slider-row b { flex: 0 0 auto; }
+}

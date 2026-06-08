@@ -225,7 +225,9 @@ async function runScrapeQueue(payload, sender) {
         await waitForTabComplete(tabId, 30000);
         // Settle: let document_idle + IG SPA hydration finish.
         await sleep(jittered(1500, 1500));
-        scraped = await sendMessageToTab(tabId, { action: 'extractInstagramData' }, 12000);
+        // Longer timeout: the content script surfaces the Reels tab and scrolls
+        // to harvest recent reel view counts before replying.
+        scraped = await sendMessageToTab(tabId, { action: 'extractInstagramData' }, 25000);
       } catch (err) {
         error = err.message;
       } finally {

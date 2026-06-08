@@ -232,11 +232,18 @@ function parseViewsList(str) {
     .filter((n) => Number.isFinite(n) && n > 0);
 }
 
+function avgViews(s) {
+  if (s && Array.isArray(s.views_raw) && s.views_raw.length) {
+    return s.views_raw.reduce((a, b) => a + Number(b || 0), 0) / s.views_raw.length;
+  }
+  return (s && s.p50) || 0;
+}
+
 function renderViewsCell(r, td) {
   const s = r.ig_scraped_data;
   td.innerHTML =
     s && (s.reel_count || s.p50)
-      ? `<b>${fmtViews(s.p50)}</b><br/><span class="meta">median · ${s.reel_count || 0} reels</span>`
+      ? `<b>${fmtViews(avgViews(s))}</b><br/><span class="meta">avg · ${s.reel_count || 0} reels</span>`
       : '<span class="meta">—</span>';
   // Editable: paste real reel view counts to drive accurate offers when the
   // extension scrape comes up empty.
@@ -301,93 +308,134 @@ function buildOfferCell(r, td) {
     return;
   }
 
+  // Offers exist: show a compact summary + a toggle that opens a roomy,
+  // full-width editor row (so the sliders get real horizontal space).
   const custom = r.custom_offer && typeof r.custom_offer === 'object' ? r.custom_offer : null;
-  let selectedId = (custom && custom.offer_id) || r.selected_offer_id || offers[0].offer_id;
-  let selected = offers.find((o) => o.offer_id === selectedId) || offers[0];
-  selectedId = selected.offer_id;
+  const cur = custom || offers.find((o) => o.offer_id === r.selected_offer_id) || offers[0];
+  const summary =
+    cur.offer_type === 'view_based'
+      ? `$${fmtNum(cur.flat_fee)} · ${fmtViews(cur.view_guarantee)} views`
+      : `$${fmtNum(cur.flat_fee)} · ${cur.num_videos} vid`;
+  td.innerHTML = `${stage}<div class="neg-summary">${escapeHtml(cur.label)}<br/><b>${summary}</b></div>`;
+  const toggle = document.createElement('button');
+  toggle.className = 'small ghost neg-edit-btn';
+  toggle.textContent = 'Review & approve ▾';
+  toggle.onclick = () => toggleOfferEditor(r, td, toggle);
+  td.appendChild(toggle);
+}
 
-  const seedFromCustom = custom && custom.offer_id === selectedId;
-  let fee = seedFromCustom && custom.flat_fee != null ? Number(custom.flat_fee) : Number(selected.flat_fee);
-  let views =
-    seedFromCustom && custom.view_guarantee != null
-      ? Number(custom.view_guarantee)
-      : Number(selected.view_guarantee || 0);
+// Insert/remove a full-width editor row directly beneath the creator row.
+function toggleOfferEditor(r, td, toggleBtn) {
+  const tr = td.closest('tr');
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('neg-expand-row') && next.dataset.for === String(r.id)) {
+    next.remove();
+    if (toggleBtn) toggleBtn.textContent = 'Review & approve ▾';
+    return;
+  }
+  document.querySelectorAll('.neg-expand-row').forEach((el) => el.remove());
+  const row = document.createElement('tr');
+  row.className = 'neg-expand-row';
+  row.dataset.for = String(r.id);
+  const cell = document.createElement('td');
+  cell.colSpan = tr.children.length;
+  row.appendChild(cell);
+  tr.after(row);
+  if (toggleBtn) toggleBtn.textContent = 'Close ▴';
+  buildOfferEditor(cell, r);
+}
 
-  const maxFee = Math.max(...offers.map((o) => Number(o.flat_fee) || 0), fee, 100);
-  const feeMax = Math.max(Math.ceil((maxFee * 2) / 50) * 50, 100);
-  const maxViews = Math.max(
-    ...offers.map((o) => Number(o.view_guarantee) || 0),
-    views,
-    (r.ig_scraped_data && r.ig_scraped_data.p75) || 0,
-    25000,
-  );
-  const viewsMax = Math.ceil((maxViews * 1.5) / 25000) * 25000;
+// Roomy editor: dropdown, two full-width horizontal sliders, live CPM, a
+// satisfies-rate check, and Approve & send.
+function buildOfferEditor(root, r) {
+  const offers = Array.isArray(r.suggested_offers) ? r.suggested_offers : [];
+  if (!offers.length) {
+    root.textContent = 'No offers.';
+    return;
+  }
+  const custom = r.custom_offer && typeof r.custom_offer === 'object' ? r.custom_offer : null;
+  let selected =
+    offers.find((o) => o.offer_id === ((custom && custom.offer_id) || r.selected_offer_id)) || offers[0];
+  const seed = custom && custom.offer_id === selected.offer_id;
+  let fee = seed && custom.flat_fee != null ? Number(custom.flat_fee) : Number(selected.flat_fee);
+  let views = seed && custom.view_guarantee != null ? Number(custom.view_guarantee) : Number(selected.view_guarantee || 0);
 
-  td.classList.add('neg-offer');
-  td.innerHTML = `
-    ${stage}
-    <select class="neg-offer-select small"></select>
-    <div class="neg-slider">
-      <label>Fee <b class="neg-fee-val"></b></label>
-      <input type="range" class="neg-fee" min="0" max="${feeMax}" step="50" />
-    </div>
-    <div class="neg-slider neg-views-wrap">
-      <label>Views <b class="neg-views-val"></b></label>
-      <input type="range" class="neg-views" min="0" max="${viewsMax}" step="25000" />
-    </div>
-    <div class="neg-cpm-badge"></div>
-    <button class="small neg-approve">Approve &amp; send</button>
-    <span class="neg-offer-status hint"></span>
-  `;
-  const sel = td.querySelector('.neg-offer-select');
-  const feeRange = td.querySelector('.neg-fee');
-  const viewsRange = td.querySelector('.neg-views');
-  const feeVal = td.querySelector('.neg-fee-val');
-  const viewsVal = td.querySelector('.neg-views-val');
-  const viewsWrap = td.querySelector('.neg-views-wrap');
-  const cpmBadge = td.querySelector('.neg-cpm-badge');
-  const approveBtn = td.querySelector('.neg-approve');
-  const statusEl = td.querySelector('.neg-offer-status');
+  const feeMax = Math.max(Math.ceil((Math.max(...offers.map((o) => Number(o.flat_fee) || 0), fee, 100) * 2) / 50) * 50, 100);
+  const viewsMax = Math.ceil((Math.max(...offers.map((o) => Number(o.view_guarantee) || 0), views, (r.ig_scraped_data && r.ig_scraped_data.p75) || 0, 25000) * 1.5) / 25000) * 25000;
+
+  root.innerHTML = `
+    <div class="neg-editor">
+      <div class="neg-editor-top">
+        <select class="neg-offer-select"></select>
+        <span class="neg-cpm-badge"></span>
+        <span class="neg-sat"></span>
+      </div>
+      <div class="neg-slider-row">
+        <label>Flat fee</label>
+        <input type="range" class="neg-fee" min="0" max="${feeMax}" step="50" />
+        <b class="neg-fee-val"></b>
+      </div>
+      <div class="neg-slider-row neg-views-wrap">
+        <label>View target</label>
+        <input type="range" class="neg-views" min="0" max="${viewsMax}" step="25000" />
+        <b class="neg-views-val"></b>
+      </div>
+      <div class="neg-editor-actions">
+        <button class="neg-approve">Approve &amp; send</button>
+        <span class="neg-offer-status hint"></span>
+      </div>
+    </div>`;
+  const sel = root.querySelector('.neg-offer-select');
+  const feeRange = root.querySelector('.neg-fee');
+  const viewsRange = root.querySelector('.neg-views');
+  const feeVal = root.querySelector('.neg-fee-val');
+  const viewsVal = root.querySelector('.neg-views-val');
+  const viewsWrap = root.querySelector('.neg-views-wrap');
+  const cpmBadge = root.querySelector('.neg-cpm-badge');
+  const satEl = root.querySelector('.neg-sat');
+  const approveBtn = root.querySelector('.neg-approve');
+  const statusEl = root.querySelector('.neg-offer-status');
 
   for (const o of offers) {
     const opt = document.createElement('option');
     opt.value = o.offer_id;
     opt.textContent = `${o.label} · $${fmtNum(o.flat_fee)}`;
-    if (o.offer_id === selectedId) opt.selected = true;
+    if (o.offer_id === selected.offer_id) opt.selected = true;
     sel.appendChild(opt);
   }
 
   const isView = () => selected.offer_type === 'view_based';
-  function syncCpm() {
-    const cpm = cpmFor(fee, views);
-    cpmBadge.textContent = cpm != null ? `CPM $${cpm}` : 'flat';
-  }
-  function syncUI() {
+  function sync() {
     feeRange.value = String(fee);
     viewsRange.value = String(views);
     feeVal.textContent = '$' + fmtNum(fee);
-    viewsVal.textContent = fmtNum(views);
+    viewsVal.textContent = isView() ? fmtNum(views) + ' views' : '—';
     viewsWrap.style.display = isView() ? '' : 'none';
-    syncCpm();
+    const cpm = cpmFor(fee, views);
+    cpmBadge.textContent = cpm != null ? `CPM $${cpm}` : 'flat deal';
+    if (r.quoted_rate != null) {
+      const ok = Math.round(fee) >= Number(r.quoted_rate);
+      satEl.textContent = ok ? `✓ meets $${fmtNum(r.quoted_rate)} rate` : `under $${fmtNum(r.quoted_rate)} rate`;
+      satEl.style.color = ok ? '#065f46' : '#92400e';
+    } else {
+      satEl.textContent = '';
+    }
   }
-  syncUI();
+  sync();
 
   sel.onchange = () => {
     selected = offers.find((o) => o.offer_id === sel.value) || offers[0];
-    selectedId = selected.offer_id;
     fee = Number(selected.flat_fee);
     views = Number(selected.view_guarantee || 0);
-    syncUI();
+    sync();
   };
   feeRange.oninput = () => {
     fee = Number(feeRange.value);
-    feeVal.textContent = '$' + fmtNum(fee);
-    syncCpm();
+    sync();
   };
   viewsRange.oninput = () => {
     views = Number(viewsRange.value);
-    viewsVal.textContent = fmtNum(views);
-    syncCpm();
+    sync();
   };
 
   approveBtn.onclick = async () => {
@@ -406,11 +454,7 @@ function buildOfferCell(r, td) {
     try {
       await api(`/api/creators/${r.id}/offer`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          selected_offer_id: selected.offer_id,
-          custom_offer: customOffer,
-          offer_approved: true,
-        }),
+        body: JSON.stringify({ selected_offer_id: selected.offer_id, custom_offer: customOffer, offer_approved: true }),
       });
       await refreshCreators();
     } catch (err) {
