@@ -72,6 +72,12 @@
               <button id="refresh-btn" class="ghost">Refresh</button>
             </div>
           </div>
+          <div class="neg-cpm-row">
+            <label class="neg-cpm-label" for="campaign-max-cpm">Max CPM ($)</label>
+            <input id="campaign-max-cpm" class="neg-cpm-input" type="number" min="0" step="0.01" placeholder="env default" />
+            <button id="save-cpm-btn" class="small ghost" type="button">Save &amp; recalc offers</button>
+            <span id="cpm-status" class="hint"></span>
+          </div>
           <p id="fetch-status" class="hint" hidden></p>
           <div id="scrape-progress" class="hint" hidden>
             <span id="scrape-progress-text"></span>
@@ -87,6 +93,9 @@
                   <th>Status</th>
                   <th>Opens</th>
                   <th>Last activity</th>
+                  <th>Views</th>
+                  <th>Rate</th>
+                  <th>Offer</th>
                   <th>Actions</th>
                 </tr>
               </thead>

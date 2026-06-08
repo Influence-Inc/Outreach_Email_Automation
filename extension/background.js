@@ -240,6 +240,9 @@ async function runScrapeQueue(payload, sender) {
         if (scraped.email) patchBody.email = scraped.email;
         if (scraped.firstName) patchBody.first_name = scraped.firstName;
         if (scraped.fullName) patchBody.full_name = scraped.fullName;
+        if (Array.isArray(scraped.reelViews) && scraped.reelViews.length) {
+          patchBody.reel_views = scraped.reelViews;
+        }
 
         if (Object.keys(patchBody).length > 0) {
           try {

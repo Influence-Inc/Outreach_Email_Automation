@@ -11,12 +11,60 @@
     return true;
   });
 
+  // "1.2K" -> 1200, "3.4M" -> 3_400_000, "950" -> 950
+  function parseViewCount(s) {
+    if (!s) return NaN;
+    s = String(s).trim().toUpperCase().replace(/,/g, '');
+    const m = s.match(/([\d.]+)\s*([KM]?)/);
+    if (!m) return NaN;
+    let n = parseFloat(m[1]);
+    if (m[2] === 'K') n *= 1e3;
+    else if (m[2] === 'M') n *= 1e6;
+    return n;
+  }
+
+  // Collect reel view counts from the profile grid. Match reel anchors, read
+  // the per-reel count span (skip like/comment/share UI text), dedupe by reel
+  // id, and cap at ~12.
+  function extractReelViews() {
+    const views = [];
+    const seen = new Set();
+    const anchors = document.querySelectorAll("a[href*='/reel/']");
+    for (const a of anchors) {
+      const href = a.getAttribute('href') || '';
+      const idMatch = href.match(/\/reel\/([^/]+)/);
+      const id = idMatch ? idMatch[1] : href;
+      if (seen.has(id)) continue;
+
+      let count = null;
+      for (const sp of a.querySelectorAll('span')) {
+        const t = (sp.textContent || '').trim();
+        if (!t) continue;
+        if (/like|comment|share|follow|view/i.test(t)) continue; // skip labels
+        if (/^[\d.,]+\s*[KM]?$/i.test(t)) {
+          const n = parseViewCount(t);
+          if (Number.isFinite(n) && n > 0) {
+            count = n;
+            break;
+          }
+        }
+      }
+      if (count != null) {
+        seen.add(id);
+        views.push(count);
+      }
+      if (views.length >= 12) break;
+    }
+    return views;
+  }
+
   function extractProfileData() {
     const result = {
       email: null,
       firstName: null,
       fullName: null,
-      username: null
+      username: null,
+      reelViews: []
     };
 
     try {
@@ -177,8 +225,16 @@
         }
       }
 
+      // Collect reel view counts for negotiation pricing (best-effort).
+      try {
+        result.reelViews = extractReelViews();
+        console.log('Reel views extracted:', result.reelViews);
+      } catch (e) {
+        console.warn('Reel view extraction failed:', e);
+      }
+
       console.log('Instagram profile data extracted:', result);
-      
+
     } catch (error) {
       console.error('Error extracting Instagram data:', error);
     }

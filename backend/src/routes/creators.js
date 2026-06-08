@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { sendOutreach } = require('../services/outreach');
 const { scrapeProfile } = require('../services/igScraper');
+const { computeStats, computeSixOffers, parseViewCount } = require('../services/pricing');
 
 const router = express.Router();
 
@@ -75,17 +76,47 @@ router.get('/:id', async (req, res, next) => {
 
 router.patch('/:id', async (req, res, next) => {
   try {
+    const body = req.body || {};
     const fields = ['email', 'first_name', 'full_name', 'instagram_username', 'notes'];
     const updates = [];
     const params = [req.params.id];
     for (const f of fields) {
-      if (req.body && req.body[f] != null) {
-        params.push(req.body[f]);
+      if (body[f] != null) {
+        params.push(body[f]);
         updates.push(`${f} = $${params.length}`);
       }
     }
+
+    // Reel-view ingestion from the Chrome extension. Compute IG percentile
+    // stats from the raw views, and (re)compute the 6 offers when we already
+    // know the creator's quoted rate.
+    if (Array.isArray(body.reel_views)) {
+      const views = body.reel_views
+        .map((v) => (typeof v === 'number' ? v : parseViewCount(v)))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      if (views.length) {
+        const stats = computeStats(views);
+        params.push(JSON.stringify(stats));
+        updates.push(`ig_scraped_data = $${params.length}::jsonb`);
+
+        const ctx = await db.one(
+          `SELECT c.quoted_rate, ca.max_cpm
+           FROM creators c JOIN campaigns ca ON ca.id = c.campaign_id
+           WHERE c.id = $1`,
+          [req.params.id],
+        );
+        const quotedRate = ctx && ctx.quoted_rate != null ? Number(ctx.quoted_rate) : null;
+        if (quotedRate != null) {
+          const maxCpm = ctx.max_cpm != null ? Number(ctx.max_cpm) : Number(process.env.TARGET_CPM || 15);
+          const offers = computeSixOffers(stats, maxCpm, quotedRate);
+          params.push(JSON.stringify(offers));
+          updates.push(`suggested_offers = $${params.length}::jsonb`);
+        }
+      }
+    }
+
     if (!updates.length) return res.status(400).json({ error: 'no fields to update' });
-    if (req.body && req.body.email) {
+    if (body.email) {
       updates.push(`status = CASE WHEN status = 'pending_extraction' THEN 'email_found' ELSE status END`);
     }
     updates.push('updated_at = NOW()');

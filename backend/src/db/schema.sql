@@ -105,13 +105,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_one_default
 
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES email_templates(id) ON DELETE SET NULL;
 
--- Creator Negotiation feature removed. Drop its columns if an earlier deploy
--- created them. DROP ... IF EXISTS is idempotent — safe to run on every boot,
--- matching this file's "safe to run on every backend boot" design.
-ALTER TABLE campaigns DROP COLUMN IF EXISTS max_cpm;
-ALTER TABLE creators  DROP COLUMN IF EXISTS ig_scraped_data;
-ALTER TABLE creators  DROP COLUMN IF EXISTS suggested_offers;
-ALTER TABLE creators  DROP COLUMN IF EXISTS selected_offer_id;
-ALTER TABLE creators  DROP COLUMN IF EXISTS custom_offer;
-ALTER TABLE creators  DROP COLUMN IF EXISTS quoted_rate;
-ALTER TABLE creators  DROP COLUMN IF EXISTS offer_approved;
+-- Creator Negotiation. Rebuilt inside this app (no separate worker). All
+-- columns are added idempotently so this stays "safe to run on every boot".
+-- Negotiation has its own `negotiation_status` lifecycle, independent of the
+-- outreach `status` column.
+--   AWAITING_RATE | AWAITING_APPROVAL | AWAITING_DECISION | ACCEPTED | DECLINED | CLOSED
+--   (NULL = not in negotiation)
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS negotiation_status TEXT;
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS quoted_rate NUMERIC(10,2);
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS ig_scraped_data JSONB;
+  -- {p10,p25,p50,p75,reel_count,min_views,views_raw:[...]}
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS suggested_offers JSONB;
+  -- array of 6 offer objects (shape in pricing.js)
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS selected_offer_id TEXT;
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS custom_offer JSONB;
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS offer_approved BOOLEAN DEFAULT FALSE;
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS negotiation_followup_count INTEGER DEFAULT 0;
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS last_negotiation_msg_id TEXT;
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS last_negotiation_email_at TIMESTAMPTZ;
+
+-- Per-campaign CPM ceiling. Nullable; falls back to env TARGET_CPM.
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS max_cpm NUMERIC(6,2);
+
+CREATE INDEX IF NOT EXISTS idx_creators_negotiation_status ON creators(negotiation_status);

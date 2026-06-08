@@ -94,6 +94,97 @@ async function sendEmail({ to, subject, body, threadId, inReplyTo, references, t
   };
 }
 
+function decodeB64Url(data) {
+  return Buffer.from(String(data).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+}
+
+// Depth-first search for the first body part of a given MIME type.
+function findPartData(payload, mime) {
+  if (!payload) return null;
+  if (payload.mimeType === mime && payload.body && payload.body.data) return payload.body.data;
+  if (Array.isArray(payload.parts)) {
+    for (const p of payload.parts) {
+      const r = findPartData(p, mime);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+function htmlToText(html) {
+  return String(html)
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>(?=)/gi, '\n')
+    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+// Strip quoted reply history and signatures so Claude sees only the new text.
+function stripQuotedHistory(text) {
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  for (const line of lines) {
+    // Gmail/Apple/Outlook "On <date>, <person> wrote:" boundary.
+    if (/^\s*On .+ wrote:\s*$/.test(line)) break;
+    if (/^\s*-{2,}\s*Original Message\s*-{2,}/i.test(line)) break;
+    if (/^\s*From:\s.+/i.test(line) && out.length) break;
+    if (/^\s*>/.test(line)) continue; // quoted line
+    out.push(line);
+  }
+  let result = out.join('\n').trim();
+  // Drop a trailing "-- " signature block if present.
+  result = result.replace(/\n-- \n[\s\S]*$/, '').trim();
+  return result;
+}
+
+// Newest inbound (non-sender) message in a thread, as plain text with quoted
+// history stripped. Returns { messageId, rfc822MessageId, text } or null.
+async function getLatestInboundText(threadId) {
+  if (!threadId) return null;
+  const auth = await getAuthorizedClient();
+  const gmail = google.gmail({ version: 'v1', auth });
+  const senderEmail = (process.env.SENDER_EMAIL || '').toLowerCase();
+
+  const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
+  const messages = thread.data.messages || [];
+
+  let latest = null;
+  for (const m of messages) {
+    const headers = (m.payload && m.payload.headers) || [];
+    const fromHeader = headers.find((h) => h.name.toLowerCase() === 'from');
+    const fromValue = fromHeader ? fromHeader.value.toLowerCase() : '';
+    if (senderEmail && fromValue.includes(senderEmail)) continue; // our own message
+    latest = m; // messages are chronological; keep overwriting to land on the newest inbound
+  }
+  if (!latest) return null;
+
+  const headers = (latest.payload && latest.payload.headers) || [];
+  const msgIdHeader = headers.find((h) => h.name.toLowerCase() === 'message-id');
+
+  let raw = null;
+  const plain = findPartData(latest.payload, 'text/plain');
+  if (plain) {
+    raw = decodeB64Url(plain);
+  } else {
+    const html = findPartData(latest.payload, 'text/html');
+    if (html) raw = htmlToText(decodeB64Url(html));
+  }
+  if (raw == null) raw = latest.snippet || '';
+
+  return {
+    messageId: latest.id,
+    rfc822MessageId: msgIdHeader ? msgIdHeader.value : null,
+    text: stripQuotedHistory(raw),
+  };
+}
+
 async function threadHasReply(threadId) {
   if (!threadId) return false;
   const auth = await getAuthorizedClient();
@@ -120,4 +211,4 @@ async function threadHasReply(threadId) {
   return false;
 }
 
-module.exports = { sendEmail, threadHasReply, newTrackingId };
+module.exports = { sendEmail, threadHasReply, getLatestInboundText, newTrackingId };

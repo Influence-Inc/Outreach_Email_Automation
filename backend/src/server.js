@@ -5,6 +5,7 @@ const cors = require('cors');
 
 const campaigns = require('./routes/campaigns');
 const creators = require('./routes/creators');
+const negotiation = require('./routes/negotiation');
 const templates = require('./routes/templates');
 const tracking = require('./routes/tracking');
 const auth = require('./routes/auth');
@@ -33,6 +34,9 @@ app.get('/api/debug/ig-cookie', (_req, res) => res.json(igCookieStatus()));
 
 app.use('/api/campaigns', campaigns);
 app.use('/api/creators', creators);
+// Negotiation admin actions live under /api/creators too (e.g. /:id/offer,
+// /:id/quoted-rate). Two-segment paths fall through the creators router above.
+app.use('/api/creators', negotiation);
 app.use('/api/templates', templates);
 app.use('/auth', auth);
 app.use('/track', tracking);

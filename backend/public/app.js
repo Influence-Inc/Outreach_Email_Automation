@@ -136,6 +136,7 @@ async function selectCampaign(id) {
   `;
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
+  el('campaign-max-cpm').value = c.max_cpm != null ? c.max_cpm : '';
   el('campaign-template-card').hidden = false;
   renderCampaignTemplatePicker(c);
   await refreshCreators();
@@ -196,6 +197,176 @@ function makeEditable(td, { value, placeholder, onSave }) {
   });
 }
 
+// --- Negotiation cells ----------------------------------------------------
+
+function fmtNum(n) {
+  return Number(n || 0).toLocaleString('en-US');
+}
+
+function fmtViews(n) {
+  n = Number(n || 0);
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+  return String(Math.round(n));
+}
+
+// Live CPM (mirrors pricing.cpmFor on the backend).
+function cpmFor(fee, views) {
+  return views ? Math.round((fee / views) * 1000 * 100) / 100 : null;
+}
+
+function renderViewsCell(r, td) {
+  const s = r.ig_scraped_data;
+  if (s && s.reel_count) {
+    td.innerHTML = `<b>${fmtViews(s.p50)}</b><br/><span class="meta">median · ${s.reel_count} reels</span>`;
+  } else {
+    td.innerHTML = '<span class="meta">—</span>';
+  }
+}
+
+function renderRateCell(r, td) {
+  td.textContent = r.quoted_rate != null ? `$${fmtNum(r.quoted_rate)}` : '—';
+  makeEditable(td, {
+    value: r.quoted_rate != null ? String(r.quoted_rate) : '',
+    placeholder: 'rate $',
+    onSave: (v) =>
+      api(`/api/creators/${r.id}/quoted-rate`, {
+        method: 'POST',
+        body: JSON.stringify({ quoted_rate: Number(String(v).replace(/[^0-9.]/g, '')) }),
+      }),
+  });
+}
+
+// Offer dropdown + fee/views sliders + live CPM + Approve & send.
+function buildOfferCell(r, td) {
+  const offers = Array.isArray(r.suggested_offers) ? r.suggested_offers : [];
+  const stage = r.negotiation_status
+    ? `<div class="neg-stage">${r.negotiation_status.replace(/_/g, ' ').toLowerCase()}</div>`
+    : '';
+  if (!offers.length) {
+    td.innerHTML = stage || '<span class="meta">—</span>';
+    return;
+  }
+
+  const custom = r.custom_offer && typeof r.custom_offer === 'object' ? r.custom_offer : null;
+  let selectedId = (custom && custom.offer_id) || r.selected_offer_id || offers[0].offer_id;
+  let selected = offers.find((o) => o.offer_id === selectedId) || offers[0];
+  selectedId = selected.offer_id;
+
+  const seedFromCustom = custom && custom.offer_id === selectedId;
+  let fee = seedFromCustom && custom.flat_fee != null ? Number(custom.flat_fee) : Number(selected.flat_fee);
+  let views =
+    seedFromCustom && custom.view_guarantee != null
+      ? Number(custom.view_guarantee)
+      : Number(selected.view_guarantee || 0);
+
+  const maxFee = Math.max(...offers.map((o) => Number(o.flat_fee) || 0), fee, 100);
+  const feeMax = Math.max(Math.ceil((maxFee * 2) / 50) * 50, 100);
+  const maxViews = Math.max(
+    ...offers.map((o) => Number(o.view_guarantee) || 0),
+    views,
+    (r.ig_scraped_data && r.ig_scraped_data.p75) || 0,
+    25000,
+  );
+  const viewsMax = Math.ceil((maxViews * 1.5) / 25000) * 25000;
+
+  td.classList.add('neg-offer');
+  td.innerHTML = `
+    ${stage}
+    <select class="neg-offer-select small"></select>
+    <div class="neg-slider">
+      <label>Fee <b class="neg-fee-val"></b></label>
+      <input type="range" class="neg-fee" min="0" max="${feeMax}" step="50" />
+    </div>
+    <div class="neg-slider neg-views-wrap">
+      <label>Views <b class="neg-views-val"></b></label>
+      <input type="range" class="neg-views" min="0" max="${viewsMax}" step="25000" />
+    </div>
+    <div class="neg-cpm-badge"></div>
+    <button class="small neg-approve">Approve &amp; send</button>
+    <span class="neg-offer-status hint"></span>
+  `;
+  const sel = td.querySelector('.neg-offer-select');
+  const feeRange = td.querySelector('.neg-fee');
+  const viewsRange = td.querySelector('.neg-views');
+  const feeVal = td.querySelector('.neg-fee-val');
+  const viewsVal = td.querySelector('.neg-views-val');
+  const viewsWrap = td.querySelector('.neg-views-wrap');
+  const cpmBadge = td.querySelector('.neg-cpm-badge');
+  const approveBtn = td.querySelector('.neg-approve');
+  const statusEl = td.querySelector('.neg-offer-status');
+
+  for (const o of offers) {
+    const opt = document.createElement('option');
+    opt.value = o.offer_id;
+    opt.textContent = `${o.label} · $${fmtNum(o.flat_fee)}`;
+    if (o.offer_id === selectedId) opt.selected = true;
+    sel.appendChild(opt);
+  }
+
+  const isView = () => selected.offer_type === 'view_based';
+  function syncCpm() {
+    const cpm = cpmFor(fee, views);
+    cpmBadge.textContent = cpm != null ? `CPM $${cpm}` : 'flat';
+  }
+  function syncUI() {
+    feeRange.value = String(fee);
+    viewsRange.value = String(views);
+    feeVal.textContent = '$' + fmtNum(fee);
+    viewsVal.textContent = fmtNum(views);
+    viewsWrap.style.display = isView() ? '' : 'none';
+    syncCpm();
+  }
+  syncUI();
+
+  sel.onchange = () => {
+    selected = offers.find((o) => o.offer_id === sel.value) || offers[0];
+    selectedId = selected.offer_id;
+    fee = Number(selected.flat_fee);
+    views = Number(selected.view_guarantee || 0);
+    syncUI();
+  };
+  feeRange.oninput = () => {
+    fee = Number(feeRange.value);
+    feeVal.textContent = '$' + fmtNum(fee);
+    syncCpm();
+  };
+  viewsRange.oninput = () => {
+    views = Number(viewsRange.value);
+    viewsVal.textContent = fmtNum(views);
+    syncCpm();
+  };
+
+  approveBtn.onclick = async () => {
+    approveBtn.disabled = true;
+    statusEl.textContent = 'Approving…';
+    const numVideos = isView() ? 1 : Number(selected.num_videos || 1);
+    const customOffer = {
+      ...selected,
+      offer_id: selected.offer_id,
+      flat_fee: Math.round(fee),
+      view_guarantee: isView() ? Math.round(views) : 0,
+      num_videos: numVideos,
+      flat_per_video: isView() ? Math.round(fee) : Math.round(fee / numVideos),
+      cpm_applied: cpmFor(fee, views),
+    };
+    try {
+      await api(`/api/creators/${r.id}/offer`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          selected_offer_id: selected.offer_id,
+          custom_offer: customOffer,
+          offer_approved: true,
+        }),
+      });
+      await refreshCreators();
+    } catch (err) {
+      statusEl.textContent = err.message;
+      approveBtn.disabled = false;
+    }
+  };
+}
+
 async function refreshCreators() {
   if (!state.selectedCampaignId) return;
   const rows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
@@ -203,6 +374,7 @@ async function refreshCreators() {
   tbody.innerHTML = '';
   for (const r of rows) {
     const tr = document.createElement('tr');
+    tr.dataset.creatorId = r.id;
     const lastActivity = r.replied_at || r.followup_sent_at || r.outreach_sent_at || r.updated_at;
     tr.innerHTML = `
       <td><a href="${r.instagram_url}" target="_blank" rel="noopener">@${r.instagram_username || r.instagram_url}</a></td>
@@ -211,12 +383,18 @@ async function refreshCreators() {
       <td><span class="tag ${r.status}">${r.status.replace(/_/g, ' ')}</span></td>
       <td>${r.open_count}${r.last_open_at ? `<br/><span class="meta">${fmtDate(r.last_open_at)}</span>` : ''}</td>
       <td><span class="meta">${fmtDate(lastActivity)}</span></td>
+      <td class="neg-views-cell"></td>
+      <td class="neg-rate-cell"></td>
+      <td class="neg-offer-cell"></td>
       <td></td>
     `;
     const cells = tr.querySelectorAll('td');
     const nameTd = cells[1];
     const emailTd = cells[2];
     const actions = cells[cells.length - 1];
+    renderViewsCell(r, tr.querySelector('.neg-views-cell'));
+    renderRateCell(r, tr.querySelector('.neg-rate-cell'));
+    buildOfferCell(r, tr.querySelector('.neg-offer-cell'));
 
     makeEditable(nameTd, {
       value: r.full_name || r.first_name || '',
@@ -333,6 +511,33 @@ el('creator-form').addEventListener('submit', async (e) => {
 });
 
 el('refresh-btn').addEventListener('click', refreshCreators);
+
+el('save-cpm-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const raw = el('campaign-max-cpm').value.trim();
+  const status = el('cpm-status');
+  const btn = el('save-cpm-btn');
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ max_cpm: raw === '' ? null : Number(raw) }),
+    });
+    status.textContent = 'Recalculating…';
+    const r = await api(
+      `/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}/recalculate-offers`,
+      { method: 'POST' },
+    );
+    status.textContent = `Saved. ${r.updated} creator(s) updated.`;
+    await refreshCampaigns();
+    await refreshCreators();
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 el('send-emails-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;

@@ -1,13 +1,16 @@
 const db = require('../db');
 const { sendFollowup, markReplied, resolveFollowupSteps } = require('./outreach');
 const { threadHasReply } = require('./gmail');
+const negotiation = require('./negotiation');
 
 const legacyDelayHours = () => Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
 const intervalMs = () =>
   Number(process.env.SCHEDULER_INTERVAL_MINUTES || 15) * 60 * 1000;
+const negotiationFollowupDays = () => Number(process.env.NEGOTIATION_FOLLOWUP_DAYS || 2);
 
 let timer = null;
 let running = false;
+let negRunning = false;
 
 async function checkRepliesAndFollowups() {
   if (running) return;
@@ -72,19 +75,98 @@ async function checkRepliesAndFollowups() {
   }
 }
 
+// Drive the in-app negotiation flow. Runs every tick after the outreach
+// reply/follow-up check. Each step is best-effort and isolated per creator so
+// one failure never blocks the rest.
+async function pollNegotiations() {
+  if (negRunning) return;
+  negRunning = true;
+  try {
+    // 1. First replies: outreach replied, negotiation not started yet.
+    const fresh = await db.many(
+      `SELECT id FROM creators
+       WHERE status = 'replied' AND negotiation_status IS NULL
+         AND outreach_thread_id IS NOT NULL
+       ORDER BY replied_at ASC NULLS LAST`,
+    );
+    for (const c of fresh) {
+      try {
+        await negotiation.processReply(c.id);
+      } catch (err) {
+        console.error(`negotiation first-reply failed for creator ${c.id}:`, err.message);
+      }
+    }
+
+    // 2. Ongoing replies: a new inbound while we await a rate or a decision.
+    //    processReply de-dupes on last_negotiation_msg_id, so this is cheap.
+    const ongoing = await db.many(
+      `SELECT id FROM creators
+       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')
+         AND outreach_thread_id IS NOT NULL`,
+    );
+    for (const c of ongoing) {
+      try {
+        await negotiation.processReply(c.id);
+      } catch (err) {
+        console.error(`negotiation reply poll failed for creator ${c.id}:`, err.message);
+      }
+    }
+
+    // 3. Admin-approved offers waiting to send.
+    const approved = await db.many(
+      `SELECT id FROM creators
+       WHERE negotiation_status = 'AWAITING_APPROVAL' AND offer_approved = TRUE`,
+    );
+    for (const c of approved) {
+      try {
+        await negotiation.sendApprovedOffer(c.id);
+      } catch (err) {
+        console.error(`negotiation send-offer failed for creator ${c.id}:`, err.message);
+      }
+    }
+
+    // 4. Idle follow-ups / close-out (re-query so steps 2–3 transitions are seen).
+    const idleMs = negotiationFollowupDays() * 24 * 3600_000;
+    const now = Date.now();
+    const waiting = await db.many(
+      `SELECT id, last_negotiation_email_at, replied_at, updated_at
+       FROM creators
+       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')`,
+    );
+    for (const c of waiting) {
+      const last = c.last_negotiation_email_at || c.replied_at || c.updated_at;
+      if (!last) continue;
+      if (now < new Date(last).getTime() + idleMs) continue;
+      try {
+        await negotiation.runNegotiationFollowup(c.id);
+      } catch (err) {
+        console.error(`negotiation follow-up failed for creator ${c.id}:`, err.message);
+      }
+    }
+  } finally {
+    negRunning = false;
+  }
+}
+
+async function tick() {
+  await checkRepliesAndFollowups().catch((err) => console.error('scheduler tick failed:', err));
+  await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
+}
+
 function start() {
   if (timer) return;
   console.log(
     `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 15} min, ` +
-      `legacy follow-up delay ${legacyDelayHours()}h (per-template followups override this)`,
+      `legacy follow-up delay ${legacyDelayHours()}h (per-template followups override this); ` +
+      `negotiation follow-up idle ${negotiationFollowupDays()}d`,
   );
   timer = setInterval(() => {
-    checkRepliesAndFollowups().catch((err) => console.error('scheduler tick failed:', err));
+    tick();
   }, intervalMs());
   // Run once on boot, but don't block startup.
   setTimeout(() => {
-    checkRepliesAndFollowups().catch((err) => console.error('scheduler boot tick failed:', err));
+    tick();
   }, 5000);
 }
 
-module.exports = { start, checkRepliesAndFollowups };
+module.exports = { start, checkRepliesAndFollowups, pollNegotiations };
