@@ -213,19 +213,30 @@ async function runScrapeQueue(payload, sender) {
       let error = null;
 
       try {
-        const url =
+        const baseUrl =
           creator.instagramUrl ||
           (creator.instagramUsername
             ? `https://www.instagram.com/${creator.instagramUsername}/`
             : null);
-        if (!url) throw new Error('no instagram url');
+        if (!baseUrl) throw new Error('no instagram url');
+        // Open the Reels tab: per-reel view counts render there as persistent
+        // overlays (on the main grid they often only appear on hover). The
+        // profile header — name, bio and email — is present on this tab too,
+        // so we still scrape username + email + views in one pass.
+        const url = baseUrl.replace(/\/+$/, '') + '/reels/';
 
         const tab = await chrome.tabs.create({ url, active: false });
         tabId = tab.id;
         await waitForTabComplete(tabId, 30000);
         // Settle: let document_idle + IG SPA hydration finish.
         await sleep(jittered(1500, 1500));
-        scraped = await sendMessageToTab(tabId, { action: 'extractInstagramData' }, 12000);
+        // includeReels: scroll-and-collect reel view counts. Allow extra time
+        // because the content script scrolls to lazy-load the reels grid.
+        scraped = await sendMessageToTab(
+          tabId,
+          { action: 'extractInstagramData', includeReels: true },
+          20000,
+        );
       } catch (err) {
         error = err.message;
       } finally {

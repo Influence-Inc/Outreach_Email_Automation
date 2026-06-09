@@ -218,10 +218,30 @@ function cpmFor(fee, views) {
 function renderViewsCell(r, td) {
   const s = r.ig_scraped_data;
   if (s && s.reel_count) {
-    td.innerHTML = `<b>${fmtViews(s.p50)}</b><br/><span class="meta">median · ${s.reel_count} reels</span>`;
+    td.innerHTML =
+      `<b>${fmtViews(s.p50)}</b> <span class="meta">median</span>` +
+      `<br/><span class="meta">${s.reel_count} reels · low ${fmtViews(s.min_views)}</span>`;
   } else {
-    td.innerHTML = '<span class="meta">—</span>';
+    td.innerHTML = '<span class="meta">— no views</span>';
   }
+  // Editable: paste the recent reel view counts (comma/space separated). Lets
+  // the admin seed or correct the numbers when the scraper comes up short.
+  const rawViews =
+    s && Array.isArray(s.views_raw) ? s.views_raw.map((n) => Math.round(n)).join(', ') : '';
+  makeEditable(td, {
+    value: rawViews,
+    placeholder: 'reel views e.g. 120k, 95k, 210k',
+    onSave: (v) => {
+      const list = String(v)
+        .split(/[\s,]+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      return api(`/api/creators/${r.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reel_views: list }),
+      });
+    },
+  });
 }
 
 function renderRateCell(r, td) {
@@ -243,8 +263,14 @@ function buildOfferCell(r, td) {
   const stage = r.negotiation_status
     ? `<div class="neg-stage">${r.negotiation_status.replace(/_/g, ' ').toLowerCase()}</div>`
     : '';
+  const sent = r.negotiation_status === 'AWAITING_DECISION';
+  const approvedBadge = r.offer_approved
+    ? `<span class="neg-approved-badge ${sent ? 'sent' : ''}">${sent ? '✓ offer sent' : '✓ approved'}</span>`
+    : '';
   if (!offers.length) {
-    td.innerHTML = stage || '<span class="meta">—</span>';
+    td.innerHTML =
+      (stage || '') +
+      '<div class="meta">Scrape reel views to generate offers, or enter views in the Views column.</div>';
     return;
   }
 
@@ -272,7 +298,7 @@ function buildOfferCell(r, td) {
 
   td.classList.add('neg-offer');
   td.innerHTML = `
-    ${stage}
+    <div class="neg-offer-head">${stage}${approvedBadge}</div>
     <select class="neg-offer-select small"></select>
     <div class="neg-slider">
       <label>Fee <b class="neg-fee-val"></b></label>
@@ -283,7 +309,7 @@ function buildOfferCell(r, td) {
       <input type="range" class="neg-views" min="0" max="${viewsMax}" step="25000" />
     </div>
     <div class="neg-cpm-badge"></div>
-    <button class="small neg-approve">Approve &amp; send</button>
+    <button class="small neg-approve">${r.offer_approved ? 'Re-approve &amp; send' : 'Approve &amp; send'}</button>
     <span class="neg-offer-status hint"></span>
   `;
   const sel = td.querySelector('.neg-offer-select');
@@ -299,7 +325,9 @@ function buildOfferCell(r, td) {
   for (const o of offers) {
     const opt = document.createElement('option');
     opt.value = o.offer_id;
-    opt.textContent = `${o.label} · $${fmtNum(o.flat_fee)}`;
+    // Flag whether the offer clears the creator's quoted rate (when known).
+    const meets = o.satisfies_creator_rate === true ? ' ✓' : o.satisfies_creator_rate === false ? ' ✗' : '';
+    opt.textContent = `${o.label} · $${fmtNum(o.flat_fee)}${meets}`;
     if (o.offer_id === selectedId) opt.selected = true;
     sel.appendChild(opt);
   }
@@ -351,7 +379,7 @@ function buildOfferCell(r, td) {
       cpm_applied: cpmFor(fee, views),
     };
     try {
-      await api(`/api/creators/${r.id}/offer`, {
+      const resp = await api(`/api/creators/${r.id}/offer`, {
         method: 'PATCH',
         body: JSON.stringify({
           selected_offer_id: selected.offer_id,
@@ -359,7 +387,18 @@ function buildOfferCell(r, td) {
           offer_approved: true,
         }),
       });
-      await refreshCreators();
+      const sr = resp && resp.send_result;
+      // Reflect the outcome before the table re-render replaces this cell.
+      if (sr && sr.sent) {
+        statusEl.textContent = '✓ Offer email sent.';
+      } else if (sr && sr.error) {
+        statusEl.textContent = `Approved, but sending failed: ${sr.error}`;
+      } else {
+        statusEl.textContent = '✓ Offer approved. It will send once the creator replies.';
+      }
+      // Brief pause so the status is visible, then refresh to show the
+      // persistent approved/sent badge.
+      setTimeout(refreshCreators, 1200);
     } catch (err) {
       statusEl.textContent = err.message;
       approveBtn.disabled = false;

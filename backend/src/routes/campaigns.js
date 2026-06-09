@@ -100,12 +100,13 @@ router.post('/:id/recalculate-offers', async (req, res, next) => {
 
     const creators = await db.many(
       `SELECT id, ig_scraped_data, quoted_rate FROM creators
-       WHERE campaign_id = $1 AND ig_scraped_data IS NOT NULL AND quoted_rate IS NOT NULL`,
+       WHERE campaign_id = $1 AND ig_scraped_data IS NOT NULL`,
       [req.params.id],
     );
     let updated = 0;
     for (const c of creators) {
-      const offers = computeSixOffers(c.ig_scraped_data, maxCpm, Number(c.quoted_rate));
+      const rate = c.quoted_rate != null ? Number(c.quoted_rate) : null;
+      const offers = computeSixOffers(c.ig_scraped_data, maxCpm, rate);
       await db.query(
         `UPDATE creators SET suggested_offers = $2::jsonb, updated_at = NOW() WHERE id = $1`,
         [c.id, JSON.stringify(offers)],

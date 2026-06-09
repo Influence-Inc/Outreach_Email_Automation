@@ -37,6 +37,7 @@ function calculatePercentile(arr, p) {
 
 function computeStats(views) {
   const s = [...views].sort((a, b) => a - b);
+  const sum = s.reduce((acc, n) => acc + n, 0);
   return {
     p10: calculatePercentile(s, 0.1),
     p25: calculatePercentile(s, 0.25),
@@ -44,6 +45,7 @@ function computeStats(views) {
     p75: calculatePercentile(s, 0.75),
     reel_count: s.length,
     min_views: s.length ? s[0] : 0,
+    avg: s.length ? Math.round(sum / s.length) : 0,
     views_raw: views,
   };
 }

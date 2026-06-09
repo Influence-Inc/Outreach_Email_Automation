@@ -41,7 +41,13 @@ router.patch('/:id/offer', async (req, res, next) => {
     let send_result = null;
     if (offer_approved) {
       try {
-        send_result = await negotiation.sendApprovedOffer(row.id);
+        // An explicit admin approval may send proactively from AWAITING_RATE
+        // too (not just AWAITING_APPROVAL), as long as a thread exists. If the
+        // creator isn't in the negotiation flow yet, the approval is recorded
+        // and the scheduler sends it once they reach the approval stage.
+        send_result = await negotiation.sendApprovedOffer(row.id, {
+          fromStages: ['AWAITING_APPROVAL', 'AWAITING_RATE'],
+        });
       } catch (err) {
         send_result = { error: err.message };
       }

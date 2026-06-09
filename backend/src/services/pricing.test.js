@@ -32,6 +32,7 @@ test('computeStats percentiles', () => {
   assert.strictEqual(stats.p75, 400000);
   assert.strictEqual(stats.reel_count, 5);
   assert.strictEqual(stats.min_views, 100000);
+  assert.strictEqual(stats.avg, 300000); // mean of the 5 reels
 });
 
 test('computeSixOffers shape + fees (maxCpm 15, RISK_BUFFER 0.20 => eff 12)', () => {

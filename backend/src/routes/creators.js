@@ -88,8 +88,12 @@ router.patch('/:id', async (req, res, next) => {
     }
 
     // Reel-view ingestion from the Chrome extension. Compute IG percentile
-    // stats from the raw views, and (re)compute the 6 offers when we already
-    // know the creator's quoted rate.
+    // stats from the raw views, then (re)compute the 6 offers. Offer fees are
+    // derived purely from the view stats + the campaign CPM ceiling; the
+    // creator's quoted rate (if known) only annotates whether each offer
+    // satisfies it. So we compute offers as soon as we have views — the admin
+    // can review / edit / approve them right after scraping, without waiting
+    // for the creator to share a rate.
     if (Array.isArray(body.reel_views)) {
       const views = body.reel_views
         .map((v) => (typeof v === 'number' ? v : parseViewCount(v)))
@@ -106,12 +110,11 @@ router.patch('/:id', async (req, res, next) => {
           [req.params.id],
         );
         const quotedRate = ctx && ctx.quoted_rate != null ? Number(ctx.quoted_rate) : null;
-        if (quotedRate != null) {
-          const maxCpm = ctx.max_cpm != null ? Number(ctx.max_cpm) : Number(process.env.TARGET_CPM || 15);
-          const offers = computeSixOffers(stats, maxCpm, quotedRate);
-          params.push(JSON.stringify(offers));
-          updates.push(`suggested_offers = $${params.length}::jsonb`);
-        }
+        const maxCpm =
+          ctx && ctx.max_cpm != null ? Number(ctx.max_cpm) : Number(process.env.TARGET_CPM || 15);
+        const offers = computeSixOffers(stats, maxCpm, quotedRate);
+        params.push(JSON.stringify(offers));
+        updates.push(`suggested_offers = $${params.length}::jsonb`);
       }
     }
 

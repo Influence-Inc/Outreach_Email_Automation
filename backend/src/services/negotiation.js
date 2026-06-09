@@ -447,16 +447,24 @@ function resolveApprovedOffer(creator) {
   return offers[0] || null;
 }
 
-// AWAITING_APPROVAL + offer_approved -> draft & send the offer -> AWAITING_DECISION.
-// Atomic claim prevents a double-send race between this and the approve route.
-async function sendApprovedOffer(creatorId) {
+// offer_approved + a sendable stage + an existing thread -> draft & send the
+// offer -> AWAITING_DECISION. Atomic claim prevents a double-send race between
+// this and the approve route. `fromStages` controls which negotiation stages
+// are allowed to send: the scheduler only auto-sends from AWAITING_APPROVAL,
+// while an explicit admin approval may also send proactively from AWAITING_RATE.
+// An outreach thread is required so the offer goes out as a threaded reply
+// (never a cold email before the intro outreach has been sent).
+async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL'] } = {}) {
+  const stagePlaceholders = fromStages.map((_, i) => `$${i + 2}`).join(', ');
   const claim = await db.one(
     `UPDATE creators SET negotiation_status = 'AWAITING_DECISION', updated_at = NOW()
-     WHERE id = $1 AND negotiation_status = 'AWAITING_APPROVAL' AND offer_approved = TRUE
+     WHERE id = $1 AND offer_approved = TRUE
+       AND outreach_thread_id IS NOT NULL
+       AND negotiation_status IN (${stagePlaceholders})
      RETURNING id`,
-    [creatorId],
+    [creatorId, ...fromStages],
   );
-  if (!claim) return { skipped: 'not approved / not awaiting' };
+  if (!claim) return { skipped: 'recorded; will send once the creator is in the negotiation flow' };
 
   const creator = await loadCreator(creatorId);
   const offer = resolveApprovedOffer(creator);

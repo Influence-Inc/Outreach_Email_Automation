@@ -2,14 +2,23 @@
 (function() {
   'use strict';
 
-  // Listen for requests from popup
+  // Listen for requests from popup / background queue. extractProfileData is
+  // async (it scrolls to lazy-load the reels grid before reading view counts),
+  // so we keep the message channel open by returning true and replying from the
+  // promise.
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'extractInstagramData') {
-      const data = extractProfileData();
-      sendResponse(data);
+      // The dashboard queue sets includeReels to scroll-and-collect reel views.
+      // The popup (email autofill only) omits it to stay fast and not scroll.
+      extractProfileData({ includeReels: request.includeReels === true })
+        .then((data) => sendResponse(data))
+        .catch((err) => sendResponse({ error: err && err.message ? err.message : String(err) }));
+      return true;
     }
     return true;
   });
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // "1.2K" -> 1200, "3.4M" -> 3_400_000, "950" -> 950
   function parseViewCount(s) {
@@ -23,20 +32,23 @@
     return n;
   }
 
-  // Collect reel view counts from the profile grid. Match reel anchors, read
-  // the per-reel count span (skip like/comment/share UI text), dedupe by reel
-  // id, and cap at ~12.
-  function extractReelViews() {
+  // Collect reel view counts from the profile grid (most-recent first). For
+  // each reel anchor, read the per-reel view-count overlay, skipping
+  // like/comment/share UI text, dedupe by reel id, and cap at `maxReels`.
+  function extractReelViews(maxReels = 12) {
     const views = [];
     const seen = new Set();
     const anchors = document.querySelectorAll("a[href*='/reel/']");
     for (const a of anchors) {
+      if (views.length >= maxReels) break;
       const href = a.getAttribute('href') || '';
       const idMatch = href.match(/\/reel\/([^/]+)/);
       const id = idMatch ? idMatch[1] : href;
       if (seen.has(id)) continue;
 
       let count = null;
+      // The view overlay renders as a small number next to a play icon. Scan
+      // every descendant span and take the first bare numeric token.
       for (const sp of a.querySelectorAll('span')) {
         const t = (sp.textContent || '').trim();
         if (!t) continue;
@@ -53,12 +65,32 @@
         seen.add(id);
         views.push(count);
       }
-      if (views.length >= 12) break;
     }
     return views;
   }
 
-  function extractProfileData() {
+  // Reels (and their view overlays) lazy-load as you scroll. Nudge the page
+  // down until we have enough reels or stop making progress, then return to the
+  // top before reading the DOM.
+  async function collectReelViews(maxReels = 12) {
+    let best = extractReelViews(maxReels);
+    let stagnant = 0;
+    for (let i = 0; i < 8 && best.length < maxReels; i++) {
+      window.scrollBy(0, Math.round(window.innerHeight * 0.9));
+      await sleep(700);
+      const next = extractReelViews(maxReels);
+      if (next.length > best.length) {
+        best = next;
+        stagnant = 0;
+      } else if (++stagnant >= 2) {
+        break; // no new reels after two nudges — stop
+      }
+    }
+    window.scrollTo(0, 0);
+    return best;
+  }
+
+  async function extractProfileData({ includeReels = true } = {}) {
     const result = {
       email: null,
       firstName: null,
@@ -68,10 +100,12 @@
     };
 
     try {
-      // Extract username from URL
-      const urlMatch = window.location.pathname.match(/^\/([^\/]+)\/?$/);
-      if (urlMatch) {
-        result.username = urlMatch[1];
+      // Extract username from the first path segment. Works on both the profile
+      // root (/username/) and sub-tabs (/username/reels/, /username/tagged/).
+      const segments = window.location.pathname.split('/').filter(Boolean);
+      const RESERVED = new Set(['reels', 'reel', 'p', 'tagged', 'explore', 'stories', 'tv']);
+      if (segments.length && !RESERVED.has(segments[0].toLowerCase())) {
+        result.username = segments[0];
       }
 
       // Try to extract full name from profile (NOT the username header)
@@ -225,9 +259,11 @@
         }
       }
 
-      // Collect reel view counts for negotiation pricing (best-effort).
+      // Collect reel view counts for negotiation pricing (best-effort). When
+      // includeReels is set (dashboard queue) we scroll to lazy-load the reels
+      // grid for the recent ~12 reels; otherwise (popup) do a quick single pass.
       try {
-        result.reelViews = extractReelViews();
+        result.reelViews = includeReels ? await collectReelViews(12) : extractReelViews(12);
         console.log('Reel views extracted:', result.reelViews);
       } catch (e) {
         console.warn('Reel view extraction failed:', e);
