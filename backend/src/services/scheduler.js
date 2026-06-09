@@ -112,20 +112,13 @@ async function pollNegotiations() {
       }
     }
 
-    // 3. Admin-approved offers waiting to send.
-    const approved = await db.many(
-      `SELECT id FROM creators
-       WHERE negotiation_status = 'AWAITING_APPROVAL' AND offer_approved = TRUE`,
-    );
-    for (const c of approved) {
-      try {
-        await negotiation.sendApprovedOffer(c.id);
-      } catch (err) {
-        console.error(`negotiation send-offer failed for creator ${c.id}:`, err.message);
-      }
-    }
+    // NOTE: Offer emails are sent ONLY when an admin approves an offer in the
+    // dashboard (the PATCH /api/creators/:id/offer route). The scheduler does
+    // NOT auto-send approved offers — a creator sitting in AWAITING_APPROVAL
+    // simply waits for that explicit admin action, so no priced offer ever
+    // goes out without a dashboard approval.
 
-    // 4. Idle follow-ups / close-out (re-query so steps 2–3 transitions are seen).
+    // 3. Idle follow-ups / close-out (re-query so step 1–2 transitions are seen).
     const idleMs = negotiationFollowupDays() * 24 * 3600_000;
     const now = Date.now();
     const waiting = await db.many(

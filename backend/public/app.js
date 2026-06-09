@@ -389,16 +389,23 @@ function buildOfferCell(r, td) {
       });
       const sr = resp && resp.send_result;
       // Reflect the outcome before the table re-render replaces this cell.
+      // Offers are sent only by this approval action — never automatically —
+      // so when a send is skipped we say why instead of promising a later send.
+      let hold = 1400;
       if (sr && sr.sent) {
         statusEl.textContent = '✓ Offer email sent.';
       } else if (sr && sr.error) {
         statusEl.textContent = `Approved, but sending failed: ${sr.error}`;
+        hold = 4000;
+      } else if (sr && sr.skipped) {
+        statusEl.textContent = `Approved, not sent — ${sr.skipped}. Approve again when ready.`;
+        hold = 4500;
       } else {
-        statusEl.textContent = '✓ Offer approved. It will send once the creator replies.';
+        statusEl.textContent = '✓ Offer approved.';
       }
       // Brief pause so the status is visible, then refresh to show the
       // persistent approved/sent badge.
-      setTimeout(refreshCreators, 1200);
+      setTimeout(refreshCreators, hold);
     } catch (err) {
       statusEl.textContent = err.message;
       approveBtn.disabled = false;

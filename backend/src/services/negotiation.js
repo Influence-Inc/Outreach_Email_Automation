@@ -447,13 +447,14 @@ function resolveApprovedOffer(creator) {
   return offers[0] || null;
 }
 
-// offer_approved + a sendable stage + an existing thread -> draft & send the
-// offer -> AWAITING_DECISION. Atomic claim prevents a double-send race between
-// this and the approve route. `fromStages` controls which negotiation stages
-// are allowed to send: the scheduler only auto-sends from AWAITING_APPROVAL,
-// while an explicit admin approval may also send proactively from AWAITING_RATE.
-// An outreach thread is required so the offer goes out as a threaded reply
-// (never a cold email before the intro outreach has been sent).
+// Send the admin-approved offer email -> AWAITING_DECISION. This runs ONLY in
+// response to an admin approving an offer in the dashboard (the /offer route);
+// nothing sends offers automatically. The atomic claim guards against a
+// double-send if the admin double-clicks. `fromStages` limits which negotiation
+// stages can send: AWAITING_APPROVAL (the canonical case) plus AWAITING_RATE
+// (so the admin can proactively send an offer to an engaged creator who hasn't
+// named a rate yet). An outreach thread is required so the offer goes out as a
+// threaded reply, never a cold email before the intro outreach.
 async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL'] } = {}) {
   const stagePlaceholders = fromStages.map((_, i) => `$${i + 2}`).join(', ');
   const claim = await db.one(
@@ -464,7 +465,24 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
      RETURNING id`,
     [creatorId, ...fromStages],
   );
-  if (!claim) return { skipped: 'recorded; will send once the creator is in the negotiation flow' };
+  if (!claim) {
+    // Explain why nothing was sent so the dashboard can guide the admin. The
+    // approval is recorded (offer_approved stays TRUE); the admin re-approves
+    // once the creator is awaiting an offer to actually send it.
+    const c = await db.one(
+      `SELECT outreach_thread_id, negotiation_status FROM creators WHERE id = $1`,
+      [creatorId],
+    );
+    if (!c) return { skipped: 'creator not found' };
+    if (!c.outreach_thread_id) {
+      return { skipped: 'no outreach thread yet — send outreach and wait for the creator to reply first' };
+    }
+    return {
+      skipped: `creator is not awaiting an offer (stage: ${
+        c.negotiation_status ? c.negotiation_status.replace(/_/g, ' ').toLowerCase() : 'no reply yet'
+      })`,
+    };
+  }
 
   const creator = await loadCreator(creatorId);
   const offer = resolveApprovedOffer(creator);

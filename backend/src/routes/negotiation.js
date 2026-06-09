@@ -9,8 +9,11 @@ const { computeSixOffers } = require('../services/pricing');
 const router = express.Router();
 
 // Admin selects / edits / approves an offer. Sliders write `custom_offer`.
-// When offer_approved is true we attempt to send immediately (best-effort);
-// the scheduler is a backstop if that send is skipped or fails.
+// This route is the ONLY thing that sends a priced offer email: when
+// offer_approved is true we send it right here, synchronously. Nothing sends
+// offers in the background — if the creator isn't ready to receive it yet
+// (no thread / not awaiting an offer) the approval is recorded and the admin
+// re-approves once they are.
 router.patch('/:id/offer', async (req, res, next) => {
   try {
     const { selected_offer_id, custom_offer, offer_approved } = req.body || {};
@@ -41,10 +44,11 @@ router.patch('/:id/offer', async (req, res, next) => {
     let send_result = null;
     if (offer_approved) {
       try {
-        // An explicit admin approval may send proactively from AWAITING_RATE
-        // too (not just AWAITING_APPROVAL), as long as a thread exists. If the
-        // creator isn't in the negotiation flow yet, the approval is recorded
-        // and the scheduler sends it once they reach the approval stage.
+        // Send the offer email now, as a direct result of this approval. Allow
+        // sending from AWAITING_RATE too (not just AWAITING_APPROVAL) so the
+        // admin can proactively offer an engaged creator. If the creator isn't
+        // ready (no thread / not awaiting an offer), the approval is recorded
+        // but nothing is sent — the admin re-approves once they are ready.
         send_result = await negotiation.sendApprovedOffer(row.id, {
           fromStages: ['AWAITING_APPROVAL', 'AWAITING_RATE'],
         });
