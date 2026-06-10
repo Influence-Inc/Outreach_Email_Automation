@@ -245,8 +245,12 @@ async function runScrapeQueue(payload, sender) {
         }
       }
 
-      const viewCount =
-        scraped && Array.isArray(scraped.reelViews) ? scraped.reelViews.length : 0;
+      // Only send clean, positive numbers — the backend drops anything else,
+      // so sending junk would store nothing while still looking "successful".
+      const cleanViews = (scraped && Array.isArray(scraped.reelViews) ? scraped.reelViews : [])
+        .filter((n) => typeof n === 'number' && Number.isFinite(n) && n > 0);
+      const viewCount = cleanViews.length;
+      let storedViews = 0;
 
       let outcome = 'error';
       if (!error && scraped) {
@@ -254,11 +258,14 @@ async function runScrapeQueue(payload, sender) {
         if (scraped.email) patchBody.email = scraped.email;
         if (scraped.firstName) patchBody.first_name = scraped.firstName;
         if (scraped.fullName) patchBody.full_name = scraped.fullName;
-        if (viewCount) patchBody.reel_views = scraped.reelViews;
+        if (viewCount) patchBody.reel_views = cleanViews;
 
         if (Object.keys(patchBody).length > 0) {
           try {
-            await patchCreator(apiBase, creator.id, patchBody);
+            const updated = await patchCreator(apiBase, creator.id, patchBody);
+            // Trust the backend's own count, not what we scraped locally.
+            storedViews =
+              (updated && updated.ig_scraped_data && Number(updated.ig_scraped_data.reel_count)) || 0;
             outcome = scraped.email ? 'email_found' : 'no_email';
           } catch (err) {
             error = `patch failed: ${err.message}`;
@@ -269,11 +276,19 @@ async function runScrapeQueue(payload, sender) {
         }
       }
 
+      // Persistent diagnostic (visible in the service-worker console): what we
+      // scraped vs what the backend actually stored.
+      console.log(
+        `[OEA] @${creator.instagramUsername}: scraped ${viewCount} reel views`,
+        cleanViews,
+        `| backend stored reel_count=${storedViews}`,
+      );
+
       summary.processed += 1;
       if (outcome === 'email_found') summary.emailFound += 1;
       else if (outcome === 'no_email') summary.noEmail += 1;
       else summary.errors += 1;
-      if (outcome !== 'error' && viewCount) summary.withViews += 1;
+      if (outcome !== 'error' && storedViews > 0) summary.withViews += 1;
 
       await emitProgress(senderTabId, {
         event: 'creator-done',
@@ -285,6 +300,7 @@ async function runScrapeQueue(payload, sender) {
         email: scraped ? scraped.email : null,
         firstName: scraped ? scraped.firstName : null,
         reelViews: viewCount,
+        storedViews,
         error,
       });
 

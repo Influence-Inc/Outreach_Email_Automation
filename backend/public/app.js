@@ -726,7 +726,11 @@ function handleScrapeProgress(msg) {
   } else if (msg.event === 'creator-done') {
     scrapeAffectedRowIds.add(msg.creatorId);
     let tail;
-    const viewsTail = msg.reelViews ? ` · ${msg.reelViews} reel views` : '';
+    // Report what the backend actually stored. If we scraped counts but none
+    // stored, surface that explicitly — it means the numbers weren't usable.
+    const stored = msg.storedViews || 0;
+    let viewsTail = stored ? ` · ${stored} reel views` : '';
+    if (!stored && msg.reelViews) viewsTail = ` · ${msg.reelViews} scraped but 0 stored`;
     if (msg.outcome === 'email_found') {
       tail = `got ${msg.email} for @${msg.username || msg.creatorId}${viewsTail}`;
     } else if (msg.outcome === 'no_email') {
