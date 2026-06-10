@@ -88,6 +88,8 @@ async function refreshCampaigns() {
 function showView(name) {
   el('campaign-view').hidden = name !== 'campaign';
   el('templates-view').hidden = name !== 'templates';
+  el('guidelines-view').hidden = name !== 'guidelines';
+  el('delegate-view').hidden = name !== 'delegate';
   closeSidebarOnMobile();
 }
 
@@ -134,6 +136,7 @@ async function selectCampaign(id) {
     <span>Follow-up: <b>${c.followup_sent_count}</b></span>
     <span>Replied: <b>${c.replied_count}</b></span>
   `;
+  updateDelegateBadge(c.needs_human_count || 0);
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
   el('campaign-max-cpm').value = c.max_cpm != null ? c.max_cpm : '';
@@ -413,6 +416,69 @@ function buildOfferCell(r, td) {
   };
 }
 
+// --- Per-creator email thread dropdown -----------------------------------
+
+function fmtThreadDate(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  return isNaN(d) ? String(s) : d.toLocaleString();
+}
+
+function renderThreadInto(box, data) {
+  const messages = (data && data.messages) || [];
+  if (!messages.length) {
+    box.innerHTML = '<p class="hint" style="margin:0;">No messages yet.</p>';
+    return;
+  }
+  const note =
+    data.source === 'events'
+      ? '<p class="hint" style="margin:0 0 8px;">Gmail not connected — showing the activity log (subjects only).</p>'
+      : '';
+  const items = messages
+    .map((m) => {
+      const side = m.direction === 'outbound' ? 'out' : 'in';
+      const who = escapeHtml(m.fromName || (side === 'out' ? 'INFLUENCE' : 'Creator'));
+      const when = escapeHtml(fmtThreadDate(m.date));
+      const subj = m.subject ? `<div class="thread-subj">${escapeHtml(m.subject)}</div>` : '';
+      const bodyText = (m.text || '').trim();
+      const body = bodyText ? escapeHtml(bodyText) : '<span class="meta">(no text)</span>';
+      return `
+        <div class="thread-msg ${side}">
+          <div class="thread-meta"><b>${who}</b><span class="meta">${when}</span></div>
+          ${subj}
+          <div class="thread-body">${body}</div>
+        </div>`;
+    })
+    .join('');
+  box.innerHTML = note + items;
+}
+
+async function toggleThreadRow(tr, creator, btn) {
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList.contains('thread-row')) {
+    existing.remove();
+    btn.classList.remove('active');
+    return;
+  }
+  btn.classList.add('active');
+  const row = document.createElement('tr');
+  row.className = 'thread-row';
+  const td = document.createElement('td');
+  td.colSpan = tr.children.length;
+  const box = document.createElement('div');
+  box.className = 'thread-box';
+  box.innerHTML = '<p class="hint" style="margin:0;">Loading conversation…</p>';
+  td.appendChild(box);
+  row.appendChild(td);
+  tr.after(row);
+  try {
+    const data = await api(`/api/creators/${creator.id}/thread`);
+    renderThreadInto(box, data);
+  } catch (err) {
+    box.innerHTML = `<p class="hint" style="margin:0;">Couldn't load thread: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
 async function refreshCreators() {
   if (!state.selectedCampaignId) return;
   const rows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
@@ -463,6 +529,13 @@ async function refreshCreators() {
           body: JSON.stringify({ email: v }),
         }),
     });
+
+    const threadBtn = document.createElement('button');
+    threadBtn.className = 'small ghost thread-toggle';
+    threadBtn.textContent = '💬 Thread';
+    threadBtn.title = 'Show the email conversation';
+    threadBtn.onclick = () => toggleThreadRow(tr, r, threadBtn);
+    actions.appendChild(threadBtn);
 
     if (r.status === 'email_found') {
       const btn = document.createElement('button');
@@ -783,6 +856,8 @@ function buildTemplateBlock(template) {
   const draft = {
     name: template.name || '',
     is_default: !!template.is_default,
+    // AI replies default ON unless explicitly false (matches backend default).
+    ai_replies_enabled: template.ai_replies_enabled !== false,
     outreach: {
       subject: (template.outreach && template.outreach.subject) || '',
       body: (template.outreach && template.outreach.body) || '',
@@ -802,6 +877,7 @@ function buildTemplateBlock(template) {
       <span class="template-block-title"></span>
       <span class="template-block-meta">
         <span class="badge default" hidden>default</span>
+        <span class="badge ai-off" hidden>AI off</span>
         <span class="meta steps-summary"></span>
       </span>
     </summary>
@@ -809,12 +885,14 @@ function buildTemplateBlock(template) {
   `;
   const titleEl = block.querySelector('.template-block-title');
   const badgeEl = block.querySelector('.badge.default');
+  const aiBadgeEl = block.querySelector('.badge.ai-off');
   const summaryMeta = block.querySelector('.steps-summary');
   const body = block.querySelector('.template-block-body');
 
   function refreshSummary() {
     titleEl.textContent = draft.name || '(unnamed)';
     badgeEl.hidden = !draft.is_default;
+    aiBadgeEl.hidden = draft.ai_replies_enabled;
     summaryMeta.textContent = describeFollowups(draft.followups);
   }
 
@@ -893,6 +971,10 @@ function buildTemplateBlock(template) {
         <input type="checkbox" class="tpl-is-default" ${draft.is_default ? 'checked' : ''} />
         Mark as default
       </label>
+      <label class="checkbox-label" style="align-self: end;" title="When off, the AI never auto-replies for creators on this template — every reply goes to the campaign's Delegate window.">
+        <input type="checkbox" class="tpl-ai-replies" ${draft.ai_replies_enabled ? 'checked' : ''} />
+        Auto-reply with AI
+      </label>
     </div>
 
     <h4 style="margin-top: 16px;">Outreach email (initial)</h4>
@@ -923,6 +1005,10 @@ function buildTemplateBlock(template) {
     draft.is_default = ev.target.checked;
     refreshSummary();
   };
+  body.querySelector('.tpl-ai-replies').onchange = (ev) => {
+    draft.ai_replies_enabled = ev.target.checked;
+    refreshSummary();
+  };
   body.querySelector('.out-subject').oninput = (ev) => { draft.outreach.subject = ev.target.value; };
   body.querySelector('.out-body').oninput = (ev) => { draft.outreach.body = ev.target.value; };
   body.querySelector('.add-followup').onclick = (ev) => {
@@ -943,6 +1029,7 @@ function buildTemplateBlock(template) {
       const payload = {
         name: draft.name.trim(),
         is_default: draft.is_default,
+        ai_replies_enabled: draft.ai_replies_enabled,
         outreach: { subject: draft.outreach.subject, body: draft.outreach.body },
         followups: draft.followups.map((s) => ({
           delayHours: Number(s.delayHours) || 0,
@@ -998,6 +1085,140 @@ el('new-template-btn').addEventListener('click', () => {
 el('open-templates-btn').addEventListener('click', () => {
   showView('templates');
 });
+
+// --- Guidelines (universal AI prompt) ------------------------------------
+
+async function refreshGuidelines() {
+  try {
+    const s = await api('/api/settings');
+    el('guidelines-text').value = s.guidelines || '';
+  } catch (err) {
+    el('guidelines-status').textContent = `Failed to load: ${err.message}`;
+  }
+}
+
+el('open-guidelines-btn').addEventListener('click', async () => {
+  showView('guidelines');
+  el('guidelines-status').textContent = '';
+  await refreshGuidelines();
+});
+
+el('save-guidelines-btn').addEventListener('click', async () => {
+  const btn = el('save-guidelines-btn');
+  const status = el('guidelines-status');
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api('/api/settings/guidelines', {
+      method: 'PUT',
+      body: JSON.stringify({ guidelines: el('guidelines-text').value }),
+    });
+    status.textContent = 'Saved.';
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// --- Delegate window (per campaign) --------------------------------------
+
+function updateDelegateBadge(n) {
+  const badge = el('delegate-count');
+  if (!badge) return;
+  badge.textContent = String(n);
+  badge.hidden = !(n > 0);
+}
+
+el('open-delegate-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  showView('delegate');
+  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+  el('delegate-title').textContent = c ? `Delegate · ${c.brand_name} · ${c.name}` : 'Delegate';
+  await renderDelegateList();
+});
+
+el('delegate-back-btn').addEventListener('click', () => showView('campaign'));
+
+async function renderDelegateList() {
+  const root = el('delegate-list');
+  root.innerHTML = '<p class="hint">Loading…</p>';
+  let rows;
+  try {
+    rows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
+  } catch (err) {
+    root.innerHTML = `<p class="hint">Failed to load: ${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  const pending = rows.filter((r) => r.needs_human);
+  updateDelegateBadge(pending.length);
+  if (!pending.length) {
+    root.innerHTML =
+      '<p class="hint">Nothing to delegate right now. Replies the AI can&rsquo;t handle (or anything on AI-off templates) will appear here.</p>';
+    return;
+  }
+  root.innerHTML = '';
+  for (const r of pending) root.appendChild(buildDelegateCard(r));
+}
+
+function buildDelegateCard(r) {
+  const card = document.createElement('div');
+  card.className = 'delegate-card';
+  card.innerHTML = `
+    <div class="delegate-head">
+      <div>
+        <a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || '')}</a>
+        ${r.first_name ? `<span class="meta"> · ${escapeHtml(r.first_name)}</span>` : ''}
+        <div class="meta">${escapeHtml(r.email || 'no email')}</div>
+      </div>
+      ${r.delegate_reason ? `<span class="delegate-reason">${escapeHtml(r.delegate_reason)}</span>` : ''}
+    </div>
+    ${r.delegate_question ? `<div class="delegate-question">${escapeHtml(r.delegate_question)}</div>` : ''}
+    <label class="meta" style="display:block; margin-top:8px;">Your reply</label>
+    <textarea class="delegate-reply" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
+    <div class="row" style="justify-content: flex-end; align-items: center; margin-top: 8px;">
+      <span class="delegate-status hint" style="margin-right: auto;"></span>
+      <button class="ghost small delegate-dismiss" type="button">Dismiss</button>
+      <button class="small delegate-send" type="button">Send reply</button>
+    </div>
+  `;
+  const replyEl = card.querySelector('.delegate-reply');
+  const statusEl = card.querySelector('.delegate-status');
+  const sendBtn = card.querySelector('.delegate-send');
+  const dismissBtn = card.querySelector('.delegate-dismiss');
+
+  sendBtn.onclick = async () => {
+    const body = replyEl.value.trim();
+    if (!body) { statusEl.textContent = 'Write a reply first.'; return; }
+    sendBtn.disabled = true; dismissBtn.disabled = true;
+    statusEl.textContent = 'Sending…';
+    try {
+      await api(`/api/creators/${r.id}/delegate-reply`, {
+        method: 'POST',
+        body: JSON.stringify({ body }),
+      });
+      await renderDelegateList();
+      await refreshCampaigns();
+    } catch (err) {
+      statusEl.textContent = `Failed: ${err.message}`;
+      sendBtn.disabled = false; dismissBtn.disabled = false;
+    }
+  };
+
+  dismissBtn.onclick = async () => {
+    if (!confirm('Dismiss without replying? This clears it from Delegate.')) return;
+    sendBtn.disabled = true; dismissBtn.disabled = true;
+    try {
+      await api(`/api/creators/${r.id}/dismiss-delegate`, { method: 'POST' });
+      await renderDelegateList();
+      await refreshCampaigns();
+    } catch (err) {
+      statusEl.textContent = `Failed: ${err.message}`;
+      sendBtn.disabled = false; dismissBtn.disabled = false;
+    }
+  };
+  return card;
+}
 
 // --- Per-campaign template picker ----------------------------------------
 

@@ -15,7 +15,8 @@ router.get('/', async (_req, res, next) => {
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'outreach_sent')::int AS outreach_sent_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'followup_sent')::int AS followup_sent_count,
-              COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count
+              COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
+              COUNT(cr.id) FILTER (WHERE cr.needs_human)::int AS needs_human_count
        FROM campaigns c
        LEFT JOIN creators cr ON cr.campaign_id = c.id
        GROUP BY c.id

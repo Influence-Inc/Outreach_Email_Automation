@@ -121,10 +121,13 @@ async function pollNegotiations() {
     // 3. Idle follow-ups / close-out (re-query so step 1–2 transitions are seen).
     const idleMs = negotiationFollowupDays() * 24 * 3600_000;
     const now = Date.now();
+    // Skip creators parked for a human (needs_human) — don't auto-nudge a
+    // conversation that's waiting on the Delegate window.
     const waiting = await db.many(
       `SELECT id, last_negotiation_email_at, replied_at, updated_at
        FROM creators
-       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')`,
+       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')
+         AND needs_human = FALSE`,
     );
     for (const c of waiting) {
       const last = c.last_negotiation_email_at || c.replied_at || c.updated_at;

@@ -34,6 +34,10 @@
           <span>Email Templates</span>
           <span class="meta">&rarr;</span>
         </button>
+        <button id="open-guidelines-btn" class="sidebar-nav-link" type="button" style="margin-top: 8px;">
+          <span>Guidelines</span>
+          <span class="meta">&rarr;</span>
+        </button>
       </section>
     </aside>
 
@@ -69,6 +73,7 @@
             <div class="actions">
               <button id="run-extension-btn" title="Open each profile in Chrome and scrape via the installed extension">Run via Extension</button>
               <button id="send-emails-btn">Send emails</button>
+              <button id="open-delegate-btn" class="ghost" title="Replies the AI handed off for a human to answer">Delegate <span id="delegate-count" class="count-badge" hidden>0</span></button>
               <button id="refresh-btn" class="ghost">Refresh</button>
             </div>
           </div>
@@ -119,6 +124,34 @@
             </div>
           </div>
           <div id="templates-list"></div>
+        </div>
+      </div>
+
+      <div id="guidelines-view" hidden>
+        <div class="main-header">
+          <h2>Guidelines</h2>
+          <p class="hint" style="margin: 0; max-width: 60ch;">Universal instructions for the AI when it reads creator replies and writes negotiation emails. Added to every AI prompt and override the templates on conflict. (They don&rsquo;t change the fixed outreach/follow-up emails, which aren&rsquo;t AI-written.)</p>
+        </div>
+        <div class="card">
+          <label for="guidelines-text" style="font-weight: 600; display: block; margin-bottom: 6px;">Universal prompt</label>
+          <textarea id="guidelines-text" rows="16" placeholder="e.g.&#10;- Always stay warm, concise and human.&#10;- Never agree to exclusivity or usage rights without a human.&#10;- Prefer view-based deals; keep CPM within the campaign ceiling.&#10;- If a creator asks anything outside standard deal terms, escalate to a human."></textarea>
+          <div class="row" style="justify-content: flex-end; align-items: center; margin-top: 10px;">
+            <span id="guidelines-status" class="hint" style="margin-right: auto;"></span>
+            <button id="save-guidelines-btn" type="button">Save guidelines</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="delegate-view" hidden>
+        <div class="main-header">
+          <div>
+            <button id="delegate-back-btn" class="ghost small" type="button">&larr; Back to campaign</button>
+            <h2 id="delegate-title" style="margin: 8px 0 0;">Delegate</h2>
+          </div>
+          <p class="hint" style="margin: 0; max-width: 52ch;">Replies the AI handed off &mdash; questions/situations it couldn&rsquo;t confidently handle, plus everything from templates with AI replies turned off. Your reply sends from the same email thread.</p>
+        </div>
+        <div class="card">
+          <div id="delegate-list"></div>
         </div>
       </div>
     </section>

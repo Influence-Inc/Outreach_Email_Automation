@@ -185,6 +185,53 @@ async function getLatestInboundText(threadId) {
   };
 }
 
+// All messages in a thread, chronological, decoded to plain text. Used by the
+// dashboard's per-creator thread dropdown. Returns
+// [{ id, fromName, from, date, subject, direction, text }].
+async function getThreadMessages(threadId) {
+  if (!threadId) return [];
+  const auth = await getAuthorizedClient();
+  const gmail = google.gmail({ version: 'v1', auth });
+  const senderEmail = (process.env.SENDER_EMAIL || '').toLowerCase();
+
+  const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
+  const messages = thread.data.messages || [];
+
+  return messages.map((m) => {
+    const headers = (m.payload && m.payload.headers) || [];
+    const get = (name) => {
+      const h = headers.find((x) => x.name.toLowerCase() === name);
+      return h ? h.value : '';
+    };
+    const fromRaw = get('from');
+    const fromValue = fromRaw.toLowerCase();
+    const direction = senderEmail && fromValue.includes(senderEmail) ? 'outbound' : 'inbound';
+    // "Jennifer <j@x.com>" -> "Jennifer"; bare address -> the address.
+    const nameMatch = fromRaw.match(/^\s*"?([^"<]*?)"?\s*<.+>\s*$/);
+    const fromName = (nameMatch ? nameMatch[1].trim() : fromRaw.trim()) || fromRaw.trim();
+
+    let raw = null;
+    const plain = findPartData(m.payload, 'text/plain');
+    if (plain) {
+      raw = decodeB64Url(plain);
+    } else {
+      const html = findPartData(m.payload, 'text/html');
+      if (html) raw = htmlToText(decodeB64Url(html));
+    }
+    if (raw == null) raw = m.snippet || '';
+
+    return {
+      id: m.id,
+      fromName,
+      from: fromRaw,
+      date: get('date') || null,
+      subject: get('subject') || '',
+      direction,
+      text: stripQuotedHistory(raw),
+    };
+  });
+}
+
 async function threadHasReply(threadId) {
   if (!threadId) return false;
   const auth = await getAuthorizedClient();
@@ -211,4 +258,4 @@ async function threadHasReply(threadId) {
   return false;
 }
 
-module.exports = { sendEmail, threadHasReply, getLatestInboundText, newTrackingId };
+module.exports = { sendEmail, threadHasReply, getLatestInboundText, getThreadMessages, newTrackingId };

@@ -107,4 +107,40 @@ router.post('/:id/quoted-rate', async (req, res, next) => {
   }
 });
 
+// Admin sends a manual reply from the Delegate window. Sends a threaded email
+// and clears the needs_human flag.
+router.post('/:id/delegate-reply', async (req, res, next) => {
+  try {
+    const { subject, body } = req.body || {};
+    if (!body || !String(body).trim()) {
+      return res.status(400).json({ error: 'body is required' });
+    }
+    const result = await negotiation.sendDelegateReply(req.params.id, { subject, body });
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, send_result: result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Dismiss a delegated item without sending (clears the flag).
+router.post('/:id/dismiss-delegate', async (req, res, next) => {
+  try {
+    const row = await db.one(
+      `UPDATE creators
+       SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id],
+    );
+    if (!row) return res.status(404).json({ error: 'not found' });
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'delegate_dismissed', $2)`,
+      [req.params.id, {}],
+    );
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

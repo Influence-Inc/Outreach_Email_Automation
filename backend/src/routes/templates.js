@@ -29,7 +29,7 @@ function normalizeFollowups(list) {
 router.get('/', async (_req, res, next) => {
   try {
     const rows = await db.many(
-      `SELECT id, name, outreach, followups, is_default, created_at, updated_at
+      `SELECT id, name, outreach, followups, is_default, ai_replies_enabled, created_at, updated_at
        FROM email_templates
        ORDER BY is_default DESC, name ASC`,
     );
@@ -39,10 +39,12 @@ router.get('/', async (_req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    const { name, outreach, followups, is_default } = req.body || {};
+    const { name, outreach, followups, is_default, ai_replies_enabled } = req.body || {};
     if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'name is required' });
     }
+    // Default to AI replies on unless explicitly disabled.
+    const aiEnabled = ai_replies_enabled === undefined ? true : Boolean(ai_replies_enabled);
 
     const client = await db.pool.connect();
     try {
@@ -51,13 +53,14 @@ router.post('/', async (req, res, next) => {
         await client.query(`UPDATE email_templates SET is_default = FALSE WHERE is_default`);
       }
       const result = await client.query(
-        `INSERT INTO email_templates (name, outreach, followups, is_default)
-         VALUES ($1, $2::jsonb, $3::jsonb, $4) RETURNING *`,
+        `INSERT INTO email_templates (name, outreach, followups, is_default, ai_replies_enabled)
+         VALUES ($1, $2::jsonb, $3::jsonb, $4, $5) RETURNING *`,
         [
           name.trim(),
           JSON.stringify(normalizeOutreach(outreach)),
           JSON.stringify(normalizeFollowups(followups)),
           Boolean(is_default),
+          aiEnabled,
         ],
       );
       await client.query('COMMIT');
@@ -93,6 +96,10 @@ router.patch('/:id', async (req, res, next) => {
     if (body.followups !== undefined) {
       params.push(JSON.stringify(normalizeFollowups(body.followups)));
       sets.push(`followups = $${params.length}::jsonb`);
+    }
+    if (body.ai_replies_enabled !== undefined) {
+      params.push(Boolean(body.ai_replies_enabled));
+      sets.push(`ai_replies_enabled = $${params.length}`);
     }
     const settingDefault = Object.prototype.hasOwnProperty.call(body, 'is_default')
       ? Boolean(body.is_default) : null;

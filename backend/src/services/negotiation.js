@@ -13,6 +13,7 @@ const db = require('../db');
 const pricing = require('./pricing');
 const templates = require('./negotiationTemplates');
 const gmail = require('./gmail');
+const { getGuidelines } = require('./settings');
 
 // ── Claude client (lazy; optional dependency) ─────────────────────────────
 let _client;
@@ -113,8 +114,21 @@ function ctxFor(creator, extra = {}) {
     stage: creator.negotiation_status || null,
     hasStats: creator.ig_scraped_data != null,
     approvedOffer: extra.approvedOffer || null,
+    guidelines: extra.guidelines || '',
     ...extra,
   };
+}
+
+// Renders the team's universal Guidelines as a prompt block (or '' when unset).
+function guidelinesBlock(ctx) {
+  const g = (ctx.guidelines || '').trim();
+  if (!g) return '';
+  return [
+    '',
+    'Team guidelines — follow these in every message, they override the templates on any conflict:',
+    g,
+    '',
+  ].join('\n');
 }
 
 function templateVars(ctx) {
@@ -171,6 +185,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     ctx.approvedOffer
       ? `An admin has approved this offer to send: ${JSON.stringify(ctx.approvedOffer)}.`
       : 'No offer has been approved yet.',
+    guidelinesBlock(ctx),
     '',
     'Adapt the following canonical templates — keep their content and tone, do not free-write new structures:',
     '--- REPLY 1 (share details + ask for their rate) ---',
@@ -179,7 +194,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     templates.REPLY2_BODY,
     '',
     'Read the creator\'s plain-text reply and respond with STRICT JSON ONLY (no prose, no markdown fences), exactly this shape:',
-    '{"understanding": string, "action": "shared_rate"|"asking_details"|"accepted"|"declined"|"counter"|"other", "quoted_rate": number|null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
+    '{"understanding": string, "action": "shared_rate"|"asking_details"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
     '',
     'Rules:',
     '- "shared_rate": the creator stated a rate/budget/price. Put the numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
@@ -187,7 +202,8 @@ async function handleCreatorReply(creator, replyText, ctx) {
     `- "asking_details": interested but no rate yet, or asked for details. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", references: ${v.refs}, sign "- ${v.managerName}"). In Timelines, propose the cadence "${v.cadence}" and an approximate posted-by date you compute from today's date for a 2-video package. send_now=true.`,
     `- "accepted": they accepted the offer. Write a short warm acceptance email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "declined": not interested / not available now. Write a brief gracious email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
-    `- "other": anything else (a question, scheduling, etc.). Write a short helpful reply signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
+    `- "escalate": ANY message you cannot confidently and correctly handle with the templates — a question outside the standard deal terms, an unusual request or situation, a complaint, anything that needs a human decision. Set email=null and send_now=false; a human will take over. When in doubt, escalate rather than guessing.`,
+    `- "other": only a trivial acknowledgement that needs no action. Prefer "escalate" whenever unsure. email=null, send_now=false.`,
     '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
     `- The creator's first name is "${v.firstName}". The email body must be plain text with line breaks.`,
   ].join('\n');
@@ -277,6 +293,7 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
       offer.offer_type === 'view_based' ? '1-2 post' : `${offer.num_videos}-video`
     } deal at that cadence; never print the cadence text where a date belongs.`,
     '',
+    guidelinesBlock(ctx),
     'Write ONE email by adapting this canonical offer template — keep its warm tone, the "Payment details" section, and the "- ' + v.managerName + '" sign-off:',
     '--- REPLY 2 ---',
     templates.REPLY2_BODY,
@@ -351,11 +368,65 @@ async function sendNegotiationEmail(creator, email, kind) {
   );
 }
 
+// ── Delegation (human handoff) ─────────────────────────────────────────────
+
+// Is the AI allowed to auto-reply for this creator? Resolves the creator's
+// active template (campaign template_id, else the default) and reads its
+// ai_replies_enabled flag. Defaults TRUE when no template row matches.
+async function aiRepliesEnabledForCreator(creator) {
+  const row = await db.one(
+    `SELECT COALESCE(et.ai_replies_enabled, TRUE) AS ai
+     FROM campaigns ca
+     LEFT JOIN email_templates et
+       ON et.id = COALESCE(ca.template_id, (SELECT id FROM email_templates WHERE is_default LIMIT 1))
+     WHERE ca.id = $1`,
+    [creator.campaign_id],
+  );
+  return row ? row.ai !== false : true;
+}
+
+// Park a reply for a human: flag needs_human and stash the creator's message +
+// the reason. Does NOT send anything.
+async function delegate(creator, inbound, reason) {
+  await db.query(
+    `UPDATE creators
+     SET needs_human = TRUE, delegate_reason = $2, delegate_question = $3,
+         delegated_at = NOW(), updated_at = NOW()
+     WHERE id = $1`,
+    [creator.id, reason, inbound.text],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'delegated', $2)`,
+    [creator.id, { reason }],
+  );
+}
+
+// Admin's manual reply from the Delegate window. Sends a threaded email and
+// clears the delegation flag. Reuses the same threading as auto-replies.
+async function sendDelegateReply(creatorId, { subject, body }) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) throw new Error('creator not found');
+  if (!creator.email) throw new Error('creator has no email');
+  const text = String(body || '').trim();
+  if (!text) throw new Error('reply body is required');
+
+  const subj = (subject && String(subject).trim()) || templates.reply1(templateVars(ctxFor(creator))).subject;
+  await sendNegotiationEmail(creator, { subject: subj, body: text }, 'delegate_reply');
+  await db.query(
+    `UPDATE creators
+     SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL, updated_at = NOW()
+     WHERE id = $1`,
+    [creatorId],
+  );
+  return { sent: true };
+}
+
 // ── Orchestration (called by the scheduler) ───────────────────────────────
 
 // Read the newest inbound message and react to it. Idempotent: a message id
 // equal to last_negotiation_msg_id is a no-op. Handles the first reply and all
-// subsequent ones.
+// subsequent ones. Routes to the human Delegate queue when AI replies are off
+// for the creator's template, or when Claude escalates a reply it can't handle.
 async function processReply(creatorId) {
   const creator = await loadCreator(creatorId);
   if (!creator || !creator.outreach_thread_id) return { skipped: 'no thread' };
@@ -372,13 +443,36 @@ async function processReply(creatorId) {
     return { skipped: 'already handled' };
   }
 
-  const ctx = ctxFor(creator);
+  const markHandled = () =>
+    db.query(`UPDATE creators SET last_negotiation_msg_id = $2, updated_at = NOW() WHERE id = $1`, [
+      creator.id,
+      inbound.messageId || null,
+    ]);
+
+  // AI off for this template -> always hand the reply to a human.
+  if (!(await aiRepliesEnabledForCreator(creator))) {
+    await delegate(creator, inbound, 'AI replies are turned off for this template');
+    await markHandled();
+    return { action: 'delegated', reason: 'ai_off' };
+  }
+
+  const guidelines = await getGuidelines();
+  const ctx = ctxFor(creator, { guidelines });
   const result = await handleCreatorReply(creator, inbound.text, ctx);
+
+  // Claude couldn't confidently handle it -> delegate instead of guessing.
+  if (result.action === 'escalate' || result.action === 'other') {
+    await delegate(
+      creator,
+      inbound,
+      result.understanding || "Claude wasn't sure how to handle this reply",
+    );
+    await markHandled();
+    return { action: 'delegated', reason: result.action };
+  }
+
   await applyReply(creator, ctx, result);
-  await db.query(
-    `UPDATE creators SET last_negotiation_msg_id = $2, updated_at = NOW() WHERE id = $1`,
-    [creator.id, inbound.messageId || null],
-  );
+  await markHandled();
   return { action: result.action };
 }
 
@@ -494,7 +588,8 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
     return { error: 'no offer to send' };
   }
 
-  const ctx = ctxFor(creator, { approvedOffer: offer });
+  const guidelines = await getGuidelines();
+  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines });
   const combine = (await countSentNegotiation(creatorId)) === 0;
   try {
     const email = await draftOfferEmail(creator, offer, ctx, { combine });
@@ -547,8 +642,10 @@ module.exports = {
   draftOfferEmail,
   processReply,
   sendApprovedOffer,
+  sendDelegateReply,
   runNegotiationFollowup,
   resolveApprovedOffer,
+  aiRepliesEnabledForCreator,
   loadCreator,
   ctxFor,
 };

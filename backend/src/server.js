@@ -7,6 +7,7 @@ const campaigns = require('./routes/campaigns');
 const creators = require('./routes/creators');
 const negotiation = require('./routes/negotiation');
 const templates = require('./routes/templates');
+const settings = require('./routes/settings');
 const tracking = require('./routes/tracking');
 const auth = require('./routes/auth');
 const scheduler = require('./services/scheduler');
@@ -38,6 +39,7 @@ app.use('/api/creators', creators);
 // /:id/quoted-rate). Two-segment paths fall through the creators router above.
 app.use('/api/creators', negotiation);
 app.use('/api/templates', templates);
+app.use('/api/settings', settings);
 app.use('/auth', auth);
 app.use('/track', tracking);
 
