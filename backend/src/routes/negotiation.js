@@ -9,8 +9,11 @@ const { computeSixOffers } = require('../services/pricing');
 const router = express.Router();
 
 // Admin selects / edits / approves an offer. Sliders write `custom_offer`.
-// When offer_approved is true we attempt to send immediately (best-effort);
-// the scheduler is a backstop if that send is skipped or fails.
+// This route is the ONLY thing that sends a priced offer email: when
+// offer_approved is true we send it right here, synchronously. Nothing sends
+// offers in the background — if the creator isn't ready to receive it yet
+// (no thread / not awaiting an offer) the approval is recorded and the admin
+// re-approves once they are.
 router.patch('/:id/offer', async (req, res, next) => {
   try {
     const { selected_offer_id, custom_offer, offer_approved } = req.body || {};
@@ -41,10 +44,11 @@ router.patch('/:id/offer', async (req, res, next) => {
     let send_result = null;
     if (offer_approved) {
       try {
-        // An explicit admin approval may send proactively from AWAITING_RATE
-        // too (not just AWAITING_APPROVAL), as long as a thread exists. If the
-        // creator isn't in the negotiation flow yet, the approval is recorded
-        // and the scheduler sends it once they reach the approval stage.
+        // Send the offer email now, as a direct result of this approval. Allow
+        // sending from AWAITING_RATE too (not just AWAITING_APPROVAL) so the
+        // admin can proactively offer an engaged creator. If the creator isn't
+        // ready (no thread / not awaiting an offer), the approval is recorded
+        // but nothing is sent — the admin re-approves once they are ready.
         send_result = await negotiation.sendApprovedOffer(row.id, {
           fromStages: ['AWAITING_APPROVAL', 'AWAITING_RATE'],
         });
@@ -96,6 +100,42 @@ router.post('/:id/quoted-rate', async (req, res, next) => {
     const row = await db.one(
       `UPDATE creators SET quoted_rate = $2${offerSet}${statusSet}, updated_at = NOW() WHERE id = $1 RETURNING *`,
       params,
+    );
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin sends a manual reply from the Delegate window. Sends a threaded email
+// and clears the needs_human flag.
+router.post('/:id/delegate-reply', async (req, res, next) => {
+  try {
+    const { subject, body } = req.body || {};
+    if (!body || !String(body).trim()) {
+      return res.status(400).json({ error: 'body is required' });
+    }
+    const result = await negotiation.sendDelegateReply(req.params.id, { subject, body });
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, send_result: result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Dismiss a delegated item without sending (clears the flag).
+router.post('/:id/dismiss-delegate', async (req, res, next) => {
+  try {
+    const row = await db.one(
+      `UPDATE creators
+       SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id],
+    );
+    if (!row) return res.status(404).json({ error: 'not found' });
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'delegate_dismissed', $2)`,
+      [req.params.id, {}],
     );
     res.json(row);
   } catch (err) {

@@ -3,6 +3,22 @@ const db = require('../db');
 const { sendOutreach } = require('../services/outreach');
 const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeSixOffers, parseViewCount } = require('../services/pricing');
+const { getThreadMessages } = require('../services/gmail');
+
+// Human-readable labels for the event-timeline fallback (when Gmail isn't
+// reachable). Keyed by email_events.type.
+const EVENT_LABELS = {
+  sent_outreach: 'Outreach sent',
+  sent_followup: 'Follow-up sent',
+  sent_negotiation: 'Negotiation email sent',
+  replied: 'Creator replied',
+  delegated: 'Sent to Delegate',
+  delegate_dismissed: 'Delegation dismissed',
+  no_email: 'No email found',
+  email_found: 'Email found',
+  failed: 'Send failed',
+  negotiation_closed: 'Negotiation closed',
+};
 
 const router = express.Router();
 
@@ -72,6 +88,47 @@ router.get('/:id', async (req, res, next) => {
     );
     res.json({ ...row, events });
   } catch (err) { next(err); }
+});
+
+// Full email conversation for the dashboard's per-row dropdown. Pulls the live
+// Gmail thread when possible; falls back to the logged event timeline (subjects
+// only, no bodies) when Gmail is unreachable or there's no thread yet.
+router.get('/:id/thread', async (req, res, next) => {
+  try {
+    const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    if (!creator) return res.status(404).json({ error: 'not found' });
+
+    if (creator.outreach_thread_id) {
+      try {
+        const messages = await getThreadMessages(creator.outreach_thread_id);
+        if (messages.length) return res.json({ source: 'gmail', messages });
+      } catch (err) {
+        console.warn(`[thread] gmail fetch failed for creator ${creator.id}: ${err.message}`);
+      }
+    }
+
+    // Fallback: build a lightweight timeline from email_events.
+    const events = await db.many(
+      `SELECT type, detail, created_at FROM email_events
+       WHERE creator_id = $1 ORDER BY created_at ASC`,
+      [req.params.id],
+    );
+    const messages = events.map((e) => {
+      const detail = e.detail || {};
+      const outbound = String(e.type).startsWith('sent_');
+      return {
+        id: null,
+        fromName: outbound ? 'INFLUENCE' : creator.first_name || 'Creator',
+        date: e.created_at,
+        subject: detail.subject || EVENT_LABELS[e.type] || e.type,
+        direction: outbound ? 'outbound' : 'inbound',
+        text: detail.subject ? `(${EVENT_LABELS[e.type] || e.type})` : EVENT_LABELS[e.type] || e.type,
+      };
+    });
+    res.json({ source: 'events', messages });
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.patch('/:id', async (req, res, next) => {

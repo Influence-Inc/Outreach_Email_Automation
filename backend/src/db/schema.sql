@@ -128,3 +128,25 @@ ALTER TABLE creators  ADD COLUMN IF NOT EXISTS last_negotiation_email_at TIMESTA
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS max_cpm NUMERIC(6,2);
 
 CREATE INDEX IF NOT EXISTS idx_creators_negotiation_status ON creators(negotiation_status);
+
+-- Per-template AI auto-reply switch. When FALSE, Claude never auto-replies for
+-- creators on this template — every reply is routed to the Delegate queue for a
+-- human. Defaults TRUE to preserve the existing auto-reply behavior.
+ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS ai_replies_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- Global key/value settings. Holds the universal negotiation "Guidelines"
+-- prompt (key = 'negotiation_guidelines') and any future app-wide settings.
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Delegation queue: replies/situations a human must handle. Set when a
+-- creator's template has AI replies off, or when Claude escalates a reply it
+-- can't confidently handle. Cleared when an admin sends a reply or dismisses it.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS needs_human       BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegate_reason   TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegate_question TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegated_at      TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_creators_needs_human ON creators(needs_human) WHERE needs_human;

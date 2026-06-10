@@ -381,3 +381,87 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
 .neg-approve { width: 100%; background: #2563eb; }
 .neg-approve:disabled { opacity: 0.6; cursor: default; }
 .neg-offer-status { display: block; margin-top: 4px; }
+
+/* --- Per-creator email thread dropdown ----------------------------------- */
+.thread-toggle.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+tr.thread-row > td { background: #f9fafb; padding: 0; }
+.thread-box {
+  padding: 14px 16px;
+  max-height: 440px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.thread-msg {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  max-width: 80%;
+}
+.thread-msg.out { align-self: flex-end; background: #eff6ff; border-color: #bfdbfe; }
+.thread-msg.in  { align-self: flex-start; }
+.thread-meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+.thread-meta b { font-size: 13px; }
+.thread-subj { font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 4px; }
+.thread-body { font-size: 13px; color: #1f2937; white-space: pre-wrap; word-break: break-word; }
+
+/* Count badge on the Delegate button */
+.count-badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 6px;
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  color: #fff;
+  background: #dc2626;
+  border-radius: 999px;
+}
+
+/* --- Delegate window ----------------------------------------------------- */
+.delegate-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 12px;
+  background: #fff;
+}
+.delegate-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.delegate-head a { font-weight: 600; }
+.delegate-reason {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  padding: 3px 8px;
+  border-radius: 10px;
+  max-width: 55%;
+}
+.delegate-question {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border-left: 3px solid #cbd5e1;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #1f2937;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.delegate-reply { width: 100%; box-sizing: border-box; }
+
+/* Template "AI off" badge (mirrors .badge.default) */
+.template-block-meta .badge.ai-off {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
