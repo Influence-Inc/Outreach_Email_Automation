@@ -20,84 +20,69 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // "1.2K" -> 1200, "3.4M" -> 3_400_000, "950" -> 950
-  function parseViewCount(s) {
-    if (!s) return NaN;
-    s = String(s).trim().toUpperCase().replace(/,/g, '');
-    const m = s.match(/([\d.]+)\s*([KM]?)/);
-    if (!m) return NaN;
-    let n = parseFloat(m[1]);
-    if (m[2] === 'K') n *= 1e3;
-    else if (m[2] === 'M') n *= 1e6;
-    return n;
+  // Parse "1.2K" -> 1200, "3M" -> 3_000_000, "1,234" -> 1234. Mirrors the
+  // proven Reels Analyzer reference (commas tolerated as a safe superset).
+  function parseViewCount(str) {
+    if (!str) return NaN;
+    str = String(str).trim().toUpperCase().replace(/,/g, '');
+    if (str.includes('K')) return parseFloat(str) * 1000;
+    if (str.includes('M')) return parseFloat(str) * 1000000;
+    return parseFloat(str);
   }
 
-  // A leaf's text "looks like" a view count: it has digits, no words (other
-  // than a K/M unit), and isn't a duration like "0:15".
-  function looksLikeCount(t) {
-    if (!t || !/\d/.test(t)) return false;
-    if (t.includes(':')) return false; // video duration, not a count
-    if (/[a-z]/i.test(t.replace(/[KM]/gi, ''))) return false; // contains words
-    return true;
-  }
-
-  // Pull a "<n> views/plays" count from any aria-label/title within `root`.
-  // Instagram exposes the play count this way for screen readers even when the
-  // visible number is hard to target.
-  function countFromAria(root) {
-    for (const el of root.querySelectorAll('[aria-label], [title]')) {
-      const lab = el.getAttribute('aria-label') || el.getAttribute('title') || '';
-      const m = lab.match(/([\d.,]+\s*[KM]?)\s*(?:views?|plays?)/i);
-      if (m) {
-        const n = parseViewCount(m[1]);
-        if (Number.isFinite(n) && n > 0) return n;
+  // Read one reel's view count from its tile. Ported verbatim from the working
+  // reference extension's extractViewCount: scan the spans in the link's PARENT
+  // container (the count renders as a sibling of the <a>, not inside it), skip
+  // engagement labels, and take the LARGEST number >= 1000. That single
+  // heuristic — parent container + max >= 1000 — is what made it reliable.
+  function extractViewCount(container) {
+    if (!container) return null;
+    let best = null;
+    for (const span of container.querySelectorAll('span')) {
+      const text = (span.textContent || '').trim();
+      const lower = text.toLowerCase();
+      if (
+        lower.includes('like') ||
+        lower.includes('comment') ||
+        lower.includes('share') ||
+        lower.includes('follow')
+      ) {
+        continue;
+      }
+      if (/^[\d.,]+[KM]?$/.test(text)) {
+        const views = parseViewCount(text);
+        if (Number.isFinite(views) && views >= 1000 && (best === null || views > best)) {
+          best = views;
+        }
       }
     }
-    return null;
+    return best;
   }
 
-  // Find this reel tile's view count within `root`. Tries the accessible
-  // label first, then scans leaf text nodes for a clean numeric token (the
-  // reels grid overlay shows only the play count, so the first number wins).
-  function countInRoot(root) {
-    const aria = countFromAria(root);
-    if (aria != null) return aria;
-    for (const el of root.querySelectorAll('span, div')) {
-      if (el.children.length) continue; // only leaf elements hold the number
-      const t = (el.textContent || '').trim();
-      if (!looksLikeCount(t)) continue;
-      const n = parseViewCount(t);
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-    return null;
-  }
-
-  // Collect reel view counts from the profile grid (most-recent first). For
-  // each reel anchor, read its view-count overlay — searching the anchor and,
-  // if the count sits outside it, widening to ancestor containers that still
-  // wrap exactly one reel (so we never read a neighbouring tile's number).
-  // Dedupes by reel id and caps at `maxReels`.
+  // Collect recent reel view counts from the reels grid, most-recent first. For
+  // each reel link, read its count from the link's parent container (the
+  // reference's key insight). As a safe net we may widen to an ancestor, but
+  // ONLY while it still wraps exactly this one reel — so we never read a
+  // neighbouring tile's number. Dedupes by reel id and caps at `maxReels`.
   function extractReelViews(maxReels = 12) {
     const views = [];
     const seen = new Set();
     const anchors = document.querySelectorAll("a[href*='/reel/']");
     for (const a of anchors) {
       if (views.length >= maxReels) break;
-      const href = a.getAttribute('href') || '';
-      const idMatch = href.match(/\/reel\/([^/]+)/);
-      const id = idMatch ? idMatch[1] : href;
-      if (seen.has(id)) continue;
+      const href = a.getAttribute('href') || a.href || '';
+      const id = (href.split('/reel/')[1] || '').split('/')[0] || href;
+      if (!id || seen.has(id)) continue;
 
-      let count = countInRoot(a);
-      let node = a;
-      for (let up = 0; up < 3 && count == null; up++) {
+      let count = extractViewCount(a.parentElement);
+      let node = a.parentElement;
+      for (let up = 0; up < 2 && count == null && node; up++) {
         node = node.parentElement;
-        if (!node) break;
-        if (node.querySelectorAll("a[href*='/reel/']").length !== 1) break; // spans >1 reel
-        count = countInRoot(node);
+        if (!node || node.querySelectorAll("a[href*='/reel/']").length !== 1) break;
+        count = extractViewCount(node);
       }
 
-      if (count != null) {
+      if (count != null && count > 0) {
         seen.add(id);
         views.push(count);
       }
