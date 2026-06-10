@@ -188,7 +188,7 @@ async function runScrapeQueue(payload, sender) {
 
   const pace = Number.isFinite(pacingMs) ? pacingMs : 5000;
   const total = creators.length;
-  const summary = { total, processed: 0, emailFound: 0, noEmail: 0, errors: 0 };
+  const summary = { total, processed: 0, emailFound: 0, noEmail: 0, errors: 0, withViews: 0 };
 
   await emitProgress(senderTabId, { event: 'start', total });
 
@@ -245,15 +245,16 @@ async function runScrapeQueue(payload, sender) {
         }
       }
 
+      const viewCount =
+        scraped && Array.isArray(scraped.reelViews) ? scraped.reelViews.length : 0;
+
       let outcome = 'error';
       if (!error && scraped) {
         const patchBody = {};
         if (scraped.email) patchBody.email = scraped.email;
         if (scraped.firstName) patchBody.first_name = scraped.firstName;
         if (scraped.fullName) patchBody.full_name = scraped.fullName;
-        if (Array.isArray(scraped.reelViews) && scraped.reelViews.length) {
-          patchBody.reel_views = scraped.reelViews;
-        }
+        if (viewCount) patchBody.reel_views = scraped.reelViews;
 
         if (Object.keys(patchBody).length > 0) {
           try {
@@ -272,6 +273,7 @@ async function runScrapeQueue(payload, sender) {
       if (outcome === 'email_found') summary.emailFound += 1;
       else if (outcome === 'no_email') summary.noEmail += 1;
       else summary.errors += 1;
+      if (outcome !== 'error' && viewCount) summary.withViews += 1;
 
       await emitProgress(senderTabId, {
         event: 'creator-done',
@@ -282,6 +284,7 @@ async function runScrapeQueue(payload, sender) {
         outcome,
         email: scraped ? scraped.email : null,
         firstName: scraped ? scraped.firstName : null,
+        reelViews: viewCount,
         error,
       });
 

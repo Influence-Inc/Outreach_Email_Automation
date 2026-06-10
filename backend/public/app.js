@@ -726,10 +726,11 @@ function handleScrapeProgress(msg) {
   } else if (msg.event === 'creator-done') {
     scrapeAffectedRowIds.add(msg.creatorId);
     let tail;
+    const viewsTail = msg.reelViews ? ` · ${msg.reelViews} reel views` : '';
     if (msg.outcome === 'email_found') {
-      tail = `got ${msg.email} for @${msg.username || msg.creatorId}`;
+      tail = `got ${msg.email} for @${msg.username || msg.creatorId}${viewsTail}`;
     } else if (msg.outcome === 'no_email') {
-      tail = `no email for @${msg.username || msg.creatorId}`;
+      tail = `no email for @${msg.username || msg.creatorId}${viewsTail}`;
     } else {
       tail = `error on @${msg.username || msg.creatorId}: ${msg.error || 'unknown'}`;
     }
@@ -737,8 +738,8 @@ function handleScrapeProgress(msg) {
   } else if (msg.event === 'done') {
     const s = msg.summary || {};
     showScrapeProgress(
-      `Done. ${s.processed || 0} processed · ${s.emailFound || 0} found · ${s.noEmail || 0} no email · ${s.errors || 0} errors. ` +
-      `[hide]`,
+      `Done. ${s.processed || 0} processed · ${s.emailFound || 0} found · ${s.noEmail || 0} no email · ` +
+      `${s.withViews || 0} with views · ${s.errors || 0} errors. [hide]`,
     );
     el('scrape-cancel-btn').textContent = 'Hide';
     refreshCreators();

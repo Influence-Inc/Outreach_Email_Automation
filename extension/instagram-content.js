@@ -32,9 +32,51 @@
     return n;
   }
 
+  // A leaf's text "looks like" a view count: it has digits, no words (other
+  // than a K/M unit), and isn't a duration like "0:15".
+  function looksLikeCount(t) {
+    if (!t || !/\d/.test(t)) return false;
+    if (t.includes(':')) return false; // video duration, not a count
+    if (/[a-z]/i.test(t.replace(/[KM]/gi, ''))) return false; // contains words
+    return true;
+  }
+
+  // Pull a "<n> views/plays" count from any aria-label/title within `root`.
+  // Instagram exposes the play count this way for screen readers even when the
+  // visible number is hard to target.
+  function countFromAria(root) {
+    for (const el of root.querySelectorAll('[aria-label], [title]')) {
+      const lab = el.getAttribute('aria-label') || el.getAttribute('title') || '';
+      const m = lab.match(/([\d.,]+\s*[KM]?)\s*(?:views?|plays?)/i);
+      if (m) {
+        const n = parseViewCount(m[1]);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+    }
+    return null;
+  }
+
+  // Find this reel tile's view count within `root`. Tries the accessible
+  // label first, then scans leaf text nodes for a clean numeric token (the
+  // reels grid overlay shows only the play count, so the first number wins).
+  function countInRoot(root) {
+    const aria = countFromAria(root);
+    if (aria != null) return aria;
+    for (const el of root.querySelectorAll('span, div')) {
+      if (el.children.length) continue; // only leaf elements hold the number
+      const t = (el.textContent || '').trim();
+      if (!looksLikeCount(t)) continue;
+      const n = parseViewCount(t);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  }
+
   // Collect reel view counts from the profile grid (most-recent first). For
-  // each reel anchor, read the per-reel view-count overlay, skipping
-  // like/comment/share UI text, dedupe by reel id, and cap at `maxReels`.
+  // each reel anchor, read its view-count overlay — searching the anchor and,
+  // if the count sits outside it, widening to ancestor containers that still
+  // wrap exactly one reel (so we never read a neighbouring tile's number).
+  // Dedupes by reel id and caps at `maxReels`.
   function extractReelViews(maxReels = 12) {
     const views = [];
     const seen = new Set();
@@ -46,21 +88,15 @@
       const id = idMatch ? idMatch[1] : href;
       if (seen.has(id)) continue;
 
-      let count = null;
-      // The view overlay renders as a small number next to a play icon. Scan
-      // every descendant span and take the first bare numeric token.
-      for (const sp of a.querySelectorAll('span')) {
-        const t = (sp.textContent || '').trim();
-        if (!t) continue;
-        if (/like|comment|share|follow|view/i.test(t)) continue; // skip labels
-        if (/^[\d.,]+\s*[KM]?$/i.test(t)) {
-          const n = parseViewCount(t);
-          if (Number.isFinite(n) && n > 0) {
-            count = n;
-            break;
-          }
-        }
+      let count = countInRoot(a);
+      let node = a;
+      for (let up = 0; up < 3 && count == null; up++) {
+        node = node.parentElement;
+        if (!node) break;
+        if (node.querySelectorAll("a[href*='/reel/']").length !== 1) break; // spans >1 reel
+        count = countInRoot(node);
       }
+
       if (count != null) {
         seen.add(id);
         views.push(count);
