@@ -485,7 +485,7 @@ async function applyReply(creator, ctx, result) {
       let offers = null;
       const stats = creator.ig_scraped_data;
       if (rate != null && stats) {
-        offers = pricing.computeSixOffers(stats, ctx.maxCpm, Number(rate));
+        offers = pricing.computeOffers(stats, ctx.maxCpm, Number(rate));
       }
       await db.query(
         `UPDATE creators
@@ -496,6 +496,14 @@ async function applyReply(creator, ctx, result) {
          WHERE id = $1`,
         [creator.id, rate != null ? rate : null, offers ? JSON.stringify(offers) : null],
       );
+      // Timeline entry: the creator named/changed a rate (NUMERIC -> string in pg).
+      if (rate != null) {
+        const prevRate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
+        await db.query(
+          `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_quoted', $2)`,
+          [creator.id, { from: prevRate, to: Number(rate), by: 'creator' }],
+        );
+      }
       return;
     }
     case 'accepted': {
@@ -504,6 +512,10 @@ async function applyReply(creator, ctx, result) {
         `UPDATE creators SET negotiation_status = 'ACCEPTED', updated_at = NOW() WHERE id = $1`,
         [creator.id],
       );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
+        [creator.id, {}],
+      );
       return;
     }
     case 'declined': {
@@ -511,6 +523,10 @@ async function applyReply(creator, ctx, result) {
       await db.query(
         `UPDATE creators SET negotiation_status = 'DECLINED', updated_at = NOW() WHERE id = $1`,
         [creator.id],
+      );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_declined', $2)`,
+        [creator.id, {}],
       );
       return;
     }
@@ -594,6 +610,13 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
   try {
     const email = await draftOfferEmail(creator, offer, ctx, { combine });
     await sendNegotiationEmail(creator, email, 'offer');
+    // Timeline entry for the Rate column: the priced offer we sent. Kept
+    // separate from the 'sent_negotiation' email event (which the thread view
+    // uses) so the rate timeline can show the fee/CPM without the email body.
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_offer_sent', $2)`,
+      [creatorId, { fee: offer.flat_fee, cpm: offer.cpm_applied, label: offer.label }],
+    );
     return { sent: true };
   } catch (err) {
     await db.query(

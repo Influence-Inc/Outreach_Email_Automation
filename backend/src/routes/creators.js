@@ -2,7 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { sendOutreach } = require('../services/outreach');
 const { scrapeProfile } = require('../services/igScraper');
-const { computeStats, computeSixOffers, parseViewCount } = require('../services/pricing');
+const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const { getThreadMessages } = require('../services/gmail');
 
 // Human-readable labels for the event-timeline fallback (when Gmail isn't
@@ -19,6 +19,78 @@ const EVENT_LABELS = {
   failed: 'Send failed',
   negotiation_closed: 'Negotiation closed',
 };
+
+// Event types that make up the per-creator "Rate" timeline (delivery-tracking
+// style). A curated subset of email_events — the offer email's own
+// 'sent_negotiation' event is intentionally excluded; we log a dedicated
+// 'rate_offer_sent' carrying the fee/CPM instead so the timeline can describe
+// the offer without the email body.
+const RATE_LOG_TYPES = [
+  'sent_outreach',
+  'replied',
+  'rate_quoted',
+  'rate_offer_sent',
+  'rate_accepted',
+  'rate_declined',
+];
+
+const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
+
+// Map one email_event to a human "delivery update" line for the Rate column.
+// Returns { text, tone } or null to skip.
+function rateLogEntry(type, detail) {
+  const d = detail || {};
+  switch (type) {
+    case 'sent_outreach':
+      return { text: 'Outreach sent', tone: 'done' };
+    case 'replied':
+      return { text: 'Creator replied', tone: 'done' };
+    case 'rate_quoted': {
+      const to = d.to != null ? fmtMoney(d.to) : null;
+      if (d.by === 'creator') {
+        return { text: to ? `Creator quoted ${to}` : 'Creator shared a rate', tone: 'active' };
+      }
+      if (d.from != null && d.to != null) {
+        return { text: `Rate updated ${fmtMoney(d.from)} → ${fmtMoney(d.to)}`, tone: 'active' };
+      }
+      return { text: to ? `Rate set to ${to}` : 'Rate updated', tone: 'active' };
+    }
+    case 'rate_offer_sent': {
+      const fee = d.fee != null ? fmtMoney(d.fee) : null;
+      const cpm = d.cpm != null ? ` · CPM $${d.cpm}` : '';
+      return { text: fee ? `Offer sent — ${fee}${cpm}` : 'Offer sent', tone: 'active' };
+    }
+    case 'rate_accepted':
+      return { text: 'Creator accepted ✓', tone: 'success' };
+    case 'rate_declined':
+      return { text: 'Creator declined', tone: 'muted' };
+    default:
+      return null;
+  }
+}
+
+// Attach a `rate_log` array (oldest→newest) to each creator row, in place. One
+// grouped query over the curated event types for all returned creators.
+async function attachRateLog(rows) {
+  if (!rows.length) return;
+  const ids = rows.map((r) => r.id);
+  const events = await db.many(
+    `SELECT creator_id, type, detail, created_at
+     FROM email_events
+     WHERE creator_id = ANY($1::int[]) AND type = ANY($2::text[])
+     ORDER BY creator_id, created_at ASC`,
+    [ids, RATE_LOG_TYPES],
+  );
+  const byCreator = new Map();
+  for (const e of events) {
+    const entry = rateLogEntry(e.type, e.detail);
+    if (!entry) continue;
+    entry.at = e.created_at;
+    if (!byCreator.has(e.creator_id)) byCreator.set(e.creator_id, []);
+    byCreator.get(e.creator_id).push(entry);
+  }
+  for (const r of rows) r.rate_log = byCreator.get(r.id) || [];
+}
 
 const router = express.Router();
 
@@ -47,6 +119,7 @@ router.get('/', async (req, res, next) => {
       `SELECT * FROM creators ${where} ORDER BY created_at DESC`,
       params,
     );
+    await attachRateLog(rows);
     res.json(rows);
   } catch (err) { next(err); }
 });
@@ -107,10 +180,13 @@ router.get('/:id/thread', async (req, res, next) => {
       }
     }
 
-    // Fallback: build a lightweight timeline from email_events.
+    // Fallback: build a lightweight timeline from email_events. The internal
+    // rate_* events power the Rate-column timeline, not the email thread, so
+    // they're excluded here (rate_offer_sent would otherwise duplicate the
+    // offer email's sent_negotiation event).
     const events = await db.many(
       `SELECT type, detail, created_at FROM email_events
-       WHERE creator_id = $1 ORDER BY created_at ASC`,
+       WHERE creator_id = $1 AND type NOT LIKE 'rate_%' ORDER BY created_at ASC`,
       [req.params.id],
     );
     const messages = events.map((e) => {
@@ -169,7 +245,7 @@ router.patch('/:id', async (req, res, next) => {
         const quotedRate = ctx && ctx.quoted_rate != null ? Number(ctx.quoted_rate) : null;
         const maxCpm =
           ctx && ctx.max_cpm != null ? Number(ctx.max_cpm) : Number(process.env.TARGET_CPM || 15);
-        const offers = computeSixOffers(stats, maxCpm, quotedRate);
+        const offers = computeOffers(stats, maxCpm, quotedRate);
         params.push(JSON.stringify(offers));
         updates.push(`suggested_offers = $${params.length}::jsonb`);
       }

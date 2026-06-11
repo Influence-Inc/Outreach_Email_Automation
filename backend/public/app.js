@@ -136,7 +136,7 @@ async function selectCampaign(id) {
     <span>Follow-up: <b>${c.followup_sent_count}</b></span>
     <span>Replied: <b>${c.replied_count}</b></span>
   `;
-  updateDelegateBadge(c.needs_human_count || 0);
+  updateDelegateBadge(c.action_count || 0);
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
   el('campaign-max-cpm').value = c.max_cpm != null ? c.max_cpm : '';
@@ -218,6 +218,28 @@ function cpmFor(fee, views) {
   return views ? Math.round((fee / views) * 1000 * 100) / 100 : null;
 }
 
+// Inverse of cpmFor: the fee implied by a CPM over a fixed view basis. Used by
+// the offer controls, where the admin sets CPM and the fee follows.
+function feeFor(cpm, views) {
+  return Math.round((Number(cpm) * Number(views)) / 1000);
+}
+
+// Compact relative time for the rate timeline ("just now", "5m ago", "2h ago").
+function fmtAgo(s) {
+  if (!s) return '';
+  const then = new Date(s).getTime();
+  if (isNaN(then)) return '';
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 45) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(s).toLocaleDateString();
+}
+
 function renderViewsCell(r, td) {
   const s = r.ig_scraped_data;
   if (s && s.reel_count) {
@@ -248,8 +270,14 @@ function renderViewsCell(r, td) {
 }
 
 function renderRateCell(r, td) {
-  td.textContent = r.quoted_rate != null ? `$${fmtNum(r.quoted_rate)}` : '—';
-  makeEditable(td, {
+  // The editable rate value lives in its own element so click-to-edit is scoped
+  // to it — clicking the timeline below never opens the editor, and the timeline
+  // survives an inline edit (makeEditable only clears the element it owns).
+  const valueDiv = document.createElement('div');
+  valueDiv.className = 'rate-value';
+  valueDiv.textContent = r.quoted_rate != null ? `$${fmtNum(r.quoted_rate)}` : '—';
+  td.appendChild(valueDiv);
+  makeEditable(valueDiv, {
     value: r.quoted_rate != null ? String(r.quoted_rate) : '',
     placeholder: 'rate $',
     onSave: (v) =>
@@ -258,10 +286,45 @@ function renderRateCell(r, td) {
         body: JSON.stringify({ quoted_rate: Number(String(v).replace(/[^0-9.]/g, '')) }),
       }),
   });
+  const log = Array.isArray(r.rate_log) ? r.rate_log : [];
+  if (log.length) td.appendChild(renderRateLog(log));
 }
 
-// Offer dropdown + fee/views sliders + live CPM + Approve & send.
-function buildOfferCell(r, td) {
+// A compact, delivery-tracking-style timeline of rate updates, newest first.
+// The newest entry is the "current" step (emphasized); older ones are muted.
+function renderRateLog(log) {
+  const ol = document.createElement('ol');
+  ol.className = 'rate-log';
+  const items = log.slice().reverse(); // newest first
+  items.forEach((e, i) => {
+    const li = document.createElement('li');
+    li.className = `rate-log-item tone-${e.tone || 'done'}${i === 0 ? ' current' : ''}`;
+    const dot = document.createElement('span');
+    dot.className = 'rate-log-dot';
+    const body = document.createElement('div');
+    body.className = 'rate-log-body';
+    const text = document.createElement('div');
+    text.className = 'rate-log-text';
+    text.textContent = e.text || '';
+    const when = document.createElement('div');
+    when.className = 'rate-log-when';
+    when.textContent = fmtAgo(e.at);
+    when.title = fmtDate(e.at);
+    body.appendChild(text);
+    body.appendChild(when);
+    li.appendChild(dot);
+    li.appendChild(body);
+    ol.appendChild(li);
+  });
+  return ol;
+}
+
+// Offer dropdown + CPM slider + computed Fee + Approve & send. Returns a
+// standalone element (lives in the Delegate window now, not a table cell).
+// `onRefresh` runs after a successful approve so the caller can repaint.
+function buildOfferControls(r, onRefresh) {
+  const container = document.createElement('div');
+  container.className = 'neg-offer';
   const offers = Array.isArray(r.suggested_offers) ? r.suggested_offers : [];
   const stage = r.negotiation_status
     ? `<div class="neg-stage">${r.negotiation_status.replace(/_/g, ' ').toLowerCase()}</div>`
@@ -271,10 +334,10 @@ function buildOfferCell(r, td) {
     ? `<span class="neg-approved-badge ${sent ? 'sent' : ''}">${sent ? '✓ offer sent' : '✓ approved'}</span>`
     : '';
   if (!offers.length) {
-    td.innerHTML =
+    container.innerHTML =
       (stage || '') +
       '<div class="meta">Scrape reel views to generate offers, or enter views in the Views column.</div>';
-    return;
+    return container;
   }
 
   const custom = r.custom_offer && typeof r.custom_offer === 'object' ? r.custom_offer : null;
@@ -282,48 +345,43 @@ function buildOfferCell(r, td) {
   let selected = offers.find((o) => o.offer_id === selectedId) || offers[0];
   selectedId = selected.offer_id;
 
+  // The fixed view basis a fee is priced on: the guarantee for view deals, or
+  // the implied views behind a video deal's flat fee (flat_fee/cpm*1000).
+  // Computed once per selected offer so CPM and the read-only Fee don't chase
+  // each other.
+  const billableFor = (o) =>
+    Number(o.view_guarantee) ||
+    (o.cpm_applied ? Math.round((Number(o.flat_fee) / Number(o.cpm_applied)) * 1000) : 0);
+
   const seedFromCustom = custom && custom.offer_id === selectedId;
-  let fee = seedFromCustom && custom.flat_fee != null ? Number(custom.flat_fee) : Number(selected.flat_fee);
-  let views =
-    seedFromCustom && custom.view_guarantee != null
-      ? Number(custom.view_guarantee)
-      : Number(selected.view_guarantee || 0);
+  let billableViews = billableFor(selected);
+  let cpm =
+    seedFromCustom && custom.cpm_applied != null
+      ? Number(custom.cpm_applied)
+      : Number(selected.cpm_applied) || 0;
 
-  const maxFee = Math.max(...offers.map((o) => Number(o.flat_fee) || 0), fee, 100);
-  const feeMax = Math.max(Math.ceil((maxFee * 2) / 50) * 50, 100);
-  const maxViews = Math.max(
-    ...offers.map((o) => Number(o.view_guarantee) || 0),
-    views,
-    (r.ig_scraped_data && r.ig_scraped_data.p75) || 0,
-    25000,
-  );
-  const viewsMax = Math.ceil((maxViews * 1.5) / 25000) * 25000;
+  const cpmCeil = Math.max(...offers.map((o) => Number(o.cpm_applied) || 0), cpm, 1);
+  const cpmMax = Math.max(Math.ceil(cpmCeil * 2), 1);
 
-  td.classList.add('neg-offer');
-  td.innerHTML = `
+  container.innerHTML = `
     <div class="neg-offer-head">${stage}${approvedBadge}</div>
     <select class="neg-offer-select small"></select>
+    <div class="neg-offer-basis meta"></div>
     <div class="neg-slider">
-      <label>Fee <b class="neg-fee-val"></b></label>
-      <input type="range" class="neg-fee" min="0" max="${feeMax}" step="50" />
+      <label>CPM <b class="neg-cpm-val"></b></label>
+      <input type="range" class="neg-cpm" min="0" max="${cpmMax}" step="0.5" />
     </div>
-    <div class="neg-slider neg-views-wrap">
-      <label>Views <b class="neg-views-val"></b></label>
-      <input type="range" class="neg-views" min="0" max="${viewsMax}" step="25000" />
-    </div>
-    <div class="neg-cpm-badge"></div>
+    <div class="neg-fee-badge"></div>
     <button class="small neg-approve">${r.offer_approved ? 'Re-approve &amp; send' : 'Approve &amp; send'}</button>
     <span class="neg-offer-status hint"></span>
   `;
-  const sel = td.querySelector('.neg-offer-select');
-  const feeRange = td.querySelector('.neg-fee');
-  const viewsRange = td.querySelector('.neg-views');
-  const feeVal = td.querySelector('.neg-fee-val');
-  const viewsVal = td.querySelector('.neg-views-val');
-  const viewsWrap = td.querySelector('.neg-views-wrap');
-  const cpmBadge = td.querySelector('.neg-cpm-badge');
-  const approveBtn = td.querySelector('.neg-approve');
-  const statusEl = td.querySelector('.neg-offer-status');
+  const sel = container.querySelector('.neg-offer-select');
+  const basisEl = container.querySelector('.neg-offer-basis');
+  const cpmRange = container.querySelector('.neg-cpm');
+  const cpmVal = container.querySelector('.neg-cpm-val');
+  const feeBadge = container.querySelector('.neg-fee-badge');
+  const approveBtn = container.querySelector('.neg-approve');
+  const statusEl = container.querySelector('.neg-offer-status');
 
   for (const o of offers) {
     const opt = document.createElement('option');
@@ -336,50 +394,46 @@ function buildOfferCell(r, td) {
   }
 
   const isView = () => selected.offer_type === 'view_based';
-  function syncCpm() {
-    const cpm = cpmFor(fee, views);
-    cpmBadge.textContent = cpm != null ? `CPM $${cpm}` : 'flat';
+  const fmtCpm = (n) => '$' + (Math.round(Number(n) * 100) / 100);
+  const currentFee = () => feeFor(cpm, billableViews);
+  function syncFee() {
+    cpmVal.textContent = fmtCpm(cpm);
+    feeBadge.textContent = 'Fee $' + fmtNum(currentFee());
   }
   function syncUI() {
-    feeRange.value = String(fee);
-    viewsRange.value = String(views);
-    feeVal.textContent = '$' + fmtNum(fee);
-    viewsVal.textContent = fmtNum(views);
-    viewsWrap.style.display = isView() ? '' : 'none';
-    syncCpm();
+    cpmRange.value = String(cpm);
+    basisEl.textContent = isView()
+      ? `Guarantees ${fmtViews(billableViews)} views`
+      : `${selected.num_videos} video${selected.num_videos === 1 ? '' : 's'} · flat`;
+    syncFee();
   }
   syncUI();
 
   sel.onchange = () => {
     selected = offers.find((o) => o.offer_id === sel.value) || offers[0];
     selectedId = selected.offer_id;
-    fee = Number(selected.flat_fee);
-    views = Number(selected.view_guarantee || 0);
+    billableViews = billableFor(selected);
+    cpm = Number(selected.cpm_applied) || 0;
     syncUI();
   };
-  feeRange.oninput = () => {
-    fee = Number(feeRange.value);
-    feeVal.textContent = '$' + fmtNum(fee);
-    syncCpm();
-  };
-  viewsRange.oninput = () => {
-    views = Number(viewsRange.value);
-    viewsVal.textContent = fmtNum(views);
-    syncCpm();
+  cpmRange.oninput = () => {
+    cpm = Number(cpmRange.value);
+    syncFee();
   };
 
   approveBtn.onclick = async () => {
     approveBtn.disabled = true;
     statusEl.textContent = 'Approving…';
     const numVideos = isView() ? 1 : Number(selected.num_videos || 1);
+    const fee = currentFee();
     const customOffer = {
       ...selected,
       offer_id: selected.offer_id,
-      flat_fee: Math.round(fee),
-      view_guarantee: isView() ? Math.round(views) : 0,
+      flat_fee: fee,
+      view_guarantee: isView() ? Math.round(billableViews) : 0,
       num_videos: numVideos,
-      flat_per_video: isView() ? Math.round(fee) : Math.round(fee / numVideos),
-      cpm_applied: cpmFor(fee, views),
+      flat_per_video: isView() ? fee : Math.round(fee / numVideos),
+      cpm_applied: Math.round(cpm * 100) / 100,
     };
     try {
       const resp = await api(`/api/creators/${r.id}/offer`, {
@@ -391,7 +445,7 @@ function buildOfferCell(r, td) {
         }),
       });
       const sr = resp && resp.send_result;
-      // Reflect the outcome before the table re-render replaces this cell.
+      // Reflect the outcome before the re-render replaces these controls.
       // Offers are sent only by this approval action — never automatically —
       // so when a send is skipped we say why instead of promising a later send.
       let hold = 1400;
@@ -406,14 +460,14 @@ function buildOfferCell(r, td) {
       } else {
         statusEl.textContent = '✓ Offer approved.';
       }
-      // Brief pause so the status is visible, then refresh to show the
-      // persistent approved/sent badge.
-      setTimeout(refreshCreators, hold);
+      // Brief pause so the status is visible, then let the caller repaint.
+      setTimeout(onRefresh, hold);
     } catch (err) {
       statusEl.textContent = err.message;
       approveBtn.disabled = false;
     }
   };
+  return container;
 }
 
 // --- Per-creator email thread dropdown -----------------------------------
@@ -497,7 +551,6 @@ async function refreshCreators() {
       <td><span class="meta">${fmtDate(lastActivity)}</span></td>
       <td class="neg-views-cell"></td>
       <td class="neg-rate-cell"></td>
-      <td class="neg-offer-cell"></td>
       <td></td>
     `;
     const cells = tr.querySelectorAll('td');
@@ -506,7 +559,6 @@ async function refreshCreators() {
     const actions = cells[cells.length - 1];
     renderViewsCell(r, tr.querySelector('.neg-views-cell'));
     renderRateCell(r, tr.querySelector('.neg-rate-cell'));
-    buildOfferCell(r, tr.querySelector('.neg-offer-cell'));
 
     makeEditable(nameTd, {
       value: r.full_name || r.first_name || '',
@@ -1145,6 +1197,22 @@ el('open-delegate-btn').addEventListener('click', async () => {
 
 el('delegate-back-btn').addEventListener('click', () => showView('campaign'));
 
+// A creator has an offer the admin can act on: priced offers exist and we're
+// waiting on internal approval. Mirrors the send gate (AWAITING_APPROVAL) and
+// the server-side action_count used for the badge.
+function isOfferActionable(r) {
+  return (
+    Array.isArray(r.suggested_offers) &&
+    r.suggested_offers.length > 0 &&
+    r.negotiation_status === 'AWAITING_APPROVAL'
+  );
+}
+
+// Shows in the Delegate window: AI hand-offs plus offers awaiting approval.
+function isDelegateActionable(r) {
+  return !!r.needs_human || isOfferActionable(r);
+}
+
 async function renderDelegateList() {
   const root = el('delegate-list');
   root.innerHTML = '<p class="hint">Loading…</p>';
@@ -1155,11 +1223,11 @@ async function renderDelegateList() {
     root.innerHTML = `<p class="hint">Failed to load: ${escapeHtml(err.message)}</p>`;
     return;
   }
-  const pending = rows.filter((r) => r.needs_human);
+  const pending = rows.filter(isDelegateActionable);
   updateDelegateBadge(pending.length);
   if (!pending.length) {
     root.innerHTML =
-      '<p class="hint">Nothing to delegate right now. Replies the AI can&rsquo;t handle (or anything on AI-off templates) will appear here.</p>';
+      '<p class="hint">Nothing needs you right now. Replies the AI hands off (or anything on AI-off templates), plus offers awaiting your approval, will appear here.</p>';
     return;
   }
   root.innerHTML = '';
@@ -1169,59 +1237,101 @@ async function renderDelegateList() {
 function buildDelegateCard(r) {
   const card = document.createElement('div');
   card.className = 'delegate-card';
-  card.innerHTML = `
-    <div class="delegate-head">
-      <div>
-        <a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || '')}</a>
-        ${r.first_name ? `<span class="meta"> · ${escapeHtml(r.first_name)}</span>` : ''}
-        <div class="meta">${escapeHtml(r.email || 'no email')}</div>
-      </div>
-      ${r.delegate_reason ? `<span class="delegate-reason">${escapeHtml(r.delegate_reason)}</span>` : ''}
-    </div>
-    ${r.delegate_question ? `<div class="delegate-question">${escapeHtml(r.delegate_question)}</div>` : ''}
-    <label class="meta" style="display:block; margin-top:8px;">Your reply</label>
-    <textarea class="delegate-reply" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
-    <div class="row" style="justify-content: flex-end; align-items: center; margin-top: 8px;">
-      <span class="delegate-status hint" style="margin-right: auto;"></span>
-      <button class="ghost small delegate-dismiss" type="button">Dismiss</button>
-      <button class="small delegate-send" type="button">Send reply</button>
-    </div>
-  `;
-  const replyEl = card.querySelector('.delegate-reply');
-  const statusEl = card.querySelector('.delegate-status');
-  const sendBtn = card.querySelector('.delegate-send');
-  const dismissBtn = card.querySelector('.delegate-dismiss');
+  const isHandoff = !!r.needs_human;
+  const offerActionable = isOfferActionable(r);
 
-  sendBtn.onclick = async () => {
-    const body = replyEl.value.trim();
-    if (!body) { statusEl.textContent = 'Write a reply first.'; return; }
-    sendBtn.disabled = true; dismissBtn.disabled = true;
-    statusEl.textContent = 'Sending…';
-    try {
-      await api(`/api/creators/${r.id}/delegate-reply`, {
-        method: 'POST',
-        body: JSON.stringify({ body }),
-      });
-      await renderDelegateList();
-      await refreshCampaigns();
-    } catch (err) {
-      statusEl.textContent = `Failed: ${err.message}`;
-      sendBtn.disabled = false; dismissBtn.disabled = false;
-    }
-  };
+  // Header — the reason pill shows the hand-off reason, or "offer to approve"
+  // when the card is here purely because an offer is ready.
+  const head = document.createElement('div');
+  head.className = 'delegate-head';
+  head.innerHTML = `
+    <div>
+      <a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || '')}</a>
+      ${r.first_name ? `<span class="meta"> · ${escapeHtml(r.first_name)}</span>` : ''}
+      <div class="meta">${escapeHtml(r.email || 'no email')}</div>
+    </div>
+    ${
+      isHandoff && r.delegate_reason
+        ? `<span class="delegate-reason">${escapeHtml(r.delegate_reason)}</span>`
+        : offerActionable
+        ? '<span class="delegate-reason offer">offer to approve</span>'
+        : ''
+    }`;
+  card.appendChild(head);
 
-  dismissBtn.onclick = async () => {
-    if (!confirm('Dismiss without replying? This clears it from Delegate.')) return;
-    sendBtn.disabled = true; dismissBtn.disabled = true;
-    try {
-      await api(`/api/creators/${r.id}/dismiss-delegate`, { method: 'POST' });
-      await renderDelegateList();
-      await refreshCampaigns();
-    } catch (err) {
-      statusEl.textContent = `Failed: ${err.message}`;
-      sendBtn.disabled = false; dismissBtn.disabled = false;
-    }
-  };
+  // The creator's parked message (hand-off), or a short prompt (offer-only).
+  if (isHandoff && r.delegate_question) {
+    const q = document.createElement('div');
+    q.className = 'delegate-question';
+    q.textContent = r.delegate_question;
+    card.appendChild(q);
+  } else if (!isHandoff && offerActionable) {
+    const sub = document.createElement('div');
+    sub.className = 'delegate-subtitle meta';
+    sub.textContent = 'Creator shared a rate — review & send an offer.';
+    card.appendChild(sub);
+  }
+
+  // Offer controls (relocated from the table) when an offer awaits approval.
+  if (offerActionable) {
+    card.appendChild(
+      buildOfferControls(r, async () => {
+        await renderDelegateList();
+        await refreshCampaigns();
+      }),
+    );
+  }
+
+  // Reply block — only for AI hand-offs (there's a creator message to answer).
+  if (isHandoff) {
+    const block = document.createElement('div');
+    block.className = 'delegate-reply-block';
+    block.innerHTML = `
+      <label class="meta" style="display:block; margin-top:12px;">Your reply</label>
+      <textarea class="delegate-reply" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
+      <div class="row" style="justify-content: flex-end; align-items: center; margin-top: 8px;">
+        <span class="delegate-status hint" style="margin-right: auto;"></span>
+        <button class="ghost small delegate-dismiss" type="button">Dismiss</button>
+        <button class="small delegate-send" type="button">Send reply</button>
+      </div>`;
+    card.appendChild(block);
+
+    const replyEl = block.querySelector('.delegate-reply');
+    const statusEl = block.querySelector('.delegate-status');
+    const sendBtn = block.querySelector('.delegate-send');
+    const dismissBtn = block.querySelector('.delegate-dismiss');
+
+    sendBtn.onclick = async () => {
+      const body = replyEl.value.trim();
+      if (!body) { statusEl.textContent = 'Write a reply first.'; return; }
+      sendBtn.disabled = true; dismissBtn.disabled = true;
+      statusEl.textContent = 'Sending…';
+      try {
+        await api(`/api/creators/${r.id}/delegate-reply`, {
+          method: 'POST',
+          body: JSON.stringify({ body }),
+        });
+        await renderDelegateList();
+        await refreshCampaigns();
+      } catch (err) {
+        statusEl.textContent = `Failed: ${err.message}`;
+        sendBtn.disabled = false; dismissBtn.disabled = false;
+      }
+    };
+
+    dismissBtn.onclick = async () => {
+      if (!confirm('Dismiss without replying? This clears it from Delegate.')) return;
+      sendBtn.disabled = true; dismissBtn.disabled = true;
+      try {
+        await api(`/api/creators/${r.id}/dismiss-delegate`, { method: 'POST' });
+        await renderDelegateList();
+        await refreshCampaigns();
+      } catch (err) {
+        statusEl.textContent = `Failed: ${err.message}`;
+        sendBtn.disabled = false; dismissBtn.disabled = false;
+      }
+    };
+  }
   return card;
 }
 

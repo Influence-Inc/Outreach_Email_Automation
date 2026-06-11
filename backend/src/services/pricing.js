@@ -52,8 +52,8 @@ function computeStats(views) {
 
 const roundTo = (x, step) => Math.round(x / step) * step;
 
-// Returns the 6 offers: 3 view-based + 3 video-based.
-function computeSixOffers(stats, maxCpm, quotedRate) {
+// Returns the offers: 1 conservative view-based deal + 3 video-based deals.
+function computeOffers(stats, maxCpm, quotedRate) {
   const eff = maxCpm * (1 - RISK_BUFFER);
   const mk = (id, type, label, num, fee, views) => ({
     offer_id: id,
@@ -69,13 +69,9 @@ function computeSixOffers(stats, maxCpm, quotedRate) {
   });
   const v = (x) => Math.max(roundTo(x, 25000), 25000);
   const v1 = v(stats.min_views);
-  const v2 = v(stats.p25);
-  const v3 = v(stats.p50);
   const perVid = (stats.p25 / 1000) * eff;
   return [
     mk('view_1', 'view_based', 'Conservative View Deal', 1, (v1 / 1000) * eff, v1),
-    mk('view_2', 'view_based', 'Standard View Deal', 1, (v2 / 1000) * eff, v2),
-    mk('view_3', 'view_based', 'Optimistic View Deal', 1, (v3 / 1000) * eff, v3),
     mk('video_1', 'video_based', '1 Video Flat Deal', 1, perVid * 1, 0),
     mk('video_2', 'video_based', '2 Videos Flat Deal', 2, perVid * 2, 0),
     mk('video_3', 'video_based', '3 Videos Flat Deal', 3, perVid * 3, 0),
@@ -93,6 +89,6 @@ module.exports = {
   parseViewCount,
   calculatePercentile,
   computeStats,
-  computeSixOffers,
+  computeOffers,
   cpmFor,
 };

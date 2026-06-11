@@ -4,7 +4,7 @@
 const express = require('express');
 const db = require('../db');
 const negotiation = require('../services/negotiation');
-const { computeSixOffers } = require('../services/pricing');
+const { computeOffers } = require('../services/pricing');
 
 const router = express.Router();
 
@@ -86,7 +86,7 @@ router.post('/:id/quoted-rate', async (req, res, next) => {
     let offerSet = '';
     if (rate !== null && creator.ig_scraped_data) {
       const maxCpm = creator.max_cpm != null ? Number(creator.max_cpm) : Number(process.env.TARGET_CPM || 15);
-      const offers = computeSixOffers(creator.ig_scraped_data, maxCpm, rate);
+      const offers = computeOffers(creator.ig_scraped_data, maxCpm, rate);
       params.push(JSON.stringify(offers));
       offerSet = `, suggested_offers = $${params.length}::jsonb`;
     }
@@ -101,6 +101,16 @@ router.post('/:id/quoted-rate', async (req, res, next) => {
       `UPDATE creators SET quoted_rate = $2${offerSet}${statusSet}, updated_at = NOW() WHERE id = $1 RETURNING *`,
       params,
     );
+
+    // Log the change for the Rate-column timeline (admin set/overrode the rate).
+    // NUMERIC comes back from pg as a string, so coerce before comparing.
+    const prevRate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
+    if (rate !== null && rate !== prevRate) {
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_quoted', $2)`,
+        [req.params.id, { from: prevRate, to: rate, by: 'admin' }],
+      );
+    }
     res.json(row);
   } catch (err) {
     next(err);

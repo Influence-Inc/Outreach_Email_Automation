@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { syncCampaigns } = require('../services/campaignsApi');
-const { computeSixOffers } = require('../services/pricing');
+const { computeOffers } = require('../services/pricing');
 
 const router = express.Router();
 
@@ -16,7 +16,11 @@ router.get('/', async (_req, res, next) => {
               COUNT(cr.id) FILTER (WHERE cr.status = 'outreach_sent')::int AS outreach_sent_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'followup_sent')::int AS followup_sent_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
-              COUNT(cr.id) FILTER (WHERE cr.needs_human)::int AS needs_human_count
+              COUNT(cr.id) FILTER (WHERE cr.needs_human)::int AS needs_human_count,
+              COUNT(cr.id) FILTER (
+                WHERE cr.needs_human
+                   OR (cr.suggested_offers IS NOT NULL AND cr.negotiation_status = 'AWAITING_APPROVAL')
+              )::int AS action_count
        FROM campaigns c
        LEFT JOIN creators cr ON cr.campaign_id = c.id
        GROUP BY c.id
@@ -107,7 +111,7 @@ router.post('/:id/recalculate-offers', async (req, res, next) => {
     let updated = 0;
     for (const c of creators) {
       const rate = c.quoted_rate != null ? Number(c.quoted_rate) : null;
-      const offers = computeSixOffers(c.ig_scraped_data, maxCpm, rate);
+      const offers = computeOffers(c.ig_scraped_data, maxCpm, rate);
       await db.query(
         `UPDATE creators SET suggested_offers = $2::jsonb, updated_at = NOW() WHERE id = $1`,
         [c.id, JSON.stringify(offers)],

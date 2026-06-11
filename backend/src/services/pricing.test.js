@@ -7,7 +7,7 @@ const {
   parseViewCount,
   calculatePercentile,
   computeStats,
-  computeSixOffers,
+  computeOffers,
   cpmFor,
 } = require('./pricing');
 
@@ -35,16 +35,17 @@ test('computeStats percentiles', () => {
   assert.strictEqual(stats.avg, 300000); // mean of the 5 reels
 });
 
-test('computeSixOffers shape + fees (maxCpm 15, RISK_BUFFER 0.20 => eff 12)', () => {
+test('computeOffers shape + fees (maxCpm 15, RISK_BUFFER 0.20 => eff 12)', () => {
   const stats = computeStats([100000, 200000, 300000, 400000, 500000]);
-  const offers = computeSixOffers(stats, 15, null);
-  assert.strictEqual(offers.length, 6);
+  const offers = computeOffers(stats, 15, null);
+  assert.strictEqual(offers.length, 4);
 
   const byId = Object.fromEntries(offers.map((o) => [o.offer_id, o]));
-  // view offers: views/1000 * eff(12)
-  assert.strictEqual(byId.view_1.flat_fee, 1200); // 100k
-  assert.strictEqual(byId.view_2.flat_fee, 2400); // 200k (p25)
-  assert.strictEqual(byId.view_3.flat_fee, 3600); // 300k (p50)
+  // the single conservative view offer: views/1000 * eff(12)
+  assert.strictEqual(byId.view_1.flat_fee, 1200); // 100k (min_views)
+  // Standard / Optimistic view deals were removed.
+  assert.strictEqual(byId.view_2, undefined);
+  assert.strictEqual(byId.view_3, undefined);
   // video offers: perVid = p25/1000 * eff = 2400, times n
   assert.strictEqual(byId.video_1.flat_fee, 2400);
   assert.strictEqual(byId.video_2.flat_fee, 4800);
@@ -55,21 +56,21 @@ test('computeSixOffers shape + fees (maxCpm 15, RISK_BUFFER 0.20 => eff 12)', ()
   assert.strictEqual(byId.video_1.view_guarantee, 0);
   assert.strictEqual(byId.video_1.cpm_applied, 12); // no views -> eff
   assert.strictEqual(byId.video_2.flat_per_video, 2400);
-  // all 6 have the expected types
+  // the expected types, in order
   assert.deepStrictEqual(
     offers.map((o) => o.offer_type),
-    ['view_based', 'view_based', 'view_based', 'video_based', 'video_based', 'video_based'],
+    ['view_based', 'video_based', 'video_based', 'video_based'],
   );
 });
 
 test('satisfies_creator_rate reflects the quoted rate', () => {
   const stats = computeStats([100000, 200000, 300000, 400000, 500000]);
-  const offers = computeSixOffers(stats, 15, 3000);
+  const offers = computeOffers(stats, 15, 3000);
   const byId = Object.fromEntries(offers.map((o) => [o.offer_id, o]));
   assert.strictEqual(byId.view_1.satisfies_creator_rate, false); // 1200 < 3000
-  assert.strictEqual(byId.view_3.satisfies_creator_rate, true); // 3600 >= 3000
+  assert.strictEqual(byId.video_3.satisfies_creator_rate, true); // 7200 >= 3000
   // null when no quoted rate
-  const noRate = computeSixOffers(stats, 15, null);
+  const noRate = computeOffers(stats, 15, null);
   assert.strictEqual(noRate[0].satisfies_creator_rate, null);
 });
 

@@ -116,7 +116,7 @@ ALTER TABLE creators  ADD COLUMN IF NOT EXISTS quoted_rate NUMERIC(10,2);
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS ig_scraped_data JSONB;
   -- {p10,p25,p50,p75,reel_count,min_views,views_raw:[...]}
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS suggested_offers JSONB;
-  -- array of 6 offer objects (shape in pricing.js)
+  -- array of offer objects (shape in pricing.js)
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS selected_offer_id TEXT;
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS custom_offer JSONB;
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS offer_approved BOOLEAN DEFAULT FALSE;

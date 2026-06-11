@@ -249,10 +249,10 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
 }
 .table-scroll::-webkit-scrollbar-thumb:hover { background: #9099a6; }
 
-/* Give the creator table a comfortable width so its 10 columns (incl. the
-   Views / Rate / Offer negotiation columns) stay readable instead of cramming
-   into the viewport. The wrapper above scrolls when the screen is narrower. */
-#creator-table { min-width: 1240px; }
+/* Give the creator table a comfortable width so its 9 columns (incl. the
+   Views / Rate negotiation columns) stay readable instead of cramming into the
+   viewport. The wrapper above scrolls when the screen is narrower. */
+#creator-table { min-width: 1100px; }
 #creator-table th, #creator-table td { vertical-align: top; }
 /* Per-column breathing room. */
 #creator-table th:nth-child(1), #creator-table td:nth-child(1) { min-width: 140px; } /* Instagram */
@@ -262,9 +262,8 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
 #creator-table th:nth-child(5), #creator-table td:nth-child(5) { min-width: 72px; }  /* Opens */
 #creator-table th:nth-child(6), #creator-table td:nth-child(6) { min-width: 130px; } /* Last activity */
 #creator-table th:nth-child(7), #creator-table td:nth-child(7) { min-width: 118px; } /* Views */
-#creator-table th:nth-child(8), #creator-table td:nth-child(8) { min-width: 92px; }  /* Rate */
-#creator-table th:nth-child(9), #creator-table td:nth-child(9) { min-width: 250px; } /* Offer */
-#creator-table th:nth-child(10), #creator-table td:nth-child(10) { min-width: 96px; } /* Actions */
+#creator-table th:nth-child(8), #creator-table td:nth-child(8) { min-width: 210px; } /* Rate (value + timeline) */
+#creator-table th:nth-child(9), #creator-table td:nth-child(9) { min-width: 96px; }  /* Actions */
 
 /* --- Responsive: tablet and below ---------------------------------------- */
 @media (max-width: 900px) {
@@ -368,19 +367,60 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
 .neg-slider label { font-size: 11px; color: #6b7280; }
 .neg-slider label b { color: #111827; }
 .neg-offer input[type="range"] { width: 100%; accent-color: #2563eb; height: 18px; }
-.neg-cpm-badge {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 700;
-  color: #065f46;
-  background: #d1fae5;
-  padding: 2px 8px;
-  border-radius: 10px;
-  margin-bottom: 6px;
-}
 .neg-approve { width: 100%; background: #2563eb; }
 .neg-approve:disabled { opacity: 0.6; cursor: default; }
 .neg-offer-status { display: block; margin-top: 4px; }
+/* Read-only view/video basis line under the offer dropdown. */
+.neg-offer-basis { margin: 0 0 6px; }
+/* The fee is now the computed read-out (admin sets CPM above). */
+.neg-fee-badge {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  color: #065f46;
+  background: #d1fae5;
+  padding: 3px 10px;
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+
+/* --- Rate column: editable value + delivery-tracking timeline ------------- */
+.rate-value { font-weight: 600; }
+.rate-value.editable { cursor: text; border-radius: 4px; padding: 1px 3px; margin: -1px -3px; }
+.rate-value.editable:hover { background: #f3f4f6; }
+.rate-value input { width: 100%; box-sizing: border-box; padding: 4px 6px; font: inherit; }
+
+.rate-log { list-style: none; margin: 10px 0 0; padding: 0; }
+.rate-log-item { position: relative; display: flex; gap: 8px; padding: 0 0 10px 2px; }
+/* Vertical connector between the step dots. */
+.rate-log-item::before {
+  content: '';
+  position: absolute;
+  left: 5px; top: 12px; bottom: -2px;
+  width: 2px; background: #e5e7eb;
+}
+.rate-log-item:last-child::before { display: none; }
+.rate-log-dot {
+  flex: 0 0 auto;
+  width: 12px; height: 12px;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #cbd5e1;
+  z-index: 1;
+}
+.rate-log-body { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.rate-log-text { font-size: 12px; color: #6b7280; word-break: break-word; }
+.rate-log-when { font-size: 10px; color: #9ca3af; }
+/* The newest entry is the current state — emphasize it. */
+.rate-log-item.current .rate-log-text { color: #111827; font-weight: 600; }
+/* Tone accents. */
+.rate-log-item.tone-active .rate-log-dot { background: #6366f1; box-shadow: 0 0 0 1px #6366f1; }
+.rate-log-item.tone-success .rate-log-dot { background: #10b981; box-shadow: 0 0 0 1px #10b981; }
+.rate-log-item.tone-muted .rate-log-dot { background: #9ca3af; box-shadow: 0 0 0 1px #9ca3af; }
+.rate-log-item.current.tone-active .rate-log-text { color: #4338ca; }
+.rate-log-item.current.tone-success .rate-log-text { color: #065f46; }
 
 /* --- Per-creator email thread dropdown ----------------------------------- */
 .thread-toggle.active { background: #2563eb; color: #fff; border-color: #2563eb; }
@@ -454,6 +494,11 @@ tr.thread-row > td { background: #f9fafb; padding: 0; }
   word-break: break-word;
 }
 .delegate-reply { width: 100%; box-sizing: border-box; }
+/* "offer to approve" pill (when a card is here purely for an offer). */
+.delegate-reason.offer { color: #4338ca; background: #e0e7ff; }
+.delegate-subtitle { margin-top: 10px; }
+/* The relocated offer controls inside a delegate card. */
+.delegate-card .neg-offer { margin-top: 12px; max-width: 360px; }
 
 /* Template "AI off" badge (mirrors .badge.default) */
 .template-block-meta .badge.ai-off {
