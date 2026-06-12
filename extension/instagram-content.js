@@ -112,29 +112,40 @@
     return best;
   }
 
-  // Collect recent reel view counts from the reels grid, most-recent first. For
-  // each reel link, read its count from the link's parent container (the
-  // reference's key insight). As a safe net we may widen to an ancestor, but
-  // ONLY while it still wraps exactly this one reel — so we never read a
-  // neighbouring tile's number. Dedupes by reel id and caps at `maxReels`.
+  // Collect recent reel view counts from the reels grid, most-recent first.
+  // Instagram renders each reel's view-count overlay as a SIBLING of the <a>
+  // (not inside it), so for every reel we climb to the largest ancestor that
+  // still wraps only that one reel — the full tile — and read the count there.
+  // The "only this reel" guard means we never pick up a neighbouring tile's
+  // number. Dedupes by reel id and caps at `maxReels`.
+  function reelIdOf(el) {
+    const href = el.getAttribute('href') || el.href || '';
+    return (href.split('/reel/')[1] || '').split('/')[0] || '';
+  }
+
   function extractReelViews(maxReels = 12) {
     const views = [];
     const seen = new Set();
     const anchors = document.querySelectorAll("a[href*='/reel/']");
     for (const a of anchors) {
       if (views.length >= maxReels) break;
-      const href = a.getAttribute('href') || a.href || '';
-      const id = (href.split('/reel/')[1] || '').split('/')[0] || href;
+      const id = reelIdOf(a);
       if (!id || seen.has(id)) continue;
 
-      let count = extractViewCount(a.parentElement);
-      let node = a.parentElement;
-      for (let up = 0; up < 2 && count == null && node; up++) {
-        node = node.parentElement;
-        if (!node || node.querySelectorAll("a[href*='/reel/']").length !== 1) break;
-        count = extractViewCount(node);
+      // Climb while the parent still contains only this reel (any number of
+      // links, but all the same reel id — a tile can have more than one anchor
+      // to the same reel). Stop the moment a different reel would be included.
+      let tile = a;
+      while (tile.parentElement) {
+        const ids = new Set(
+          [...tile.parentElement.querySelectorAll("a[href*='/reel/']")].map(reelIdOf),
+        );
+        ids.delete('');
+        if (ids.size > 1 || (ids.size === 1 && !ids.has(id))) break;
+        tile = tile.parentElement;
       }
 
+      const count = extractViewCount(tile);
       if (count != null && count > 0) {
         seen.add(id);
         views.push(count);
