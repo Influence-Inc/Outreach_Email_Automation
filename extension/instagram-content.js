@@ -83,11 +83,13 @@
     return parseFloat(str);
   }
 
-  // Read one reel's view count from its tile. Ported verbatim from the working
-  // reference extension's extractViewCount: scan the spans in the link's PARENT
-  // container (the count renders as a sibling of the <a>, not inside it), skip
-  // engagement labels, and take the LARGEST number >= 1000. That single
-  // heuristic — parent container + max >= 1000 — is what made it reliable.
+  // ---- Reel view scraping --------------------------------------------------
+  // Ported from the proven "Instagram Reels Analyzer" extension. For each reel
+  // link we read the view count from the link's IMMEDIATE parent (the overlay
+  // renders inside / right beside the <a>), scan its spans, skip engagement
+  // labels, and take the largest number >= 1000. The number match is
+  // case-insensitive so Instagram's lowercase "153k"/"1.5m" parse as well as
+  // "153K"/"1.5M".
   function extractViewCount(container) {
     if (!container) return null;
     let best = null;
@@ -102,7 +104,7 @@
       ) {
         continue;
       }
-      if (/^[\d.,]+[KM]?$/.test(text)) {
+      if (/^[\d.,]+[km]?$/i.test(text)) {
         const views = parseViewCount(text);
         if (Number.isFinite(views) && views >= 1000 && (best === null || views > best)) {
           best = views;
@@ -112,67 +114,47 @@
     return best;
   }
 
-  // Collect recent reel view counts from the reels grid, most-recent first.
-  // Instagram renders each reel's view-count overlay as a SIBLING of the <a>
-  // (not inside it), so for every reel we climb to the largest ancestor that
-  // still wraps only that one reel — the full tile — and read the count there.
-  // The "only this reel" guard means we never pick up a neighbouring tile's
-  // number. Dedupes by reel id and caps at `maxReels`.
-  function reelIdOf(el) {
-    const href = el.getAttribute('href') || el.href || '';
-    return (href.split('/reel/')[1] || '').split('/')[0] || '';
-  }
-
-  function extractReelViews(maxReels = 12) {
-    const views = [];
-    const seen = new Set();
-    const anchors = document.querySelectorAll("a[href*='/reel/']");
-    for (const a of anchors) {
-      if (views.length >= maxReels) break;
-      const id = reelIdOf(a);
-      if (!id || seen.has(id)) continue;
-
-      // Climb while the parent still contains only this reel (any number of
-      // links, but all the same reel id — a tile can have more than one anchor
-      // to the same reel). Stop the moment a different reel would be included.
-      let tile = a;
-      while (tile.parentElement) {
-        const ids = new Set(
-          [...tile.parentElement.querySelectorAll("a[href*='/reel/']")].map(reelIdOf),
-        );
-        ids.delete('');
-        if (ids.size > 1 || (ids.size === 1 && !ids.has(id))) break;
-        tile = tile.parentElement;
-      }
-
-      const count = extractViewCount(tile);
-      if (count != null && count > 0) {
-        seen.add(id);
-        views.push(count);
-      }
+  // One scrape pass over the reels feed: record each reel's views keyed by reel
+  // id into `reels`, reading from the link's immediate parent. Repeated passes
+  // across scrolls accumulate and dedupe (reels that scrolled out of view stay
+  // recorded). Scoped to the main feed so sidebar/suggested reels are ignored.
+  function scrapeVisibleReels(reels) {
+    const feed =
+      document.querySelector('main') ||
+      document.querySelector("section[role='region']") ||
+      document.body;
+    for (const link of feed.querySelectorAll("a[href*='/reel/']")) {
+      const href = link.getAttribute('href') || link.href || '';
+      const id = (href.split('/reel/')[1] || '').split('/')[0];
+      if (!id || reels.has(id)) continue;
+      const views = extractViewCount(link.parentElement);
+      if (views != null && views > 0) reels.set(id, views);
     }
-    return views;
   }
 
-  // Reels (and their view overlays) lazy-load as you scroll. Nudge the page
-  // down until we have enough reels or stop making progress, then return to the
-  // top before reading the DOM.
+  // Reels lazy-load as you scroll. Nudge the page down, accumulating into a Map
+  // until we have enough or stop making progress, then return the view counts.
   async function collectReelViews(maxReels = 12) {
-    let best = extractReelViews(maxReels);
+    const reels = new Map();
+    scrapeVisibleReels(reels);
     let stagnant = 0;
-    for (let i = 0; i < 8 && best.length < maxReels; i++) {
+    for (let i = 0; i < 12 && reels.size < maxReels; i++) {
+      const before = reels.size;
       window.scrollBy(0, Math.round(window.innerHeight * 0.9));
       await sleep(700);
-      const next = extractReelViews(maxReels);
-      if (next.length > best.length) {
-        best = next;
-        stagnant = 0;
-      } else if (++stagnant >= 2) {
-        break; // no new reels after two nudges — stop
-      }
+      scrapeVisibleReels(reels);
+      if (reels.size > before) stagnant = 0;
+      else if (++stagnant >= 3) break; // no new reels after a few nudges — stop
     }
     window.scrollTo(0, 0);
-    return best;
+    return [...reels.values()].slice(0, maxReels);
+  }
+
+  // Quick single-pass scrape for the popup path (no scrolling).
+  function extractReelViews(maxReels = 12) {
+    const reels = new Map();
+    scrapeVisibleReels(reels);
+    return [...reels.values()].slice(0, maxReels);
   }
 
   async function extractProfileData({ includeReels = true } = {}) {
