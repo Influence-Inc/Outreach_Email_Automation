@@ -48,3 +48,14 @@ test('findEmail extracts from messy bio text', () => {
   assert.strictEqual(findEmail(''), null);
   assert.strictEqual(findEmail('no email here'), null);
 });
+
+test('findEmail ignores @-mentions that have a space before the @', () => {
+  // Instagram handle mentions are not emails — a space before @ disqualifies it.
+  assert.strictEqual(findEmail('1/2 of @afterthought.ca'), null);
+  assert.strictEqual(findEmail('run by @brand.co with love'), null);
+  assert.strictEqual(findEmail('collab? dm @some.studio'), null);
+  // A real (glued) email elsewhere in the bio is still found.
+  assert.strictEqual(findEmail('follow @brand or email hi@brand.com'), 'hi@brand.com');
+  // A genuinely glued address (no space before @) is still an email.
+  assert.strictEqual(findEmail('of@afterthought.ca'), 'of@afterthought.ca');
+});

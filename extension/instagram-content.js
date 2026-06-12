@@ -307,10 +307,12 @@
       if (!result.email && bioText) {
         // Common email patterns. {2,24} caps the TLD so the greedy match
         // can't run away; trimAppendedTld below handles the no-separator
-        // case where words get glued onto the TLD.
+        // case where words get glued onto the TLD. The local part must be
+        // glued to the @ (no space before it) so an @-mention preceded by a
+        // word — e.g. "1/2 of @afterthought.ca" — is never read as an email.
         const emailPatterns = [
           /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,24}\b/g,
-          /\b[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,24}\b/g,
+          /\b[A-Za-z0-9._%+-]+@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,24}\b/g,
           /\b[A-Za-z0-9._%+-]+\s*\[\s*at\s*\]\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,24}\b/gi,
           /\b[A-Za-z0-9._%+-]+\s*\(\s*at\s*\)\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,24}\b/gi
         ];

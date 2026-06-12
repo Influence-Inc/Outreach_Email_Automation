@@ -18,7 +18,10 @@ const USER_AGENT =
 
 const EMAIL_REGEXES = [
   /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b/,
-  /\b[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Za-z]{2,24}\b/,
+  // The local part must be glued to the @ — no space before it — so an Instagram
+  // @-mention preceded by a word (e.g. "1/2 of @afterthought.ca") is NOT read as
+  // an email. Whitespace after the @ / around the dot is still tolerated.
+  /\b[A-Za-z0-9._%+-]+@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Za-z]{2,24}\b/,
   /\b[A-Za-z0-9._%+-]+\s*\[\s*at\s*\]\s*[A-Za-z0-9.-]+\s*\.\s*[A-Za-z]{2,24}\b/i,
   /\b[A-Za-z0-9._%+-]+\s*\(\s*at\s*\)\s*[A-Za-z0-9.-]+\s*\.\s*[A-Za-z]{2,24}\b/i,
 ];
