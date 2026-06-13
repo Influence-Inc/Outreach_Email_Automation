@@ -1,6 +1,10 @@
 const db = require('../db');
 const { renderOutreach, renderFollowup } = require('./templates');
 const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
+const { verifyEmail } = require('./emailVerify');
+
+// Pre-send verification is on by default; set EMAIL_VERIFY=0 to disable.
+const verifyEnabled = !/^(0|false|no|off)$/i.test(process.env.EMAIL_VERIFY || '');
 
 // Joins each creator with the active template for their campaign: that
 // campaign's template_id, or whichever template is marked is_default, or
@@ -46,6 +50,25 @@ async function sendOutreach(creatorId) {
   if (!creator) throw new Error(`Creator ${creatorId} not found`);
   if (!creator.email) throw new Error(`Creator ${creatorId} has no email`);
   if (creator.outreach_sent_at) throw new Error(`Outreach already sent to creator ${creatorId}`);
+
+  // Pre-send deliverability check — skip + flag undeliverable scraped addresses
+  // so they don't bounce (bounces wreck sender reputation). Flagged invalids
+  // leave 'email_found', so a re-run won't keep retrying them; fixing the email
+  // in the dashboard re-arms the creator (status resets to 'email_found').
+  if (verifyEnabled) {
+    const verdict = await verifyEmail(creator.email);
+    if (!verdict.valid) {
+      await db.query(
+        `UPDATE creators SET status = 'invalid_email', notes = $2, updated_at = NOW() WHERE id = $1`,
+        [creatorId, `invalid email (${verdict.reason})`],
+      );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'invalid_email', $2)`,
+        [creatorId, { email: creator.email, reason: verdict.reason }],
+      );
+      throw new Error(`email failed verification: ${verdict.reason}`);
+    }
+  }
 
   const { subject, body } = renderOutreach(activeTemplate(creator), templateVars(creator));
   const trackingId = newTrackingId();

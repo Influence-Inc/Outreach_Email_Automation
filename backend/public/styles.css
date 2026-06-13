@@ -128,6 +128,7 @@ th { background: #f9fafb; font-weight: 600; color: #4b5563; }
 .tag.followup_sent { background: #ede9fe; color: #6d28d9; }
 .tag.replied { background: #d1fae5; color: #065f46; }
 .tag.failed { background: #fee2e2; color: #991b1b; }
+.tag.invalid_email { background: #ffedd5; color: #9a3412; }
 
 /* Sidebar nav link to Follow-up Rules page */
 .sidebar-section { margin-top: 24px; }

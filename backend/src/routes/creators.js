@@ -18,6 +18,7 @@ const EVENT_LABELS = {
   email_found: 'Email found',
   failed: 'Send failed',
   negotiation_closed: 'Negotiation closed',
+  invalid_email: 'Email failed verification',
 };
 
 // Event types that make up the per-creator "Rate" timeline (delivery-tracking
@@ -255,7 +256,11 @@ router.patch('/:id', async (req, res, next) => {
 
     if (!updates.length) return res.status(400).json({ error: 'no fields to update' });
     if (body.email) {
-      updates.push(`status = CASE WHEN status = 'pending_extraction' THEN 'email_found' ELSE status END`);
+      // Setting/fixing the email re-arms a creator that had no usable address
+      // (incl. one we flagged 'invalid_email' from a failed verification).
+      updates.push(
+        `status = CASE WHEN status IN ('pending_extraction','no_email','invalid_email') THEN 'email_found' ELSE status END`,
+      );
     }
     updates.push('updated_at = NOW()');
     const row = await db.one(
@@ -346,15 +351,19 @@ router.post('/bulk/send-outreach', async (req, res) => {
     let sent = 0;
     let failed = 0;
     for (const row of pending) {
+      let didSend = false;
       try {
         const r = await sendOutreach(row.id);
         results.push({ id: row.id, ok: true, trackingId: r.trackingId });
         sent += 1;
+        didSend = true;
       } catch (err) {
         results.push({ id: row.id, ok: false, error: err.message });
         failed += 1;
       }
-      if (row !== pending[pending.length - 1]) {
+      // Pace only after an actual send — skipped invalids (and other no-sends)
+      // shouldn't burn the inter-send delay.
+      if (didSend && row !== pending[pending.length - 1]) {
         const baseMs = Number(process.env.SEND_PACING_MS) || 60_000;
         const jitterMs = Math.floor(baseMs * 0.2 * (Math.random() * 2 - 1));
         await new Promise((r) => setTimeout(r, Math.max(0, baseMs + jitterMs)));
