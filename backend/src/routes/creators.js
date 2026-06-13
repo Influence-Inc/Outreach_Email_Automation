@@ -214,8 +214,10 @@ router.patch('/:id', async (req, res, next) => {
     const updates = [];
     const params = [req.params.id];
     for (const f of fields) {
-      if (body[f] != null) {
-        params.push(body[f]);
+      // Present-but-null clears the column (e.g. blanking the email cell);
+      // absent fields are left untouched.
+      if (Object.prototype.hasOwnProperty.call(body, f)) {
+        params.push(body[f] === '' ? null : body[f]);
         updates.push(`${f} = $${params.length}`);
       }
     }
@@ -314,6 +316,17 @@ router.post('/bulk/fetch-email', async (req, res) => {
     console.error('bulk fetch-email failed:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Delete every creator in a campaign (email_events cascade). Guarded by a
+// confirm dialog on the dashboard.
+router.post('/bulk/delete', async (req, res, next) => {
+  try {
+    const { campaign_id } = req.body || {};
+    if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+    const result = await db.query(`DELETE FROM creators WHERE campaign_id = $1`, [campaign_id]);
+    res.json({ ok: true, deleted: result.rowCount });
+  } catch (err) { next(err); }
 });
 
 router.post('/bulk/send-outreach', async (req, res) => {

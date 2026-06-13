@@ -145,7 +145,7 @@ async function selectCampaign(id) {
   await refreshCreators();
 }
 
-function makeEditable(td, { value, placeholder, onSave }) {
+function makeEditable(td, { value, placeholder, onSave, allowEmpty = false }) {
   td.classList.add('editable');
   td.title = 'Click to edit';
   td.addEventListener('click', () => {
@@ -173,8 +173,8 @@ function makeEditable(td, { value, placeholder, onSave }) {
         refreshCreators();
         return;
       }
-      if (!next) {
-        // empty input = treat as cancel; clearing requires deleting the row.
+      if (!next && !allowEmpty) {
+        // empty input = cancel for fields that can't be blank (name, rate…).
         refreshCreators();
         return;
       }
@@ -575,10 +575,11 @@ async function refreshCreators() {
     makeEditable(emailTd, {
       value: r.email || '',
       placeholder: 'creator@email.com',
+      allowEmpty: true, // blanking the cell clears the email
       onSave: (v) =>
         api(`/api/creators/${r.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({ email: v }),
+          body: JSON.stringify({ email: v || null }),
         }),
     });
 
@@ -682,6 +683,28 @@ el('creator-form').addEventListener('submit', async (e) => {
 });
 
 el('refresh-btn').addEventListener('click', refreshCreators);
+
+el('remove-all-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+  const count = c ? c.creator_count : 0;
+  if (!count) { alert('No creators to remove.'); return; }
+  if (!confirm(`Remove ALL ${count} creator(s) from this campaign? This permanently deletes them and cannot be undone.`)) return;
+  const btn = el('remove-all-btn');
+  btn.disabled = true;
+  try {
+    await api('/api/creators/bulk/delete', {
+      method: 'POST',
+      body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
+    });
+    await refreshCreators();
+    await refreshCampaigns();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 el('save-cpm-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
