@@ -35,7 +35,7 @@ function getClient() {
   }
   return _client;
 }
-const model = () => process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
+const model = () => process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
 
 async function callClaudeText(system, user, maxTokens = 1200) {
   const client = getClient();
