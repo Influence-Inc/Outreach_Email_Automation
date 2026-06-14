@@ -14,12 +14,31 @@ function wrapHtml(innerHtml, trackingPixelUrl) {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">${innerHtml}${pixel}</div>`;
 }
 
+// Email Subject headers must be ASCII. "Smart" punctuation that templates or
+// Claude emit — em/en dashes, curly quotes, ellipsis — otherwise lands as raw
+// UTF-8 bytes in the header (which declares no charset) and renders as mojibake
+// like "Ã¢Â€Â“" in many mail clients. Normalize that punctuation to plain ASCII,
+// then RFC 2047-encode anything still non-ASCII (e.g. an accented name) so a
+// subject can never garble.
+function encodeSubject(subject) {
+  const ascii = String(subject == null ? '' : subject)
+    .replace(/[‐-―]/g, '-') // hyphen / figure / en / em / horizontal dashes
+    .replace(/[‘’‚‛]/g, "'") // curly single quotes
+    .replace(/[“”„‟]/g, '"') // curly double quotes
+    .replace(/…/g, '...') // ellipsis
+    .replace(/[  ]/g, ' '); // non-breaking spaces
+  if (/[^\x00-\x7F]/.test(ascii)) {
+    return `=?UTF-8?B?${Buffer.from(ascii, 'utf8').toString('base64')}?=`;
+  }
+  return ascii;
+}
+
 function buildRawMime({ from, to, subject, htmlBody, textBody, inReplyTo, references }) {
   const boundary = `b_${crypto.randomBytes(8).toString('hex')}`;
   const headers = [
     `From: ${from}`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeSubject(subject)}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];
@@ -258,4 +277,4 @@ async function threadHasReply(threadId) {
   return false;
 }
 
-module.exports = { sendEmail, threadHasReply, getLatestInboundText, getThreadMessages, newTrackingId };
+module.exports = { sendEmail, threadHasReply, getLatestInboundText, getThreadMessages, newTrackingId, encodeSubject };
