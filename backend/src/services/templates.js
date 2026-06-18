@@ -1,8 +1,10 @@
 const SENDER_NAME = process.env.SENDER_NAME || 'Jennifer';
 
-// Hardcoded safety-net copy, used only if no email_templates row exists
-// at all (fresh deploy before seeding finished, or all templates deleted).
-const OUTREACH_SUBJECT = 'Paid collaboration with {brandName}';
+// Subject includes {firstName} so the rendered subject differs for every
+// recipient — sidesteps the same-subject bulk-mail fingerprint at Gmail/
+// Outlook. Avoids the word "paid" in the subject (a soft promotional
+// trigger); the commercial nature is still made clear in the body.
+const OUTREACH_SUBJECT = '{firstName} — collab idea from useinfluence.xyz';
 
 const OUTREACH_BODY = `Hi {firstName},
 
@@ -16,7 +18,7 @@ Best,
 ${SENDER_NAME}
 useinfluence.xyz`;
 
-const FOLLOWUP_SUBJECT = 'Re: Paid collaboration with {brandName}';
+const FOLLOWUP_SUBJECT = 'Re: {firstName} — collab idea from useinfluence.xyz';
 
 const FOLLOWUP_BODY = `Hi {firstName},
 
@@ -27,6 +29,14 @@ Happy to send over the brief and rates whenever works for you - even a quick yes
 Best,
 ${SENDER_NAME}
 useinfluence.xyz`;
+
+// Appended at render time when an unsubscribeUrl is supplied.
+// {{grey}}...{{/grey}} is rendered as small grey text in HTML and stripped
+// to plain text by richBody.js — keeps the visible email focused while
+// still being CAN-SPAM/PECR-compliant.
+const UNSUB_FOOTER =
+  `\n\n{{grey}}You're getting this because we found your contact on your public Instagram. ` +
+  `Not interested? [Unsubscribe]({unsubscribeUrl}) and I won't follow up.{{/grey}}`;
 
 // Only substitute placeholders that the caller actually defined. Unknown
 // {...} sequences (e.g. {{grey}} markers used by the rich-body renderer
@@ -41,21 +51,24 @@ function fill(template, vars) {
 
 // `template` is an email_templates row (or null). Renders the outreach email,
 // substituting variables. Falls back to hardcoded defaults if the template
-// doesn't define them.
+// doesn't define them. When `unsubscribeUrl` is supplied in vars, an
+// unsubscribe footer is appended to the body.
 function renderOutreach(template, vars) {
   const tpl = template && template.outreach ? template.outreach : {};
+  const body = (tpl.body || OUTREACH_BODY) + (vars.unsubscribeUrl ? UNSUB_FOOTER : '');
   return {
     subject: fill(tpl.subject || OUTREACH_SUBJECT, vars),
-    body: fill(tpl.body || OUTREACH_BODY, vars),
+    body: fill(body, vars),
   };
 }
 
 function renderFollowup(template, vars, stepIndex = 0) {
   const list = template && Array.isArray(template.followups) ? template.followups : [];
   const tpl = list[stepIndex] || {};
+  const body = (tpl.body || FOLLOWUP_BODY) + (vars.unsubscribeUrl ? UNSUB_FOOTER : '');
   return {
     subject: fill(tpl.subject || FOLLOWUP_SUBJECT, vars),
-    body: fill(tpl.body || FOLLOWUP_BODY, vars),
+    body: fill(body, vars),
   };
 }
 

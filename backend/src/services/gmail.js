@@ -14,6 +14,16 @@ function wrapHtml(innerHtml, trackingPixelUrl) {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">${innerHtml}${pixel}</div>`;
 }
 
+// Open-tracking pixel and unsubscribe endpoints live on a dedicated host so
+// they look like an aligned part of the sending domain rather than a
+// cross-domain remote fetch (a spam signal). Production should set
+// TRACKING_BASE_URL=https://track.useinfluence.xyz. Falls back to
+// PUBLIC_BASE_URL so dev/localhost keeps working.
+function trackingBaseUrl() {
+  const base = process.env.TRACKING_BASE_URL || process.env.PUBLIC_BASE_URL || '';
+  return base.replace(/\/$/, '');
+}
+
 // Email Subject headers must be ASCII. "Smart" punctuation that templates or
 // Claude emit — em/en dashes, curly quotes, ellipsis — otherwise lands as raw
 // UTF-8 bytes in the header (which declares no charset) and renders as mojibake
@@ -33,7 +43,18 @@ function encodeSubject(subject) {
   return ascii;
 }
 
-function buildRawMime({ from, to, subject, htmlBody, textBody, inReplyTo, references }) {
+function buildRawMime({
+  from,
+  replyTo,
+  to,
+  subject,
+  htmlBody,
+  textBody,
+  inReplyTo,
+  references,
+  listUnsubscribeUrl,
+  listUnsubscribeMailto,
+}) {
   const boundary = `b_${crypto.randomBytes(8).toString('hex')}`;
   const headers = [
     `From: ${from}`,
@@ -42,8 +63,21 @@ function buildRawMime({ from, to, subject, htmlBody, textBody, inReplyTo, refere
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];
+  if (replyTo) headers.push(`Reply-To: ${replyTo}`);
   if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`);
   if (references) headers.push(`References: ${references}`);
+  // List-Unsubscribe + one-click POST (RFC 8058). Gmail + Yahoo show the
+  // "Easy Unsubscribe" pip only when both headers are present and the URL
+  // accepts POST without a body.
+  if (listUnsubscribeUrl || listUnsubscribeMailto) {
+    const parts = [];
+    if (listUnsubscribeMailto) parts.push(`<${listUnsubscribeMailto}>`);
+    if (listUnsubscribeUrl) parts.push(`<${listUnsubscribeUrl}>`);
+    headers.push(`List-Unsubscribe: ${parts.join(', ')}`);
+    if (listUnsubscribeUrl) {
+      headers.push('List-Unsubscribe-Post: List-Unsubscribe=One-Click');
+    }
+  }
 
   const mime = [
     headers.join('\r\n'),
@@ -101,7 +135,17 @@ async function getThreadSubject(gmail, threadId) {
   }
 }
 
-async function sendEmail({ to, subject, body, threadId, inReplyTo, references, trackingId }) {
+async function sendEmail({
+  to,
+  subject,
+  body,
+  threadId,
+  inReplyTo,
+  references,
+  trackingId,
+  listUnsubscribeUrl,
+  listUnsubscribeMailto,
+}) {
   const auth = await getAuthorizedClient();
   const gmail = google.gmail({ version: 'v1', auth });
 
@@ -109,8 +153,10 @@ async function sendEmail({ to, subject, body, threadId, inReplyTo, references, t
   const senderEmail = process.env.SENDER_EMAIL;
   const from = `${senderName} <${senderEmail}>`;
 
-  const baseUrl = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-  const pixelUrl = trackingId ? `${baseUrl}/track/open/${trackingId}.png` : null;
+  const baseUrl = trackingBaseUrl();
+  // Unbranded pixel path so naive "/track/" filters don't flag it. Served
+  // by routes/tracking.js under the new mount.
+  const pixelUrl = trackingId && baseUrl ? `${baseUrl}/o/${trackingId}.gif` : null;
   const rendered = renderRichBody(body);
 
   // Keep negotiation / follow-up emails inside the outreach conversation: when
@@ -126,12 +172,15 @@ async function sendEmail({ to, subject, body, threadId, inReplyTo, references, t
 
   const raw = buildRawMime({
     from,
+    replyTo: senderEmail,
     to,
     subject: finalSubject,
     htmlBody: wrapHtml(rendered.html, pixelUrl),
     textBody: rendered.text,
     inReplyTo,
     references,
+    listUnsubscribeUrl,
+    listUnsubscribeMailto,
   });
 
   const res = await gmail.users.messages.send({

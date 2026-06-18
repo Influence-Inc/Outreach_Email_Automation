@@ -2,9 +2,40 @@ const db = require('../db');
 const { renderOutreach, renderFollowup } = require('./templates');
 const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
 const { verifyEmail } = require('./emailVerify');
+const { unsubscribeUrl, unsubscribeMailto } = require('./unsubscribe');
 
 // Pre-send verification is on by default; set EMAIL_VERIFY=0 to disable.
 const verifyEnabled = !/^(0|false|no|off)$/i.test(process.env.EMAIL_VERIFY || '');
+
+// Suppression list lookup. Returns the row (or null). Anyone on this list is
+// silently skipped — they've unsubscribed, bounced, or been manually flagged.
+async function lookupSuppression(email) {
+  if (!email) return null;
+  return db.one(
+    `SELECT email, reason FROM email_suppressions WHERE LOWER(email) = LOWER($1)`,
+    [email],
+  );
+}
+
+// Tracking subdomain (for unsubscribe URL). Same fallback chain as the
+// pixel host in gmail.js: TRACKING_BASE_URL → PUBLIC_BASE_URL.
+function trackingBaseUrl() {
+  const base = process.env.TRACKING_BASE_URL || process.env.PUBLIC_BASE_URL || '';
+  return base.replace(/\/$/, '');
+}
+
+// Build the per-creator List-Unsubscribe / footer values. Returns nullish
+// if UNSUBSCRIBE_SECRET isn't set — the email still sends, just without the
+// unsubscribe affordance (better to deliver than to error out at boot).
+function buildUnsubscribe(creatorId) {
+  if (!process.env.UNSUBSCRIBE_SECRET) return {};
+  const base = trackingBaseUrl();
+  const senderEmail = process.env.SENDER_EMAIL;
+  return {
+    unsubUrl: base ? unsubscribeUrl(base, creatorId) : null,
+    unsubMailto: senderEmail ? unsubscribeMailto(senderEmail, creatorId) : null,
+  };
+}
 
 // Joins each creator with the active template for their campaign: that
 // campaign's template_id, or whichever template is marked is_default, or
@@ -30,11 +61,13 @@ async function loadCreatorContext(creatorId) {
   );
 }
 
-function templateVars(creator) {
+function templateVars(creator, extras = {}) {
   return {
     firstName: creator.first_name || 'there',
     brandName: creator.brand_name,
     campaignName: creator.campaign_name,
+    creatorId: creator.id,
+    ...extras,
   };
 }
 
@@ -50,6 +83,22 @@ async function sendOutreach(creatorId) {
   if (!creator) throw new Error(`Creator ${creatorId} not found`);
   if (!creator.email) throw new Error(`Creator ${creatorId} has no email`);
   if (creator.outreach_sent_at) throw new Error(`Outreach already sent to creator ${creatorId}`);
+
+  // Suppression check. Any address that has unsubscribed / bounced / been
+  // manually flagged is silently skipped — re-mailing them is the fastest
+  // way to wreck domain reputation.
+  const suppressed = await lookupSuppression(creator.email);
+  if (suppressed) {
+    await db.query(
+      `UPDATE creators SET status = 'suppressed', notes = $2, updated_at = NOW() WHERE id = $1`,
+      [creatorId, `suppressed (${suppressed.reason})`],
+    );
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'suppressed', $2)`,
+      [creatorId, { email: creator.email, reason: suppressed.reason }],
+    );
+    throw new Error(`email is on suppression list (${suppressed.reason})`);
+  }
 
   // Pre-send deliverability check — skip + flag undeliverable scraped addresses
   // so they don't bounce (bounces wreck sender reputation). Flagged invalids
@@ -70,11 +119,22 @@ async function sendOutreach(creatorId) {
     }
   }
 
-  const { subject, body } = renderOutreach(activeTemplate(creator), templateVars(creator));
+  const { unsubUrl, unsubMailto } = buildUnsubscribe(creatorId);
+  const { subject, body } = renderOutreach(
+    activeTemplate(creator),
+    templateVars(creator, { unsubscribeUrl: unsubUrl }),
+  );
   const trackingId = newTrackingId();
 
   try {
-    const sent = await sendEmail({ to: creator.email, subject, body, trackingId });
+    const sent = await sendEmail({
+      to: creator.email,
+      subject,
+      body,
+      trackingId,
+      listUnsubscribeUrl: unsubUrl,
+      listUnsubscribeMailto: unsubMailto,
+    });
 
     await db.query(
       `UPDATE creators
@@ -130,6 +190,21 @@ async function sendFollowup(creatorId) {
   if (!creator) throw new Error(`Creator ${creatorId} not found`);
   if (!creator.outreach_sent_at) throw new Error(`Cannot follow up before outreach`);
 
+  // Same suppression check as outreach — if the recipient has unsubscribed
+  // since the original send, do not follow up.
+  const suppressed = await lookupSuppression(creator.email);
+  if (suppressed) {
+    await db.query(
+      `UPDATE creators SET status = 'suppressed', notes = $2, updated_at = NOW() WHERE id = $1`,
+      [creatorId, `suppressed (${suppressed.reason})`],
+    );
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'suppressed', $2)`,
+      [creatorId, { email: creator.email, reason: suppressed.reason, phase: 'followup' }],
+    );
+    return { ok: false, reason: 'suppressed' };
+  }
+
   const steps = resolveFollowupSteps(creator);
   const nextStepIndex = creator.followup_step || 0;
   if (nextStepIndex >= steps.length) {
@@ -144,9 +219,10 @@ async function sendFollowup(creatorId) {
     }
   }
 
+  const { unsubUrl, unsubMailto } = buildUnsubscribe(creatorId);
   const { subject, body } = renderFollowup(
     activeTemplate(creator),
-    templateVars(creator),
+    templateVars(creator, { unsubscribeUrl: unsubUrl }),
     nextStepIndex,
   );
 
@@ -169,6 +245,8 @@ async function sendFollowup(creatorId) {
       inReplyTo: rfc822,
       references: rfc822,
       trackingId,
+      listUnsubscribeUrl: unsubUrl,
+      listUnsubscribeMailto: unsubMailto,
     });
 
     const newStep = nextStepIndex + 1;

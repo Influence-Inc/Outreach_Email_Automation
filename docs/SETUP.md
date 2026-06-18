@@ -113,7 +113,99 @@ into the local DB. Click **Refresh** in the sidebar to re-sync on demand.
 - Public deploy needs HTTPS for the Gmail OAuth callback. Update
   `GOOGLE_REDIRECT_URI` and `PUBLIC_BASE_URL` in `.env`, and add the same
   redirect URI in Google Cloud Credentials.
-- The tracking pixel is served from `${PUBLIC_BASE_URL}/track/open/:id.png`.
-  This must be publicly reachable for opens to register.
+- The tracking pixel is served from `${TRACKING_BASE_URL}/o/:id.gif` (or
+  `${PUBLIC_BASE_URL}` as a fallback). This must be publicly reachable for
+  opens to register.
 - The IG scraper makes outbound requests from your server's IP. If IG starts
   rate-limiting, route through a residential proxy.
+
+## Deliverability (avoiding the spam folder)
+
+Outreach from `jennifer@useinfluence.xyz` can land in spam for two
+independent reasons: **email authentication** (out of this repo's control,
+configured in DNS) and **message hygiene** (handled by this app). Both need
+to be right.
+
+### 1. Move sending onto Google Workspace for `useinfluence.xyz`
+
+If `jennifer@useinfluence.xyz` is currently a **consumer Gmail account with
+a "Send mail as" alias**, the Gmail API signs DKIM with `d=gmail.com` and
+the Return-Path is a `gmail.com` address — so **DMARC alignment with
+`useinfluence.xyz` fails**. Recipients see "via gmail.com" next to the From
+name. This single factor is enough to send most cold outreach to spam.
+
+Fix:
+
+1. Provision `useinfluence.xyz` on Google Workspace.
+2. Move Jennifer's mailbox onto the Workspace tenant.
+3. Re-grant OAuth from `http://localhost:3000/auth/google` while logged in
+   to the Workspace account so the refresh token in `oauth_tokens` belongs
+   to the new account.
+
+### 2. Configure SPF / DKIM / DMARC on `useinfluence.xyz`
+
+Once Workspace is the sending account, publish these DNS records:
+
+- **SPF** (TXT on `@`):
+  ```
+  v=spf1 include:_spf.google.com ~all
+  ```
+- **DKIM**: Workspace Admin Console → Apps → Google Workspace → Gmail →
+  Authenticate email → generate a 2048-bit key. Publish the TXT it
+  shows you at the `google._domainkey` host.
+- **DMARC** (TXT on `_dmarc`):
+  ```
+  v=DMARC1; p=none; rua=mailto:dmarc@useinfluence.xyz
+  ```
+  Start at `p=none` and watch reports for two clean weeks, then ramp to
+  `p=quarantine; pct=25` and eventually `p=reject`.
+
+Verify on a delivered message: "Show original" in Gmail must list
+`dkim=pass header.d=useinfluence.xyz` and `dmarc=pass`. Run
+<https://www.mail-tester.com> and target ≥9/10.
+
+### 3. Aligned tracking subdomain
+
+The open-tracking pixel and the unsubscribe endpoints are served from the
+backend. A cross-domain remote-image fetch on cold mail is a spam signal,
+so point them at a subdomain of your sending domain:
+
+1. Add an A/AAAA/CNAME record for `track.useinfluence.xyz` pointing at the
+   production backend.
+2. Issue a TLS cert for it (Caddy / Let's Encrypt is fine).
+3. Set `TRACKING_BASE_URL=https://track.useinfluence.xyz` in
+   production `.env`.
+
+The pixel URL becomes `https://track.useinfluence.xyz/o/:id.gif` and the
+unsubscribe URL `https://track.useinfluence.xyz/unsubscribe/:id/:token`.
+
+### 4. Unsubscribe (RFC 8058)
+
+Set `UNSUBSCRIBE_SECRET` in `.env` (32+ random bytes). When set, every
+outreach and follow-up carries:
+
+- A `List-Unsubscribe` header with `mailto:` and `https:` URLs and a
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click` companion (the
+  "Easy Unsubscribe" pip in Gmail).
+- A grey footer link in the email body.
+
+POSTing the URL adds the recipient to `email_suppressions`, and future
+`sendOutreach` / `sendFollowup` calls skip them.
+
+### 5. Postmaster Tools + warm-up
+
+Enroll `useinfluence.xyz` in <https://postmaster.google.com>. Watch the
+Domain Reputation, Spam Rate, Authentication, and Encryption dashboards.
+Pause sending if Spam Rate exceeds 0.1%.
+
+If the domain is new (or you've just migrated to Workspace), warm it up:
+
+| Week | Sends/day |
+|------|-----------|
+| 1    | 20        |
+| 2    | 50        |
+| 3    | 100       |
+| 4    | 200       |
+| 5+   | 300       |
+
+Keep `SEND_PACING_MS=60000`. Don't ramp through the table all at once.

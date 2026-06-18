@@ -41,7 +41,14 @@ app.use('/api/creators', negotiation);
 app.use('/api/templates', templates);
 app.use('/api/settings', settings);
 app.use('/auth', auth);
+// Tracking routes are mounted at root so the public pixel + unsubscribe
+// URLs (/o/:id.gif, /unsubscribe/:id/:token) don't carry a "/track/" path
+// segment — naive filters string-match against that. Also mounted under
+// /track for backwards compatibility with any pixel URLs already shipped
+// in inboxes (those use /track/open/:id.png, handled by an alias inside
+// the router).
 app.use('/track', tracking);
+app.use('/', tracking);
 
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 

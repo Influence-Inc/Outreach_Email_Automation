@@ -52,7 +52,7 @@ We'd love the content to be in your natural style, with {brandName} integrated e
 
 Deliverables & Rates
 - Depending on your rate, we'd love to do a 2 or more video package deal.
-- We're keen on exploring a long-term retainer deal. These initial videos would act as a test run, and if things go well, this could turn into a guaranteed monthly brand deal!
+- We're keen on exploring a long-term retainer deal. These initial videos would act as a test run, and if things go well, this could turn into a recurring monthly collaboration!
 - Additionally, through INFLUENCE, we aim to bring you consistent deal flow from other brands we work with.
 
 Platforms

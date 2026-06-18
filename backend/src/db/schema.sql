@@ -150,3 +150,13 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegate_reason   TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegate_question TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegated_at      TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_creators_needs_human ON creators(needs_human) WHERE needs_human;
+
+-- Suppression list. Any address in here is skipped by sendOutreach / sendFollowup.
+-- Populated by the /unsubscribe endpoint (RFC 8058 one-click + GET confirmation
+-- page), by bounce handling, and by manual admin action.
+CREATE TABLE IF NOT EXISTS email_suppressions (
+  email         TEXT PRIMARY KEY,
+  reason        TEXT NOT NULL,                       -- 'unsubscribed' | 'bounced' | 'complained' | 'manual'
+  creator_id    INTEGER REFERENCES creators(id) ON DELETE SET NULL,
+  suppressed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
