@@ -194,16 +194,17 @@ async function handleCreatorReply(creator, replyText, ctx) {
     templates.REPLY2_BODY,
     '',
     'Read the creator\'s plain-text reply and respond with STRICT JSON ONLY (no prose, no markdown fences), exactly this shape:',
-    '{"understanding": string, "action": "shared_rate"|"asking_details"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
+    '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
     '',
     'Rules:',
     '- "shared_rate": the creator stated a rate/budget/price. Put the numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
     '- "counter": the creator pushed back on a prior offer with a different number/terms. Put any numeric amount in quoted_rate. email=null, send_now=false.',
-    `- "asking_details": interested but no rate yet, or asked for details. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", references: ${v.refs}, sign "- ${v.managerName}"). In Timelines, propose the cadence "${v.cadence}" and an approximate posted-by date you compute from today's date for a 2-video package. send_now=true.`,
+    `- "asking_details": the creator is interested but has not yet seen the standard collab pitch. Use this for the FIRST substantive reply when we have not yet sent REPLY 1. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", references: ${v.refs}, sign "- ${v.managerName}"). In Timelines, propose the cadence "${v.cadence}" and an approximate posted-by date you compute from today's date for a 2-video package. send_now=true. quoted_rate=null.`,
+    `- "answer_question": the creator asked a specific factual question about an already-discussed deal. Common topics that ARE safe to answer from the REPLY 1 / REPLY 2 templates and the campaign context above: posting platform (Instagram only, no TikTok/YouTube cross-posting in this deal), content format (Reels), posting cadence ("${v.cadence}"), approximate timeline / posted-by date, creative freedom (yes, no script approval required), exclusivity (none), what we need from them (their rate, then we share a tailored offer; once accepted, posting can begin), who Influence is (a brand-partnerships team — point to references ${v.refs} if asked for examples), payment timing (per the "Payment details" block in REPLY 2: after the post is up and verified). Write a SHORT plain-text reply that (1) directly answers their question in 1-3 sentences using ONLY facts from the templates / campaign context above, then (2) one short follow-up line keeping the negotiation moving — if they have not shared a rate yet, ask for it; if an offer is on the table awaiting their decision, gently nudge for it; otherwise leave the door open. Sign "- ${v.managerName}". send_now=true. quoted_rate=null. NEVER invent specifics that are not in the campaign context, templates, or already-quoted offer — if you would have to guess a number, a date beyond what cadence-math gives you, or any term not in the templates, use "escalate" instead.`,
     `- "accepted": they accepted the offer. Write a short warm acceptance email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "declined": not interested / not available now. Write a brief gracious email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
-    `- "escalate": ANY message you cannot confidently and correctly handle with the templates — a question outside the standard deal terms, an unusual request or situation, a complaint, anything that needs a human decision. Set email=null and send_now=false; a human will take over. When in doubt, escalate rather than guessing.`,
-    `- "other": only a trivial acknowledgement that needs no action. Prefer "escalate" whenever unsure. email=null, send_now=false.`,
+    `- "escalate": use this when (a) the creator asks about money or contractual terms outside what is already in the templates / approved offer (a rate bump, a different payment structure, a usage-rights ask, an NDA, a legal question, a dispute, a complaint); OR (b) the creator's question references specifics not present in the campaign context, templates, or already-quoted offer (a different brand, a different campaign, a custom timeline, a special exception); OR (c) the message is unusual, emotionally heated, or otherwise needs a human decision. email=null, send_now=false; a human will take over. When in doubt about whether you have enough information to answer correctly, escalate — but prefer "answer_question" for benign factual questions the templates DO cover.`,
+    `- "other": only a trivial acknowledgement that needs no action (e.g. "got it, thanks"). email=null, send_now=false.`,
     '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
     `- The creator's first name is "${v.firstName}". The email body must be plain text with line breaks.`,
   ].join('\n');
@@ -483,6 +484,9 @@ async function processReply(creatorId) {
 
   // AI off for this template -> always hand the reply to a human.
   if (!(await aiRepliesEnabledForCreator(creator))) {
+    console.log(
+      `[negotiation] creator ${creator.id}: AI replies disabled on active template, delegating`,
+    );
     await delegate(creator, inbound, 'AI replies are turned off for this template');
     await markHandled();
     return { action: 'delegated', reason: 'ai_off' };
@@ -491,6 +495,11 @@ async function processReply(creatorId) {
   const guidelines = await getGuidelines();
   const ctx = ctxFor(creator, { guidelines });
   const result = await handleCreatorReply(creator, inbound.text, ctx);
+  // Visibility: surface Claude's classification + a snippet of its understanding
+  // so it's obvious from Railway logs whether the model is doing the work.
+  console.log(
+    `[negotiation] creator ${creator.id}: action=${result.action} understanding="${(result.understanding || '').slice(0, 140)}"`,
+  );
 
   // Claude couldn't confidently handle it -> delegate instead of guessing.
   if (result.action === 'escalate' || result.action === 'other') {
@@ -560,6 +569,28 @@ async function applyReply(creator, ctx, result) {
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_declined', $2)`,
         [creator.id, {}],
       );
+      return;
+    }
+    case 'answer_question': {
+      // Direct factual answer about an already-discussed deal. Send the reply
+      // Claude wrote, and PRESERVE the existing negotiation stage — asking a
+      // clarifying question shouldn't regress AWAITING_DECISION back to
+      // AWAITING_RATE. Only set AWAITING_RATE if there's no stage yet.
+      const email = result.email || templates.reply1(v);
+      if (result.send_now !== false) {
+        await sendNegotiationEmail(creator, email, 'reply_qa');
+      }
+      if (!creator.negotiation_status) {
+        await db.query(
+          `UPDATE creators SET negotiation_status = 'AWAITING_RATE', updated_at = NOW() WHERE id = $1`,
+          [creator.id],
+        );
+      } else {
+        await db.query(
+          `UPDATE creators SET updated_at = NOW() WHERE id = $1`,
+          [creator.id],
+        );
+      }
       return;
     }
     default: {
