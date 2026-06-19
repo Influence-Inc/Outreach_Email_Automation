@@ -7,11 +7,15 @@ function newTrackingId() {
   return crypto.randomBytes(12).toString('hex');
 }
 
+// Match Gmail's compose-time HTML wrapper exactly (`<div dir="ltr">`). The
+// previous inline-styled wrapper (font-family/size/line-height/color) is a
+// template fingerprint that hand-typed Gmail messages never have, and content
+// filters use it as a "sent from a marketing platform" signal.
 function wrapHtml(innerHtml, trackingPixelUrl) {
   const pixel = trackingPixelUrl
     ? `<img src="${trackingPixelUrl}" width="1" height="1" alt="" style="display:block;border:0;outline:none;" />`
     : '';
-  return `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">${innerHtml}${pixel}</div>`;
+  return `<div dir="ltr">${innerHtml}${pixel}</div>`;
 }
 
 // Open-tracking pixel and unsubscribe endpoints live on a dedicated host so
