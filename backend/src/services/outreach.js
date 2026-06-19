@@ -3,6 +3,7 @@ const { renderOutreach, renderFollowup } = require('./templates');
 const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
 const { verifyEmail } = require('./emailVerify');
 const { unsubscribeUrl, unsubscribeMailto } = require('./unsubscribe');
+const { varyOutreach } = require('./outreachVary');
 
 // Pre-send verification is on by default; set EMAIL_VERIFY=0 to disable.
 const verifyEnabled = !/^(0|false|no|off)$/i.test(process.env.EMAIL_VERIFY || '');
@@ -120,10 +121,11 @@ async function sendOutreach(creatorId) {
   }
 
   const { unsubUrl, unsubMailto } = buildUnsubscribe(creatorId);
-  const { subject, body } = renderOutreach(
+  const rendered = renderOutreach(
     activeTemplate(creator),
     templateVars(creator, { unsubscribeUrl: unsubUrl }),
   );
+  const { subject, body } = await varyOutreach(rendered);
   const trackingId = newTrackingId();
 
   try {
