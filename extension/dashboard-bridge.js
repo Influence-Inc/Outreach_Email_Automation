@@ -13,12 +13,16 @@
 
   // Only the dashboard has these elements — bail immediately on every other site.
   const isDashboard =
-    document.getElementById('brand-tree') || document.getElementById('run-extension-btn');
+    document.getElementById('brand-tree') ||
+    document.getElementById('run-extension-btn') ||
+    document.getElementById('send-via-extension-btn');
   if (!isDashboard) return;
 
   const PAGE_TO_BG = {
     OEA_RUN_SCRAPE_QUEUE: 'runScrapeQueue',
     OEA_ABORT_SCRAPE_QUEUE: 'abortScrapeQueue',
+    OEA_RUN_SEND_QUEUE: 'runSendQueue',
+    OEA_ABORT_SEND_QUEUE: 'abortSendQueue',
   };
 
   // Announce extension presence so the page can tell whether it's installed.
@@ -63,6 +67,12 @@
     if (msg.action === 'scrapeQueueProgress') {
       window.postMessage(
         { type: 'OEA_SCRAPE_PROGRESS', ...msg.payload },
+        window.location.origin,
+      );
+    }
+    if (msg.action === 'sendQueueProgress') {
+      window.postMessage(
+        { type: 'OEA_SEND_PROGRESS', ...msg.payload },
         window.location.origin,
       );
     }

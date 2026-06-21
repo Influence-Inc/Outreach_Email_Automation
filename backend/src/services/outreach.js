@@ -1,6 +1,8 @@
+const { google } = require('googleapis');
 const db = require('../db');
 const { renderOutreach, renderFollowup } = require('./templates');
 const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
+const { getAuthorizedClient } = require('./oauth');
 const { verifyEmail } = require('./emailVerify');
 const { unsubscribeUrl, unsubscribeMailto } = require('./unsubscribe');
 const { varyOutreach } = require('./outreachVary');
@@ -79,15 +81,21 @@ function activeTemplate(creator) {
   };
 }
 
-async function sendOutreach(creatorId) {
+// Render + pre-send checks, without actually sending. Used by both sendOutreach
+// (the Gmail-API path) and the /prepare-outreach route (the extension path).
+// Returns { ok: true, ...payload } when the recipient is sendable, or
+// { ok: false, skipReason, message } when suppression or email-verification
+// rejects the recipient. Side effects on rejection match the API path
+// (status flip + email_event row) so a bulk run leaves the same trail no
+// matter which transport sent the batch.
+async function prepareOutreach(creatorId) {
   const creator = await loadCreatorContext(creatorId);
   if (!creator) throw new Error(`Creator ${creatorId} not found`);
   if (!creator.email) throw new Error(`Creator ${creatorId} has no email`);
-  if (creator.outreach_sent_at) throw new Error(`Outreach already sent to creator ${creatorId}`);
+  if (creator.outreach_sent_at) {
+    return { ok: false, skipReason: 'already_sent', message: `Outreach already sent to creator ${creatorId}` };
+  }
 
-  // Suppression check. Any address that has unsubscribed / bounced / been
-  // manually flagged is silently skipped — re-mailing them is the fastest
-  // way to wreck domain reputation.
   const suppressed = await lookupSuppression(creator.email);
   if (suppressed) {
     await db.query(
@@ -98,13 +106,9 @@ async function sendOutreach(creatorId) {
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'suppressed', $2)`,
       [creatorId, { email: creator.email, reason: suppressed.reason }],
     );
-    throw new Error(`email is on suppression list (${suppressed.reason})`);
+    return { ok: false, skipReason: 'suppressed', message: `email is on suppression list (${suppressed.reason})` };
   }
 
-  // Pre-send deliverability check — skip + flag undeliverable scraped addresses
-  // so they don't bounce (bounces wreck sender reputation). Flagged invalids
-  // leave 'email_found', so a re-run won't keep retrying them; fixing the email
-  // in the dashboard re-arms the creator (status resets to 'email_found').
   if (verifyEnabled) {
     const verdict = await verifyEmail(creator.email);
     if (!verdict.valid) {
@@ -116,7 +120,7 @@ async function sendOutreach(creatorId) {
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'invalid_email', $2)`,
         [creatorId, { email: creator.email, reason: verdict.reason }],
       );
-      throw new Error(`email failed verification: ${verdict.reason}`);
+      return { ok: false, skipReason: 'invalid_email', message: `email failed verification: ${verdict.reason}` };
     }
   }
 
@@ -127,10 +131,30 @@ async function sendOutreach(creatorId) {
   );
   const { subject, body } = await varyOutreach(rendered);
   const trackingId = newTrackingId();
+  const base = trackingBaseUrl();
+  const trackingPixelUrl = base ? `${base}/o/${trackingId}.gif` : null;
+
+  return {
+    ok: true,
+    creator,
+    to: creator.email,
+    subject,
+    body,
+    trackingId,
+    trackingPixelUrl,
+    unsubUrl,
+    unsubMailto,
+  };
+}
+
+async function sendOutreach(creatorId) {
+  const prep = await prepareOutreach(creatorId);
+  if (!prep.ok) throw new Error(prep.message);
+  const { creator, to, subject, body, trackingId, unsubUrl, unsubMailto } = prep;
 
   try {
     const sent = await sendEmail({
-      to: creator.email,
+      to,
       subject,
       body,
       trackingId,
@@ -175,6 +199,99 @@ async function sendOutreach(creatorId) {
     );
     throw err;
   }
+}
+
+// Locate a Gmail Sent message by the unique trackingId baked into the body's
+// pixel <img src=…> URL. Gmail's full-text index covers HTML content (including
+// URL text), and the 24-hex trackingId is unique per send, so this returns at
+// most one match. Used by the extension path: after the user's local Gmail UI
+// sends the message, we read the Sent folder via the API (same OAuth mailbox)
+// to recover the gmailMessageId / threadId / rfc822MessageId — which the
+// follow-up + negotiation flows already use for threading.
+//
+// Gmail's Sent indexing can lag a few seconds after a UI send, so this is
+// meant to be polled with backoff by the caller.
+async function locateExtensionSent({ trackingId, sentAfterEpochMs }) {
+  if (!trackingId) throw new Error('trackingId required');
+  const auth = await getAuthorizedClient();
+  const gmail = google.gmail({ version: 'v1', auth });
+  // `after:` takes seconds since epoch. Subtract 60s of slack so a clock skew
+  // between the backend and the browser doesn't push our message out of range.
+  const afterSec = sentAfterEpochMs
+    ? Math.max(0, Math.floor(sentAfterEpochMs / 1000) - 60)
+    : 0;
+  const q = afterSec
+    ? `in:sent "${trackingId}" after:${afterSec}`
+    : `in:sent "${trackingId}"`;
+  const list = await gmail.users.messages.list({ userId: 'me', q, maxResults: 5 });
+  const messages = list.data.messages || [];
+  if (!messages.length) return { found: false };
+  // Pick the newest match (closest to "just now"). messages.list returns
+  // newest-first by default.
+  const msgId = messages[0].id;
+  const full = await gmail.users.messages.get({
+    userId: 'me',
+    id: msgId,
+    format: 'metadata',
+    metadataHeaders: ['Message-ID'],
+  });
+  const headers = (full.data.payload && full.data.payload.headers) || [];
+  const rfc822 = headers.find((h) => /^Message-ID$/i.test(h.name));
+  return {
+    found: true,
+    gmailMessageId: full.data.id,
+    threadId: full.data.threadId,
+    rfc822MessageId: rfc822 ? rfc822.value : null,
+  };
+}
+
+// Record an extension-sent outreach after the locate succeeded (or timed out).
+// Mirrors the DB writes sendOutreach does on the API path so follow-ups and
+// negotiation reuse the same threading + tracking-pixel plumbing. When the
+// locate timed out, gmailMessageId/threadId/rfc822MessageId are null; the row
+// still flips to outreach_sent (so we don't double-send), but we also emit a
+// 'thread_unmatched' event so the admin can see threading was lost on this one.
+async function markExtensionOutreachSent(creatorId, { trackingId, gmailMessageId, threadId, rfc822MessageId, subject }) {
+  if (!trackingId) throw new Error('trackingId required');
+  const creator = await loadCreatorContext(creatorId);
+  if (!creator) throw new Error(`Creator ${creatorId} not found`);
+  if (creator.outreach_sent_at) {
+    return { ok: true, alreadyMarked: true };
+  }
+
+  await db.query(
+    `UPDATE creators
+     SET status = 'outreach_sent',
+         outreach_message_id = $2,
+         outreach_thread_id = $3,
+         outreach_sent_at = NOW(),
+         updated_at = NOW()
+     WHERE id = $1`,
+    [creatorId, trackingId, threadId || null],
+  );
+
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, message_id, detail)
+     VALUES ($1, 'sent_outreach', $2, $3)`,
+    [creatorId, trackingId, {
+      via: 'extension',
+      gmailMessageId: gmailMessageId || null,
+      threadId: threadId || null,
+      rfc822MessageId: rfc822MessageId || null,
+      subject: subject || null,
+      templateId: creator.template_id || null,
+      templateName: creator.template_name || null,
+    }],
+  );
+
+  if (!threadId) {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'thread_unmatched', $2)`,
+      [creatorId, { trackingId, reason: 'gmail_sent_lookup_failed' }],
+    );
+  }
+
+  return { ok: true, threadId: threadId || null };
 }
 
 // Returns the list of follow-up steps the campaign should run. Falls back
@@ -302,4 +419,12 @@ async function markReplied(creatorId) {
   );
 }
 
-module.exports = { sendOutreach, sendFollowup, markReplied, resolveFollowupSteps };
+module.exports = {
+  sendOutreach,
+  sendFollowup,
+  markReplied,
+  resolveFollowupSteps,
+  prepareOutreach,
+  locateExtensionSent,
+  markExtensionOutreachSent,
+};

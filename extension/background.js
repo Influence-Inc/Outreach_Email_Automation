@@ -60,8 +60,10 @@ chrome.runtime.onInstalled.addListener(() => {
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'composeInGmail') {
-    composeEmailInGmail(request.data).then(success => {
-      sendResponse({ success });
+    composeEmailInGmail(request.data).then((result) => {
+      // result is {success, error?}; unwrap so popup.js's response.success
+      // check still gets a plain boolean.
+      sendResponse({ success: !!(result && result.success), error: result && result.error });
     });
     return true; // Keep channel open for async response
   }
@@ -73,6 +75,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.action === 'abortScrapeQueue') {
     scrapeQueueState.abort = true;
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (request.action === 'runSendQueue') {
+    runSendQueue(request.payload || {}, sender)
+      .then((summary) => sendResponse({ ok: true, summary }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (request.action === 'abortSendQueue') {
+    sendQueueState.abort = true;
     sendResponse({ ok: true });
     return true;
   }
@@ -325,6 +338,193 @@ async function runScrapeQueue(payload, sender) {
   return summary;
 }
 
+// ---------------------------------------------------------------------------
+// Send queue runner: for each pending creator, ask the backend for a rendered
+// outreach (subject + body + trackingId), drive Gmail's compose+send UI, then
+// poll the backend's Gmail-API search to recover the threadId / message-id so
+// follow-ups and negotiation can thread normally. Random jitter between sends.
+// ---------------------------------------------------------------------------
+
+const sendQueueState = {
+  running: false,
+  abort: false,
+};
+
+async function emitSendProgress(senderTabId, payload) {
+  if (senderTabId == null) return;
+  try {
+    await chrome.tabs.sendMessage(senderTabId, {
+      action: 'sendQueueProgress',
+      payload,
+    });
+  } catch (err) {
+    // Dashboard tab closed; not fatal.
+  }
+}
+
+async function backendPost(apiBase, path, body) {
+  const resp = await fetch(`${apiBase}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  let json = null;
+  try { json = await resp.json(); } catch {}
+  if (!resp.ok) {
+    const detail = (json && (json.error || json.message)) || `HTTP ${resp.status}`;
+    throw new Error(detail);
+  }
+  return json || {};
+}
+
+// Gmail's Sent indexing lags a few seconds after a UI send. Poll the backend's
+// locate endpoint with backoff until it finds the message (so we can record
+// the threadId for future follow-ups) or until we give up.
+async function locateSentWithBackoff(apiBase, creatorId, trackingId, sentAfter) {
+  const delays = [2000, 3000, 5000, 8000, 12000]; // ~30s total
+  let lastResult = { found: false };
+  for (const d of delays) {
+    await sleep(d);
+    try {
+      lastResult = await backendPost(
+        apiBase,
+        `/api/creators/${creatorId}/locate-extension-sent`,
+        { trackingId, sentAfter },
+      );
+    } catch (err) {
+      lastResult = { found: false, error: err.message };
+    }
+    if (lastResult && lastResult.found) return lastResult;
+    if (sendQueueState.abort) return lastResult;
+  }
+  return lastResult;
+}
+
+async function runSendQueue(payload, sender) {
+  const { apiBase, creators, pacingMs, spreadMs } = payload;
+  const senderTabId = sender && sender.tab && sender.tab.id;
+
+  if (!apiBase || !Array.isArray(creators) || !creators.length) {
+    throw new Error('invalid payload: apiBase + non-empty creators[] required');
+  }
+  if (sendQueueState.running) {
+    throw new Error('send queue already running');
+  }
+
+  sendQueueState.running = true;
+  sendQueueState.abort = false;
+
+  // 90s ± 60s default → uniform random 60-150s between sends. Caller can
+  // override per-batch from the dashboard.
+  const pace = Number.isFinite(pacingMs) ? pacingMs : 90_000;
+  const spread = Number.isFinite(spreadMs) ? spreadMs : 60_000;
+  const total = creators.length;
+  const summary = { total, processed: 0, sent: 0, skipped: 0, errors: 0 };
+
+  await emitSendProgress(senderTabId, { event: 'start', total });
+
+  try {
+    for (let i = 0; i < creators.length; i++) {
+      if (sendQueueState.abort) {
+        await emitSendProgress(senderTabId, { event: 'aborted', index: i, total });
+        break;
+      }
+      const creator = creators[i];
+      const index = i + 1;
+      await emitSendProgress(senderTabId, {
+        event: 'creator-start',
+        index,
+        total,
+        creatorId: creator.id,
+        label: creator.label || `creator ${creator.id}`,
+      });
+
+      let outcome = 'error';
+      let error = null;
+      let sentMeta = null;
+      let burnDelay = true;
+
+      try {
+        // 1. Render + suppression/verify on the backend; we get back the
+        //    subject/body/pixel URL/trackingId — no DB writes yet.
+        const prep = await backendPost(apiBase, `/api/creators/${creator.id}/prepare-outreach`, {});
+        if (!prep.ok) {
+          outcome = 'skipped';
+          error = prep.skipReason || 'unknown skip';
+          burnDelay = false; // skipped creators shouldn't burn the inter-send delay
+        } else {
+          // 2. Open / focus Gmail, fill compose with the rendered email +
+          //    tracking pixel, click Send, confirm the dialog closed.
+          const sentAt = Date.now();
+          const composeResult = await composeEmailInGmail({
+            to: prep.to,
+            subject: prep.subject,
+            body: prep.body,
+            trackingPixelUrl: prep.trackingPixelUrl || null,
+            autoSend: true,
+          });
+          if (!composeResult || !composeResult.success) {
+            throw new Error((composeResult && composeResult.error) || 'compose/send failed');
+          }
+
+          // 3. Poll Gmail's Sent folder (via the backend's API search) by the
+          //    unique trackingId to recover the threadId + message-ids so the
+          //    follow-up + negotiation scheduler can thread later replies.
+          const located = await locateSentWithBackoff(apiBase, creator.id, prep.trackingId, sentAt);
+
+          // 4. Mark the creator as outreach_sent regardless of whether locate
+          //    succeeded — we don't want a doubly-charged delivery. If locate
+          //    timed out, mark-outreach-sent records 'thread_unmatched' so the
+          //    admin can see threading was lost on this one.
+          await backendPost(apiBase, `/api/creators/${creator.id}/mark-outreach-sent`, {
+            trackingId: prep.trackingId,
+            gmailMessageId: located && located.found ? located.gmailMessageId : null,
+            threadId: located && located.found ? located.threadId : null,
+            rfc822MessageId: located && located.found ? located.rfc822MessageId : null,
+            subject: prep.subject,
+          });
+
+          outcome = 'sent';
+          sentMeta = {
+            trackingId: prep.trackingId,
+            threaded: !!(located && located.found),
+          };
+        }
+      } catch (err) {
+        error = err.message;
+        outcome = 'error';
+      }
+
+      summary.processed += 1;
+      if (outcome === 'sent') summary.sent += 1;
+      else if (outcome === 'skipped') summary.skipped += 1;
+      else summary.errors += 1;
+
+      await emitSendProgress(senderTabId, {
+        event: 'creator-done',
+        index,
+        total,
+        creatorId: creator.id,
+        label: creator.label || `creator ${creator.id}`,
+        outcome,
+        error,
+        sentMeta,
+      });
+
+      if (i < creators.length - 1 && !sendQueueState.abort && burnDelay) {
+        await sleep(jittered(pace, spread));
+      }
+    }
+
+    await emitSendProgress(senderTabId, { event: 'done', summary });
+  } finally {
+    sendQueueState.running = false;
+    sendQueueState.abort = false;
+  }
+
+  return summary;
+}
+
 // Open Gmail and compose email
 async function composeEmailInGmail(emailData) {
   try {
@@ -366,26 +566,36 @@ async function composeEmailInGmail(emailData) {
     // Wait a bit more to ensure storage is saved
     await new Promise(resolve => setTimeout(resolve, 300));
     
-    // Inject and execute content script to compose email
+    // Inject and execute content script to compose email. The injected
+    // function returns {success, error} — we propagate that so callers (the
+    // popup as well as the send queue) can react to compose / auto-send
+    // failures instead of silently treating every attempt as a success.
     try {
-      await chrome.scripting.executeScript({
+      const results = await chrome.scripting.executeScript({
         target: { tabId: gmailTab.id },
         func: composeEmailFromData,
-        args: [emailData]
+        args: [emailData],
       });
+      const r = results && results[0] && results[0].result;
+      if (r && typeof r === 'object') return r;
+      return { success: true };
     } catch (err) {
       console.error('Script injection failed, trying alternative method:', err);
-      // Alternative: send message to existing content script
-      await chrome.tabs.sendMessage(gmailTab.id, {
-        action: 'composeEmail',
-        data: emailData
-      });
+      // Alternative: send message to existing content script. The content-script
+      // fallback path doesn't yet do autoSend; only the popup flow uses it.
+      try {
+        await chrome.tabs.sendMessage(gmailTab.id, {
+          action: 'composeEmail',
+          data: emailData,
+        });
+        return { success: true, viaFallback: true };
+      } catch (e2) {
+        return { success: false, error: 'inject + fallback both failed: ' + e2.message };
+      }
     }
-    
-    return true;
   } catch (error) {
     console.error('Error composing in Gmail:', error);
-    return false;
+    return { success: false, error: error.message };
   }
 }
 
@@ -562,38 +772,116 @@ function composeEmailFromData(emailData) {
       if (bodyField) {
         bodyField.focus();
         await new Promise(resolve => setTimeout(resolve, 300));
-        
+
         // Clear any existing content
         bodyField.innerHTML = '';
-        
+
         // Convert markdown-style links to HTML
         let processedBody = body;
         // Match [text](url) pattern and convert to <a href="url">text</a>
         processedBody = processedBody.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-        
+
         // Convert newlines to <br> tags
         processedBody = processedBody.replace(/\n/g, '<br>');
-        
+
+        // Append the tracking pixel so opens still get logged on extension-sent
+        // outreach. The backend's /o/<trackingId>.gif endpoint is the same one
+        // the Gmail-API path uses; the pixel here just rides along inside the
+        // body that the recipient's mail client renders.
+        if (emailData.trackingPixelUrl) {
+          processedBody += `<img src="${emailData.trackingPixelUrl}" width="1" height="1" alt="" style="display:block;border:0;outline:none;" />`;
+        }
+
         // Insert HTML content
         bodyField.innerHTML = processedBody;
-        
+
         // Trigger input event
         bodyField.dispatchEvent(new Event('input', { bubbles: true }));
-        
+
         console.log('Email composed successfully!');
       } else {
         console.error('Body field not found');
+        return { success: false, error: 'body field not found' };
       }
-      
+
+      // Auto-send path (extension queue). Click Gmail's Send button, handle the
+      // "send without subject?" / similar confirmation modals, then wait for the
+      // compose dialog to disappear as the sent signal.
+      if (emailData.autoSend) {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        // Scope the search to the compose dialog so we can't accidentally match
+        // "Send feedback" in the sidebar or a "Send & Archive" reply button.
+        let composeDialog = null;
+        for (const d of document.querySelectorAll('div[role="dialog"]')) {
+          if (d.querySelector('input[name="subjectbox"]')) {
+            composeDialog = d;
+            break;
+          }
+        }
+        if (!composeDialog) {
+          return { success: false, error: 'compose dialog not found at send time' };
+        }
+        const sendSelectors = [
+          'div[role="button"][data-tooltip^="Send"]',
+          'div[role="button"][aria-label^="Send"]',
+          'div[role="button"][data-tooltip*="(Ctrl-Enter)"]',
+          'div[aria-label*="Send"]',
+        ];
+        let sendBtn = null;
+        for (const sel of sendSelectors) {
+          sendBtn = composeDialog.querySelector(sel);
+          if (sendBtn) break;
+        }
+        if (!sendBtn) {
+          return { success: false, error: 'send button not found' };
+        }
+        sendBtn.click();
+
+        // If Gmail pops a confirmation modal (no subject, attached-files warning,
+        // etc.), click its primary "OK" / "Send" button.
+        await new Promise((r) => setTimeout(r, 400));
+        const modal = document.querySelector('div[role="alertdialog"]');
+        if (modal) {
+          const primaryBtn = modal.querySelector('button[name="ok"], button[name="default"], div[role="button"]');
+          if (primaryBtn) primaryBtn.click();
+        }
+
+        // Wait up to 8s for the compose dialog to disappear (sent confirmation).
+        const dialogSelector = 'div[role="dialog"]';
+        const start = Date.now();
+        while (Date.now() - start < 8000) {
+          await new Promise((r) => setTimeout(r, 200));
+          const dialogs = document.querySelectorAll(dialogSelector);
+          // Compose dialogs contain a Subject input. Filter to those, since
+          // Gmail also opens transient dialogs (notifications, etc.).
+          let composeStillOpen = false;
+          for (const d of dialogs) {
+            if (d.querySelector('input[name="subjectbox"]')) {
+              composeStillOpen = true;
+              break;
+            }
+          }
+          if (!composeStillOpen) {
+            return { success: true };
+          }
+        }
+        return { success: false, error: 'compose dialog still open 8s after send click' };
+      }
+
+      return { success: true };
     } catch (error) {
       console.error('Error in compose execution:', error);
+      return { success: false, error: String(error && error.message || error) };
     }
   }
-  
-  // Execute with delay to ensure page is ready
-  setTimeout(() => {
-    executeCompose();
-  }, 1000);
+
+  // Wrap so executeScript() awaits the full compose+send sequence and the
+  // background queue gets a structured result back instead of a bare boolean.
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      executeCompose().then(resolve).catch((err) => resolve({ success: false, error: String(err && err.message || err) }));
+    }, 1000);
+  });
 }
 
 // Listen for alarms to check for pending follow-ups

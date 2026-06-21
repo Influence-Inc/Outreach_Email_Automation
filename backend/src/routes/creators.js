@@ -1,6 +1,11 @@
 const express = require('express');
 const db = require('../db');
-const { sendOutreach } = require('../services/outreach');
+const {
+  sendOutreach,
+  prepareOutreach,
+  locateExtensionSent,
+  markExtensionOutreachSent,
+} = require('../services/outreach');
 const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const { getThreadMessages } = require('../services/gmail');
@@ -433,6 +438,63 @@ router.post('/:id/fetch-email', async (req, res) => {
 router.post('/:id/send-outreach', async (req, res, next) => {
   try {
     const result = await sendOutreach(req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Extension-driven send path. The browser extension calls these three routes
+// per creator: prepare → (compose + click Send in Gmail UI) → locate → mark.
+// Together they replace the Gmail-API send while keeping the same threading +
+// tracking-pixel plumbing that follow-ups and negotiation rely on.
+
+router.post('/:id/prepare-outreach', async (req, res) => {
+  try {
+    const prep = await prepareOutreach(req.params.id);
+    if (!prep.ok) {
+      // 200 with skipReason — the queue records-and-skips without burning a
+      // delay, instead of treating the rejection as a fatal HTTP error.
+      return res.json({ ok: false, skipReason: prep.skipReason, message: prep.message });
+    }
+    res.json({
+      ok: true,
+      to: prep.to,
+      subject: prep.subject,
+      body: prep.body,
+      trackingId: prep.trackingId,
+      trackingPixelUrl: prep.trackingPixelUrl,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/:id/locate-extension-sent', async (req, res) => {
+  try {
+    const { trackingId, sentAfter } = req.body || {};
+    if (!trackingId) return res.status(400).json({ error: 'trackingId required' });
+    const result = await locateExtensionSent({
+      trackingId,
+      sentAfterEpochMs: Number(sentAfter) || null,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:id/mark-outreach-sent', async (req, res) => {
+  try {
+    const { trackingId, gmailMessageId, threadId, rfc822MessageId, subject } = req.body || {};
+    if (!trackingId) return res.status(400).json({ error: 'trackingId required' });
+    const result = await markExtensionOutreachSent(req.params.id, {
+      trackingId,
+      gmailMessageId,
+      threadId,
+      rfc822MessageId,
+      subject,
+    });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
