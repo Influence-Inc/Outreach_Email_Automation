@@ -339,6 +339,11 @@ async function countSentNegotiation(creatorId) {
 }
 
 async function sendNegotiationEmail(creator, email, kind) {
+  // Mint a tracking id and pass it into sendEmail so the body gets the same
+  // open-tracking pixel that outreach/follow-ups use. The id also goes into
+  // email_events.message_id so the thread route can link this exact email to
+  // its 'opened' rows for the per-message read-receipt ticks.
+  const trackingId = gmail.newTrackingId();
   let detail = { kind, subject: email.subject };
   if (isDryRun()) {
     console.log(`[negotiation][DRY_RUN] -> ${creator.email} (${kind}): ${email.subject}\n${email.body}\n`);
@@ -352,6 +357,7 @@ async function sendNegotiationEmail(creator, email, kind) {
       threadId: creator.outreach_thread_id || undefined,
       inReplyTo: rfc || undefined,
       references: rfc || undefined,
+      trackingId,
     });
     detail = {
       ...detail,
@@ -361,8 +367,8 @@ async function sendNegotiationEmail(creator, email, kind) {
     };
   }
   await db.query(
-    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'sent_negotiation', $2)`,
-    [creator.id, detail],
+    `INSERT INTO email_events (creator_id, type, message_id, detail) VALUES ($1, 'sent_negotiation', $2, $3)`,
+    [creator.id, trackingId, detail],
   );
   await db.query(
     `UPDATE creators SET last_negotiation_email_at = NOW(), updated_at = NOW() WHERE id = $1`,
