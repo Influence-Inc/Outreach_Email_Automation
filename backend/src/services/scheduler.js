@@ -1,7 +1,16 @@
 const db = require('../db');
-const { sendFollowup, markReplied, resolveFollowupSteps } = require('./outreach');
+const {
+  sendFollowup,
+  markReplied,
+  resolveFollowupSteps,
+  backfillExtensionThread,
+} = require('./outreach');
 const { threadHasReply } = require('./gmail');
 const negotiation = require('./negotiation');
+
+// Cap thread-recovery lookups per tick so a large backlog can't exhaust the
+// Gmail API quota in one pass; the next tick continues where this left off.
+const THREAD_RECOVERY_PER_TICK = 25;
 
 const legacyDelayHours = () => Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
 const intervalMs = () =>
@@ -16,6 +25,32 @@ async function checkRepliesAndFollowups() {
   if (running) return;
   running = true;
   try {
+    // Recover threads for extension-sent creators whose send-time Gmail Sent
+    // lookup failed (outreach_thread_id left NULL). Without this they're
+    // invisible to the reply check below — and therefore to Claude. needs_human
+    // creators are excluded: their NULL thread means a genuinely gone thread
+    // (e.g. workspace migration), not a not-yet-indexed one. Runs first so a
+    // recovered thread is reply-checked in the same tick.
+    const stuck = await db.many(
+      `SELECT id FROM creators
+       WHERE status IN ('outreach_sent', 'followup_sent')
+         AND outreach_thread_id IS NULL
+         AND outreach_message_id IS NOT NULL
+         AND needs_human = FALSE
+       ORDER BY outreach_sent_at ASC
+       LIMIT ${THREAD_RECOVERY_PER_TICK}`,
+    );
+    for (const c of stuck) {
+      try {
+        const r = await backfillExtensionThread(c.id);
+        if (r.ok) {
+          console.log(`[scheduler] recovered Gmail thread for creator ${c.id} (extension send)`);
+        }
+      } catch (err) {
+        console.error(`thread recovery failed for creator ${c.id}:`, err.message);
+      }
+    }
+
     // Refresh reply status for anything still in outreach_sent.
     const sentOutreach = await db.many(
       `SELECT id, outreach_thread_id FROM creators

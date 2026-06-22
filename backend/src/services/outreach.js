@@ -294,6 +294,50 @@ async function markExtensionOutreachSent(creatorId, { trackingId, gmailMessageId
   return { ok: true, threadId: threadId || null };
 }
 
+// Self-heal for the extension-send path. When the post-send Gmail Sent-folder
+// lookup times out, a creator is left with outreach_thread_id = NULL — which
+// makes them invisible to the scheduler's reply detection (and therefore to the
+// Claude negotiation flow). Gmail's Sent indexing always catches up eventually,
+// so the scheduler calls this every tick for stuck creators to recover the
+// thread id and re-arm reply detection. Idempotent: the UPDATE is guarded on
+// outreach_thread_id IS NULL, and a found thread writes a 'thread_recovered'
+// audit event. Returns { ok, threadId } on success, { ok: false } otherwise.
+async function backfillExtensionThread(creatorId) {
+  const creator = await db.one(
+    `SELECT id, outreach_message_id, outreach_thread_id, outreach_sent_at
+     FROM creators WHERE id = $1`,
+    [creatorId],
+  );
+  if (!creator) return { ok: false, reason: 'gone' };
+  if (creator.outreach_thread_id) return { ok: false, reason: 'already_threaded' };
+  if (!creator.outreach_message_id) return { ok: false, reason: 'no_tracking_id' };
+
+  const located = await locateExtensionSent({
+    trackingId: creator.outreach_message_id,
+    sentAfterEpochMs: creator.outreach_sent_at
+      ? new Date(creator.outreach_sent_at).getTime()
+      : null,
+  });
+  if (!located.found) return { ok: false, reason: 'not_indexed_yet' };
+
+  await db.query(
+    `UPDATE creators
+     SET outreach_thread_id = $2, updated_at = NOW()
+     WHERE id = $1 AND outreach_thread_id IS NULL`,
+    [creatorId, located.threadId],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, message_id, detail)
+     VALUES ($1, 'thread_recovered', $2, $3)`,
+    [creatorId, creator.outreach_message_id, {
+      threadId: located.threadId,
+      gmailMessageId: located.gmailMessageId,
+      rfc822MessageId: located.rfc822MessageId,
+    }],
+  );
+  return { ok: true, threadId: located.threadId };
+}
+
 // Returns the list of follow-up steps the campaign should run. Falls back
 // to one step at FOLLOWUP_DELAY_HOURS if the active template has none —
 // matches the pre-template behaviour.
@@ -427,4 +471,5 @@ module.exports = {
   prepareOutreach,
   locateExtensionSent,
   markExtensionOutreachSent,
+  backfillExtensionThread,
 };
