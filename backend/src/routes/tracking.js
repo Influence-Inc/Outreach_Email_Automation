@@ -24,10 +24,15 @@ router.get('/o/:trackingId.gif', async (req, res) => {
 
   // Log after responding so the pixel always returns fast.
   try {
+    // Look the creator up via the email_events row that recorded the send.
+    // Every tracked send (outreach, follow-up, negotiation) writes message_id
+    // = trackingId on its row, so this matches all of them with one query and
+    // automatically picks up future kinds without code changes here.
     const creator = await db.one(
-      `SELECT id FROM creators
-       WHERE outreach_message_id = $1 OR followup_message_id = $1
-       LIMIT 1`,
+      `SELECT creator_id AS id FROM email_events
+       WHERE message_id = $1
+         AND type IN ('sent_outreach', 'sent_followup', 'sent_negotiation')
+       ORDER BY created_at DESC LIMIT 1`,
       [trackingId],
     );
     if (!creator) return;
