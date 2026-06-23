@@ -22,7 +22,6 @@ async function pollNegotiations() {
     const fresh = await db.many(
       `SELECT id FROM creators
        WHERE status = 'replied' AND negotiation_status IS NULL
-         AND outreach_thread_id IS NOT NULL
        ORDER BY replied_at ASC NULLS LAST`,
     );
     for (const c of fresh) {
@@ -37,8 +36,7 @@ async function pollNegotiations() {
     //    processReply de-dupes on last_negotiation_msg_id, so this is cheap.
     const ongoing = await db.many(
       `SELECT id FROM creators
-       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')
-         AND outreach_thread_id IS NOT NULL`,
+       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')`,
     );
     for (const c of ongoing) {
       try {
@@ -89,8 +87,7 @@ function start() {
   const claudeConfigured = !!process.env.ANTHROPIC_API_KEY;
   const claudeModel = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
   console.log(
-    `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 15} min, ` +
-      `legacy follow-up delay ${legacyDelayHours()}h (per-template followups override this); ` +
+    `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 15} min (negotiation only — outreach/follow-ups via Instantly.ai); ` +
       `negotiation follow-up idle ${negotiationFollowupDays()}d; ` +
       `Claude ${claudeConfigured ? `configured (model=${claudeModel})` : 'NOT configured (ANTHROPIC_API_KEY unset — replies will fall back to static templates)'}`,
   );

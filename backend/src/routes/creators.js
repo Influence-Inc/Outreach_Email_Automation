@@ -192,7 +192,7 @@ router.get('/:id/thread', async (req, res, next) => {
     const sentRows = await db.many(
       `SELECT message_id, detail, created_at FROM email_events
        WHERE creator_id = $1
-         AND type IN ('sent_outreach', 'sent_followup')
+         AND type IN ('sent_outreach', 'sent_followup', 'sent_negotiation')
          AND message_id IS NOT NULL`,
       [req.params.id],
     );
