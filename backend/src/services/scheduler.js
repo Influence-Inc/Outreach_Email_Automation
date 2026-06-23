@@ -1,118 +1,19 @@
 const db = require('../db');
-const {
-  sendFollowup,
-  markReplied,
-  resolveFollowupSteps,
-  backfillExtensionThread,
-} = require('./outreach');
-const { threadHasReply } = require('./gmail');
 const negotiation = require('./negotiation');
 
-// Cap thread-recovery lookups per tick so a large backlog can't exhaust the
-// Gmail API quota in one pass; the next tick continues where this left off.
-const THREAD_RECOVERY_PER_TICK = 25;
-
-const legacyDelayHours = () => Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
 const intervalMs = () =>
   Number(process.env.SCHEDULER_INTERVAL_MINUTES || 15) * 60 * 1000;
 const negotiationFollowupDays = () => Number(process.env.NEGOTIATION_FOLLOWUP_DAYS || 2);
 
 let timer = null;
-let running = false;
 let negRunning = false;
 
-async function checkRepliesAndFollowups() {
-  if (running) return;
-  running = true;
-  try {
-    // Recover threads for extension-sent creators whose send-time Gmail Sent
-    // lookup failed (outreach_thread_id left NULL). Without this they're
-    // invisible to the reply check below — and therefore to Claude. needs_human
-    // creators are excluded: their NULL thread means a genuinely gone thread
-    // (e.g. workspace migration), not a not-yet-indexed one. Runs first so a
-    // recovered thread is reply-checked in the same tick.
-    const stuck = await db.many(
-      `SELECT id FROM creators
-       WHERE status IN ('outreach_sent', 'followup_sent')
-         AND outreach_thread_id IS NULL
-         AND outreach_message_id IS NOT NULL
-         AND needs_human = FALSE
-       ORDER BY outreach_sent_at ASC
-       LIMIT ${THREAD_RECOVERY_PER_TICK}`,
-    );
-    for (const c of stuck) {
-      try {
-        const r = await backfillExtensionThread(c.id);
-        if (r.ok) {
-          console.log(`[scheduler] recovered Gmail thread for creator ${c.id} (extension send)`);
-        }
-      } catch (err) {
-        console.error(`thread recovery failed for creator ${c.id}:`, err.message);
-      }
-    }
+// Outreach and follow-up sending is now handled by Instantly.ai.
+// Reply detection arrives via the /webhook/instantly endpoint (reply_received event).
+// The scheduler only drives the negotiation flow once a reply has been received.
 
-    // Refresh reply status for anything still in outreach_sent.
-    const sentOutreach = await db.many(
-      `SELECT id, outreach_thread_id FROM creators
-       WHERE status IN ('outreach_sent', 'followup_sent')
-       AND outreach_thread_id IS NOT NULL`,
-    );
-    for (const c of sentOutreach) {
-      try {
-        const replied = await threadHasReply(c.outreach_thread_id);
-        if (replied) await markReplied(c.id);
-      } catch (err) {
-        console.error(`reply-check failed for creator ${c.id}:`, err.message);
-      }
-    }
-
-    // Multi-step follow-up due check. We pull every creator still in the
-    // outreach/follow-up flow that hasn't replied, then decide per-row whether
-    // the next step is due based on their campaign's active template
-    // (campaign template_id, or the row marked is_default).
-    const candidates = await db.many(
-      `SELECT c.id, c.followup_step, c.outreach_sent_at, c.followup_sent_at,
-              et.followups AS template_followups
-       FROM creators c
-       JOIN campaigns ca ON ca.id = c.campaign_id
-       LEFT JOIN email_templates et
-         ON et.id = COALESCE(
-           ca.template_id,
-           (SELECT id FROM email_templates WHERE is_default LIMIT 1)
-         )
-       WHERE c.status IN ('outreach_sent', 'followup_sent')`,
-    );
-
-    const now = Date.now();
-    for (const c of candidates) {
-      try {
-        const steps = resolveFollowupSteps({ template_followups: c.template_followups });
-        const nextIndex = c.followup_step || 0;
-        if (nextIndex >= steps.length) continue;
-
-        const step = steps[nextIndex] || {};
-        const delayHours = Number(step.delayHours) > 0
-          ? Number(step.delayHours)
-          : legacyDelayHours();
-        const lastSentAt = c.followup_sent_at || c.outreach_sent_at;
-        if (!lastSentAt) continue;
-        const dueAt = new Date(lastSentAt).getTime() + delayHours * 3600_000;
-        if (now < dueAt) continue;
-
-        const result = await sendFollowup(c.id);
-        console.log(`follow-up for ${c.id} (step ${nextIndex + 1}/${steps.length}):`, result);
-      } catch (err) {
-        console.error(`follow-up failed for creator ${c.id}:`, err.message);
-      }
-    }
-  } finally {
-    running = false;
-  }
-}
-
-// Drive the in-app negotiation flow. Runs every tick after the outreach
-// reply/follow-up check. Each step is best-effort and isolated per creator so
-// one failure never blocks the rest.
+// Drive the in-app negotiation flow. Each step is best-effort and isolated per
+// creator so one failure never blocks the rest.
 async function pollNegotiations() {
   if (negRunning) return;
   negRunning = true;
@@ -121,7 +22,6 @@ async function pollNegotiations() {
     const fresh = await db.many(
       `SELECT id FROM creators
        WHERE status = 'replied' AND negotiation_status IS NULL
-         AND outreach_thread_id IS NOT NULL
        ORDER BY replied_at ASC NULLS LAST`,
     );
     for (const c of fresh) {
@@ -136,8 +36,7 @@ async function pollNegotiations() {
     //    processReply de-dupes on last_negotiation_msg_id, so this is cheap.
     const ongoing = await db.many(
       `SELECT id FROM creators
-       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')
-         AND outreach_thread_id IS NOT NULL`,
+       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')`,
     );
     for (const c of ongoing) {
       try {
@@ -180,7 +79,6 @@ async function pollNegotiations() {
 }
 
 async function tick() {
-  await checkRepliesAndFollowups().catch((err) => console.error('scheduler tick failed:', err));
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
 }
 
@@ -189,8 +87,7 @@ function start() {
   const claudeConfigured = !!process.env.ANTHROPIC_API_KEY;
   const claudeModel = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
   console.log(
-    `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 15} min, ` +
-      `legacy follow-up delay ${legacyDelayHours()}h (per-template followups override this); ` +
+    `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 15} min (negotiation only — outreach/follow-ups via Instantly.ai); ` +
       `negotiation follow-up idle ${negotiationFollowupDays()}d; ` +
       `Claude ${claudeConfigured ? `configured (model=${claudeModel})` : 'NOT configured (ANTHROPIC_API_KEY unset — replies will fall back to static templates)'}`,
   );
@@ -203,4 +100,4 @@ function start() {
   }, 5000);
 }
 
-module.exports = { start, checkRepliesAndFollowups, pollNegotiations };
+module.exports = { start, pollNegotiations };

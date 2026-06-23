@@ -151,6 +151,13 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegate_question TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegated_at      TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_creators_needs_human ON creators(needs_human) WHERE needs_human;
 
+-- Instantly.ai hybrid integration. reply_to_uuid is Instantly's thread handle,
+-- used to send threaded negotiation replies via POST /api/v2/emails/reply.
+-- latest_inbound_text holds the creator's most recent reply text, written by
+-- the /webhook/instantly handler and consumed by negotiation.processReply().
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_reply_uuid TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_text  TEXT;
+
 -- Suppression list. Any address in here is skipped by sendOutreach / sendFollowup.
 -- Populated by the /unsubscribe endpoint (RFC 8058 one-click + GET confirmation
 -- page), by bounce handling, and by manual admin action.

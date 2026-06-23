@@ -12,7 +12,7 @@
 const db = require('../db');
 const pricing = require('./pricing');
 const templates = require('./negotiationTemplates');
-const gmail = require('./gmail');
+const instantly = require('./instantly');
 const { getGuidelines } = require('./settings');
 
 // ── Claude client (lazy; optional dependency) ─────────────────────────────
@@ -320,16 +320,6 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
 }
 
 // ── Email sending (threaded; DRY_RUN logs instead) ────────────────────────
-async function lastRfc822(creatorId) {
-  const ev = await db.one(
-    `SELECT detail FROM email_events
-     WHERE creator_id = $1 AND type IN ('sent_outreach','sent_followup','sent_negotiation')
-     ORDER BY created_at DESC LIMIT 1`,
-    [creatorId],
-  );
-  return ev && ev.detail ? ev.detail.rfc822MessageId || null : null;
-}
-
 async function countSentNegotiation(creatorId) {
   const r = await db.one(
     `SELECT COUNT(*)::int AS n FROM email_events WHERE creator_id = $1 AND type = 'sent_negotiation'`,
@@ -339,36 +329,24 @@ async function countSentNegotiation(creatorId) {
 }
 
 async function sendNegotiationEmail(creator, email, kind) {
-  // Mint a tracking id and pass it into sendEmail so the body gets the same
-  // open-tracking pixel that outreach/follow-ups use. The id also goes into
-  // email_events.message_id so the thread route can link this exact email to
-  // its 'opened' rows for the per-message read-receipt ticks.
-  const trackingId = gmail.newTrackingId();
   let detail = { kind, subject: email.subject };
   if (isDryRun()) {
     console.log(`[negotiation][DRY_RUN] -> ${creator.email} (${kind}): ${email.subject}\n${email.body}\n`);
     detail.dryRun = true;
   } else {
-    const rfc = await lastRfc822(creator.id);
-    const sent = await gmail.sendEmail({
-      to: creator.email,
+    if (!creator.instantly_reply_uuid) {
+      throw new Error(`No instantly_reply_uuid for creator ${creator.id} — cannot send threaded reply`);
+    }
+    await instantly.replyToEmail({
+      replyToUuid: creator.instantly_reply_uuid,
       subject: email.subject,
       body: email.body,
-      threadId: creator.outreach_thread_id || undefined,
-      inReplyTo: rfc || undefined,
-      references: rfc || undefined,
-      trackingId,
     });
-    detail = {
-      ...detail,
-      gmailMessageId: sent.gmailMessageId,
-      threadId: sent.threadId,
-      rfc822MessageId: sent.rfc822MessageId,
-    };
+    detail = { ...detail, replyToUuid: creator.instantly_reply_uuid };
   }
   await db.query(
-    `INSERT INTO email_events (creator_id, type, message_id, detail) VALUES ($1, 'sent_negotiation', $2, $3)`,
-    [creator.id, trackingId, detail],
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'sent_negotiation', $2)`,
+    [creator.id, detail],
   );
   await db.query(
     `UPDATE creators SET last_negotiation_email_at = NOW(), updated_at = NOW() WHERE id = $1`,
@@ -437,47 +415,14 @@ async function sendDelegateReply(creatorId, { subject, body }) {
 // for the creator's template, or when Claude escalates a reply it can't handle.
 async function processReply(creatorId) {
   const creator = await loadCreator(creatorId);
-  if (!creator || !creator.outreach_thread_id) return { skipped: 'no thread' };
+  if (!creator) return { skipped: 'no creator' };
 
-  let inbound;
-  try {
-    inbound = await gmail.getLatestInboundText(creator.outreach_thread_id);
-  } catch (err) {
-    // Gmail 404 means the thread isn't reachable from the currently authorized
-    // mailbox — typical after a workspace migration: the threadId was minted in
-    // the old mailbox and doesn't resolve in the new one. Stop polling this
-    // thread (drop the linkage) and flag for human review.
-    //
-    // gaxios v6 exposes the HTTP status in several places depending on the
-    // failure path, so check all of them rather than just one.
-    const status =
-      (err && (err.response && err.response.status)) ||
-      (err && err.status) ||
-      (err && err.code);
-    const is404 =
-      status === 404 ||
-      status === '404' ||
-      (err && /requested entity was not found/i.test(err.message || ''));
-    if (is404) {
-      await db.query(
-        `UPDATE creators
-         SET outreach_thread_id = NULL, needs_human = TRUE,
-             delegate_reason = $2, delegated_at = NOW(), updated_at = NOW()
-         WHERE id = $1`,
-        [creator.id, 'Gmail thread is no longer in this mailbox (likely workspace migration); please review manually.'],
-      );
-      await db.query(
-        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'thread_unreachable', $2)`,
-        [creator.id, { threadId: creator.outreach_thread_id, source: 'gmail_404' }],
-      );
-      console.warn(
-        `[negotiation] thread unreachable for creator ${creatorId}; dropped outreach_thread_id and flagged needs_human`,
-      );
-      return { error: 'thread_unreachable' };
-    }
-    console.error(`[negotiation] read reply failed for creator ${creatorId}:`, err.message);
-    return { error: err.message };
-  }
+  // Reply text and dedup key are written by the /webhook/instantly handler
+  // when Instantly fires a reply_received event. No Gmail polling needed.
+  const inbound = creator.latest_inbound_text
+    ? { text: creator.latest_inbound_text, messageId: creator.instantly_reply_uuid }
+    : null;
+
   if (!inbound || !inbound.text) return { skipped: 'no inbound text' };
   if (inbound.messageId && inbound.messageId === creator.last_negotiation_msg_id) {
     return { skipped: 'already handled' };
@@ -659,22 +604,19 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
   const claim = await db.one(
     `UPDATE creators SET negotiation_status = 'AWAITING_DECISION', updated_at = NOW()
      WHERE id = $1 AND offer_approved = TRUE
-       AND outreach_thread_id IS NOT NULL
+       AND instantly_reply_uuid IS NOT NULL
        AND negotiation_status IN (${stagePlaceholders})
      RETURNING id`,
     [creatorId, ...fromStages],
   );
   if (!claim) {
-    // Explain why nothing was sent so the dashboard can guide the admin. The
-    // approval is recorded (offer_approved stays TRUE); the admin re-approves
-    // once the creator is awaiting an offer to actually send it.
     const c = await db.one(
-      `SELECT outreach_thread_id, negotiation_status FROM creators WHERE id = $1`,
+      `SELECT instantly_reply_uuid, negotiation_status FROM creators WHERE id = $1`,
       [creatorId],
     );
     if (!c) return { skipped: 'creator not found' };
-    if (!c.outreach_thread_id) {
-      return { skipped: 'no outreach thread yet — send outreach and wait for the creator to reply first' };
+    if (!c.instantly_reply_uuid) {
+      return { skipped: 'no reply received yet — wait for the creator to reply before sending an offer' };
     }
     return {
       skipped: `creator is not awaiting an offer (stage: ${
