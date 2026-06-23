@@ -14,6 +14,7 @@ const pricing = require('./pricing');
 const templates = require('./negotiationTemplates');
 const instantly = require('./instantly');
 const { getGuidelines } = require('./settings');
+const replyExamples = require('./replyExamples');
 
 // ── Claude client (lazy; optional dependency) ─────────────────────────────
 let _client;
@@ -35,9 +36,24 @@ function getClient() {
   }
   return _client;
 }
+
+// Test-only: inject a fake client (anything exposing .messages.create) so the
+// reply-evaluation harness can replay labeled examples through Claude without
+// hitting the network. Passing null restores lazy initialization.
+function _setClient(client) {
+  _client = client;
+  _clientTried = client !== undefined;
+}
 const model = () => process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
 
 async function callClaudeText(system, user, maxTokens = 1200) {
+  return callClaudeMessages(system, [{ role: 'user', content: user }], maxTokens);
+}
+
+// Same as callClaudeText but takes the full messages array — used so the
+// caller can prepend few-shot (user/assistant) example turns BEFORE the real
+// user message.
+async function callClaudeMessages(system, messages, maxTokens = 1200) {
   const client = getClient();
   if (!client) return null;
   try {
@@ -45,7 +61,7 @@ async function callClaudeText(system, user, maxTokens = 1200) {
       model: model(),
       max_tokens: maxTokens,
       system,
-      messages: [{ role: 'user', content: user }],
+      messages,
     });
     return (resp.content || [])
       .filter((b) => b.type === 'text')
@@ -210,7 +226,21 @@ async function handleCreatorReply(creator, replyText, ctx) {
     `- The creator's first name is "${v.firstName}". The email body must be plain text with line breaks.`,
   ].join('\n');
 
-  const out = parseJsonLoose(await callClaudeText(system, replyText, 1200));
+  // Few-shot examples picked from past labeled threads (seed bank + harvested
+  // mailbox if available). Empty array when nothing matches — call still works,
+  // just zero-shot like before. Capped at 4 to keep the prompt compact.
+  const shots = replyExamples.pickExamplesFor(replyText, { k: 4, stage: ctx.stage });
+  const shotMessages = replyExamples.examplesAsMessages(shots);
+  if (shots.length) {
+    console.log(
+      `[negotiation] creator reply: using ${shots.length} example shot(s) — ${shots
+        .map((s) => `${s.id}/${s.expected_action}`)
+        .join(', ')}`,
+    );
+  }
+
+  const messages = [...shotMessages, { role: 'user', content: replyText }];
+  const out = parseJsonLoose(await callClaudeMessages(system, messages, 1200));
   if (out && out.action) {
     const email =
       out.email && out.email.body
@@ -702,4 +732,6 @@ module.exports = {
   aiRepliesEnabledForCreator,
   loadCreator,
   ctxFor,
+  // Test-only.
+  _setClient,
 };
