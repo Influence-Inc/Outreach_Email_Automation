@@ -10,6 +10,7 @@ const templates = require('./routes/templates');
 const settings = require('./routes/settings');
 const tracking = require('./routes/tracking');
 const auth = require('./routes/auth');
+const webhook = require('./routes/webhook');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
@@ -49,6 +50,7 @@ app.use('/auth', auth);
 // the router).
 app.use('/track', tracking);
 app.use('/', tracking);
+app.use('/webhook', webhook);
 
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 

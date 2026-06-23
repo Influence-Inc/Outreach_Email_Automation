@@ -1,11 +1,10 @@
-const { google } = require('googleapis');
 const db = require('../db');
-const { renderOutreach, renderFollowup } = require('./templates');
-const { sendEmail, threadHasReply, newTrackingId } = require('./gmail');
-const { getAuthorizedClient } = require('./oauth');
+const { renderOutreach } = require('./templates');
+const { newTrackingId } = require('./gmail');
 const { verifyEmail } = require('./emailVerify');
 const { unsubscribeUrl, unsubscribeMailto } = require('./unsubscribe');
 const { varyOutreach } = require('./outreachVary');
+const instantly = require('./instantly');
 
 // Pre-send verification is on by default; set EMAIL_VERIFY=0 to disable.
 const verifyEnabled = !/^(0|false|no|off)$/i.test(process.env.EMAIL_VERIFY || '');
@@ -150,43 +149,39 @@ async function prepareOutreach(creatorId) {
 async function sendOutreach(creatorId) {
   const prep = await prepareOutreach(creatorId);
   if (!prep.ok) throw new Error(prep.message);
-  const { creator, to, subject, body, trackingId, unsubUrl, unsubMailto } = prep;
+  const { creator, to, trackingId } = prep;
 
   try {
-    const sent = await sendEmail({
-      to,
-      subject,
-      body,
-      trackingId,
-      listUnsubscribeUrl: unsubUrl,
-      listUnsubscribeMailto: unsubMailto,
+    await instantly.addLeadToCampaign({
+      email: to,
+      firstName: creator.first_name || '',
+      campaignId: process.env.INSTANTLY_CAMPAIGN_ID,
     });
 
+    // outreach_message_id stores the trackingId for audit trail;
+    // outreach_thread_id is null — Instantly owns threading for outreach + follow-ups.
     await db.query(
       `UPDATE creators
        SET status = 'outreach_sent',
            outreach_message_id = $2,
-           outreach_thread_id = $3,
+           outreach_thread_id = NULL,
            outreach_sent_at = NOW(),
            updated_at = NOW()
        WHERE id = $1`,
-      [creatorId, trackingId, sent.threadId],
+      [creatorId, trackingId],
     );
 
     await db.query(
       `INSERT INTO email_events (creator_id, type, message_id, detail)
        VALUES ($1, 'sent_outreach', $2, $3)`,
       [creatorId, trackingId, {
-        gmailMessageId: sent.gmailMessageId,
-        threadId: sent.threadId,
-        rfc822MessageId: sent.rfc822MessageId,
-        subject,
+        via: 'instantly',
         templateId: creator.template_id || null,
         templateName: creator.template_name || null,
       }],
     );
 
-    return { ok: true, trackingId, threadId: sent.threadId };
+    return { ok: true, trackingId };
   } catch (err) {
     await db.query(
       `INSERT INTO email_events (creator_id, type, detail)
@@ -294,118 +289,6 @@ async function markExtensionOutreachSent(creatorId, { trackingId, gmailMessageId
   return { ok: true, threadId: threadId || null };
 }
 
-// Returns the list of follow-up steps the campaign should run. Falls back
-// to one step at FOLLOWUP_DELAY_HOURS if the active template has none —
-// matches the pre-template behaviour.
-function resolveFollowupSteps(creator) {
-  const list = activeTemplate(creator).followups;
-  if (list.length) return list;
-  const legacyDelay = Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
-  return [{ delayHours: legacyDelay }];
-}
-
-async function sendFollowup(creatorId) {
-  const creator = await loadCreatorContext(creatorId);
-  if (!creator) throw new Error(`Creator ${creatorId} not found`);
-  if (!creator.outreach_sent_at) throw new Error(`Cannot follow up before outreach`);
-
-  // Same suppression check as outreach — if the recipient has unsubscribed
-  // since the original send, do not follow up.
-  const suppressed = await lookupSuppression(creator.email);
-  if (suppressed) {
-    await db.query(
-      `UPDATE creators SET status = 'suppressed', notes = $2, updated_at = NOW() WHERE id = $1`,
-      [creatorId, `suppressed (${suppressed.reason})`],
-    );
-    await db.query(
-      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'suppressed', $2)`,
-      [creatorId, { email: creator.email, reason: suppressed.reason, phase: 'followup' }],
-    );
-    return { ok: false, reason: 'suppressed' };
-  }
-
-  const steps = resolveFollowupSteps(creator);
-  const nextStepIndex = creator.followup_step || 0;
-  if (nextStepIndex >= steps.length) {
-    throw new Error(`No more follow-up steps for creator ${creatorId}`);
-  }
-
-  if (creator.outreach_thread_id) {
-    const hasReply = await threadHasReply(creator.outreach_thread_id);
-    if (hasReply) {
-      await markReplied(creatorId);
-      return { ok: false, reason: 'replied' };
-    }
-  }
-
-  const { unsubUrl, unsubMailto } = buildUnsubscribe(creatorId);
-  const { subject, body } = renderFollowup(
-    activeTemplate(creator),
-    templateVars(creator, { unsubscribeUrl: unsubUrl }),
-    nextStepIndex,
-  );
-
-  const trackingId = newTrackingId();
-
-  try {
-    const lastEvent = await db.one(
-      `SELECT detail FROM email_events
-       WHERE creator_id = $1 AND type IN ('sent_outreach', 'sent_followup')
-       ORDER BY created_at DESC LIMIT 1`,
-      [creatorId],
-    );
-    const rfc822 = lastEvent && lastEvent.detail ? lastEvent.detail.rfc822MessageId : null;
-
-    const sent = await sendEmail({
-      to: creator.email,
-      subject,
-      body,
-      threadId: creator.outreach_thread_id,
-      inReplyTo: rfc822,
-      references: rfc822,
-      trackingId,
-      listUnsubscribeUrl: unsubUrl,
-      listUnsubscribeMailto: unsubMailto,
-    });
-
-    const newStep = nextStepIndex + 1;
-    await db.query(
-      `UPDATE creators
-       SET status = 'followup_sent',
-           followup_message_id = $2,
-           followup_sent_at = NOW(),
-           followup_step = $3,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [creatorId, trackingId, newStep],
-    );
-
-    await db.query(
-      `INSERT INTO email_events (creator_id, type, message_id, detail)
-       VALUES ($1, 'sent_followup', $2, $3)`,
-      [creatorId, trackingId, {
-        gmailMessageId: sent.gmailMessageId,
-        threadId: sent.threadId,
-        rfc822MessageId: sent.rfc822MessageId,
-        subject,
-        step: newStep,
-        totalSteps: steps.length,
-        templateId: creator.template_id || null,
-        templateName: creator.template_name || null,
-      }],
-    );
-
-    return { ok: true, trackingId, step: newStep, totalSteps: steps.length };
-  } catch (err) {
-    await db.query(
-      `INSERT INTO email_events (creator_id, type, detail)
-       VALUES ($1, 'failed', $2)`,
-      [creatorId, { phase: 'followup', step: nextStepIndex + 1, error: err.message }],
-    );
-    throw err;
-  }
-}
-
 async function markReplied(creatorId) {
   await db.query(
     `UPDATE creators
@@ -421,9 +304,7 @@ async function markReplied(creatorId) {
 
 module.exports = {
   sendOutreach,
-  sendFollowup,
   markReplied,
-  resolveFollowupSteps,
   prepareOutreach,
   locateExtensionSent,
   markExtensionOutreachSent,

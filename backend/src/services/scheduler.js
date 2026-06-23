@@ -1,83 +1,19 @@
 const db = require('../db');
-const { sendFollowup, markReplied, resolveFollowupSteps } = require('./outreach');
-const { threadHasReply } = require('./gmail');
 const negotiation = require('./negotiation');
 
-const legacyDelayHours = () => Number(process.env.FOLLOWUP_DELAY_HOURS || 48);
 const intervalMs = () =>
   Number(process.env.SCHEDULER_INTERVAL_MINUTES || 15) * 60 * 1000;
 const negotiationFollowupDays = () => Number(process.env.NEGOTIATION_FOLLOWUP_DAYS || 2);
 
 let timer = null;
-let running = false;
 let negRunning = false;
 
-async function checkRepliesAndFollowups() {
-  if (running) return;
-  running = true;
-  try {
-    // Refresh reply status for anything still in outreach_sent.
-    const sentOutreach = await db.many(
-      `SELECT id, outreach_thread_id FROM creators
-       WHERE status IN ('outreach_sent', 'followup_sent')
-       AND outreach_thread_id IS NOT NULL`,
-    );
-    for (const c of sentOutreach) {
-      try {
-        const replied = await threadHasReply(c.outreach_thread_id);
-        if (replied) await markReplied(c.id);
-      } catch (err) {
-        console.error(`reply-check failed for creator ${c.id}:`, err.message);
-      }
-    }
+// Outreach and follow-up sending is now handled by Instantly.ai.
+// Reply detection arrives via the /webhook/instantly endpoint (reply_received event).
+// The scheduler only drives the negotiation flow once a reply has been received.
 
-    // Multi-step follow-up due check. We pull every creator still in the
-    // outreach/follow-up flow that hasn't replied, then decide per-row whether
-    // the next step is due based on their campaign's active template
-    // (campaign template_id, or the row marked is_default).
-    const candidates = await db.many(
-      `SELECT c.id, c.followup_step, c.outreach_sent_at, c.followup_sent_at,
-              et.followups AS template_followups
-       FROM creators c
-       JOIN campaigns ca ON ca.id = c.campaign_id
-       LEFT JOIN email_templates et
-         ON et.id = COALESCE(
-           ca.template_id,
-           (SELECT id FROM email_templates WHERE is_default LIMIT 1)
-         )
-       WHERE c.status IN ('outreach_sent', 'followup_sent')`,
-    );
-
-    const now = Date.now();
-    for (const c of candidates) {
-      try {
-        const steps = resolveFollowupSteps({ template_followups: c.template_followups });
-        const nextIndex = c.followup_step || 0;
-        if (nextIndex >= steps.length) continue;
-
-        const step = steps[nextIndex] || {};
-        const delayHours = Number(step.delayHours) > 0
-          ? Number(step.delayHours)
-          : legacyDelayHours();
-        const lastSentAt = c.followup_sent_at || c.outreach_sent_at;
-        if (!lastSentAt) continue;
-        const dueAt = new Date(lastSentAt).getTime() + delayHours * 3600_000;
-        if (now < dueAt) continue;
-
-        const result = await sendFollowup(c.id);
-        console.log(`follow-up for ${c.id} (step ${nextIndex + 1}/${steps.length}):`, result);
-      } catch (err) {
-        console.error(`follow-up failed for creator ${c.id}:`, err.message);
-      }
-    }
-  } finally {
-    running = false;
-  }
-}
-
-// Drive the in-app negotiation flow. Runs every tick after the outreach
-// reply/follow-up check. Each step is best-effort and isolated per creator so
-// one failure never blocks the rest.
+// Drive the in-app negotiation flow. Each step is best-effort and isolated per
+// creator so one failure never blocks the rest.
 async function pollNegotiations() {
   if (negRunning) return;
   negRunning = true;
@@ -145,7 +81,6 @@ async function pollNegotiations() {
 }
 
 async function tick() {
-  await checkRepliesAndFollowups().catch((err) => console.error('scheduler tick failed:', err));
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
 }
 
@@ -168,4 +103,4 @@ function start() {
   }, 5000);
 }
 
-module.exports = { start, checkRepliesAndFollowups, pollNegotiations };
+module.exports = { start, pollNegotiations };
