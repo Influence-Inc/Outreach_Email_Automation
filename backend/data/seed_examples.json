@@ -1,0 +1,192 @@
+[
+  {
+    "id": "seed_asking_details_01",
+    "expected_action": "asking_details",
+    "expected_quoted_rate": null,
+    "stage": null,
+    "inbound": "Hi Jennifer! Yes, I'd love to hear more about the collab. Can you share what you have in mind?",
+    "outbound_subject": "Re: {brandName} x {firstName} Collaboration",
+    "outbound_body_template": "REPLY1",
+    "notes": "First substantive reply, creator is interested but has no details yet → adapt REPLY 1 (details + ask for rate)."
+  },
+  {
+    "id": "seed_asking_details_02",
+    "expected_action": "asking_details",
+    "expected_quoted_rate": null,
+    "stage": null,
+    "inbound": "Sounds interesting! What's the brand and what kind of content are you looking for?",
+    "outbound_body_template": "REPLY1",
+    "notes": "Asking for brand + content style → REPLY 1 covers both."
+  },
+  {
+    "id": "seed_shared_rate_01",
+    "expected_action": "shared_rate",
+    "expected_quoted_rate": 1500,
+    "stage": "AWAITING_RATE",
+    "inbound": "Hey! For one Reel, my rate is $1,500. Long-term retainer would be open to discussing.",
+    "outbound_body": null,
+    "notes": "Creator named a number → shared_rate. quoted_rate = 1500. Model emits no email; admin must approve an offer before any reply goes out."
+  },
+  {
+    "id": "seed_shared_rate_02",
+    "expected_action": "shared_rate",
+    "expected_quoted_rate": 800,
+    "stage": "AWAITING_RATE",
+    "inbound": "thanks for the details. I usually charge 800 per video for paid integrations. open to a multi-video deal if the brand is a fit.",
+    "outbound_body": null,
+    "notes": "Bare 800 (no $) is still a rate."
+  },
+  {
+    "id": "seed_shared_rate_03_k_suffix",
+    "expected_action": "shared_rate",
+    "expected_quoted_rate": 2500,
+    "stage": "AWAITING_RATE",
+    "inbound": "My rate is 2.5k per Reel. Let me know if that works!",
+    "outbound_body": null,
+    "notes": "k-suffix shorthand. The number we want is 2500, not 2.5."
+  },
+  {
+    "id": "seed_request_counter_rate_01",
+    "expected_action": "request_counter_rate",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "Hey, thanks for the offer but that rate is a bit lower than what I usually take. Can you do better?",
+    "outbound_body": "Hi {firstName},\n\nTotally understand — I want to land on something that works for both sides. Could you let me know what rate would feel right to you? Happy to look at it from there.\n\n- {managerName}",
+    "notes": "Pushback on the offer without a number → ask what would work, do not propose a new number."
+  },
+  {
+    "id": "seed_request_counter_rate_02",
+    "expected_action": "request_counter_rate",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "This is below my usual range tbh, not quite what I had in mind.",
+    "outbound_body": "Hi {firstName},\n\nGot it — appreciate you being upfront. What rate would actually work for you? I'd love to figure out a number that fits on both ends.\n\n- {managerName}",
+    "notes": "Same pattern — soft pushback, no number → ask for theirs."
+  },
+  {
+    "id": "seed_counter_01",
+    "expected_action": "counter",
+    "expected_quoted_rate": 1800,
+    "stage": "AWAITING_DECISION",
+    "inbound": "Appreciate the offer. Could you stretch to $1800 per video? That's closer to what I take from brands at this size.",
+    "outbound_body": null,
+    "notes": "Pushback with a specific number → counter, quoted_rate = 1800."
+  },
+  {
+    "id": "seed_answer_question_platform_01",
+    "expected_action": "answer_question",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_RATE",
+    "inbound": "Quick question — does this need to be posted on TikTok too, or is it Instagram only?",
+    "outbound_body": "Hi {firstName},\n\nFor this one we're keeping it Instagram only — no TikTok or YouTube cross-posting required. While I have you, what rate were you thinking for a 2-video package?\n\n- {managerName}",
+    "notes": "Platform question is covered by the campaign context. Answer briefly + nudge for the rate."
+  },
+  {
+    "id": "seed_answer_question_format_01",
+    "expected_action": "answer_question",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_RATE",
+    "inbound": "Is this for Reels or static posts?",
+    "outbound_body": "Hi {firstName},\n\nReels — that's where we're seeing the best performance for this campaign. Happy to share more on creative direction once we lock in a rate. What were you thinking?\n\n- {managerName}",
+    "notes": "Format question covered by REPLY1 context (Reels)."
+  },
+  {
+    "id": "seed_answer_question_exclusivity_01",
+    "expected_action": "answer_question",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "Is there an exclusivity clause on this deal? I have a couple of other partnerships in the pipeline.",
+    "outbound_body": "Hi {firstName},\n\nNo exclusivity on this one — you're free to keep your other partnerships running. Let me know what you think of the offer when you get a sec!\n\n- {managerName}",
+    "notes": "Exclusivity is explicitly 'none' in REPLY 2 — safe to answer. Nudge for offer decision."
+  },
+  {
+    "id": "seed_answer_question_payment_01",
+    "expected_action": "answer_question",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "When does payment go out? Is it before or after the post?",
+    "outbound_body": "Hi {firstName},\n\nPayment is initiated within 7 working days after the post is up and we've verified it — direct bank transfer. Let me know if the offer works for you!\n\n- {managerName}",
+    "notes": "Payment timing is in REPLY 2 ('Payment details' block). Safe to answer."
+  },
+  {
+    "id": "seed_accepted_01",
+    "expected_action": "accepted",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "Sounds good! Let's lock it in. What are the next steps?",
+    "outbound_body": "Hi {firstName},\n\nAmazing — so glad we're moving forward! I'll send over the next steps and the brief shortly.\n\n- {managerName}",
+    "notes": "Clear acceptance → warm short acceptance email."
+  },
+  {
+    "id": "seed_accepted_02",
+    "expected_action": "accepted",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "Yes that works for me, happy to move forward.",
+    "outbound_body": "Hi {firstName},\n\nWonderful — really excited to work together. I'll be in touch shortly with the brief and next steps.\n\n- {managerName}",
+    "notes": "Same — straight acceptance."
+  },
+  {
+    "id": "seed_declined_01",
+    "expected_action": "declined",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_RATE",
+    "inbound": "Hey, thanks for reaching out but I'm going to pass on this one. Not the right fit for me right now.",
+    "outbound_body": "Hi {firstName},\n\nNo worries at all — thanks for getting back to me. I'll reach out if we have something more aligned down the road.\n\n- {managerName}",
+    "notes": "Genuine 'no thanks' → graceful decline reply."
+  },
+  {
+    "id": "seed_declined_02",
+    "expected_action": "declined",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_RATE",
+    "inbound": "Please stop emailing me, I'm not interested in brand deals at the moment.",
+    "outbound_body": "Hi {firstName},\n\nTotally understood — I won't follow up. Best of luck with everything!\n\n- {managerName}",
+    "notes": "Stronger decline → still gracious, confirm you'll stop."
+  },
+  {
+    "id": "seed_escalate_usage_rights_01",
+    "expected_action": "escalate",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "I can do this rate but I'd want a clause on usage rights — the brand can't run this as paid ads on their own account without an additional fee. Can we add that?",
+    "outbound_body": null,
+    "notes": "Usage rights / paid-ad rights are NOT in the templates. Must escalate to a human."
+  },
+  {
+    "id": "seed_escalate_legal_01",
+    "expected_action": "escalate",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "Before we sign, can you send the contract? My manager wants to review the IP and indemnification clauses.",
+    "outbound_body": null,
+    "notes": "Contract / legal review → escalate."
+  },
+  {
+    "id": "seed_escalate_special_timeline_01",
+    "expected_action": "escalate",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_RATE",
+    "inbound": "I'm traveling for the next 3 weeks — can we delay the post-by date to mid-next-month? Also, can the first video be a Story series instead of a Reel?",
+    "outbound_body": null,
+    "notes": "Custom timeline + non-Reel format both fall outside the templates → escalate."
+  },
+  {
+    "id": "seed_other_ack_01",
+    "expected_action": "other",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_RATE",
+    "inbound": "Got it, thanks!",
+    "outbound_body": null,
+    "notes": "Trivial ack — no action needed, no email to send."
+  },
+  {
+    "id": "seed_other_ack_02",
+    "expected_action": "other",
+    "expected_quoted_rate": null,
+    "stage": "AWAITING_DECISION",
+    "inbound": "Cool, will get back to you soon.",
+    "outbound_body": null,
+    "notes": "Trivial ack."
+  }
+]
