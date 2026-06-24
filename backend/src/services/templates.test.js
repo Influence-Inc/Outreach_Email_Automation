@@ -15,27 +15,10 @@ test('renderOutreach personalizes the subject with firstName', () => {
   assert.doesNotMatch(subject, /paid/i);
 });
 
-test('renderOutreach appends unsubscribe footer only when unsubscribeUrl is set', () => {
-  const url = 'https://track.useinfluence.xyz/unsubscribe/1/abc';
-  const withUrl = renderOutreach(null, { firstName: 'Alex', brandName: 'Nike', unsubscribeUrl: url });
-  assert.ok(withUrl.body.includes(url), 'body must include the unsubscribe URL');
-  assert.match(withUrl.body, /\{\{grey\}\}/, 'footer should be wrapped in grey marker');
-
-  const noUrl = renderOutreach(null, { firstName: 'Alex', brandName: 'Nike' });
-  assert.ok(!noUrl.body.includes('Unsubscribe'), 'no footer when URL absent');
-  assert.ok(!noUrl.body.includes('{{grey}}'));
-});
-
-test('renderFollowup also gets the personalized subject and the unsub footer', () => {
-  const url = 'https://track.useinfluence.xyz/unsubscribe/2/def';
-  const { subject, body } = renderFollowup(
-    null,
-    { firstName: 'Sam', brandName: 'Nike', unsubscribeUrl: url },
-    0,
-  );
+test('renderFollowup personalizes subject and prefixes with Re:', () => {
+  const { subject } = renderFollowup(null, { firstName: 'Sam', brandName: 'Nike' }, 0);
   assert.match(subject, /^Re:/);
   assert.match(subject, /Sam/);
-  assert.ok(body.includes(url));
 });
 
 test('renderOutreach respects a custom template subject/body', () => {

@@ -30,14 +30,6 @@ Best,
 ${SENDER_NAME}
 useinfluence.xyz`;
 
-// Appended at render time when an unsubscribeUrl is supplied.
-// {{grey}}...{{/grey}} is rendered as small grey text in HTML and stripped
-// to plain text by richBody.js — keeps the visible email focused while
-// still being CAN-SPAM/PECR-compliant.
-const UNSUB_FOOTER =
-  `\n\n{{grey}}You're getting this because we found your contact on your public Instagram. ` +
-  `Not interested? [Unsubscribe]({unsubscribeUrl}) and I won't follow up.{{/grey}}`;
-
 // Only substitute placeholders that the caller actually defined. Unknown
 // {...} sequences (e.g. {{grey}} markers used by the rich-body renderer
 // downstream) are left intact instead of being replaced with empty strings.
@@ -51,24 +43,22 @@ function fill(template, vars) {
 
 // `template` is an email_templates row (or null). Renders the outreach email,
 // substituting variables. Falls back to hardcoded defaults if the template
-// doesn't define them. When `unsubscribeUrl` is supplied in vars, an
-// unsubscribe footer is appended to the body.
+// doesn't define them. Unsubscribe handling lives in Instantly itself, so we
+// no longer append a per-email unsubscribe footer here.
 function renderOutreach(template, vars) {
   const tpl = template && template.outreach ? template.outreach : {};
-  const body = (tpl.body || OUTREACH_BODY) + (vars.unsubscribeUrl ? UNSUB_FOOTER : '');
   return {
     subject: fill(tpl.subject || OUTREACH_SUBJECT, vars),
-    body: fill(body, vars),
+    body: fill(tpl.body || OUTREACH_BODY, vars),
   };
 }
 
 function renderFollowup(template, vars, stepIndex = 0) {
   const list = template && Array.isArray(template.followups) ? template.followups : [];
   const tpl = list[stepIndex] || {};
-  const body = (tpl.body || FOLLOWUP_BODY) + (vars.unsubscribeUrl ? UNSUB_FOOTER : '');
   return {
     subject: fill(tpl.subject || FOLLOWUP_SUBJECT, vars),
-    body: fill(body, vars),
+    body: fill(tpl.body || FOLLOWUP_BODY, vars),
   };
 }
 

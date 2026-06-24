@@ -813,9 +813,6 @@ window.addEventListener('message', (event) => {
   if (msg.type === 'OEA_SCRAPE_PROGRESS') {
     handleScrapeProgress(msg);
   }
-  if (msg.type === 'OEA_SEND_PROGRESS') {
-    handleSendProgress(msg);
-  }
 });
 
 function showScrapeProgress(text) {
@@ -930,129 +927,6 @@ el('run-extension-btn').addEventListener('click', async () => {
   } catch (err) {
     showScrapeProgress(`Failed: ${err.message}`);
     el('scrape-cancel-btn').textContent = 'Hide';
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-// --- Send-via-Extension queue --------------------------------------------
-// Mirrors the scrape-queue progress UI. The extension drives Gmail's compose
-// UI for each pending creator instead of going through the Gmail API.
-
-function showSendProgress(text) {
-  el('send-progress').hidden = false;
-  el('send-progress-text').textContent = text;
-}
-
-function hideSendProgress() {
-  el('send-progress').hidden = true;
-  el('send-progress-text').textContent = '';
-}
-
-function handleSendProgress(msg) {
-  if (msg.event === 'start') {
-    showSendProgress(`Sending 0/${msg.total}…`);
-  } else if (msg.event === 'creator-start') {
-    showSendProgress(`Sending ${msg.index}/${msg.total} — ${msg.label}…`);
-  } else if (msg.event === 'creator-done') {
-    let tail;
-    if (msg.outcome === 'sent') {
-      const thr = msg.sentMeta && msg.sentMeta.threaded ? '' : ' (no thread)';
-      tail = `sent ${msg.label}${thr}`;
-    } else if (msg.outcome === 'skipped') {
-      tail = `skipped ${msg.label}: ${msg.error || 'unknown'}`;
-    } else {
-      tail = `error on ${msg.label}: ${msg.error || 'unknown'}`;
-    }
-    showSendProgress(`Sending ${msg.index}/${msg.total} — ${tail}`);
-  } else if (msg.event === 'done') {
-    const s = msg.summary || {};
-    showSendProgress(
-      `Done. ${s.processed || 0} processed · ${s.sent || 0} sent · ` +
-      `${s.skipped || 0} skipped · ${s.errors || 0} errors. [hide]`,
-    );
-    el('send-cancel-btn').textContent = 'Hide';
-    refreshCreators();
-    refreshCampaigns();
-  } else if (msg.event === 'aborted') {
-    showSendProgress(`Aborted at ${msg.index}/${msg.total}.`);
-    el('send-cancel-btn').textContent = 'Hide';
-    refreshCreators();
-    refreshCampaigns();
-  } else if (msg.event === 'error') {
-    showSendProgress(`Extension error: ${msg.error}`);
-    el('send-cancel-btn').textContent = 'Hide';
-  }
-}
-
-el('send-cancel-btn').addEventListener('click', () => {
-  if (el('send-cancel-btn').textContent === 'Hide') {
-    hideSendProgress();
-    el('send-cancel-btn').textContent = 'Cancel';
-    return;
-  }
-  window.postMessage({ type: 'OEA_ABORT_SEND_QUEUE' }, window.location.origin);
-});
-
-el('send-via-extension-btn').addEventListener('click', async () => {
-  if (!state.selectedCampaignId) return;
-  const btn = el('send-via-extension-btn');
-  btn.disabled = true;
-  el('send-cancel-btn').textContent = 'Cancel';
-  // Same handshake pattern as the scrape button: ping so a missed initial
-  // OEA_EXTENSION_READY doesn't read as "not installed".
-  window.postMessage({ type: 'OEA_PING' }, window.location.origin);
-  try {
-    const rows = await api(
-      `/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}&status=email_found`,
-    );
-    // Same filter the server-side bulk endpoint uses — pending creators only.
-    const pending = rows.filter((r) => !r.outreach_sent_at && r.email);
-    if (!pending.length) {
-      showSendProgress('No pending creators to send to.');
-      el('send-cancel-btn').textContent = 'Hide';
-      return;
-    }
-    if (
-      !confirm(
-        `Send outreach to ${pending.length} pending creator(s) via your local Gmail tab? ` +
-          `Each send goes through Gmail's UI with a 60-150s random delay between sends. ` +
-          `Make sure Gmail is open and logged in.`,
-      )
-    ) {
-      hideSendProgress();
-      return;
-    }
-    const creators = pending.map((r) => ({
-      id: r.id,
-      label: r.first_name
-        ? `${r.first_name} <${r.email}>`
-        : (r.instagram_username ? `@${r.instagram_username} <${r.email}>` : r.email),
-    }));
-    showSendProgress(`Starting send for ${creators.length} creator(s)…`);
-    window.postMessage(
-      {
-        type: 'OEA_RUN_SEND_QUEUE',
-        payload: {
-          apiBase: window.location.origin,
-          creators,
-          pacingMs: 90_000,
-          spreadMs: 60_000,
-        },
-      },
-      window.location.origin,
-    );
-    setTimeout(() => {
-      if (!extensionBridge.ready) {
-        showSendProgress(
-          'Extension not detected. Load the unpacked extension at chrome://extensions then reload this page.',
-        );
-        el('send-cancel-btn').textContent = 'Hide';
-      }
-    }, 2000);
-  } catch (err) {
-    showSendProgress(`Failed: ${err.message}`);
-    el('send-cancel-btn').textContent = 'Hide';
   } finally {
     btn.disabled = false;
   }

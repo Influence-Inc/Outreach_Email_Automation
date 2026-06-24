@@ -1,4 +1,9 @@
-// Background service worker for Gmail Follow-up Automator
+// Background service worker for Influence Outreach Automator.
+// Handles two flows:
+//  1. Instagram scrape queue driven by the Outreach dashboard.
+//  2. The popup's manual Gmail compose helper (legacy, kept for ad-hoc use).
+// All outreach + follow-up + negotiation sending happens server-side via
+// Instantly.ai — this extension does not send automated emails.
 
 // Initialize default settings on install
 chrome.runtime.onInstalled.addListener(() => {
@@ -75,17 +80,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.action === 'abortScrapeQueue') {
     scrapeQueueState.abort = true;
-    sendResponse({ ok: true });
-    return true;
-  }
-  if (request.action === 'runSendQueue') {
-    runSendQueue(request.payload || {}, sender)
-      .then((summary) => sendResponse({ ok: true, summary }))
-      .catch((err) => sendResponse({ ok: false, error: err.message }));
-    return true;
-  }
-  if (request.action === 'abortSendQueue') {
-    sendQueueState.abort = true;
     sendResponse({ ok: true });
     return true;
   }
@@ -333,193 +327,6 @@ async function runScrapeQueue(payload, sender) {
   } finally {
     scrapeQueueState.running = false;
     scrapeQueueState.abort = false;
-  }
-
-  return summary;
-}
-
-// ---------------------------------------------------------------------------
-// Send queue runner: for each pending creator, ask the backend for a rendered
-// outreach (subject + body + trackingId), drive Gmail's compose+send UI, then
-// poll the backend's Gmail-API search to recover the threadId / message-id so
-// follow-ups and negotiation can thread normally. Random jitter between sends.
-// ---------------------------------------------------------------------------
-
-const sendQueueState = {
-  running: false,
-  abort: false,
-};
-
-async function emitSendProgress(senderTabId, payload) {
-  if (senderTabId == null) return;
-  try {
-    await chrome.tabs.sendMessage(senderTabId, {
-      action: 'sendQueueProgress',
-      payload,
-    });
-  } catch (err) {
-    // Dashboard tab closed; not fatal.
-  }
-}
-
-async function backendPost(apiBase, path, body) {
-  const resp = await fetch(`${apiBase}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
-  let json = null;
-  try { json = await resp.json(); } catch {}
-  if (!resp.ok) {
-    const detail = (json && (json.error || json.message)) || `HTTP ${resp.status}`;
-    throw new Error(detail);
-  }
-  return json || {};
-}
-
-// Gmail's Sent indexing lags a few seconds after a UI send. Poll the backend's
-// locate endpoint with backoff until it finds the message (so we can record
-// the threadId for future follow-ups) or until we give up.
-async function locateSentWithBackoff(apiBase, creatorId, trackingId, sentAfter) {
-  const delays = [2000, 3000, 5000, 8000, 12000]; // ~30s total
-  let lastResult = { found: false };
-  for (const d of delays) {
-    await sleep(d);
-    try {
-      lastResult = await backendPost(
-        apiBase,
-        `/api/creators/${creatorId}/locate-extension-sent`,
-        { trackingId, sentAfter },
-      );
-    } catch (err) {
-      lastResult = { found: false, error: err.message };
-    }
-    if (lastResult && lastResult.found) return lastResult;
-    if (sendQueueState.abort) return lastResult;
-  }
-  return lastResult;
-}
-
-async function runSendQueue(payload, sender) {
-  const { apiBase, creators, pacingMs, spreadMs } = payload;
-  const senderTabId = sender && sender.tab && sender.tab.id;
-
-  if (!apiBase || !Array.isArray(creators) || !creators.length) {
-    throw new Error('invalid payload: apiBase + non-empty creators[] required');
-  }
-  if (sendQueueState.running) {
-    throw new Error('send queue already running');
-  }
-
-  sendQueueState.running = true;
-  sendQueueState.abort = false;
-
-  // 90s ± 60s default → uniform random 60-150s between sends. Caller can
-  // override per-batch from the dashboard.
-  const pace = Number.isFinite(pacingMs) ? pacingMs : 90_000;
-  const spread = Number.isFinite(spreadMs) ? spreadMs : 60_000;
-  const total = creators.length;
-  const summary = { total, processed: 0, sent: 0, skipped: 0, errors: 0 };
-
-  await emitSendProgress(senderTabId, { event: 'start', total });
-
-  try {
-    for (let i = 0; i < creators.length; i++) {
-      if (sendQueueState.abort) {
-        await emitSendProgress(senderTabId, { event: 'aborted', index: i, total });
-        break;
-      }
-      const creator = creators[i];
-      const index = i + 1;
-      await emitSendProgress(senderTabId, {
-        event: 'creator-start',
-        index,
-        total,
-        creatorId: creator.id,
-        label: creator.label || `creator ${creator.id}`,
-      });
-
-      let outcome = 'error';
-      let error = null;
-      let sentMeta = null;
-      let burnDelay = true;
-
-      try {
-        // 1. Render + suppression/verify on the backend; we get back the
-        //    subject/body/pixel URL/trackingId — no DB writes yet.
-        const prep = await backendPost(apiBase, `/api/creators/${creator.id}/prepare-outreach`, {});
-        if (!prep.ok) {
-          outcome = 'skipped';
-          error = prep.skipReason || 'unknown skip';
-          burnDelay = false; // skipped creators shouldn't burn the inter-send delay
-        } else {
-          // 2. Open / focus Gmail, fill compose with the rendered email +
-          //    tracking pixel, click Send, confirm the dialog closed.
-          const sentAt = Date.now();
-          const composeResult = await composeEmailInGmail({
-            to: prep.to,
-            subject: prep.subject,
-            body: prep.body,
-            trackingPixelUrl: prep.trackingPixelUrl || null,
-            autoSend: true,
-          });
-          if (!composeResult || !composeResult.success) {
-            throw new Error((composeResult && composeResult.error) || 'compose/send failed');
-          }
-
-          // 3. Poll Gmail's Sent folder (via the backend's API search) by the
-          //    unique trackingId to recover the threadId + message-ids so the
-          //    follow-up + negotiation scheduler can thread later replies.
-          const located = await locateSentWithBackoff(apiBase, creator.id, prep.trackingId, sentAt);
-
-          // 4. Mark the creator as outreach_sent regardless of whether locate
-          //    succeeded — we don't want a doubly-charged delivery. If locate
-          //    timed out, mark-outreach-sent records 'thread_unmatched' so the
-          //    admin can see threading was lost on this one.
-          await backendPost(apiBase, `/api/creators/${creator.id}/mark-outreach-sent`, {
-            trackingId: prep.trackingId,
-            gmailMessageId: located && located.found ? located.gmailMessageId : null,
-            threadId: located && located.found ? located.threadId : null,
-            rfc822MessageId: located && located.found ? located.rfc822MessageId : null,
-            subject: prep.subject,
-          });
-
-          outcome = 'sent';
-          sentMeta = {
-            trackingId: prep.trackingId,
-            threaded: !!(located && located.found),
-          };
-        }
-      } catch (err) {
-        error = err.message;
-        outcome = 'error';
-      }
-
-      summary.processed += 1;
-      if (outcome === 'sent') summary.sent += 1;
-      else if (outcome === 'skipped') summary.skipped += 1;
-      else summary.errors += 1;
-
-      await emitSendProgress(senderTabId, {
-        event: 'creator-done',
-        index,
-        total,
-        creatorId: creator.id,
-        label: creator.label || `creator ${creator.id}`,
-        outcome,
-        error,
-        sentMeta,
-      });
-
-      if (i < creators.length - 1 && !sendQueueState.abort && burnDelay) {
-        await sleep(jittered(pace, spread));
-      }
-    }
-
-    await emitSendProgress(senderTabId, { event: 'done', summary });
-  } finally {
-    sendQueueState.running = false;
-    sendQueueState.abort = false;
   }
 
   return summary;
@@ -784,14 +591,6 @@ function composeEmailFromData(emailData) {
         // Convert newlines to <br> tags
         processedBody = processedBody.replace(/\n/g, '<br>');
 
-        // Append the tracking pixel so opens still get logged on extension-sent
-        // outreach. The backend's /o/<trackingId>.gif endpoint is the same one
-        // the Gmail-API path uses; the pixel here just rides along inside the
-        // body that the recipient's mail client renders.
-        if (emailData.trackingPixelUrl) {
-          processedBody += `<img src="${emailData.trackingPixelUrl}" width="1" height="1" alt="" style="display:block;border:0;outline:none;" />`;
-        }
-
         // Insert HTML content
         bodyField.innerHTML = processedBody;
 
@@ -883,48 +682,4 @@ function composeEmailFromData(emailData) {
     }, 1000);
   });
 }
-
-// Listen for alarms to check for pending follow-ups
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'checkFollowups') {
-    console.log('Alarm triggered: checking for pending follow-ups');
-    processFollowupsInBackground();
-  }
-});
-
-// Create alarm to check every 30 minutes
-chrome.alarms.create('checkFollowups', { periodInMinutes: 30 });
-
-// Process follow-ups in background by sending message to Gmail tabs
-async function processFollowupsInBackground() {
-  try {
-    // Find all Gmail tabs
-    const tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
-    
-    if (tabs.length === 0) {
-      console.log('No Gmail tabs open, skipping follow-up check');
-      return;
-    }
-    
-    console.log(`Found ${tabs.length} Gmail tab(s), processing follow-ups...`);
-    
-    // Use the first Gmail tab to process follow-ups
-    const gmailTab = tabs[0];
-    
-    // Send message to content script to process follow-ups
-    chrome.tabs.sendMessage(gmailTab.id, { 
-      action: 'processFollowups' 
-    }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.log('Could not send message to Gmail tab:', chrome.runtime.lastError.message);
-      } else {
-        console.log('Follow-up processing initiated');
-      }
-    });
-    
-  } catch (error) {
-    console.error('Error in background follow-up processing:', error);
-  }
-}
-
-console.log('Gmail Follow-up Automator background script loaded');
+console.log('Influence Outreach Automator background script loaded');

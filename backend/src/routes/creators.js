@@ -1,17 +1,11 @@
 const express = require('express');
 const db = require('../db');
-const {
-  sendOutreach,
-  prepareOutreach,
-  locateExtensionSent,
-  markExtensionOutreachSent,
-} = require('../services/outreach');
+const { sendOutreach } = require('../services/outreach');
 const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
-const { getThreadMessages } = require('../services/gmail');
 
-// Human-readable labels for the event-timeline fallback (when Gmail isn't
-// reachable). Keyed by email_events.type.
+// Human-readable labels for the event-driven thread timeline.
+// Keyed by email_events.type.
 const EVENT_LABELS = {
   sent_outreach: 'Outreach sent',
   sent_followup: 'Follow-up sent',
@@ -173,82 +167,18 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Full email conversation for the dashboard's per-row dropdown. Pulls the live
-// Gmail thread when possible; falls back to the logged event timeline (subjects
-// only, no bodies) when Gmail is unreachable or there's no thread yet.
+// Email-conversation timeline for the dashboard's per-row dropdown.
+// Built from email_events — Instantly owns the live thread contents in its
+// own inbox, so we surface the audit trail (sends, replies, opens, etc.)
+// rather than re-fetching the conversation body.
 router.get('/:id/thread', async (req, res, next) => {
   try {
     const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
     if (!creator) return res.status(404).json({ error: 'not found' });
 
-    // Pull the per-outbound-message tracking metadata once. We use it to enrich
-    // both the Gmail-thread path and the events-fallback path with read-receipt
-    // info (✓ sent / ✓✓ delivered / ✓✓ read). Mapping: each sent_outreach /
-    // sent_followup event carries the trackingId in `message_id` and (when sent
-    // via the Gmail API path) the Gmail message id in detail.gmailMessageId.
-    // 'opened' events also use `message_id` for the trackingId so we just count
-    // per id. Extension-sent rows may have a null gmailMessageId until locate
-    // succeeds — that's fine, they're matched via the events-fallback path.
-    const sentRows = await db.many(
-      `SELECT message_id, detail, created_at FROM email_events
-       WHERE creator_id = $1
-         AND type IN ('sent_outreach', 'sent_followup', 'sent_negotiation')
-         AND message_id IS NOT NULL`,
-      [req.params.id],
-    );
-    const gmailIdToTracking = new Map();
-    const trackingIdToSent = new Map();
-    for (const r of sentRows) {
-      const gmailId = r.detail && r.detail.gmailMessageId;
-      const sentInfo = { trackingId: r.message_id, sentAt: r.created_at };
-      if (gmailId) gmailIdToTracking.set(gmailId, sentInfo);
-      trackingIdToSent.set(r.message_id, sentInfo);
-    }
-    const trackingIds = Array.from(trackingIdToSent.keys());
-    const opensByTracking = new Map();
-    if (trackingIds.length) {
-      const openRows = await db.many(
-        `SELECT message_id, COUNT(*)::int AS opens, MAX(created_at) AS last_open
-         FROM email_events
-         WHERE creator_id = $1 AND type = 'opened' AND message_id = ANY($2::text[])
-         GROUP BY message_id`,
-        [req.params.id, trackingIds],
-      );
-      for (const r of openRows) {
-        opensByTracking.set(r.message_id, { opens: r.opens, lastOpenAt: r.last_open });
-      }
-    }
-    const buildTracking = (sentInfo) => {
-      if (!sentInfo) return null;
-      const o = opensByTracking.get(sentInfo.trackingId);
-      return {
-        trackingId: sentInfo.trackingId,
-        sentAt: sentInfo.sentAt,
-        opens: o ? o.opens : 0,
-        lastOpenAt: o ? o.lastOpenAt : null,
-      };
-    };
-
-    if (creator.outreach_thread_id) {
-      try {
-        const messages = await getThreadMessages(creator.outreach_thread_id);
-        if (messages.length) {
-          for (const m of messages) {
-            if (m.direction === 'outbound' && m.id) {
-              m.tracking = buildTracking(gmailIdToTracking.get(m.id));
-            }
-          }
-          return res.json({ source: 'gmail', messages });
-        }
-      } catch (err) {
-        console.warn(`[thread] gmail fetch failed for creator ${creator.id}: ${err.message}`);
-      }
-    }
-
-    // Fallback: build a lightweight timeline from email_events. The internal
-    // rate_* events power the Rate-column timeline, not the email thread, so
-    // they're excluded here (rate_offer_sent would otherwise duplicate the
-    // offer email's sent_negotiation event).
+    // The internal rate_* events power the Rate-column timeline, not the email
+    // thread, so they're excluded here (rate_offer_sent would otherwise
+    // duplicate the offer email's sent_negotiation event).
     const events = await db.many(
       `SELECT type, message_id, detail, created_at FROM email_events
        WHERE creator_id = $1 AND type NOT LIKE 'rate_%' ORDER BY created_at ASC`,
@@ -257,8 +187,6 @@ router.get('/:id/thread', async (req, res, next) => {
     const messages = events.map((e) => {
       const detail = e.detail || {};
       const outbound = String(e.type).startsWith('sent_');
-      const tracking =
-        outbound && e.message_id ? buildTracking(trackingIdToSent.get(e.message_id)) : null;
       return {
         id: null,
         fromName: outbound ? 'INFLUENCE' : creator.first_name || 'Creator',
@@ -266,7 +194,6 @@ router.get('/:id/thread', async (req, res, next) => {
         subject: detail.subject || EVENT_LABELS[e.type] || e.type,
         direction: outbound ? 'outbound' : 'inbound',
         text: detail.subject ? `(${EVENT_LABELS[e.type] || e.type})` : EVENT_LABELS[e.type] || e.type,
-        tracking,
       };
     });
     res.json({ source: 'events', messages });
@@ -496,63 +423,6 @@ router.post('/:id/fetch-email', async (req, res) => {
 router.post('/:id/send-outreach', async (req, res, next) => {
   try {
     const result = await sendOutreach(req.params.id);
-    res.json(result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// Extension-driven send path. The browser extension calls these three routes
-// per creator: prepare → (compose + click Send in Gmail UI) → locate → mark.
-// Together they replace the Gmail-API send while keeping the same threading +
-// tracking-pixel plumbing that follow-ups and negotiation rely on.
-
-router.post('/:id/prepare-outreach', async (req, res) => {
-  try {
-    const prep = await prepareOutreach(req.params.id);
-    if (!prep.ok) {
-      // 200 with skipReason — the queue records-and-skips without burning a
-      // delay, instead of treating the rejection as a fatal HTTP error.
-      return res.json({ ok: false, skipReason: prep.skipReason, message: prep.message });
-    }
-    res.json({
-      ok: true,
-      to: prep.to,
-      subject: prep.subject,
-      body: prep.body,
-      trackingId: prep.trackingId,
-      trackingPixelUrl: prep.trackingPixelUrl,
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-router.post('/:id/locate-extension-sent', async (req, res) => {
-  try {
-    const { trackingId, sentAfter } = req.body || {};
-    if (!trackingId) return res.status(400).json({ error: 'trackingId required' });
-    const result = await locateExtensionSent({
-      trackingId,
-      sentAfterEpochMs: Number(sentAfter) || null,
-    });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post('/:id/mark-outreach-sent', async (req, res) => {
-  try {
-    const { trackingId, gmailMessageId, threadId, rfc822MessageId, subject } = req.body || {};
-    if (!trackingId) return res.status(400).json({ error: 'trackingId required' });
-    const result = await markExtensionOutreachSent(req.params.id, {
-      trackingId,
-      gmailMessageId,
-      threadId,
-      rfc822MessageId,
-      subject,
-    });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
