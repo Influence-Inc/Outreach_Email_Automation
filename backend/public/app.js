@@ -26,20 +26,6 @@ function fmtDate(s) {
   return new Date(s).toLocaleString();
 }
 
-async function refreshAuth() {
-  try {
-    const s = await api('/auth/status');
-    const node = el('auth-status');
-    if (s.authorized) {
-      node.innerHTML = `Sending as <b>${s.senderEmail}</b> · <a href="/auth/google">re-auth</a>`;
-    } else {
-      node.innerHTML = `<a href="/auth/google" style="color:#fff;text-decoration:underline;">⚠ Connect Gmail (${s.senderEmail})</a>`;
-    }
-  } catch (err) {
-    el('auth-status').textContent = `auth status error: ${err.message}`;
-  }
-}
-
 async function refreshCampaigns() {
   state.campaigns = await api('/api/campaigns');
   const tree = el('brand-tree');
@@ -490,33 +476,6 @@ function fmtThreadDate(s) {
   return isNaN(d) ? String(s) : d.toLocaleString();
 }
 
-// Read-receipt ticks for outbound messages, WhatsApp-style. Email gives us only
-// two reliable signals — we sent it, and the recipient's mail client fetched
-// the tracking pixel — so the three-state UI uses a 30s threshold to fake the
-// "delivered" middle state:
-//   ✓     "sent"      → sent < 30s ago, no opens yet
-//   ✓✓    "delivered" → sent ≥ 30s ago, no opens yet (assumed in the inbox)
-//   ✓✓    "read"      → pixel fired at least once (rendered in solid black)
-// Outbound messages without tracking (e.g. negotiation emails, which don't
-// embed a pixel today) and inbound messages get no tick.
-const SENT_TO_DELIVERED_MS = 30_000;
-
-function ticksFor(m) {
-  if (m.direction !== 'outbound' || !m.tracking) return '';
-  const opens = m.tracking.opens || 0;
-  if (opens > 0) {
-    const seen = m.tracking.lastOpenAt ? ` · last open ${fmtDate(m.tracking.lastOpenAt)}` : '';
-    const label = opens === 1 ? 'Read once' : `Read ${opens} times`;
-    return `<span class="ticks read" title="${escapeHtml(label + seen)}">&#10003;&#10003;</span>`;
-  }
-  const sentAt = m.tracking.sentAt ? new Date(m.tracking.sentAt) : null;
-  const ageMs = sentAt ? Date.now() - sentAt.getTime() : Infinity;
-  if (ageMs < SENT_TO_DELIVERED_MS) {
-    return '<span class="ticks sent" title="Sent — just now">&#10003;</span>';
-  }
-  return '<span class="ticks delivered" title="Sent — no open detected yet">&#10003;&#10003;</span>';
-}
-
 function renderThreadInto(box, data) {
   const messages = (data && data.messages) || [];
   if (!messages.length) {
@@ -524,9 +483,7 @@ function renderThreadInto(box, data) {
     return;
   }
   const note =
-    data.source === 'events'
-      ? '<p class="hint" style="margin:0 0 8px;">Gmail not connected — showing the activity log (subjects only).</p>'
-      : '';
+    '<p class="hint" style="margin:0 0 8px;">Activity log (sends, replies and negotiation steps). The full email conversation lives in Instantly.ai.</p>';
   const items = messages
     .map((m) => {
       const side = m.direction === 'outbound' ? 'out' : 'in';
@@ -535,10 +492,9 @@ function renderThreadInto(box, data) {
       const subj = m.subject ? `<div class="thread-subj">${escapeHtml(m.subject)}</div>` : '';
       const bodyText = (m.text || '').trim();
       const body = bodyText ? escapeHtml(bodyText) : '<span class="meta">(no text)</span>';
-      const ticks = ticksFor(m);
       return `
         <div class="thread-msg ${side}">
-          <div class="thread-meta"><b>${who}</b><span class="meta">${when}</span>${ticks}</div>
+          <div class="thread-meta"><b>${who}</b><span class="meta">${when}</span></div>
           ${subj}
           <div class="thread-body">${body}</div>
         </div>`;
@@ -965,11 +921,6 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-function describeFollowups(followups) {
-  if (!Array.isArray(followups) || !followups.length) return 'no follow-ups';
-  return followups.map((s) => `${s.delayHours}h`).join(' → ');
-}
-
 async function refreshTemplates() {
   state.templates = await api('/api/templates');
   renderTemplatesList();
@@ -1001,18 +952,6 @@ function buildTemplateBlock(template) {
     is_default: !!template.is_default,
     // AI replies default ON unless explicitly false (matches backend default).
     ai_replies_enabled: template.ai_replies_enabled !== false,
-    outreach: {
-      subject: (template.outreach && template.outreach.subject) || '',
-      body: (template.outreach && template.outreach.body) || '',
-    },
-    followups: Array.isArray(template.followups)
-      ? template.followups.map((s) => ({
-          delayHours: Number(s.delayHours) || 0,
-          label: s.label || '',
-          subject: s.subject || '',
-          body: s.body || '',
-        }))
-      : [],
   };
 
   block.innerHTML = `
@@ -1036,75 +975,13 @@ function buildTemplateBlock(template) {
     titleEl.textContent = draft.name || '(unnamed)';
     badgeEl.hidden = !draft.is_default;
     aiBadgeEl.hidden = draft.ai_replies_enabled;
-    summaryMeta.textContent = describeFollowups(draft.followups);
-  }
-
-  function renderFollowups() {
-    const list = body.querySelector('.followups-list');
-    list.innerHTML = '';
-    if (!draft.followups.length) {
-      const empty = document.createElement('p');
-      empty.className = 'hint';
-      empty.textContent = 'No follow-ups configured. Click "+ Add follow-up" to add one.';
-      list.appendChild(empty);
-      return;
-    }
-    draft.followups.forEach((step, i) => {
-      const row = document.createElement('details');
-      row.className = 'followup-row';
-      row.setAttribute('open', '');
-      row.innerHTML = `
-        <summary>
-          <span class="followup-row-title">Follow-up #${i + 1}</span>
-          <span class="meta followup-row-meta"></span>
-          <button type="button" class="ghost small followup-remove">Remove</button>
-        </summary>
-        <div class="followup-row-body">
-          <div class="row" style="gap: 12px; flex-wrap: wrap;">
-            <label style="flex: 0 0 120px;">Delay (h)
-              <input type="number" min="0" step="1" class="fup-delay" value="${step.delayHours}" />
-            </label>
-            <label style="flex: 1; min-width: 200px;">Label (optional)
-              <input type="text" class="fup-label" value="${escapeHtml(step.label)}" placeholder="e.g. First bump" />
-            </label>
-          </div>
-          <label>Subject
-            <input type="text" class="fup-subject" value="${escapeHtml(step.subject)}" placeholder="Re: ..." />
-          </label>
-          <label>Body
-            <textarea class="fup-body" rows="8" placeholder="Hi {firstName}, ...">${escapeHtml(step.body)}</textarea>
-          </label>
-        </div>
-      `;
-      const metaEl = row.querySelector('.followup-row-meta');
-      const updateMeta = () => {
-        const lbl = step.label ? ` — ${step.label}` : '';
-        metaEl.textContent = `after ${step.delayHours}h${lbl}`;
-      };
-      updateMeta();
-      row.querySelector('.fup-delay').oninput = (ev) => {
-        step.delayHours = Number(ev.target.value) || 0;
-        updateMeta();
-        refreshSummary();
-      };
-      row.querySelector('.fup-label').oninput = (ev) => { step.label = ev.target.value; updateMeta(); };
-      row.querySelector('.fup-subject').oninput = (ev) => { step.subject = ev.target.value; };
-      row.querySelector('.fup-body').oninput = (ev) => { step.body = ev.target.value; };
-      row.querySelector('.followup-remove').onclick = (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        draft.followups.splice(i, 1);
-        renderFollowups();
-        refreshSummary();
-      };
-      list.appendChild(row);
-    });
+    summaryMeta.textContent = draft.ai_replies_enabled ? 'AI auto-reply on' : 'AI auto-reply off';
   }
 
   body.innerHTML = `
     <p class="hint">
-      Placeholders: <code>{firstName}</code>, <code>{brandName}</code>, <code>{campaignName}</code>.
-      Formatting: <code>[click here](https://example.com)</code> for links, <code>{{grey}}text{{/grey}}</code> for grey.
+      This template controls the AI&rsquo;s reply behaviour for its campaigns. The outreach
+      and follow-up emails themselves (subject, body, cadence) are configured in Instantly.ai.
     </p>
     <div class="row" style="gap: 12px; flex-wrap: wrap;">
       <label style="flex: 1; min-width: 200px;">Template name
@@ -1118,20 +995,6 @@ function buildTemplateBlock(template) {
         <input type="checkbox" class="tpl-ai-replies" ${draft.ai_replies_enabled ? 'checked' : ''} />
         Auto-reply with AI
       </label>
-    </div>
-
-    <h4 style="margin-top: 16px;">Outreach email (initial)</h4>
-    <label>Subject
-      <input type="text" class="out-subject" value="${escapeHtml(draft.outreach.subject)}" placeholder="Paid collaboration with {brandName}" />
-    </label>
-    <label>Body
-      <textarea class="out-body" rows="10" placeholder="Hi {firstName}, ...">${escapeHtml(draft.outreach.body)}</textarea>
-    </label>
-
-    <h4 style="margin-top: 16px;">Follow-ups (in order)</h4>
-    <div class="followups-list"></div>
-    <div style="margin-top: 8px;">
-      <button type="button" class="ghost small add-followup">+ Add follow-up</button>
     </div>
 
     <div class="row" style="gap: 8px; margin-top: 16px; justify-content: flex-end; align-items: center;">
@@ -1152,14 +1015,6 @@ function buildTemplateBlock(template) {
     draft.ai_replies_enabled = ev.target.checked;
     refreshSummary();
   };
-  body.querySelector('.out-subject').oninput = (ev) => { draft.outreach.subject = ev.target.value; };
-  body.querySelector('.out-body').oninput = (ev) => { draft.outreach.body = ev.target.value; };
-  body.querySelector('.add-followup').onclick = (ev) => {
-    ev.preventDefault();
-    draft.followups.push({ delayHours: 48, label: '', subject: '', body: '' });
-    renderFollowups();
-    refreshSummary();
-  };
 
   body.querySelector('.tpl-save').onclick = async (ev) => {
     ev.preventDefault();
@@ -1173,13 +1028,6 @@ function buildTemplateBlock(template) {
         name: draft.name.trim(),
         is_default: draft.is_default,
         ai_replies_enabled: draft.ai_replies_enabled,
-        outreach: { subject: draft.outreach.subject, body: draft.outreach.body },
-        followups: draft.followups.map((s) => ({
-          delayHours: Number(s.delayHours) || 0,
-          label: s.label || '',
-          subject: s.subject || '',
-          body: s.body || '',
-        })),
       };
       if (template.id) {
         await api(`/api/templates/${template.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
@@ -1209,7 +1057,6 @@ function buildTemplateBlock(template) {
   }
 
   refreshSummary();
-  renderFollowups();
   return block;
 }
 
@@ -1219,8 +1066,7 @@ el('new-template-btn').addEventListener('click', () => {
   const block = buildTemplateBlock({
     name: '',
     is_default: false,
-    outreach: { subject: '', body: '' },
-    followups: [],
+    ai_replies_enabled: true,
   });
   root.prepend(block);
 });
@@ -1444,11 +1290,12 @@ function renderCampaignTemplatePicker(campaign) {
   noneOpt.textContent = `Use default — ${defaultLabel}`;
   select.appendChild(noneOpt);
 
+  const aiLabel = (t) => (t && t.ai_replies_enabled !== false ? 'AI auto-reply on' : 'AI auto-reply off');
+
   for (const t of state.templates) {
     const opt = document.createElement('option');
     opt.value = String(t.id);
-    const stepCount = Array.isArray(t.followups) ? t.followups.length : 0;
-    opt.textContent = `${t.name} · ${stepCount} follow-up${stepCount === 1 ? '' : 's'}`;
+    opt.textContent = `${t.name} · ${aiLabel(t)}`;
     if (campaign.template_id === t.id) opt.selected = true;
     select.appendChild(opt);
   }
@@ -1457,9 +1304,7 @@ function renderCampaignTemplatePicker(campaign) {
     const picked = select.value
       ? state.templates.find((t) => t.id === Number(select.value))
       : defaultTpl;
-    el('campaign-template-summary').textContent = picked
-      ? describeFollowups(picked.followups)
-      : '(no follow-ups configured)';
+    el('campaign-template-summary').textContent = picked ? aiLabel(picked) : '';
   };
   refreshSummary();
 
@@ -1484,7 +1329,6 @@ el('campaign-template-open-btn').addEventListener('click', () => {
 });
 
 (async () => {
-  await refreshAuth();
   await refreshTemplates();
   await refreshCampaigns();
 })();
