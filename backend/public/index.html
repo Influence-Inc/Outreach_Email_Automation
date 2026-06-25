@@ -84,6 +84,12 @@
             <button id="save-cpm-btn" class="small ghost" type="button">Save &amp; recalc offers</button>
             <span id="cpm-status" class="hint"></span>
           </div>
+          <div class="neg-cpm-row">
+            <label class="neg-cpm-label" for="campaign-instantly-id" title="UUID from the campaign URL in your Instantly.ai dashboard. This campaign's outreach + follow-up emails are sent from there.">Instantly campaign ID</label>
+            <input id="campaign-instantly-id" class="neg-cpm-input" type="text" style="width: 320px;" placeholder="env default (INSTANTLY_CAMPAIGN_ID)" />
+            <button id="save-instantly-btn" class="small ghost" type="button">Save</button>
+            <span id="instantly-status" class="hint"></span>
+          </div>
           <p id="fetch-status" class="hint" hidden></p>
           <div id="scrape-progress" class="hint" hidden>
             <span id="scrape-progress-text"></span>

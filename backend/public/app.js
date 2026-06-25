@@ -140,6 +140,8 @@ async function selectCampaign(id) {
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
   el('campaign-max-cpm').value = c.max_cpm != null ? c.max_cpm : '';
+  el('campaign-instantly-id').value = c.instantly_campaign_id || '';
+  el('instantly-status').textContent = '';
   el('campaign-template-card').hidden = false;
   renderCampaignTemplatePicker(c);
   await refreshCreators();
@@ -763,6 +765,27 @@ el('save-cpm-btn').addEventListener('click', async () => {
     status.textContent = `Saved. ${r.updated} creator(s) updated.`;
     await refreshCampaigns();
     await refreshCreators();
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el('save-instantly-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const raw = el('campaign-instantly-id').value.trim();
+  const status = el('instantly-status');
+  const btn = el('save-instantly-btn');
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ instantly_campaign_id: raw === '' ? null : raw }),
+    });
+    status.textContent = raw === '' ? 'Cleared — using env default.' : 'Saved.';
+    await refreshCampaigns();
   } catch (err) {
     status.textContent = `Failed: ${err.message}`;
   } finally {

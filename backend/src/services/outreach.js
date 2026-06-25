@@ -30,6 +30,7 @@ async function loadCreatorContext(creatorId) {
     `SELECT c.*,
             ca.name AS campaign_name,
             ca.brand_name AS brand_name,
+            ca.instantly_campaign_id AS instantly_campaign_id,
             et.id AS template_id,
             et.name AS template_name,
             et.outreach AS template_outreach,
@@ -122,11 +123,21 @@ async function sendOutreach(creatorId) {
   if (!prep.ok) throw new Error(prep.message);
   const { creator, to, trackingId } = prep;
 
+  // Route to this campaign's own Instantly campaign (its own outreach copy +
+  // follow-up sequence), falling back to the global env default when unmapped.
+  const instantlyCampaignId = creator.instantly_campaign_id || process.env.INSTANTLY_CAMPAIGN_ID;
+  if (!instantlyCampaignId) {
+    throw new Error(
+      `No Instantly campaign mapped for campaign "${creator.campaign_name}" and INSTANTLY_CAMPAIGN_ID is unset — ` +
+        'set the campaign\'s Instantly campaign ID in the dashboard or the env fallback',
+    );
+  }
+
   try {
     await instantly.addLeadToCampaign({
       email: to,
       firstName: creator.first_name || '',
-      campaignId: process.env.INSTANTLY_CAMPAIGN_ID,
+      campaignId: instantlyCampaignId,
     });
 
     await db.query(
@@ -144,6 +155,7 @@ async function sendOutreach(creatorId) {
        VALUES ($1, 'sent_outreach', $2, $3)`,
       [creatorId, trackingId, {
         via: 'instantly',
+        instantlyCampaignId,
         templateId: creator.template_id || null,
         templateName: creator.template_name || null,
       }],

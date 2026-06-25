@@ -149,6 +149,14 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_text  TEXT;
 -- The webhook resolves replies by case-insensitive email; index the expression.
 CREATE INDEX IF NOT EXISTS idx_creators_lower_email ON creators(LOWER(email));
 
+-- The Instantly.ai campaign each creator in this dashboard campaign is added to
+-- for outreach + follow-up sending. Lets every brand/campaign use its own
+-- Instantly campaign (its own subject/body/sequence). Falls back to the
+-- INSTANTLY_CAMPAIGN_ID env var when NULL. Copy the UUID from the campaign URL
+-- in the Instantly dashboard. Added here (not in the upstream-synced columns) so
+-- the campaigns sync upsert never clobbers it.
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS instantly_campaign_id TEXT;
+
 -- Suppression list. Any address in here is skipped by sendOutreach / sendFollowup.
 -- Populated by the /unsubscribe endpoint (RFC 8058 one-click + GET confirmation
 -- page), by bounce handling, and by manual admin action.

@@ -9,7 +9,7 @@ router.get('/', async (_req, res, next) => {
   try {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
-              c.template_id, c.max_cpm,
+              c.template_id, c.max_cpm, c.instantly_campaign_id,
               COUNT(cr.id)::int AS creator_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'pending_extraction')::int AS pending_extraction_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
@@ -48,14 +48,15 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Update campaign settings: template_id and/or max_cpm.
+// Update campaign settings: template_id, max_cpm and/or instantly_campaign_id.
 router.patch('/:id', async (req, res, next) => {
   try {
     const body = req.body || {};
     const hasTemplate = Object.prototype.hasOwnProperty.call(body, 'template_id');
     const hasMaxCpm = Object.prototype.hasOwnProperty.call(body, 'max_cpm');
-    if (!hasTemplate && !hasMaxCpm) {
-      return res.status(400).json({ error: 'template_id or max_cpm is required' });
+    const hasInstantly = Object.prototype.hasOwnProperty.call(body, 'instantly_campaign_id');
+    if (!hasTemplate && !hasMaxCpm && !hasInstantly) {
+      return res.status(400).json({ error: 'template_id, max_cpm or instantly_campaign_id is required' });
     }
 
     const sets = [];
@@ -79,6 +80,14 @@ router.patch('/:id', async (req, res, next) => {
       }
       params.push(maxCpm);
       sets.push(`max_cpm = $${params.length}`);
+    }
+
+    if (hasInstantly) {
+      const raw = body.instantly_campaign_id;
+      // Trim; treat empty string as "clear it" (fall back to env default).
+      const id = raw === null || raw === undefined ? null : String(raw).trim() || null;
+      params.push(id);
+      sets.push(`instantly_campaign_id = $${params.length}`);
     }
 
     const row = await db.one(
