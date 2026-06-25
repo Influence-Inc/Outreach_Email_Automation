@@ -1,8 +1,6 @@
 const crypto = require('crypto');
 const db = require('../db');
-const { renderOutreach } = require('./templates');
 const { verifyEmail } = require('./emailVerify');
-const { varyOutreach } = require('./outreachVary');
 const instantly = require('./instantly');
 
 // Pre-send verification is on by default; set EMAIL_VERIFY=0 to disable.
@@ -32,9 +30,7 @@ async function loadCreatorContext(creatorId) {
             ca.brand_name AS brand_name,
             ca.instantly_campaign_id AS instantly_campaign_id,
             et.id AS template_id,
-            et.name AS template_name,
-            et.outreach AS template_outreach,
-            et.followups AS template_followups
+            et.name AS template_name
      FROM creators c
      JOIN campaigns ca ON ca.id = c.campaign_id
      LEFT JOIN email_templates et
@@ -45,23 +41,6 @@ async function loadCreatorContext(creatorId) {
      WHERE c.id = $1`,
     [creatorId],
   );
-}
-
-function templateVars(creator, extras = {}) {
-  return {
-    firstName: creator.first_name || 'there',
-    brandName: creator.brand_name,
-    campaignName: creator.campaign_name,
-    creatorId: creator.id,
-    ...extras,
-  };
-}
-
-function activeTemplate(creator) {
-  return {
-    outreach: creator.template_outreach || null,
-    followups: Array.isArray(creator.template_followups) ? creator.template_followups : [],
-  };
 }
 
 // Render + pre-send checks, without actually sending. Returns
@@ -104,16 +83,12 @@ async function prepareOutreach(creatorId) {
     }
   }
 
-  const rendered = renderOutreach(activeTemplate(creator), templateVars(creator));
-  const { subject, body } = await varyOutreach(rendered);
   const trackingId = newTrackingId();
 
   return {
     ok: true,
     creator,
     to: creator.email,
-    subject,
-    body,
     trackingId,
   };
 }
