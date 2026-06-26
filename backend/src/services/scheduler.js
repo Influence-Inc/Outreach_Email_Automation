@@ -2,7 +2,7 @@ const db = require('../db');
 const negotiation = require('./negotiation');
 
 const intervalMs = () =>
-  Number(process.env.SCHEDULER_INTERVAL_MINUTES || 15) * 60 * 1000;
+  Number(process.env.SCHEDULER_INTERVAL_MINUTES || 5) * 60 * 1000;
 const negotiationFollowupDays = () => Number(process.env.NEGOTIATION_FOLLOWUP_DAYS || 2);
 
 let timer = null;
@@ -87,7 +87,7 @@ function start() {
   const claudeConfigured = !!process.env.ANTHROPIC_API_KEY;
   const claudeModel = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
   console.log(
-    `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 15} min (negotiation only — outreach/follow-ups via Instantly.ai); ` +
+    `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 5} min (negotiation only — outreach/follow-ups via Instantly.ai); ` +
       `negotiation follow-up idle ${negotiationFollowupDays()}d; ` +
       `Claude ${claudeConfigured ? `configured (model=${claudeModel})` : 'NOT configured (ANTHROPIC_API_KEY unset — replies will fall back to static templates)'}`,
   );
