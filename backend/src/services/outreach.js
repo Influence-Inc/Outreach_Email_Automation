@@ -109,11 +109,17 @@ async function sendOutreach(creatorId) {
   }
 
   try {
-    await instantly.addLeadToCampaign({
+    const resp = await instantly.addLeadToCampaign({
       email: to,
       firstName: creator.first_name || '',
       campaignId: instantlyCampaignId,
     });
+    // Log Instantly's response so we can see whether the lead was actually
+    // ADDED vs SKIPPED (skip_if_in_workspace silently skips an email that
+    // already exists anywhere in the workspace — the call still returns 200).
+    console.log(
+      `[outreach] creator ${creatorId} Instantly /leads/add response: ${JSON.stringify(resp).slice(0, 400)}`,
+    );
 
     await db.query(
       `UPDATE creators
