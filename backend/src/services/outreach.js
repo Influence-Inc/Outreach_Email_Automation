@@ -115,11 +115,24 @@ async function sendOutreach(creatorId) {
       campaignId: instantlyCampaignId,
     });
     // Log Instantly's response so we can see whether the lead was actually
-    // ADDED vs SKIPPED (skip_if_in_workspace silently skips an email that
-    // already exists anywhere in the workspace — the call still returns 200).
+    // ADDED vs SKIPPED (the call returns 200 even when nothing is enrolled).
     console.log(
       `[outreach] creator ${creatorId} Instantly /leads/add response: ${JSON.stringify(resp).slice(0, 400)}`,
     );
+
+    // Instantly returns success with leads_uploaded=0 when the lead was not
+    // actually enrolled (blocklist, invalid, duplicate, or skipped). Treat that
+    // as a failure so the creator isn't falsely marked 'outreach_sent'.
+    if (resp && typeof resp.leads_uploaded === 'number' && resp.leads_uploaded < 1) {
+      const why = [];
+      if (resp.skipped_count) why.push('skipped (already in workspace)');
+      if (resp.in_blocklist) why.push('in blocklist');
+      if (resp.invalid_email_count) why.push('invalid email');
+      if (resp.duplicate_email_count) why.push('duplicate in campaign');
+      throw new Error(
+        `Instantly enrolled 0 leads${why.length ? `: ${why.join(', ')}` : ' (no reason given)'}`,
+      );
+    }
 
     await db.query(
       `UPDATE creators

@@ -64,13 +64,20 @@ function textToHtml(text) {
 
 // Add a single lead to the outreach campaign. Instantly will send the
 // campaign's Step 1 email (outreach) and any configured follow-up steps
-// automatically. skip_if_in_workspace prevents double-adding on retry.
+// automatically.
+//
+// skip_if_in_workspace is deliberately FALSE: when true, Instantly silently
+// skips any email that already exists ANYWHERE in the workspace (e.g. added to
+// a different campaign during testing), returning success with leads_uploaded=0
+// and no email ever sent. Our own outreach_sent_at guard already prevents
+// re-adding the same creator, so we want the lead enrolled in THIS campaign
+// even if the address exists elsewhere.
 async function addLeadToCampaign({ email, firstName, campaignId }) {
   const id = campaignId || process.env.INSTANTLY_CAMPAIGN_ID;
   if (!id) throw new Error('INSTANTLY_CAMPAIGN_ID is not set');
   return request('POST', '/leads/add', {
     campaign_id: id,
-    skip_if_in_workspace: true,
+    skip_if_in_workspace: false,
     leads: [{ email, first_name: firstName }],
   });
 }
