@@ -97,7 +97,9 @@ router.post('/instantly', async (req, res) => {
 
     // The same email can exist across campaigns; attribute the reply to the
     // creator we most recently emailed (deterministic, not arbitrary).
-    const creator = await db.oneOrNone(
+    // db.one in this codebase returns null on no row (it is not pg-promise's
+    // throwing variant), so this is the right helper for an optional match.
+    const creator = await db.one(
       `SELECT id, status FROM creators
        WHERE LOWER(email) = LOWER($1)
        ORDER BY outreach_sent_at DESC NULLS LAST
