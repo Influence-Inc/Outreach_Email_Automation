@@ -337,12 +337,22 @@ async function sendNegotiationEmail(creator, email, kind) {
     if (!creator.instantly_reply_uuid) {
       throw new Error(`No instantly_reply_uuid for creator ${creator.id} — cannot send threaded reply`);
     }
+    // Instantly requires the sending mailbox (eaccount) on /emails/reply. It's
+    // captured from the reply webhook's email_account; INSTANTLY_EACCOUNT is an
+    // optional fallback for replies received before that field was stored.
+    const eaccount = creator.instantly_email_account || process.env.INSTANTLY_EACCOUNT || null;
+    if (!eaccount) {
+      throw new Error(
+        `No sending account (eaccount) for creator ${creator.id} — it is captured from the reply webhook; set INSTANTLY_EACCOUNT as a fallback`,
+      );
+    }
     await instantly.replyToEmail({
       replyToUuid: creator.instantly_reply_uuid,
+      eaccount,
       subject: email.subject,
       body: email.body,
     });
-    detail = { ...detail, replyToUuid: creator.instantly_reply_uuid };
+    detail = { ...detail, replyToUuid: creator.instantly_reply_uuid, eaccount };
   }
   await db.query(
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'sent_negotiation', $2)`,

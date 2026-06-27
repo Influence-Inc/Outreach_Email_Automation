@@ -61,6 +61,11 @@ function pickReplyUuid(body) {
     null
   );
 }
+// The connected mailbox that handled this conversation — required as `eaccount`
+// when sending a threaded reply back through Instantly's /emails/reply endpoint.
+function pickEmailAccount(body) {
+  return body.email_account || body.eaccount || null;
+}
 
 router.post('/instantly', async (req, res) => {
   // Respond 200 immediately — Instantly retries on non-2xx and gives only 30s.
@@ -88,6 +93,7 @@ router.post('/instantly', async (req, res) => {
     const email = pickEmail(body);
     const reply_text = pickReplyText(body);
     const reply_to_uuid = pickReplyUuid(body);
+    const email_account = pickEmailAccount(body);
     if (!email || !reply_text) {
       console.warn(
         `[webhook/instantly] reply missing fields (email=${!!email} text=${!!reply_text}); raw=${JSON.stringify(body).slice(0, 800)}`,
@@ -117,9 +123,10 @@ router.post('/instantly', async (req, res) => {
       `UPDATE creators
        SET latest_inbound_text = $2,
            instantly_reply_uuid = $3,
+           instantly_email_account = COALESCE($4, instantly_email_account),
            updated_at = NOW()
        WHERE id = $1`,
-      [creator.id, reply_text, reply_to_uuid || null],
+      [creator.id, reply_text, reply_to_uuid || null, email_account],
     );
 
     await markReplied(creator.id);

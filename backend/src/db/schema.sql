@@ -146,6 +146,10 @@ CREATE INDEX IF NOT EXISTS idx_creators_needs_human ON creators(needs_human) WHE
 -- the /webhook/instantly handler and consumed by negotiation.processReply().
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_reply_uuid TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_text  TEXT;
+-- The connected Instantly mailbox that handled the conversation (the webhook's
+-- email_account). Required as `eaccount` when sending a threaded reply via
+-- POST /api/v2/emails/reply.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_email_account TEXT;
 -- The webhook resolves replies by case-insensitive email; index the expression.
 CREATE INDEX IF NOT EXISTS idx_creators_lower_email ON creators(LOWER(email));
 

@@ -84,10 +84,12 @@ async function addLeadToCampaign({ email, firstName, campaignId }) {
 
 // Send a threaded reply within an existing Instantly conversation. reply_to_uuid
 // comes from the reply_received webhook payload and routes the reply into the
-// correct inbox + thread automatically.
-async function replyToEmail({ replyToUuid, subject, body }) {
+// correct thread; eaccount is the connected sending mailbox to reply FROM
+// (Instantly requires it — it's the email_account from the reply webhook).
+async function replyToEmail({ replyToUuid, eaccount, subject, body }) {
   return request('POST', '/emails/reply', {
     reply_to_uuid: replyToUuid,
+    eaccount,
     subject,
     body: { text: body, html: textToHtml(body) },
   });
