@@ -213,6 +213,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"request_counter_rate"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
     '',
     'Rules:',
+    `- Judge the creator's intent from the MEANING and tone of the whole reply, NEVER from specific keywords. Any enthusiasm, curiosity, or request to hear more — e.g. "sounds great", "amazing", "interesting", "cool", "tell me more", "share the details", "what did you have in mind", "I'd love to know more", "I'm in", "sure", a simple "yes", or even just a positive emoji — all mean the creator wants to proceed. Treat those as interest: classify as "asking_details" when REPLY 1 has not been sent yet, otherwise "answer_question". A creator does NOT have to say the word "yes" or "interested" to be interested. Reserve "declined" strictly for replies whose overall meaning is that they do NOT want to proceed.`,
     '- "shared_rate": the creator stated a rate/budget/price. Put the numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
     '- "counter": the creator pushed back on a prior offer with a different number/terms. Put any numeric amount in quoted_rate. email=null, send_now=false.',
     `- "request_counter_rate": the creator pushed back on the offer we already sent ("this rate is too low", "can you do better?", "I usually charge more", "not quite what I had in mind") but did NOT name a specific number. Use this ONLY when an offer is already on the table (the current stage is AWAITING_DECISION) — otherwise prefer "asking_details" or "answer_question". Write a SHORT plain-text reply that (1) warmly acknowledges their hesitation without committing to anything specific, (2) asks them directly what rate would work for them, (3) signals openness to working it out together. Do NOT propose a number, do NOT promise to match, do NOT mention any offer specifics — those come from admin approval. Sign "- ${v.managerName}". send_now=true. quoted_rate=null.`,
@@ -288,7 +289,19 @@ function heuristicReply(text, ctx) {
       send_now: false,
     };
   }
-  if (/\b(not interested|no thanks|no longer|unfortunately|we'?ll pass|i'?ll pass|too busy|not available|maybe later|another time)\b/i.test(text)) {
+  // Fallback intent read (only used when Claude is unavailable). Decline solely
+  // on a clear disinterest signal AND only when the reply shows no sign of
+  // interest — so "unfortunately I was slow, but this sounds amazing" is read as
+  // interested, not declined. Any enthusiasm/curiosity counts as interest.
+  const interested =
+    /\b(interested|sounds?\s+(great|good|amazing|interesting|cool)|amazing|awesome|great|cool|love\s+(it|this)|tell me more|more details?|share\s+(the\s+)?details?|learn more|keen|i'?m in|let'?s\s+(do|talk|chat|go)|sure|yes|yeah|yep|absolutely)\b/i.test(
+      text,
+    );
+  const declined =
+    /\b(not interested|no thanks?|no longer|we'?ll pass|i'?ll pass|too busy|not available|maybe later|another time|please stop|not the right fit|not a good fit)\b/i.test(
+      text,
+    );
+  if (declined && !interested) {
     return {
       understanding: '(heuristic) creator declined',
       action: 'declined',
