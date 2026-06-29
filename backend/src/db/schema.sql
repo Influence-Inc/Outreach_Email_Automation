@@ -150,6 +150,10 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_text  TEXT;
 -- email_account). Required as `eaccount` when sending a threaded reply via
 -- POST /api/v2/emails/reply.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_email_account TEXT;
+-- The exact subject of the creator's reply (the webhook's reply_subject). Echoed
+-- verbatim when we reply so Gmail keeps the whole exchange in ONE thread — a
+-- changed subject makes Gmail split off a new conversation even with In-Reply-To.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_reply_subject TEXT;
 -- The webhook resolves replies by case-insensitive email; index the expression.
 CREATE INDEX IF NOT EXISTS idx_creators_lower_email ON creators(LOWER(email));
 

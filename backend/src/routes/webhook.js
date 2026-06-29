@@ -72,6 +72,12 @@ function pickEmailAccount(body) {
 function pickCampaignId(body) {
   return body.campaign_id || body.campaign || null;
 }
+// The exact subject of the creator's reply. We echo it verbatim when replying so
+// Gmail threads our message into the same conversation (a changed subject splits
+// the thread even when In-Reply-To is set).
+function pickReplySubject(body) {
+  return body.reply_subject || body.subject || null;
+}
 
 router.post('/instantly', async (req, res) => {
   // Respond 200 immediately — Instantly retries on non-2xx and gives only 30s.
@@ -100,6 +106,7 @@ router.post('/instantly', async (req, res) => {
     const reply_text = pickReplyText(body);
     const reply_to_uuid = pickReplyUuid(body);
     const email_account = pickEmailAccount(body);
+    const reply_subject = pickReplySubject(body);
     const campaignId = pickCampaignId(body);
     if (!email || !reply_text) {
       console.warn(
@@ -155,9 +162,10 @@ router.post('/instantly', async (req, res) => {
        SET latest_inbound_text = $2,
            instantly_reply_uuid = $3,
            instantly_email_account = COALESCE($4, instantly_email_account),
+           instantly_reply_subject = COALESCE($5, instantly_reply_subject),
            updated_at = NOW()
        WHERE id = $1`,
-      [creator.id, reply_text, reply_to_uuid || null, email_account],
+      [creator.id, reply_text, reply_to_uuid || null, email_account, reply_subject],
     );
 
     await markReplied(creator.id);

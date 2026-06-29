@@ -328,12 +328,13 @@ async function countSentNegotiation(creatorId) {
   return r ? r.n : 0;
 }
 
-// Every negotiation email for a creator shares ONE subject so the whole
-// conversation stays in a single tidy thread: "Paid Partnership with <brand>",
-// matching the outreach subject. Threading is already guaranteed by the
-// reply_to_uuid handle; a uniform subject just keeps the displayed thread clean
-// instead of a different Claude/template subject on each message.
+// The subject for every negotiation email MUST equal the conversation's subject,
+// or Gmail splits our message into a new thread even with In-Reply-To set. So we
+// echo the exact subject of the creator's reply (captured by the webhook as
+// instantly_reply_subject). Only when that's missing do we synthesize one from
+// the brand as a last resort.
 function threadSubject(creator) {
+  if (creator.instantly_reply_subject) return creator.instantly_reply_subject;
   const brand = creator.brand_name || process.env.BRAND_NAME || 'INFLUENCE';
   return `Paid Partnership with ${brand}`;
 }
