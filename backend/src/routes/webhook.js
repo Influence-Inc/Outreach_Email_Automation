@@ -66,6 +66,12 @@ function pickReplyUuid(body) {
 function pickEmailAccount(body) {
   return body.email_account || body.eaccount || null;
 }
+// Which Instantly campaign the reply came from. Critical when the same address
+// is a lead in more than one campaign — it disambiguates which creator row owns
+// the reply so we never attribute it to the wrong campaign's conversation.
+function pickCampaignId(body) {
+  return body.campaign_id || body.campaign || null;
+}
 
 router.post('/instantly', async (req, res) => {
   // Respond 200 immediately — Instantly retries on non-2xx and gives only 30s.
@@ -94,6 +100,7 @@ router.post('/instantly', async (req, res) => {
     const reply_text = pickReplyText(body);
     const reply_to_uuid = pickReplyUuid(body);
     const email_account = pickEmailAccount(body);
+    const campaignId = pickCampaignId(body);
     if (!email || !reply_text) {
       console.warn(
         `[webhook/instantly] reply missing fields (email=${!!email} text=${!!reply_text}); raw=${JSON.stringify(body).slice(0, 800)}`,
@@ -101,17 +108,41 @@ router.post('/instantly', async (req, res) => {
       return;
     }
 
-    // The same email can exist across campaigns; attribute the reply to the
-    // creator we most recently emailed (deterministic, not arbitrary).
-    // db.one in this codebase returns null on no row (it is not pg-promise's
-    // throwing variant), so this is the right helper for an optional match.
-    const creator = await db.one(
-      `SELECT id, status FROM creators
-       WHERE LOWER(email) = LOWER($1)
-       ORDER BY outreach_sent_at DESC NULLS LAST
-       LIMIT 1`,
-      [email],
-    );
+    // The same address can be a lead in multiple campaigns. The webhook tells us
+    // which Instantly campaign the reply came from, so attribute it to the creator
+    // row in THAT campaign — never an arbitrary other one. COALESCE maps campaigns
+    // that rely on the INSTANTLY_CAMPAIGN_ID env fallback (instantly_campaign_id
+    // IS NULL) onto the env value so they still match.
+    // db.one returns null on no row in this codebase (not pg-promise's throwing
+    // variant), so it is the right helper for an optional match.
+    let creator = null;
+    if (campaignId) {
+      creator = await db.one(
+        `SELECT c.id, c.status FROM creators c
+         JOIN campaigns ca ON ca.id = c.campaign_id
+         WHERE LOWER(c.email) = LOWER($1)
+           AND COALESCE(ca.instantly_campaign_id, $3) = $2
+         ORDER BY c.outreach_sent_at DESC NULLS LAST
+         LIMIT 1`,
+        [email, campaignId, process.env.INSTANTLY_CAMPAIGN_ID || null],
+      );
+    }
+    if (!creator) {
+      // No campaign match (unmapped campaign, or campaign_id absent) — fall back
+      // to email-only, most recently emailed.
+      creator = await db.one(
+        `SELECT id, status FROM creators
+         WHERE LOWER(email) = LOWER($1)
+         ORDER BY outreach_sent_at DESC NULLS LAST
+         LIMIT 1`,
+        [email],
+      );
+      if (creator && campaignId) {
+        console.warn(
+          `[webhook/instantly] no creator mapped to instantly campaign ${campaignId} for ${email}; fell back to email-only attribution (creator ${creator.id})`,
+        );
+      }
+    }
     if (!creator) {
       console.warn(`[webhook/instantly] reply from unknown email: ${email}`);
       return;
@@ -130,7 +161,9 @@ router.post('/instantly', async (req, res) => {
     );
 
     await markReplied(creator.id);
-    console.log(`[webhook/instantly] reply_received for creator ${creator.id}`);
+    console.log(
+      `[webhook/instantly] reply_received for creator ${creator.id} (instantly campaign ${campaignId || 'n/a'})`,
+    );
   } catch (err) {
     console.error('[webhook/instantly] error:', err.message);
   }
