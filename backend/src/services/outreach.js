@@ -118,10 +118,12 @@ async function sendOutreach(creatorId) {
       // brand and matches the negotiation reply subject (same thread).
       companyName: creator.brand_name || process.env.BRAND_NAME || '',
     });
-    // Log Instantly's response so we can see whether the lead was actually
-    // ADDED vs SKIPPED (the call returns 200 even when nothing is enrolled).
+    // Log the brand we sent as company_name + Instantly's response, so we can
+    // see both that the right per-campaign brand was sent AND whether the lead
+    // was actually ADDED vs SKIPPED (the call returns 200 even when nothing is
+    // enrolled).
     console.log(
-      `[outreach] creator ${creatorId} Instantly /leads/add response: ${JSON.stringify(resp).slice(0, 400)}`,
+      `[outreach] creator ${creatorId} company_name="${creator.brand_name || ''}" (campaign "${creator.campaign_name}") Instantly /leads/add response: ${JSON.stringify(resp).slice(0, 400)}`,
     );
 
     // Instantly returns success with leads_uploaded=0 when the lead was not
