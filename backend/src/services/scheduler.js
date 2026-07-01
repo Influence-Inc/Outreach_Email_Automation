@@ -1,5 +1,7 @@
 const db = require('../db');
 const negotiation = require('./negotiation');
+const replyExamples = require('./replyExamples');
+const replyLearning = require('./replyLearning');
 
 const intervalMs = () =>
   Number(process.env.SCHEDULER_INTERVAL_MINUTES || 5) * 60 * 1000;
@@ -78,25 +80,55 @@ async function pollNegotiations() {
   }
 }
 
+// Keep the in-memory example bank in sync with the reply_examples table.
+// Inserts made by THIS process update the cache directly; the periodic
+// refresh picks up rows written by other means (SQL, another instance).
+const EXAMPLES_REFRESH_MS = 10 * 60 * 1000;
+async function refreshLearning() {
+  if (replyExamples.dbCacheAgeMs() > EXAMPLES_REFRESH_MS) {
+    await replyExamples
+      .refreshFromDb()
+      .catch((err) => console.error('reply examples refresh failed:', err.message));
+  }
+  // Continuous learning: sweep the connected mailbox for new
+  // (creator inbound → manager reply) pairs when a harvest is due.
+  // No-ops unless LEARN_HARVEST_HOURS elapsed since the last run.
+  await replyLearning
+    .maybeRunScheduledHarvest()
+    .catch((err) => console.error('scheduled harvest failed:', err.message));
+}
+
 async function tick() {
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
+  await refreshLearning().catch((err) => console.error('learning tick failed:', err));
 }
 
 function start() {
   if (timer) return;
   const claudeConfigured = !!process.env.ANTHROPIC_API_KEY;
   const claudeModel = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
+  const harvestHoursRaw = process.env.LEARN_HARVEST_HOURS;
+  const harvestHours = harvestHoursRaw == null || harvestHoursRaw === '' ? 24 : Number(harvestHoursRaw);
   console.log(
     `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 5} min (negotiation only — outreach/follow-ups via Instantly.ai); ` +
       `negotiation follow-up idle ${negotiationFollowupDays()}d; ` +
-      `Claude ${claudeConfigured ? `configured (model=${claudeModel})` : 'NOT configured (ANTHROPIC_API_KEY unset — replies will fall back to static templates)'}`,
+      `Claude ${claudeConfigured ? `configured (model=${claudeModel})` : 'NOT configured (ANTHROPIC_API_KEY unset — replies will fall back to static templates)'}; ` +
+      `reply learning: delegate capture ${/^(0|false|no)$/i.test(String(process.env.LEARN_FROM_DELEGATE || '')) ? 'OFF' : 'on'}, ` +
+      `inbox harvest ${harvestHours > 0 ? `every ${harvestHours}h` : 'OFF'}`,
   );
   timer = setInterval(() => {
     tick();
   }, intervalMs());
-  // Run once on boot, but don't block startup.
+  // Run once on boot, but don't block startup. Load the learned example bank
+  // first so the first processed reply already benefits from it.
   setTimeout(() => {
-    tick();
+    replyExamples
+      .refreshFromDb()
+      .then((rows) => {
+        if (rows.length) console.log(`Loaded ${rows.length} learned reply examples from the DB`);
+      })
+      .catch((err) => console.error('reply examples initial load failed:', err.message))
+      .finally(() => tick());
   }, 5000);
 }
 

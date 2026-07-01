@@ -8,13 +8,20 @@
 // picks up the schema, the action taxonomy, and the team's tone from the
 // demonstrations.
 //
-// Two data sources, merged at load time:
+// Three data sources, merged at load time:
 //   - data/seed_examples.json       — committed; small synthetic set so the
 //                                     tests run anywhere and prod always has
 //                                     at least a few examples to anchor on.
-//   - data/harvested_examples.json  — git-ignored; populated by
-//                                     scripts/harvest-inbox.js from real
-//                                     threads in the connected mailbox.
+//   - data/harvested_examples.json  — git-ignored legacy file from the old
+//                                     Gmail-based harvest; still read if
+//                                     present so nothing already learned is
+//                                     lost.
+//   - reply_examples table          — the continuous-learning bank. Fed by
+//                                     replyLearning.js: the scheduled
+//                                     Instantly mailbox harvest ('harvest')
+//                                     and live capture of human replies from
+//                                     the Delegate window ('delegate').
+//                                     Survives redeploys, unlike the file.
 //
 // Templated bodies: an outbound_body_template === "REPLY1" / "REPLY2" is
 // expanded to the canonical template body at load time, so the demonstration
@@ -22,10 +29,15 @@
 
 const fs = require('fs');
 const path = require('path');
+const db = require('../db');
 const templates = require('./negotiationTemplates');
 
 const SEED_PATH = path.join(__dirname, '..', '..', 'data', 'seed_examples.json');
 const HARVEST_PATH = path.join(__dirname, '..', '..', 'data', 'harvested_examples.json');
+
+// Newest N DB examples kept in memory. Plenty for a Jaccard scan per reply;
+// keeps an unbounded bank from bloating the process.
+const MAX_DB_EXAMPLES = Number(process.env.LEARN_MAX_EXAMPLES || 500);
 
 const ACTIONS = [
   'shared_rate',
@@ -58,10 +70,11 @@ function expandBody(ex) {
   return null;
 }
 
-function normalize(ex) {
+function normalize(ex, defaultSource = 'seed') {
   const body = expandBody(ex);
   return {
     id: ex.id || null,
+    source: ex.source || defaultSource,
     expected_action: ex.expected_action || 'other',
     expected_quoted_rate:
       ex.expected_quoted_rate == null ? null : Number(ex.expected_quoted_rate),
@@ -73,19 +86,99 @@ function normalize(ex) {
   };
 }
 
-let _cache = null;
-function loadAll({ force = false } = {}) {
-  if (_cache && !force) return _cache;
-  const merged = [...readJsonSafe(SEED_PATH), ...readJsonSafe(HARVEST_PATH)]
-    .map(normalize)
-    .filter((ex) => ex.inbound && ACTIONS.includes(ex.expected_action));
-  _cache = merged;
-  return merged;
+const isValid = (ex) => ex.inbound && ACTIONS.includes(ex.expected_action);
+
+// ── DB source (reply_examples table) ───────────────────────────────────────
+// Loaded into memory so pickExamplesFor stays synchronous (it runs inside the
+// negotiation hot path). Refreshed on boot, by the scheduler, and after every
+// insert. No DATABASE_URL (tests, file-only dev) → stays empty, silently.
+let _dbCache = [];
+let _dbLoadedAt = 0;
+
+async function refreshFromDb() {
+  if (!process.env.DATABASE_URL) return _dbCache;
+  try {
+    const rows = await db.many(
+      `SELECT id, source, expected_action, expected_quoted_rate, stage, inbound,
+              outbound_subject, outbound_body, notes
+       FROM reply_examples
+       WHERE enabled
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [MAX_DB_EXAMPLES],
+    );
+    _dbCache = rows.map((r) => normalize(r, 'harvest')).filter(isValid);
+    _dbLoadedAt = Date.now();
+  } catch (err) {
+    console.warn(`[replyExamples] refreshFromDb failed: ${err.message}`);
+  }
+  return _dbCache;
 }
 
-// Reset the in-memory cache. Used by tests that mutate the on-disk fixtures.
+function dbCacheAgeMs() {
+  return _dbLoadedAt ? Date.now() - _dbLoadedAt : Infinity;
+}
+
+// Persist one learned example and make it immediately pickable. Idempotent on
+// id (re-learning the same pair is a no-op). Returns true when a new row was
+// actually inserted.
+async function insertExample(ex) {
+  const norm = normalize(ex, ex.source || 'manual');
+  if (!isValid(norm) || !norm.id) return false;
+  if (!process.env.DATABASE_URL) return false;
+  const row = await db.one(
+    `INSERT INTO reply_examples
+       (id, source, expected_action, expected_quoted_rate, stage, inbound,
+        outbound_subject, outbound_body, notes, creator_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (id) DO NOTHING
+     RETURNING id`,
+    [
+      norm.id,
+      norm.source,
+      norm.expected_action,
+      norm.expected_quoted_rate,
+      norm.stage,
+      norm.inbound,
+      norm.outbound_subject,
+      norm.outbound_body,
+      norm.notes,
+      ex.creator_id || null,
+    ],
+  );
+  if (row) {
+    // Keep the in-memory bank hot without a full reload.
+    _dbCache = [norm, ..._dbCache.filter((e) => e.id !== norm.id)].slice(0, MAX_DB_EXAMPLES);
+  }
+  return !!row;
+}
+
+let _cache = null;
+function loadAll({ force = false } = {}) {
+  if (!_cache || force) {
+    _cache = [
+      ...readJsonSafe(SEED_PATH).map((ex) => normalize(ex, 'seed')),
+      ...readJsonSafe(HARVEST_PATH).map((ex) => normalize(ex, 'harvest')),
+    ].filter(isValid);
+  }
+  if (!_dbCache.length) return _cache;
+  // DB is the canonical store — on id collision (e.g. a legacy file later
+  // imported into the table) the DB row wins.
+  const dbIds = new Set(_dbCache.map((e) => e.id));
+  return [..._cache.filter((e) => !dbIds.has(e.id)), ..._dbCache];
+}
+
+// Reset the in-memory caches. Used by tests that mutate the on-disk fixtures.
 function _resetCache() {
   _cache = null;
+  _dbCache = [];
+  _dbLoadedAt = 0;
+}
+
+// Test-only: pretend these rows came from the reply_examples table.
+function _setDbCache(rows) {
+  _dbCache = (rows || []).map((r) => normalize(r, 'harvest')).filter(isValid);
+  _dbLoadedAt = Date.now();
 }
 
 // Cheap relevance score: Jaccard overlap of lowercased word tokens (≥3 chars).
@@ -132,8 +225,12 @@ function exampleToAssistantJson(ex) {
 // Strategy:
 //   1. Score every example by similarity to the inbound.
 //   2. If stage is known, lightly boost examples that match it.
-//   3. Greedy pick by score, but cap at maxPerAction per label.
-//   4. Drop ties by id for deterministic ordering (tests stay stable).
+//   3. Lightly boost 'delegate' examples — a human wrote those replies, so
+//      when a harvested (possibly AI-written) example and a human answer are
+//      about equally relevant, the human one should win the slot. Also keeps
+//      the bank from slowly reinforcing the model's own past outputs.
+//   4. Greedy pick by score, but cap at maxPerAction per label.
+//   5. Drop ties by id for deterministic ordering (tests stay stable).
 function pickExamplesFor(inboundText, { k = 4, stage = null, maxPerAction = 2, pool = null } = {}) {
   const examples = pool || loadAll();
   if (!examples.length) return [];
@@ -141,6 +238,7 @@ function pickExamplesFor(inboundText, { k = 4, stage = null, maxPerAction = 2, p
   const scored = examples.map((ex) => {
     let score = similarity(inboundText, ex.inbound);
     if (stage && ex.stage === stage) score += 0.05;
+    if (ex.source === 'delegate') score += 0.03;
     return { ex, score };
   });
 
@@ -181,8 +279,12 @@ module.exports = {
   examplesAsMessages,
   exampleToAssistantJson,
   similarity,
+  refreshFromDb,
+  dbCacheAgeMs,
+  insertExample,
   ACTIONS,
   SEED_PATH,
   HARVEST_PATH,
   _resetCache,
+  _setDbCache,
 };
