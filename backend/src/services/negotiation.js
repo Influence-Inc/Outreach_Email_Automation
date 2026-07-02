@@ -109,6 +109,83 @@ const numOrNull = (x) => {
 
 const isDryRun = () => /^(1|true|yes)$/i.test(String(process.env.DRY_RUN || ''));
 
+// ── Who is replying? ────────────────────────────────────────────────────────
+// A reply may come from someone acting on the creator's behalf — a manager,
+// agent, assistant, or agency rep. When it does, we greet THAT person by name
+// while still doing the deal with the creator. Detect the sender's first name
+// from an explicit self-introduction or a signature. Conservative by design:
+// returns null unless it finds a clear, plausible first name, so we never
+// invent or mis-address.
+const ROLE_WORD = 'manager|agent|assistant|team|talent|mgmt|management|rep|representative|partnerships?|agency|mcn';
+const NAME = "([A-Z][a-z]+(?:\\s[A-Z][a-z]+)?)"; // "Alex" or "Alex Chen"
+
+function firstToken(name) {
+  return String(name || '').trim().split(/\s+/)[0] || null;
+}
+
+// A real name, case-sensitively: each token starts with a capital. This is the
+// guard against the case-insensitive trigger match capturing a common word
+// (the `i` flag lets "thanks, sounds good" match "Thanks, <Name>", but the
+// captured "sounds" keeps its lowercase and is rejected here).
+function looksLikeName(s) {
+  return /^[A-Z][a-z]+(?:\s[A-Z][a-z]+)?$/.test(String(s || '').trim());
+}
+// Return the captured name's first token only if it's genuinely capitalized.
+function nameOf(m) {
+  return m && looksLikeName(m[1]) ? firstToken(m[1]) : null;
+}
+
+function detectSenderName(text) {
+  if (!text) return null;
+  const s = String(text).replace(/\r\n/g, '\n');
+
+  // 1. Signature line: "- Alex", "– Alex Chen", "Best, Alex", "Thanks, Alex",
+  //    "- Alex, Manager". Scan the last few non-empty lines.
+  const lines = s.split('\n').map((l) => l.trim()).filter(Boolean);
+  for (const line of lines.slice(-4)) {
+    let m = line.match(new RegExp(`^[-–—]\\s*${NAME}(?:\\s*,\\s*(?:the\\s+)?(?:${ROLE_WORD})\\b)?`, 'i'));
+    if (nameOf(m)) return nameOf(m);
+    m = line.match(new RegExp(`^(?:best|thanks|thank you|regards|cheers|warmly|sincerely)[,!]?\\s+${NAME}$`, 'i'));
+    if (nameOf(m)) return nameOf(m);
+  }
+
+  // 2. Self-introduction: "this is Alex", "I'm Alex", "I am Alex",
+  //    "Alex here", "Alex from XYZ", "on behalf of ... , Alex".
+  let m = s.match(new RegExp(`\\b(?:this is|i['’]?m|i am|it['’]?s)\\s+${NAME}`, 'i'));
+  if (nameOf(m)) return nameOf(m);
+  m = s.match(new RegExp(`\\b${NAME}\\s+here\\b`, 'i'));
+  if (nameOf(m)) return nameOf(m);
+  m = s.match(new RegExp(`\\b${NAME}[,]?\\s+(?:the\\s+)?(?:${ROLE_WORD})\\b`, 'i'));
+  if (nameOf(m)) return nameOf(m);
+
+  return null;
+}
+
+// The greeting name for our reply: the sender's name when someone clearly
+// replied on the creator's behalf, otherwise the creator's own first name.
+// Guards: the detected name must differ from the creator's, be a single
+// plausible token, and not be a role/brand word.
+const NOT_A_PERSON = new Set([
+  'the', 'team', 'hi', 'hello', 'hey', 'manager', 'agent', 'influence', 'thanks',
+]);
+function salutationFor(creatorFirstName, inboundText) {
+  const creator = firstToken(creatorFirstName);
+  const sender = detectSenderName(inboundText);
+  if (!sender) return creator || 'there';
+  if (NOT_A_PERSON.has(sender.toLowerCase())) return creator || 'there';
+  if (creator && sender.toLowerCase() === creator.toLowerCase()) return creator;
+  return sender; // someone else is writing on the creator's behalf
+}
+
+// Did the sender ask to see references / a portfolio / other creators? We only
+// share reference accounts on an explicit ask.
+function askedForReferences(text) {
+  if (!text) return false;
+  return /\b(reference|portfolio|examples?\s+(of\s+)?(your|past|previous|prior)\s+(work|content|collab|campaign)|past\s+work|previous\s+work|other\s+creators?|case\s+stud(y|ies)|who\s+(have|'?ve)\s+you\s+worked\s+with|brands?\s+you\s+(have|'?ve)?\s*worked\s+with|samples?\s+of|showcase|any\s+work\s+you)/i.test(
+    String(text),
+  );
+}
+
 // ── Context ───────────────────────────────────────────────────────────────
 async function loadCreator(creatorId) {
   return db.one(
@@ -151,6 +228,9 @@ function guidelinesBlock(ctx) {
 function templateVars(ctx) {
   return {
     firstName: ctx.firstName,
+    // The greeting name — the sender when someone replied on the creator's
+    // behalf, else the creator. Defaults to firstName when not resolved.
+    salutation: ctx.salutation || ctx.firstName,
     brandName: ctx.brandName,
     cadence: ctx.cadence,
     refs: ctx.refs,
@@ -194,6 +274,12 @@ async function handleCreatorReply(creator, replyText, ctx) {
       ctx.campaignName ? ` (campaign: ${ctx.campaignName})` : ''
     }.`,
     `Today's date is ${todayStr()}. The desired posting cadence is "${v.cadence}". When you mention timelines, compute an APPROXIMATE "all videos posted by" calendar date from today's date, the cadence, and the number of videos in the deal — do NOT print the cadence text where a date belongs.`,
+    v.salutation && v.salutation !== v.firstName
+      ? `This reply appears to be from ${v.salutation}, writing on ${v.firstName}'s behalf (a manager/agent/assistant). Greet ${v.salutation} by name ("Hi ${v.salutation},") while still referring to the creator as ${v.firstName} when you talk about the collaboration.`
+      : `Greet the creator by their first name ("Hi ${v.firstName},").`,
+    ctx.includeRefs
+      ? 'The sender asked to see examples of past work, so you MAY include the reference accounts.'
+      : 'The sender did NOT ask for references — do NOT include the reference accounts or a "Past content references" section in this reply.',
     '',
     `Current stage: ${describeStage(ctx.stage)}`,
     ctx.hasStats
@@ -218,15 +304,18 @@ async function handleCreatorReply(creator, replyText, ctx) {
     '- "shared_rate": the creator stated a rate/budget/price. Put the numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
     '- "counter": the creator pushed back on a prior offer with a different number/terms. Put any numeric amount in quoted_rate. email=null, send_now=false.',
     `- "request_counter_rate": the creator pushed back on the offer we already sent ("this rate is too low", "can you do better?", "I usually charge more", "not quite what I had in mind") but did NOT name a specific number. Use this ONLY when an offer is already on the table (the current stage is AWAITING_DECISION) — otherwise prefer "asking_details" or "answer_question". Write a SHORT plain-text reply that (1) warmly acknowledges their hesitation without committing to anything specific, (2) asks them directly what rate would work for them, (3) signals openness to working it out together. Do NOT propose a number, do NOT promise to match, do NOT mention any offer specifics — those come from admin approval. Sign "- ${v.managerName}". send_now=true. quoted_rate=null.`,
-    `- "asking_details": the creator is interested but has not yet seen the standard collab pitch. Use this for the FIRST substantive reply when we have not yet sent REPLY 1. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", references: ${v.refs}, sign "- ${v.managerName}"). In Timelines, propose the cadence "${v.cadence}" and an approximate posted-by date you compute from today's date for a 2-video package. send_now=true. quoted_rate=null.`,
-    `- "answer_question": the creator asked a specific factual question about an already-discussed deal. Common topics that ARE safe to answer from the REPLY 1 / REPLY 2 templates and the campaign context above: posting platform (Instagram only, no TikTok/YouTube cross-posting in this deal), content format (Reels), posting cadence ("${v.cadence}"), approximate timeline / posted-by date, creative freedom (yes, no script approval required), exclusivity (none), what we need from them (their rate, then we share a tailored offer; once accepted, posting can begin), who Influence is (a brand-partnerships team — point to references ${v.refs} if asked for examples), payment timing (per the "Payment details" block in REPLY 2: after the post is up and verified). Write a SHORT plain-text reply that (1) directly answers their question in 1-3 sentences using ONLY facts from the templates / campaign context above or facts our team already stated in the example exchanges shown before this message, then (2) one short follow-up line keeping the negotiation moving — if they have not shared a rate yet, ask for it; if an offer is on the table awaiting their decision, gently nudge for it; otherwise leave the door open. Sign "- ${v.managerName}". send_now=true. quoted_rate=null. NEVER invent specifics that are not in the campaign context, templates, past example exchanges, or already-quoted offer — if you would have to guess a number, a date beyond what cadence-math gives you, or any term not covered by those sources, use "escalate" instead.`,
+    `- "asking_details": the creator is interested but has not yet seen the standard collab pitch. Use this for the FIRST substantive reply when we have not yet sent REPLY 1. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", sign "- ${v.managerName}"). In Timelines, propose the cadence "${v.cadence}" and an approximate posted-by date you compute from today's date for a 2-video package. Include the "Past content references" section ONLY if the sender explicitly asked to see examples of past work / a portfolio / other creators we've worked with — otherwise drop that whole section from your adaptation. send_now=true. quoted_rate=null.`,
+    `- "answer_question": the creator asked a specific factual question about an already-discussed deal. Common topics that ARE safe to answer from the REPLY 1 / REPLY 2 templates and the campaign context above: posting platform (Instagram only, no TikTok/YouTube cross-posting in this deal), content format (Reels), posting cadence ("${v.cadence}"), approximate timeline / posted-by date, creative freedom (yes, no script approval required), exclusivity (none), what we need from them (their rate, then we share a tailored offer; once accepted, posting can begin), who Influence is (a brand-partnerships team — share reference accounts (${v.refs}) ONLY when the sender asked to see examples of past work / a portfolio / other creators we've worked with), payment timing (per the "Payment details" block in REPLY 2: after the post is up and verified). Write a SHORT reply that (1) directly answers their question in 1-3 sentences using ONLY facts from the templates / campaign context above or facts our team already stated in the example exchanges shown before this message, then (2) one short follow-up line keeping the negotiation moving — if they have not shared a rate yet, ask for it; if an offer is on the table awaiting their decision, gently nudge for it; otherwise leave the door open. Sign "- ${v.managerName}". send_now=true. quoted_rate=null. NEVER invent specifics that are not in the campaign context, templates, past example exchanges, or already-quoted offer — if you would have to guess a number, a date beyond what cadence-math gives you, or any term not covered by those sources, use "escalate" instead.`,
     `- "accepted": they accepted the offer. Write a short warm acceptance email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "declined": they are GENUINELY not interested or not available — explicit "no thanks", "passing on this one", "not the right fit", "too busy right now", "please stop reaching out". Do NOT use "declined" for "this rate is too low" or "can you do better" — those are "request_counter_rate" (if no number given) or "counter" (if a number is given). Write a brief gracious email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "escalate": use this when (a) the creator asks about money or contractual terms outside what is already in the templates / approved offer (a rate bump, a different payment structure, a usage-rights ask, an NDA, a legal question, a dispute, a complaint); OR (b) the creator's question references specifics not present in the campaign context, templates, past example exchanges, or already-quoted offer (a different brand, a different campaign, a custom timeline, a special exception); OR (c) the message is unusual, emotionally heated, or otherwise needs a human decision. email=null, send_now=false; a human will take over. When in doubt about whether you have enough information to answer correctly, escalate — but prefer "answer_question" for benign factual questions the templates or past example exchanges DO cover.`,
     `- "other": only a trivial acknowledgement that needs no action (e.g. "got it, thanks"). email=null, send_now=false.`,
     '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
     '- Some (user → assistant) turn pairs may precede the real message below: those are REAL exchanges from our past negotiations, showing the correct output for a similar inbound. Treat the facts, decisions, and phrasing in their replies as team-approved knowledge. When the new message closely matches an example where our team answered directly, answer the same way instead of escalating — but never copy a dollar amount from an example, and never reuse another creator\'s name or deal specifics.',
-    `- The creator's first name is "${v.firstName}". The email body must be plain text with line breaks.`,
+    `- Salutation name — the reply may not be from the creator themselves. It may be from a manager, agent, assistant, MCN, agency, or brand-partnerships rep writing on the creator's behalf. Detect the sender's first name from the reply's opening ("Hi, this is Alex, ${v.firstName}'s manager"), signature block ("- Alex", "Best, Alex Chen"), or self-introduction ("I'm Alex from XYZ Talent"). If the sender's name is clearly different from "${v.firstName}", address that person by THEIR first name in the salutation ("Hi Alex,"). Still refer to the creator as "${v.firstName}" when discussing the collaboration itself — the deal is with the creator, not the sender. If the sender's identity is ambiguous, address "${v.firstName}" or fall back to "Hi there,"; never guess a name.`,
+    `- Reference accounts (${v.refs}) are a portfolio credential — DO NOT include them proactively. Only include them when the sender explicitly asked to see examples of past work, other creators we've worked with, our portfolio, or references. When adapting REPLY 1 without such an ask, drop the "Past content references" section from your email entirely.`,
+    `- Formatting — the delivery layer renders inline markdown as HTML in the sent email. Use **text** to bold a section header or key label (e.g. **Content Style**, **Deliverables & Rates**, **Timelines**, **Payment details**), and [label](https://example.com) for any hyperlink. Match the format spec in the team guidelines above when it prescribes what to bold or link; do not over-format. Everything else stays plain text with line breaks — no other markdown (no headings, no lists syntax beyond the "-" bullets already in the templates, no italics).`,
+    `- The creator's first name is "${v.firstName}" (used when talking about the creator; may be overridden by the sender's actual first name for the salutation, per the rule above).`,
   ].join('\n');
 
   // Few-shot examples picked from past labeled threads (seed bank + harvested
@@ -316,7 +405,7 @@ function heuristicReply(text, ctx) {
     understanding: '(heuristic) creator interested, no rate yet',
     action: 'asking_details',
     quoted_rate: null,
-    email: templates.reply1(v),
+    email: templates.reply1(v, { includeRefs: ctx.includeRefs }),
     send_now: true,
   };
 }
@@ -525,7 +614,11 @@ async function processReply(creatorId) {
   }
 
   const guidelines = await getGuidelines();
-  const ctx = ctxFor(creator, { guidelines });
+  // Resolve, from THIS inbound: who to greet (the sender may be replying on
+  // the creator's behalf) and whether they asked to see references.
+  const salutation = salutationFor(creator.first_name, inbound.text);
+  const includeRefs = askedForReferences(inbound.text);
+  const ctx = ctxFor(creator, { guidelines, salutation, includeRefs });
   const result = await handleCreatorReply(creator, inbound.text, ctx);
   // Visibility: surface Claude's classification + a snippet of its understanding
   // so it's obvious from Railway logs whether the model is doing the work.
@@ -608,7 +701,7 @@ async function applyReply(creator, ctx, result) {
       // "what rate would work for you?" reply, move to AWAITING_RATE so the
       // dashboard shows we're waiting on their counter, and log the request
       // on the rate timeline so the admin sees the negotiation re-opened.
-      const email = result.email || templates.reply1(v);
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, 'request_counter_rate');
       }
@@ -627,7 +720,7 @@ async function applyReply(creator, ctx, result) {
       // Claude wrote, and PRESERVE the existing negotiation stage — asking a
       // clarifying question shouldn't regress AWAITING_DECISION back to
       // AWAITING_RATE. Only set AWAITING_RATE if there's no stage yet.
-      const email = result.email || templates.reply1(v);
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, 'reply_qa');
       }
@@ -646,7 +739,7 @@ async function applyReply(creator, ctx, result) {
     }
     default: {
       // asking_details / other
-      const email = result.email || templates.reply1(v);
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, result.action === 'other' ? 'reply' : 'reply1');
       }
@@ -782,6 +875,9 @@ module.exports = {
   aiRepliesEnabledForCreator,
   loadCreator,
   ctxFor,
+  salutationFor,
+  detectSenderName,
+  askedForReferences,
   // Test-only.
   _setClient,
 };
