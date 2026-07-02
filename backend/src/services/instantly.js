@@ -53,14 +53,42 @@ async function request(method, path, body) {
   throw lastErr;
 }
 
-// Minimal text→HTML so newlines render as line breaks in the HTML part.
-function textToHtml(text) {
-  return String(text)
+// Render the model's body into HTML for the sent email. Supports a small
+// markdown subset the negotiation prompt asks Claude to use:
+//   **bold**           → <strong>bold</strong>
+//   [label](https://…) → <a href="https://…">label</a>
+//   bare https://…     → clickable link
+// Everything else stays plain text with <br>-preserved line breaks. HTML
+// escape runs first so the model can't inject tags via the body.
+function renderMarkdown(text) {
+  const esc = String(text)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\r?\n/g, '<br>\n');
+    .replace(/>/g, '&gt;');
+  // 1. Explicit markdown links FIRST so their URL isn't re-linkified next.
+  let out = esc.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    (_m, label, url) => `<a href="${url}">${label}</a>`,
+  );
+  // 2. Bare URLs — but not the ones already inside an href we just wrote.
+  out = out.replace(/(?<![">=])\bhttps?:\/\/[^\s<]+/g, (m) => `<a href="${m}">${m}</a>`);
+  // 3. Bold. Non-greedy, single line (avoids gobbling across paragraphs).
+  out = out.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+  // 4. Newlines → <br>.
+  return out.replace(/\r?\n/g, '<br>\n');
 }
+
+// Plain-text counterpart of the HTML body. Strips markdown markers so
+// text-only mail clients (Instantly falls back to `text` when the HTML part
+// is dropped) don't see raw ** or [label](url). URLs are rendered inline.
+function stripMarkdown(text) {
+  return String(text)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 ($2)')
+    .replace(/\*\*([^*\n]+?)\*\*/g, '$1');
+}
+
+// Kept for backward compatibility with anything importing the old name.
+const textToHtml = renderMarkdown;
 
 // Add a single lead to the outreach campaign. Instantly will send the
 // campaign's Step 1 email (outreach) and any configured follow-up steps
@@ -97,7 +125,9 @@ async function replyToEmail({ replyToUuid, eaccount, subject, body }) {
     reply_to_uuid: replyToUuid,
     eaccount,
     subject,
-    body: { text: body, html: textToHtml(body) },
+    // text = markdown-stripped so text-only clients see clean prose;
+    // html = markdown-rendered so bold and links land as formatting.
+    body: { text: stripMarkdown(body), html: renderMarkdown(body) },
   });
 }
 
@@ -114,4 +144,13 @@ async function listEmails({ limit = 100, startingAfter = null, eaccount = null }
   return request('GET', `/emails?${params.toString()}`);
 }
 
-module.exports = { addLeadToCampaign, replyToEmail, listEmails };
+module.exports = {
+  addLeadToCampaign,
+  replyToEmail,
+  listEmails,
+  // Exported for tests and any other caller that needs the same rendering
+  // logic outside the reply path.
+  renderMarkdown,
+  stripMarkdown,
+  textToHtml, // legacy alias
+};
