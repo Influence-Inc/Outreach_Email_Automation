@@ -174,3 +174,29 @@ CREATE TABLE IF NOT EXISTS email_suppressions (
   creator_id    INTEGER REFERENCES creators(id) ON DELETE SET NULL,
   suppressed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Continuous-learning bank for the negotiation model. Each row is one labeled
+-- (creator inbound → manager outbound) pair that replyExamples.js serves as a
+-- few-shot demonstration to Claude. Replaces the ephemeral
+-- data/harvested_examples.json file (which vanished on every redeploy).
+-- Sources:
+--   'harvest'  — periodic sweep of the connected mailbox via the Instantly API
+--   'delegate' — a human's reply from the Delegate window (the highest-value
+--                signal: it teaches the model answers to the exact questions
+--                it previously escalated)
+--   'manual'   — inserted by hand (SQL / future admin UI)
+CREATE TABLE IF NOT EXISTS reply_examples (
+  id                   TEXT PRIMARY KEY,
+  source               TEXT NOT NULL DEFAULT 'harvest',
+  expected_action      TEXT NOT NULL,
+  expected_quoted_rate NUMERIC(12,2),
+  stage                TEXT,
+  inbound              TEXT NOT NULL,
+  outbound_subject     TEXT,
+  outbound_body        TEXT,
+  notes                TEXT,
+  creator_id           INTEGER REFERENCES creators(id) ON DELETE SET NULL,
+  enabled              BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reply_examples_enabled ON reply_examples(enabled) WHERE enabled;

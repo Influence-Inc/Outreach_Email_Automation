@@ -101,4 +101,17 @@ async function replyToEmail({ replyToUuid, eaccount, subject, body }) {
   });
 }
 
-module.exports = { addLeadToCampaign, replyToEmail };
+// One page of mailbox emails (sent + received) from the Instantly unibox —
+// the read side of the connected mailbox (e.g. jennifer@useinfluence.xyz).
+// Used by the reply-learning harvest to reconstruct past (creator inbound →
+// manager reply) exchanges. Pagination is cursor-based: pass the previous
+// page's `next_starting_after` back as `startingAfter`.
+async function listEmails({ limit = 100, startingAfter = null, eaccount = null } = {}) {
+  const params = new URLSearchParams();
+  params.set('limit', String(Math.max(1, Math.min(100, limit))));
+  if (startingAfter) params.set('starting_after', String(startingAfter));
+  if (eaccount) params.set('eaccount', String(eaccount));
+  return request('GET', `/emails?${params.toString()}`);
+}
+
+module.exports = { addLeadToCampaign, replyToEmail, listEmails };
