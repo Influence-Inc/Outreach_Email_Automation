@@ -109,6 +109,83 @@ const numOrNull = (x) => {
 
 const isDryRun = () => /^(1|true|yes)$/i.test(String(process.env.DRY_RUN || ''));
 
+// ── Who is replying? ────────────────────────────────────────────────────────
+// A reply may come from someone acting on the creator's behalf — a manager,
+// agent, assistant, or agency rep. When it does, we greet THAT person by name
+// while still doing the deal with the creator. Detect the sender's first name
+// from an explicit self-introduction or a signature. Conservative by design:
+// returns null unless it finds a clear, plausible first name, so we never
+// invent or mis-address.
+const ROLE_WORD = 'manager|agent|assistant|team|talent|mgmt|management|rep|representative|partnerships?|agency|mcn';
+const NAME = "([A-Z][a-z]+(?:\\s[A-Z][a-z]+)?)"; // "Alex" or "Alex Chen"
+
+function firstToken(name) {
+  return String(name || '').trim().split(/\s+/)[0] || null;
+}
+
+// A real name, case-sensitively: each token starts with a capital. This is the
+// guard against the case-insensitive trigger match capturing a common word
+// (the `i` flag lets "thanks, sounds good" match "Thanks, <Name>", but the
+// captured "sounds" keeps its lowercase and is rejected here).
+function looksLikeName(s) {
+  return /^[A-Z][a-z]+(?:\s[A-Z][a-z]+)?$/.test(String(s || '').trim());
+}
+// Return the captured name's first token only if it's genuinely capitalized.
+function nameOf(m) {
+  return m && looksLikeName(m[1]) ? firstToken(m[1]) : null;
+}
+
+function detectSenderName(text) {
+  if (!text) return null;
+  const s = String(text).replace(/\r\n/g, '\n');
+
+  // 1. Signature line: "- Alex", "– Alex Chen", "Best, Alex", "Thanks, Alex",
+  //    "- Alex, Manager". Scan the last few non-empty lines.
+  const lines = s.split('\n').map((l) => l.trim()).filter(Boolean);
+  for (const line of lines.slice(-4)) {
+    let m = line.match(new RegExp(`^[-–—]\\s*${NAME}(?:\\s*,\\s*(?:the\\s+)?(?:${ROLE_WORD})\\b)?`, 'i'));
+    if (nameOf(m)) return nameOf(m);
+    m = line.match(new RegExp(`^(?:best|thanks|thank you|regards|cheers|warmly|sincerely)[,!]?\\s+${NAME}$`, 'i'));
+    if (nameOf(m)) return nameOf(m);
+  }
+
+  // 2. Self-introduction: "this is Alex", "I'm Alex", "I am Alex",
+  //    "Alex here", "Alex from XYZ", "on behalf of ... , Alex".
+  let m = s.match(new RegExp(`\\b(?:this is|i['’]?m|i am|it['’]?s)\\s+${NAME}`, 'i'));
+  if (nameOf(m)) return nameOf(m);
+  m = s.match(new RegExp(`\\b${NAME}\\s+here\\b`, 'i'));
+  if (nameOf(m)) return nameOf(m);
+  m = s.match(new RegExp(`\\b${NAME}[,]?\\s+(?:the\\s+)?(?:${ROLE_WORD})\\b`, 'i'));
+  if (nameOf(m)) return nameOf(m);
+
+  return null;
+}
+
+// The greeting name for our reply: the sender's name when someone clearly
+// replied on the creator's behalf, otherwise the creator's own first name.
+// Guards: the detected name must differ from the creator's, be a single
+// plausible token, and not be a role/brand word.
+const NOT_A_PERSON = new Set([
+  'the', 'team', 'hi', 'hello', 'hey', 'manager', 'agent', 'influence', 'thanks',
+]);
+function salutationFor(creatorFirstName, inboundText) {
+  const creator = firstToken(creatorFirstName);
+  const sender = detectSenderName(inboundText);
+  if (!sender) return creator || 'there';
+  if (NOT_A_PERSON.has(sender.toLowerCase())) return creator || 'there';
+  if (creator && sender.toLowerCase() === creator.toLowerCase()) return creator;
+  return sender; // someone else is writing on the creator's behalf
+}
+
+// Did the sender ask to see references / a portfolio / other creators? We only
+// share reference accounts on an explicit ask.
+function askedForReferences(text) {
+  if (!text) return false;
+  return /\b(reference|portfolio|examples?\s+(of\s+)?(your|past|previous|prior)\s+(work|content|collab|campaign)|past\s+work|previous\s+work|other\s+creators?|case\s+stud(y|ies)|who\s+(have|'?ve)\s+you\s+worked\s+with|brands?\s+you\s+(have|'?ve)?\s*worked\s+with|samples?\s+of|showcase|any\s+work\s+you)/i.test(
+    String(text),
+  );
+}
+
 // ── Context ───────────────────────────────────────────────────────────────
 async function loadCreator(creatorId) {
   return db.one(
@@ -151,6 +228,9 @@ function guidelinesBlock(ctx) {
 function templateVars(ctx) {
   return {
     firstName: ctx.firstName,
+    // The greeting name — the sender when someone replied on the creator's
+    // behalf, else the creator. Defaults to firstName when not resolved.
+    salutation: ctx.salutation || ctx.firstName,
     brandName: ctx.brandName,
     cadence: ctx.cadence,
     refs: ctx.refs,
@@ -194,6 +274,12 @@ async function handleCreatorReply(creator, replyText, ctx) {
       ctx.campaignName ? ` (campaign: ${ctx.campaignName})` : ''
     }.`,
     `Today's date is ${todayStr()}. The desired posting cadence is "${v.cadence}". When you mention timelines, compute an APPROXIMATE "all videos posted by" calendar date from today's date, the cadence, and the number of videos in the deal — do NOT print the cadence text where a date belongs.`,
+    v.salutation && v.salutation !== v.firstName
+      ? `This reply appears to be from ${v.salutation}, writing on ${v.firstName}'s behalf (a manager/agent/assistant). Greet ${v.salutation} by name ("Hi ${v.salutation},") while still referring to the creator as ${v.firstName} when you talk about the collaboration.`
+      : `Greet the creator by their first name ("Hi ${v.firstName},").`,
+    ctx.includeRefs
+      ? 'The sender asked to see examples of past work, so you MAY include the reference accounts.'
+      : 'The sender did NOT ask for references — do NOT include the reference accounts or a "Past content references" section in this reply.',
     '',
     `Current stage: ${describeStage(ctx.stage)}`,
     ctx.hasStats
@@ -319,7 +405,7 @@ function heuristicReply(text, ctx) {
     understanding: '(heuristic) creator interested, no rate yet',
     action: 'asking_details',
     quoted_rate: null,
-    email: templates.reply1(v),
+    email: templates.reply1(v, { includeRefs: ctx.includeRefs }),
     send_now: true,
   };
 }
@@ -528,7 +614,11 @@ async function processReply(creatorId) {
   }
 
   const guidelines = await getGuidelines();
-  const ctx = ctxFor(creator, { guidelines });
+  // Resolve, from THIS inbound: who to greet (the sender may be replying on
+  // the creator's behalf) and whether they asked to see references.
+  const salutation = salutationFor(creator.first_name, inbound.text);
+  const includeRefs = askedForReferences(inbound.text);
+  const ctx = ctxFor(creator, { guidelines, salutation, includeRefs });
   const result = await handleCreatorReply(creator, inbound.text, ctx);
   // Visibility: surface Claude's classification + a snippet of its understanding
   // so it's obvious from Railway logs whether the model is doing the work.
@@ -611,7 +701,7 @@ async function applyReply(creator, ctx, result) {
       // "what rate would work for you?" reply, move to AWAITING_RATE so the
       // dashboard shows we're waiting on their counter, and log the request
       // on the rate timeline so the admin sees the negotiation re-opened.
-      const email = result.email || templates.reply1(v);
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, 'request_counter_rate');
       }
@@ -630,7 +720,7 @@ async function applyReply(creator, ctx, result) {
       // Claude wrote, and PRESERVE the existing negotiation stage — asking a
       // clarifying question shouldn't regress AWAITING_DECISION back to
       // AWAITING_RATE. Only set AWAITING_RATE if there's no stage yet.
-      const email = result.email || templates.reply1(v);
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, 'reply_qa');
       }
@@ -649,7 +739,7 @@ async function applyReply(creator, ctx, result) {
     }
     default: {
       // asking_details / other
-      const email = result.email || templates.reply1(v);
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, result.action === 'other' ? 'reply' : 'reply1');
       }
@@ -785,6 +875,9 @@ module.exports = {
   aiRepliesEnabledForCreator,
   loadCreator,
   ctxFor,
+  salutationFor,
+  detectSenderName,
+  askedForReferences,
   // Test-only.
   _setClient,
 };
