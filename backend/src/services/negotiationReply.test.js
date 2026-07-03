@@ -125,6 +125,23 @@ test('offer email (combine) reuses REPLY1 details but never the references', () 
   assert.ok(!body.includes('Past content references'), 'offer email never introduces references');
 });
 
+test('offer email renders the video_bonus structure (base fee + bonus on threshold)', () => {
+  const offer = {
+    offer_type: 'video_bonus',
+    num_videos: 3,
+    base_fee: 9000,
+    flat_per_video: 3000,
+    bonus_amount: 2000,
+    bonus_threshold_views: 5000000,
+    flat_fee: 11000, // aggregate (base + bonus)
+  };
+  const { body } = templates.offerEmail(offer, { firstName: 'Dua', salutation: 'Dua', brandName: 'Acme' });
+  assert.ok(body.includes('$9,000 flat for 3 videos'), 'states the base fee and video count');
+  assert.ok(body.includes('$3,000 per video'), 'states the per-video rate');
+  assert.ok(body.includes('$2,000 bonus'), 'states the bonus amount');
+  assert.ok(body.includes('5,000,000 on Instagram'), 'states the bonus view threshold');
+});
+
 // ── 4. Delegate reply offer detection ───────────────────────────────────────
 
 test('extractOfferAmount picks up "$10k" shorthand from a delegate reply', () => {

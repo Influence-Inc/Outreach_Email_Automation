@@ -163,6 +163,23 @@ function describeOffer(offer, brandName) {
       `- No ad rights or exclusivity required.`
     );
   }
+  // video_bonus: a flat video package + a bonus that unlocks past a view target.
+  if (offer.offer_type === 'video_bonus') {
+    const n = Number(offer.num_videos || 1);
+    const base = Number(offer.base_fee != null ? offer.base_fee : offer.flat_fee || 0);
+    const per = offer.flat_per_video != null ? offer.flat_per_video : Math.round(base / n);
+    const bonus = Number(offer.bonus_amount || 0);
+    const threshold = Number(offer.bonus_threshold_views || 0);
+    return (
+      `We usually do performance-based deals with all our creators. We'd love to propose a flat package with a performance bonus:\n\n` +
+      `$${fmtMoney(base)} flat for ${n} video${n === 1 ? '' : 's'} — $${fmtMoney(per)} per video.\n` +
+      `- Plus a $${fmtMoney(bonus)} bonus if the combined views cross ${fmtNum(threshold)} on Instagram.\n` +
+      `- Views can come from a single video or multiple posts — combined total views will be counted.\n` +
+      `- Views counted for 7 days from each post's publish date.\n` +
+      `- Full creative freedom, so you can create engaging content around ${brandName} without it feeling like an ad!\n` +
+      `- No ad rights or exclusivity required.`
+    );
+  }
   // video_based / flat
   const n = Number(offer.num_videos || 1);
   const per = offer.flat_per_video != null ? offer.flat_per_video : Math.round(Number(offer.flat_fee) / n);

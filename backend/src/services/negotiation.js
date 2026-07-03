@@ -418,6 +418,8 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
   const offerDesc =
     offer.offer_type === 'view_based'
       ? `A view-based deal: $${offer.flat_fee} for a minimum of ${offer.view_guarantee} combined total views on Instagram (views counted for 7 days per post; combined across posts; full creative freedom; no exclusivity).`
+      : offer.offer_type === 'video_bonus'
+      ? `A flat package with a performance bonus: ${offer.num_videos} video(s) for $${offer.base_fee != null ? offer.base_fee : offer.flat_fee} base, plus a $${offer.bonus_amount} bonus if combined views cross ${offer.bonus_threshold_views} on Instagram (full creative freedom; no exclusivity).`
       : `A flat package: ${offer.num_videos} video(s) for $${offer.flat_fee} total (full creative freedom; no exclusivity).`;
 
   const system = [
