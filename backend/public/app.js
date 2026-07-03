@@ -227,17 +227,6 @@ function fmtViews(n) {
   return String(Math.round(n));
 }
 
-// Live CPM (mirrors pricing.cpmFor on the backend).
-function cpmFor(fee, views) {
-  return views ? Math.round((fee / views) * 1000 * 100) / 100 : null;
-}
-
-// Inverse of cpmFor: the fee implied by a CPM over a fixed view basis. Used by
-// the offer controls, where the admin sets CPM and the fee follows.
-function feeFor(cpm, views) {
-  return Math.round((Number(cpm) * Number(views)) / 1000);
-}
-
 // Compact relative time for the rate timeline ("just now", "5m ago", "2h ago").
 function fmtAgo(s) {
   if (!s) return '';
@@ -412,148 +401,341 @@ function renderTimeline(log) {
   return wrap;
 }
 
-// Offer dropdown + CPM slider + computed Fee + Approve & send. Returns a
-// standalone element (lives in the Delegate window now, not a table cell).
-// `onRefresh` runs after a successful approve so the caller can repaint.
-function buildOfferControls(r, onRefresh) {
-  const container = document.createElement('div');
-  container.className = 'neg-offer';
+// ── Offer configurator ────────────────────────────────────────────────────
+// Three editable deal structures (view-based / video-based / video + bonus),
+// all seeded from a "safe floor" (the creator's weakest recent video's views).
+// The admin shapes any structure, selects one, and Approve & send. The chosen
+// structure is serialized into the `custom_offer` shape the backend already
+// understands (offer_type view_based | video_based | video_bonus) and POSTed
+// to the same /offer endpoint. Replaces the old dropdown + CPM slider.
+
+const money = (n) => '$' + fmtNum(Math.round(Number(n) || 0));
+const numOr = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const round2 = (n) => Math.round(Number(n) * 100) / 100;
+
+const OC_ICONS = {
+  view: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
+  video: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"></rect><path d="m10 9 5 3-5 3Z" fill="currentColor" stroke="none"></path></svg>',
+  bonus: '<svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"></path></svg>',
+};
+
+function buildOfferConfigurator(r, onRefresh) {
+  const root = document.createElement('div');
+  root.className = 'offer-config';
+
+  const stats = r.ig_scraped_data && typeof r.ig_scraped_data === 'object' ? r.ig_scraped_data : {};
   const offers = Array.isArray(r.suggested_offers) ? r.suggested_offers : [];
-  // Detect a counter-offer scenario: any prior 'rate_offer_sent' event means
-  // this isn't the first approval — the admin is now setting a counter, not an
-  // initial offer. Label the controls so it's obvious which round they're in.
-  const priorOfferSent = Array.isArray(r.rate_log)
-    && r.rate_log.some((e) => e && e.type === 'rate_offer_sent');
+  const viewOffer = offers.find((o) => o.offer_type === 'view_based');
+  const seedCpm =
+    Math.round(Number((viewOffer && viewOffer.cpm_applied) || (offers[0] && offers[0].cpm_applied) || 12)) || 12;
+  const safeFloor0 = Math.round(Number(stats.min_views) || Number(stats.p50) || 1000000);
+
+  // A prior 'rate_offer_sent' means this is a counter-offer round, not the first.
+  const priorOfferSent =
+    Array.isArray(r.rate_log) && r.rate_log.some((e) => e && e.type === 'rate_offer_sent');
   const offerNoun = priorOfferSent ? 'counter offer' : 'offer';
-  const stage = r.negotiation_status
-    ? `<div class="neg-stage">${r.negotiation_status.replace(/_/g, ' ').toLowerCase()}</div>`
-    : '';
   const sent = r.negotiation_status === 'AWAITING_DECISION';
-  const approvedBadge = r.offer_approved
-    ? `<span class="neg-approved-badge ${sent ? 'sent' : ''}">${sent ? `✓ ${offerNoun} sent` : '✓ approved'}</span>`
-    : '';
-  if (!offers.length) {
-    container.innerHTML =
-      (stage || '') +
-      '<div class="meta">Scrape reel views to generate offers, or enter views in the Views column.</div>';
-    return container;
-  }
 
+  // Seed from an existing custom_offer (previous approval) when present, so
+  // reopening shows the last configuration; otherwise from the safe floor.
   const custom = r.custom_offer && typeof r.custom_offer === 'object' ? r.custom_offer : null;
-  let selectedId = (custom && custom.offer_id) || r.selected_offer_id || offers[0].offer_id;
-  let selected = offers.find((o) => o.offer_id === selectedId) || offers[0];
-  selectedId = selected.offer_id;
+  const bCpm0 = Math.max(1, seedCpm - 4);
+  const bUnlock0 = Math.round((safeFloor0 * 2 * 1.4) / 100000) * 100000 || safeFloor0;
+  const bBonus0 = Math.max(1000, Math.round(((safeFloor0 * 2) / 1000) * bCpm0 * 0.15 / 500) * 500);
+  const isType = (t) => custom && custom.offer_type === t;
+  const m = {
+    safeFloor: safeFloor0,
+    vViews: (isType('view_based') && custom.view_guarantee) || safeFloor0,
+    vCpm: (isType('view_based') && custom.cpm_applied) || seedCpm,
+    fVideos: (isType('video_based') && custom.num_videos) || 2,
+    fCpm: (isType('video_based') && custom.cpm_applied) || seedCpm,
+    bVideos: (isType('video_bonus') && custom.num_videos) || 2,
+    bCpm: (isType('video_bonus') && custom.cpm_applied) || bCpm0,
+    bUnlock: (isType('video_bonus') && custom.bonus_threshold_views) || bUnlock0,
+    bBonus: (isType('video_bonus') && custom.bonus_amount) || bBonus0,
+    selected: custom
+      ? custom.offer_type === 'view_based'
+        ? 'view'
+        : custom.offer_type === 'video_bonus'
+        ? 'bonus'
+        : 'video'
+      : 'view',
+  };
 
-  // The fixed view basis a fee is priced on: the guarantee for view deals, or
-  // the implied views behind a video deal's flat fee (flat_fee/cpm*1000).
-  // Computed once per selected offer so CPM and the read-only Fee don't chase
-  // each other.
-  const billableFor = (o) =>
-    Number(o.view_guarantee) ||
-    (o.cpm_applied ? Math.round((Number(o.flat_fee) / Number(o.cpm_applied)) * 1000) : 0);
+  const initial = avatarInitial(r);
+  const badge = sent
+    ? '<span class="oc-badge sent">✓ Offer sent</span>'
+    : '<span class="oc-badge pending">Awaiting approval</span>';
+  const approveLabel = priorOfferSent ? 'Re-approve &amp; send counter offer' : 'Approve &amp; send offer';
 
-  const seedFromCustom = custom && custom.offer_id === selectedId;
-  let billableViews = billableFor(selected);
-  let cpm =
-    seedFromCustom && custom.cpm_applied != null
-      ? Number(custom.cpm_applied)
-      : Number(selected.cpm_applied) || 0;
-
-  const cpmCeil = Math.max(...offers.map((o) => Number(o.cpm_applied) || 0), cpm, 1);
-  const cpmMax = Math.max(Math.ceil(cpmCeil * 2), 1);
-
-  const offerNounUcFirst = offerNoun.charAt(0).toUpperCase() + offerNoun.slice(1);
-  const approveLabel = r.offer_approved
-    ? `Re-approve &amp; send ${offerNoun}`
-    : `Approve &amp; send ${offerNoun}`;
-  container.innerHTML = `
-    <div class="neg-offer-head"><span class="neg-offer-title">${offerNounUcFirst}</span>${stage}${approvedBadge}</div>
-    <select class="neg-offer-select small"></select>
-    <div class="neg-offer-basis meta"></div>
-    <div class="neg-slider">
-      <label>CPM <b class="neg-cpm-val"></b></label>
-      <input type="range" class="neg-cpm" min="0" max="${cpmMax}" step="0.5" />
+  root.innerHTML = `
+    <div class="oc-header">
+      <div class="oc-id">
+        <div class="oc-avatar">${escapeHtml(initial)}</div>
+        <div>
+          <div class="oc-handle">
+            <a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || '')}</a>
+            ${r.first_name ? `<span class="oc-name"> · ${escapeHtml(r.first_name)}</span>` : ''}
+          </div>
+          <div class="oc-email">${escapeHtml(r.email || 'no email')}</div>
+        </div>
+      </div>
+      ${badge}
     </div>
-    <div class="neg-fee-badge"></div>
-    <button class="neg-approve" type="button">${approveLabel}</button>
-    <span class="neg-offer-status hint"></span>
+
+    <div class="oc-floor">
+      <div class="oc-floor-main">
+        <div class="oc-floor-label">Safe floor · per video <span class="oc-scraped">SCRAPED</span></div>
+        <input type="number" min="0" class="oc-input oc-floor-input num" data-k="safeFloor" value="${m.safeFloor}">
+        <div class="oc-sub">= <span data-r="safeFloorFmt"></span> guaranteed views · least-viewed recent video</div>
+      </div>
+      <div class="oc-floor-desc">The safe floor is the view count of the creator’s weakest recent video. It seeds the defaults below and drives every video-based structure.</div>
+    </div>
+
+    <div class="oc-deals">
+      <!-- VIEW -->
+      <div class="oc-deal" data-deal="view">
+        <div class="oc-deal-head">
+          <div class="oc-deal-icon view">${OC_ICONS.view}</div>
+          <div><div class="oc-deal-kicker">01 · GUARANTEED</div><div class="oc-deal-title">View-based deal</div></div>
+        </div>
+        <div class="oc-deal-desc">Pay a flat CPM against a guaranteed view count. Simplest, most predictable spend.</div>
+        <div class="oc-fields">
+          <div class="oc-field">
+            <label class="oc-field-label">Guaranteed views</label>
+            <input type="number" min="0" class="oc-input num" data-k="vViews" value="${m.vViews}">
+            <div class="oc-sub">= <span data-r="vViewsFmt"></span> views · seeded from safe floor</div>
+          </div>
+          <div class="oc-field">
+            <label class="oc-field-label">CPM</label>
+            <div class="oc-money"><span class="oc-money-prefix">$</span><input type="number" min="0" step="0.5" class="oc-input oc-money-input num" data-k="vCpm" value="${m.vCpm}"></div>
+          </div>
+        </div>
+        <div class="oc-divider"></div>
+        <div class="oc-rows">
+          <div class="oc-row"><span>Guarantees</span><b data-r="vViewsFmt"></b></div>
+          <div class="oc-row"><span>Effective CPM</span><b data-r="viewEff"></b></div>
+          <div class="oc-row oc-row-total"><span>Total fee</span><span class="oc-fee num" data-r="viewFee"></span></div>
+        </div>
+        <button class="oc-choose" data-choose="view" type="button">Choose this offer</button>
+      </div>
+
+      <!-- VIDEO -->
+      <div class="oc-deal" data-deal="video">
+        <div class="oc-deal-head">
+          <div class="oc-deal-icon video">${OC_ICONS.video}</div>
+          <div><div class="oc-deal-kicker">02 · DELIVERABLES</div><div class="oc-deal-title">Video-based deal</div></div>
+        </div>
+        <div class="oc-deal-desc">Pay per video at the safe-floor rate. Views scale with the number of posts.</div>
+        <div class="oc-fields">
+          <div class="oc-field">
+            <label class="oc-field-label">Number of videos</label>
+            <input type="number" min="1" step="1" class="oc-input num" data-k="fVideos" value="${m.fVideos}">
+            <div class="oc-sub">× <span data-r="safeFloorFmt"></span> floor = <span data-r="videoViewsFmt"></span> views</div>
+          </div>
+          <div class="oc-field">
+            <label class="oc-field-label">CPM</label>
+            <div class="oc-money"><span class="oc-money-prefix">$</span><input type="number" min="0" step="0.5" class="oc-input oc-money-input num" data-k="fCpm" value="${m.fCpm}"></div>
+          </div>
+        </div>
+        <div class="oc-divider"></div>
+        <div class="oc-rows">
+          <div class="oc-row"><span>Total views</span><b data-r="videoViewsFmt"></b></div>
+          <div class="oc-row"><span>Effective CPM</span><b data-r="videoEff"></b></div>
+          <div class="oc-row oc-row-total"><span>Total fee</span><span class="oc-fee num" data-r="videoFee"></span></div>
+        </div>
+        <button class="oc-choose" data-choose="video" type="button">Choose this offer</button>
+      </div>
+
+      <!-- BONUS -->
+      <div class="oc-deal" data-deal="bonus">
+        <div class="oc-deal-head">
+          <div class="oc-deal-icon bonus">${OC_ICONS.bonus}</div>
+          <div><div class="oc-deal-kicker">03 · UPSIDE</div><div class="oc-deal-title">Video deal + bonus</div></div>
+        </div>
+        <div class="oc-deal-desc">Lower base CPM plus a flat bonus that unlocks past a view threshold.</div>
+        <div class="oc-fields">
+          <div class="oc-field-pair">
+            <div class="oc-field">
+              <label class="oc-field-label">Videos</label>
+              <input type="number" min="1" step="1" class="oc-input num" data-k="bVideos" value="${m.bVideos}">
+            </div>
+            <div class="oc-field">
+              <label class="oc-field-label">Base CPM</label>
+              <div class="oc-money"><span class="oc-money-prefix">$</span><input type="number" min="0" step="0.5" class="oc-input oc-money-input num" data-k="bCpm" value="${m.bCpm}"></div>
+            </div>
+          </div>
+          <div class="oc-field">
+            <label class="oc-field-label">Bonus unlocks at (views)</label>
+            <input type="number" min="0" class="oc-input num" data-k="bUnlock" value="${m.bUnlock}">
+            <div class="oc-sub">= <span data-r="bUnlockFmt"></span> views · floor projects <span data-r="bonusViewsFmt"></span></div>
+          </div>
+          <div class="oc-field">
+            <label class="oc-field-label">Bonus amount</label>
+            <div class="oc-money"><span class="oc-money-prefix">$</span><input type="number" min="0" step="500" class="oc-input oc-money-input num" data-k="bBonus" value="${m.bBonus}"></div>
+          </div>
+        </div>
+        <div class="oc-divider"></div>
+        <div class="oc-rows">
+          <div class="oc-row"><span>Base fee (<span data-r="bonusViewsFmt"></span> views)</span><b data-r="baseFee"></b></div>
+          <div class="oc-row"><span>+ Bonus on unlock</span><b class="oc-plus">+ <span data-r="bBonusMoney"></span></b></div>
+          <div class="oc-row oc-row-inset"><span>Effective CPM at unlock</span><b data-r="bonusUnlockEff"></b></div>
+          <div class="oc-row oc-row-total"><span>Aggregate deal</span><span class="oc-fee num" data-r="aggregate"></span></div>
+        </div>
+        <button class="oc-choose" data-choose="bonus" type="button">Choose this offer</button>
+      </div>
+    </div>
+
+    <div class="oc-sendbar">
+      <div class="oc-sendbar-info">
+        <div class="oc-sendbar-label">Selected offer · @${escapeHtml(r.instagram_username || '')}</div>
+        <div class="oc-sendbar-headline"><span data-r="selName"></span> <span class="oc-dash">—</span> <span class="num" data-r="selFee"></span></div>
+        <div class="oc-sendbar-meta" data-r="selMeta"></div>
+      </div>
+      <div class="oc-sendbar-actions">
+        <span class="oc-send-status hint"></span>
+        <button class="oc-approve btn-primary" type="button">${approveLabel} →</button>
+      </div>
+    </div>
   `;
-  const sel = container.querySelector('.neg-offer-select');
-  const basisEl = container.querySelector('.neg-offer-basis');
-  const cpmRange = container.querySelector('.neg-cpm');
-  const cpmVal = container.querySelector('.neg-cpm-val');
-  const feeBadge = container.querySelector('.neg-fee-badge');
-  const approveBtn = container.querySelector('.neg-approve');
-  const statusEl = container.querySelector('.neg-offer-status');
 
-  for (const o of offers) {
-    const opt = document.createElement('option');
-    opt.value = o.offer_id;
-    // Flag whether the offer clears the creator's quoted rate (when known).
-    const meets = o.satisfies_creator_rate === true ? ' ✓' : o.satisfies_creator_rate === false ? ' ✗' : '';
-    opt.textContent = `${o.label} · $${fmtNum(o.flat_fee)}${meets}`;
-    if (o.offer_id === selectedId) opt.selected = true;
-    sel.appendChild(opt);
-  }
-
-  const isView = () => selected.offer_type === 'view_based';
-  const fmtCpm = (n) => '$' + (Math.round(Number(n) * 100) / 100);
-  const currentFee = () => feeFor(cpm, billableViews);
-  function syncFee() {
-    cpmVal.textContent = fmtCpm(cpm);
-    feeBadge.textContent = 'Fee $' + fmtNum(currentFee());
-  }
-  function syncUI() {
-    cpmRange.value = String(cpm);
-    basisEl.textContent = isView()
-      ? `Guarantees ${fmtViews(billableViews)} views`
-      : `${selected.num_videos} video${selected.num_videos === 1 ? '' : 's'} · flat`;
-    syncFee();
-  }
-  syncUI();
-
-  sel.onchange = () => {
-    selected = offers.find((o) => o.offer_id === sel.value) || offers[0];
-    selectedId = selected.offer_id;
-    billableViews = billableFor(selected);
-    cpm = Number(selected.cpm_applied) || 0;
-    syncUI();
+  const setR = (key, val) => {
+    root.querySelectorAll(`[data-r="${key}"]`).forEach((n) => { n.textContent = val; });
   };
-  cpmRange.oninput = () => {
-    cpm = Number(cpmRange.value);
-    syncFee();
-  };
+  const statusEl = root.querySelector('.oc-send-status');
+  const approveBtn = root.querySelector('.oc-approve');
+  let computed = {};
+
+  function recompute() {
+    const sf = numOr(m.safeFloor);
+    const vViews = numOr(m.vViews), vCpm = numOr(m.vCpm);
+    const viewFee = Math.round((vViews / 1000) * vCpm);
+    const fVideos = numOr(m.fVideos), fCpm = numOr(m.fCpm);
+    const videoViews = sf * fVideos;
+    const videoFee = Math.round((videoViews / 1000) * fCpm);
+    const perVideo = fVideos ? Math.round(videoFee / fVideos) : videoFee;
+    const bVideos = numOr(m.bVideos), bCpm = numOr(m.bCpm), bUnlock = numOr(m.bUnlock), bBonus = numOr(m.bBonus);
+    const bonusViews = sf * bVideos;
+    const baseFee = Math.round((bonusViews / 1000) * bCpm);
+    const aggregate = baseFee + bBonus;
+    const unlockEff = bUnlock ? (aggregate / bUnlock) * 1000 : 0;
+
+    setR('safeFloorFmt', fmtViews(sf));
+    setR('vViewsFmt', fmtViews(vViews));
+    setR('viewEff', '$' + vCpm.toFixed(2));
+    setR('viewFee', money(viewFee));
+    setR('videoViewsFmt', fmtViews(videoViews));
+    setR('videoEff', '$' + fCpm.toFixed(2));
+    setR('videoFee', money(videoFee));
+    setR('bUnlockFmt', fmtViews(bUnlock));
+    setR('bonusViewsFmt', fmtViews(bonusViews));
+    setR('baseFee', money(baseFee));
+    setR('bBonusMoney', money(bBonus));
+    setR('aggregate', money(aggregate));
+    setR('bonusUnlockEff', '$' + unlockEff.toFixed(2));
+
+    let selName, selFee, selMeta;
+    if (m.selected === 'view') {
+      selName = 'View-based deal';
+      selFee = money(viewFee);
+      selMeta = `${fmtViews(vViews)} guaranteed views · $${vCpm} CPM`;
+    } else if (m.selected === 'video') {
+      selName = 'Video-based deal';
+      selFee = money(videoFee);
+      selMeta = `${fVideos} videos · ${fmtViews(videoViews)} views · $${fCpm} CPM`;
+    } else {
+      selName = 'Video + bonus deal';
+      selFee = money(aggregate);
+      selMeta = `${bVideos} videos · base ${money(baseFee)} + ${money(bBonus)} bonus`;
+    }
+    setR('selName', selName);
+    setR('selFee', selFee);
+    setR('selMeta', selMeta);
+
+    root.querySelectorAll('.oc-deal').forEach((d) => {
+      const on = d.dataset.deal === m.selected;
+      d.classList.toggle('selected', on);
+      const btn = d.querySelector('.oc-choose');
+      btn.textContent = on ? '✓ Selected offer' : 'Choose this offer';
+      btn.classList.toggle('is-selected', on);
+    });
+
+    computed = { viewFee, vViews, vCpm, videoViews, videoFee, perVideo, fVideos, fCpm, bonusViews, baseFee, aggregate, bVideos, bCpm, bUnlock, bBonus };
+  }
+
+  root.querySelectorAll('input[data-k]').forEach((input) => {
+    input.addEventListener('input', () => {
+      const k = input.dataset.k;
+      m[k] = input.value === '' ? '' : Number(input.value);
+      recompute();
+    });
+  });
+  root.querySelectorAll('.oc-choose').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      m.selected = btn.dataset.choose;
+      recompute();
+    });
+  });
+
+  function buildCustomOffer() {
+    if (m.selected === 'view') {
+      return {
+        offer_id: 'cfg_view',
+        offer_type: 'view_based',
+        label: 'View-based deal',
+        flat_fee: computed.viewFee,
+        view_guarantee: Math.round(computed.vViews),
+        num_videos: 1,
+        flat_per_video: computed.viewFee,
+        cpm_applied: round2(computed.vCpm),
+      };
+    }
+    if (m.selected === 'video') {
+      return {
+        offer_id: 'cfg_video',
+        offer_type: 'video_based',
+        label: 'Video-based deal',
+        flat_fee: computed.videoFee,
+        num_videos: computed.fVideos,
+        flat_per_video: computed.perVideo,
+        view_guarantee: Math.round(computed.videoViews),
+        cpm_applied: round2(computed.fCpm),
+      };
+    }
+    return {
+      offer_id: 'cfg_bonus',
+      offer_type: 'video_bonus',
+      label: 'Video + bonus deal',
+      flat_fee: computed.aggregate, // top-line (base + bonus)
+      base_fee: computed.baseFee,
+      bonus_amount: computed.bBonus,
+      bonus_threshold_views: Math.round(computed.bUnlock),
+      num_videos: computed.bVideos,
+      flat_per_video: Math.round(computed.baseFee / Math.max(1, computed.bVideos)),
+      view_guarantee: Math.round(computed.bonusViews),
+      cpm_applied: round2(computed.bCpm),
+    };
+  }
 
   approveBtn.onclick = async () => {
     approveBtn.disabled = true;
     statusEl.textContent = 'Approving…';
-    const numVideos = isView() ? 1 : Number(selected.num_videos || 1);
-    const fee = currentFee();
-    const customOffer = {
-      ...selected,
-      offer_id: selected.offer_id,
-      flat_fee: fee,
-      view_guarantee: isView() ? Math.round(billableViews) : 0,
-      num_videos: numVideos,
-      flat_per_video: isView() ? fee : Math.round(fee / numVideos),
-      cpm_applied: Math.round(cpm * 100) / 100,
-    };
+    const offer = buildCustomOffer();
     try {
       const resp = await api(`/api/creators/${r.id}/offer`, {
         method: 'PATCH',
         body: JSON.stringify({
-          selected_offer_id: selected.offer_id,
-          custom_offer: customOffer,
+          selected_offer_id: offer.offer_id,
+          custom_offer: offer,
           offer_approved: true,
         }),
       });
       const sr = resp && resp.send_result;
-      // Reflect the outcome before the re-render replaces these controls.
-      // Offers are sent only by this approval action — never automatically —
-      // so when a send is skipped we say why instead of promising a later send.
+      // Offers are sent only by this approval — never automatically — so when a
+      // send is skipped we say why instead of promising a later send.
       let hold = 1400;
       if (sr && sr.sent) {
-        statusEl.textContent = `✓ ${offerNounUcFirst} email sent.`;
+        statusEl.textContent = `✓ ${offer.label} sent.`;
       } else if (sr && sr.error) {
         statusEl.textContent = `Approved, but sending failed: ${sr.error}`;
         hold = 4000;
@@ -561,16 +743,17 @@ function buildOfferControls(r, onRefresh) {
         statusEl.textContent = `Approved, not sent — ${sr.skipped}. Approve again when ready.`;
         hold = 4500;
       } else {
-        statusEl.textContent = `✓ ${offerNounUcFirst} approved.`;
+        statusEl.textContent = `✓ ${offer.label} approved.`;
       }
-      // Brief pause so the status is visible, then let the caller repaint.
       setTimeout(onRefresh, hold);
     } catch (err) {
       statusEl.textContent = err.message;
       approveBtn.disabled = false;
     }
   };
-  return container;
+
+  recompute();
+  return root;
 }
 
 async function refreshCreators() {
@@ -1077,14 +1260,29 @@ async function renderDelegateList() {
   for (const r of pending) root.appendChild(buildDelegateCard(r));
 }
 
+const refreshDelegateAndCampaigns = async () => {
+  await renderDelegateList();
+  await refreshCampaigns();
+};
+
 function buildDelegateCard(r) {
-  const card = document.createElement('div');
-  card.className = 'delegate-card';
   const isHandoff = !!r.needs_human;
   const offerActionable = isOfferActionable(r);
 
-  // Header — the reason pill shows the hand-off reason, or "offer to approve"
-  // when the card is here purely because an offer is ready.
+  // Offer-actionable creators get the full offer configurator, rendered on the
+  // app background so its white deal cards read as the redesign intends. If the
+  // same creator is also an AI hand-off, the reply block is appended below.
+  if (offerActionable) {
+    const item = document.createElement('div');
+    item.className = 'delegate-offer-item';
+    item.appendChild(buildOfferConfigurator(r, refreshDelegateAndCampaigns));
+    if (isHandoff) item.appendChild(buildReplyBlock(r));
+    return item;
+  }
+
+  // Hand-off only: the creator's parked message + a reply box, in a plain card.
+  const card = document.createElement('div');
+  card.className = 'delegate-card';
   const head = document.createElement('div');
   head.className = 'delegate-head';
   head.innerHTML = `
@@ -1093,89 +1291,67 @@ function buildDelegateCard(r) {
       ${r.first_name ? `<span class="meta"> · ${escapeHtml(r.first_name)}</span>` : ''}
       <div class="meta">${escapeHtml(r.email || 'no email')}</div>
     </div>
-    ${
-      isHandoff && r.delegate_reason
-        ? `<span class="delegate-reason">${escapeHtml(r.delegate_reason)}</span>`
-        : offerActionable
-        ? '<span class="delegate-reason offer">offer to approve</span>'
-        : ''
-    }`;
+    ${r.delegate_reason ? `<span class="delegate-reason">${escapeHtml(r.delegate_reason)}</span>` : ''}`;
   card.appendChild(head);
 
-  // The creator's parked message (hand-off), or a short prompt (offer-only).
-  if (isHandoff && r.delegate_question) {
+  if (r.delegate_question) {
     const q = document.createElement('div');
     q.className = 'delegate-question';
     q.textContent = r.delegate_question;
     card.appendChild(q);
-  } else if (!isHandoff && offerActionable) {
-    const sub = document.createElement('div');
-    sub.className = 'delegate-subtitle meta';
-    sub.textContent = 'Creator shared a rate — review & send an offer.';
-    card.appendChild(sub);
   }
-
-  // Offer controls (relocated from the table) when an offer awaits approval.
-  if (offerActionable) {
-    card.appendChild(
-      buildOfferControls(r, async () => {
-        await renderDelegateList();
-        await refreshCampaigns();
-      }),
-    );
-  }
-
-  // Reply block — only for AI hand-offs (there's a creator message to answer).
-  if (isHandoff) {
-    const block = document.createElement('div');
-    block.className = 'delegate-reply-block';
-    block.innerHTML = `
-      <label>Your reply</label>
-      <textarea class="delegate-reply io-scroll" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
-      <div class="delegate-reply-foot">
-        <span class="delegate-status hint"></span>
-        <button class="ghost small delegate-dismiss" type="button">Dismiss</button>
-        <button class="btn-primary delegate-send" type="button">Send reply</button>
-      </div>`;
-    card.appendChild(block);
-
-    const replyEl = block.querySelector('.delegate-reply');
-    const statusEl = block.querySelector('.delegate-status');
-    const sendBtn = block.querySelector('.delegate-send');
-    const dismissBtn = block.querySelector('.delegate-dismiss');
-
-    sendBtn.onclick = async () => {
-      const body = replyEl.value.trim();
-      if (!body) { statusEl.textContent = 'Write a reply first.'; return; }
-      sendBtn.disabled = true; dismissBtn.disabled = true;
-      statusEl.textContent = 'Sending…';
-      try {
-        await api(`/api/creators/${r.id}/delegate-reply`, {
-          method: 'POST',
-          body: JSON.stringify({ body }),
-        });
-        await renderDelegateList();
-        await refreshCampaigns();
-      } catch (err) {
-        statusEl.textContent = `Failed: ${err.message}`;
-        sendBtn.disabled = false; dismissBtn.disabled = false;
-      }
-    };
-
-    dismissBtn.onclick = async () => {
-      if (!confirm('Dismiss without replying? This clears it from Delegate.')) return;
-      sendBtn.disabled = true; dismissBtn.disabled = true;
-      try {
-        await api(`/api/creators/${r.id}/dismiss-delegate`, { method: 'POST' });
-        await renderDelegateList();
-        await refreshCampaigns();
-      } catch (err) {
-        statusEl.textContent = `Failed: ${err.message}`;
-        sendBtn.disabled = false; dismissBtn.disabled = false;
-      }
-    };
-  }
+  card.appendChild(buildReplyBlock(r));
   return card;
+}
+
+// The "Your reply" textarea + Dismiss/Send, used by hand-off cards (standalone,
+// and alongside the offer configurator when a creator is both).
+function buildReplyBlock(r) {
+  const block = document.createElement('div');
+  block.className = 'delegate-reply-block';
+  block.innerHTML = `
+    <label>Your reply</label>
+    <textarea class="delegate-reply io-scroll" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
+    <div class="delegate-reply-foot">
+      <span class="delegate-status hint"></span>
+      <button class="ghost small delegate-dismiss" type="button">Dismiss</button>
+      <button class="btn-primary delegate-send" type="button">Send reply</button>
+    </div>`;
+
+  const replyEl = block.querySelector('.delegate-reply');
+  const statusEl = block.querySelector('.delegate-status');
+  const sendBtn = block.querySelector('.delegate-send');
+  const dismissBtn = block.querySelector('.delegate-dismiss');
+
+  sendBtn.onclick = async () => {
+    const body = replyEl.value.trim();
+    if (!body) { statusEl.textContent = 'Write a reply first.'; return; }
+    sendBtn.disabled = true; dismissBtn.disabled = true;
+    statusEl.textContent = 'Sending…';
+    try {
+      await api(`/api/creators/${r.id}/delegate-reply`, {
+        method: 'POST',
+        body: JSON.stringify({ body }),
+      });
+      await refreshDelegateAndCampaigns();
+    } catch (err) {
+      statusEl.textContent = `Failed: ${err.message}`;
+      sendBtn.disabled = false; dismissBtn.disabled = false;
+    }
+  };
+
+  dismissBtn.onclick = async () => {
+    if (!confirm('Dismiss without replying? This clears it from Delegate.')) return;
+    sendBtn.disabled = true; dismissBtn.disabled = true;
+    try {
+      await api(`/api/creators/${r.id}/dismiss-delegate`, { method: 'POST' });
+      await refreshDelegateAndCampaigns();
+    } catch (err) {
+      statusEl.textContent = `Failed: ${err.message}`;
+      sendBtn.disabled = false; dismissBtn.disabled = false;
+    }
+  };
+  return block;
 }
 
 (async () => {
