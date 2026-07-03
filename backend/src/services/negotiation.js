@@ -537,6 +537,34 @@ async function delegate(creator, inbound, reason) {
   );
 }
 
+// Scan a plain-text delegate reply for the largest dollar amount, so a manual
+// offer typed by the admin ("We'd love to offer $10k for 1 video.") can be
+// surfaced on the rate timeline as an "Offer sent — $X" entry, just like
+// offers sent through the structured Approve & send flow. Returns an integer
+// USD amount, or null if no plausible amount is present. Supports $X, $X.Y,
+// $Xk / $X.Yk, and $X,XXX formatting.
+function extractOfferAmount(text) {
+  if (!text) return null;
+  const s = String(text);
+  const amounts = [];
+  const kRe = /\$\s*(\d+(?:\.\d+)?)\s*[kK]\b/g;
+  let m;
+  while ((m = kRe.exec(s)) !== null) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > 0) amounts.push(Math.round(n * 1000));
+  }
+  // Bare amounts: $10,000 / $10000 / $10.50 — but skip anything immediately
+  // followed by k/K (already captured above) or another digit (part of a longer
+  // token like a phone number).
+  const rawRe = /\$\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?![kK\d])/g;
+  while ((m = rawRe.exec(s)) !== null) {
+    const n = Number(m[1].replace(/,/g, ''));
+    if (Number.isFinite(n) && n > 0) amounts.push(Math.round(n));
+  }
+  if (!amounts.length) return null;
+  return Math.max(...amounts);
+}
+
 // Admin's manual reply from the Delegate window. Sends a threaded email and
 // clears the delegation flag. Reuses the same threading as auto-replies.
 async function sendDelegateReply(creatorId, { subject, body }) {
@@ -548,6 +576,36 @@ async function sendDelegateReply(creatorId, { subject, body }) {
 
   const subj = (subject && String(subject).trim()) || templates.reply1(templateVars(ctxFor(creator))).subject;
   await sendNegotiationEmail(creator, { subject: subj, body: text }, 'delegate_reply');
+
+  // Surface the delegate reply on the rate timeline so the dashboard shows we
+  // responded to the creator. If the admin typed a dollar amount, treat it as
+  // an offer and log 'rate_offer_sent' (with the parsed fee) so it renders as
+  // "Offer sent — $X", matching the structured Approve & send flow. Otherwise
+  // log 'sent_delegate_reply' so the timeline still shows a "Reply sent" step.
+  const fee = extractOfferAmount(text);
+  if (fee != null) {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_offer_sent', $2)`,
+      [creatorId, { fee, source: 'delegate' }],
+    );
+    // An offer from the delegate reply should also move the creator into
+    // AWAITING_DECISION, matching sendApprovedOffer — but only from stages
+    // where quoting a rate is appropriate, so we don't regress ACCEPTED /
+    // DECLINED / CLOSED conversations.
+    await db.query(
+      `UPDATE creators
+       SET negotiation_status = 'AWAITING_DECISION', updated_at = NOW()
+       WHERE id = $1
+         AND (negotiation_status IS NULL
+              OR negotiation_status IN ('AWAITING_RATE', 'AWAITING_APPROVAL'))`,
+      [creatorId],
+    );
+  } else {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'sent_delegate_reply', $2)`,
+      [creatorId, {}],
+    );
+  }
 
   // Learn from the human's answer: label the (creator question → admin reply)
   // pair and add it to the example bank, so the next creator with the same
@@ -878,6 +936,7 @@ module.exports = {
   salutationFor,
   detectSenderName,
   askedForReferences,
+  extractOfferAmount,
   // Test-only.
   _setClient,
 };
