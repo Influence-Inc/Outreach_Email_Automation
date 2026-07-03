@@ -17,6 +17,7 @@ const RATE_LOG_TYPES = [
   'rate_counter_requested',
   'rate_accepted',
   'rate_declined',
+  'sent_delegate_reply',
 ];
 
 const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
@@ -43,7 +44,8 @@ function rateLogEntry(type, detail) {
     case 'rate_offer_sent': {
       const fee = d.fee != null ? fmtMoney(d.fee) : null;
       const cpm = d.cpm != null ? ` · CPM $${d.cpm}` : '';
-      return { text: fee ? `Offer sent — ${fee}${cpm}` : 'Offer sent', tone: 'active' };
+      const via = d.source === 'delegate' ? ' (from delegate)' : '';
+      return { text: fee ? `Offer sent — ${fee}${cpm}${via}` : `Offer sent${via}`, tone: 'active' };
     }
     case 'rate_counter_requested':
       return { text: 'Asked creator for their counter rate', tone: 'active' };
@@ -51,6 +53,8 @@ function rateLogEntry(type, detail) {
       return { text: 'Creator accepted ✓', tone: 'success' };
     case 'rate_declined':
       return { text: 'Creator declined', tone: 'muted' };
+    case 'sent_delegate_reply':
+      return { text: 'Reply sent (from delegate)', tone: 'done' };
     default:
       return null;
   }

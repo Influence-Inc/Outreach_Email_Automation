@@ -124,3 +124,31 @@ test('offer email (combine) reuses REPLY1 details but never the references', () 
   assert.ok(body.startsWith('Hi Anvith,'), 'greets the sender in combine mode');
   assert.ok(!body.includes('Past content references'), 'offer email never introduces references');
 });
+
+// ── 4. Delegate reply offer detection ───────────────────────────────────────
+
+test('extractOfferAmount picks up "$10k" shorthand from a delegate reply', () => {
+  assert.strictEqual(
+    negotiation.extractOfferAmount("We'd love to offer $10k for 1 video."),
+    10000,
+  );
+});
+
+test('extractOfferAmount handles decimal-k, comma-separated, and bare dollars', () => {
+  assert.strictEqual(negotiation.extractOfferAmount('Our budget is $5.5k'), 5500);
+  assert.strictEqual(negotiation.extractOfferAmount('Offering $10,000 total'), 10000);
+  assert.strictEqual(negotiation.extractOfferAmount('$1500 per reel works'), 1500);
+});
+
+test('extractOfferAmount picks the largest amount when multiple appear', () => {
+  assert.strictEqual(
+    negotiation.extractOfferAmount('$10k for 1 video, or $18k for 2 videos'),
+    18000,
+  );
+});
+
+test('extractOfferAmount returns null when the reply has no dollar amount', () => {
+  assert.strictEqual(negotiation.extractOfferAmount('Thanks! Let me get back to you.'), null);
+  assert.strictEqual(negotiation.extractOfferAmount(''), null);
+  assert.strictEqual(negotiation.extractOfferAmount(null), null);
+});
