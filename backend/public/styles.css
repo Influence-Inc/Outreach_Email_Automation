@@ -446,6 +446,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .oc-badge.pending { color: #b45309; background: #fef3e2; border: 1px solid #fbe0ba; }
 .oc-badge.sent { color: var(--green); background: #e7f6ec; border: 1px solid #c5e9cf; }
+.oc-subtitle { font-size: 14px; color: var(--muted); margin-top: -4px; }
 
 /* Safe-floor card */
 .oc-floor {

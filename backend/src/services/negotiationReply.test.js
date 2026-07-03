@@ -169,3 +169,30 @@ test('extractOfferAmount returns null when the reply has no dollar amount', () =
   assert.strictEqual(negotiation.extractOfferAmount(''), null);
   assert.strictEqual(negotiation.extractOfferAmount(null), null);
 });
+
+// ── 5. "Creator asks us to quote first" detection ───────────────────────────
+
+test('asksUsToQuoteFirst detects the creator turning the rate question back on us', () => {
+  const yes = [
+    'Thanks for the details. Can you quote a fair rate yourself first?',
+    "What's your budget for this?",
+    'What are you offering?',
+    'Make me an offer and we can go from there.',
+    'What do you usually pay for a reel like this?',
+    'You tell me a number that works for you.',
+    'Could you propose a rate first?',
+  ];
+  for (const t of yes) assert.strictEqual(negotiation.asksUsToQuoteFirst(t), true, `should detect: ${t}`);
+});
+
+test('asksUsToQuoteFirst does NOT fire when the creator states their own rate or just chats', () => {
+  const no = [
+    'My rate is $1500 per video.',
+    'Sounds great, tell me more about the deliverables!',
+    'When do I get paid?',
+    'That offer is too low for me.',
+    '',
+    null,
+  ];
+  for (const t of no) assert.strictEqual(negotiation.asksUsToQuoteFirst(t), false, `should not fire: ${t}`);
+});
