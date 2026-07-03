@@ -297,18 +297,19 @@ async function handleCreatorReply(creator, replyText, ctx) {
     templates.REPLY2_BODY,
     '',
     'Read the creator\'s plain-text reply and respond with STRICT JSON ONLY (no prose, no markdown fences), exactly this shape:',
-    '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"request_counter_rate"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
+    '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"request_our_offer"|"request_counter_rate"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
     '',
     'Rules:',
     `- Judge the creator's intent from the MEANING and tone of the whole reply, NEVER from specific keywords. Any enthusiasm, curiosity, or request to hear more — e.g. "sounds great", "amazing", "interesting", "cool", "tell me more", "share the details", "what did you have in mind", "I'd love to know more", "I'm in", "sure", a simple "yes", or even just a positive emoji — all mean the creator wants to proceed. Treat those as interest: classify as "asking_details" when REPLY 1 has not been sent yet, otherwise "answer_question". A creator does NOT have to say the word "yes" or "interested" to be interested. Reserve "declined" strictly for replies whose overall meaning is that they do NOT want to proceed.`,
     '- "shared_rate": the creator stated a rate/budget/price. Put the numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
+    `- "request_our_offer": the creator is interested but turns the rate question back on us — they ask US to name/quote/propose a rate, state a budget, or make the FIRST offer instead of giving their own number ("can you quote a fair rate first?", "what's your budget?", "what are you offering?", "make me an offer", "what do you usually pay for this?", "you tell me a number"). This is NOT a rate from them and NOT a complaint about an existing offer — it's a request for us to price it. email=null, send_now=false — an admin will set the price and send an offer from the dashboard. quoted_rate=null.`,
     '- "counter": the creator pushed back on a prior offer with a different number/terms. Put any numeric amount in quoted_rate. email=null, send_now=false.',
     `- "request_counter_rate": the creator pushed back on the offer we already sent ("this rate is too low", "can you do better?", "I usually charge more", "not quite what I had in mind") but did NOT name a specific number. Use this ONLY when an offer is already on the table (the current stage is AWAITING_DECISION) — otherwise prefer "asking_details" or "answer_question". Write a SHORT plain-text reply that (1) warmly acknowledges their hesitation without committing to anything specific, (2) asks them directly what rate would work for them, (3) signals openness to working it out together. Do NOT propose a number, do NOT promise to match, do NOT mention any offer specifics — those come from admin approval. Sign "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "asking_details": the creator is interested but has not yet seen the standard collab pitch. Use this for the FIRST substantive reply when we have not yet sent REPLY 1. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", sign "- ${v.managerName}"). In Timelines, propose the cadence "${v.cadence}" and an approximate posted-by date you compute from today's date for a 2-video package. Include the "Past content references" section ONLY if the sender explicitly asked to see examples of past work / a portfolio / other creators we've worked with — otherwise drop that whole section from your adaptation. send_now=true. quoted_rate=null.`,
     `- "answer_question": the creator asked a specific factual question about an already-discussed deal. Common topics that ARE safe to answer from the REPLY 1 / REPLY 2 templates and the campaign context above: posting platform (Instagram only, no TikTok/YouTube cross-posting in this deal), content format (Reels), posting cadence ("${v.cadence}"), approximate timeline / posted-by date, creative freedom (yes, no script approval required), exclusivity (none), what we need from them (their rate, then we share a tailored offer; once accepted, posting can begin), who Influence is (a brand-partnerships team — share reference accounts (${v.refs}) ONLY when the sender asked to see examples of past work / a portfolio / other creators we've worked with), payment timing (per the "Payment details" block in REPLY 2: after the post is up and verified). Write a SHORT reply that (1) directly answers their question in 1-3 sentences using ONLY facts from the templates / campaign context above or facts our team already stated in the example exchanges shown before this message, then (2) one short follow-up line keeping the negotiation moving — if they have not shared a rate yet, ask for it; if an offer is on the table awaiting their decision, gently nudge for it; otherwise leave the door open. Sign "- ${v.managerName}". send_now=true. quoted_rate=null. NEVER invent specifics that are not in the campaign context, templates, past example exchanges, or already-quoted offer — if you would have to guess a number, a date beyond what cadence-math gives you, or any term not covered by those sources, use "escalate" instead.`,
     `- "accepted": they accepted the offer. Write a short warm acceptance email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "declined": they are GENUINELY not interested or not available — explicit "no thanks", "passing on this one", "not the right fit", "too busy right now", "please stop reaching out". Do NOT use "declined" for "this rate is too low" or "can you do better" — those are "request_counter_rate" (if no number given) or "counter" (if a number is given). Write a brief gracious email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
-    `- "escalate": use this when (a) the creator asks about money or contractual terms outside what is already in the templates / approved offer (a rate bump, a different payment structure, a usage-rights ask, an NDA, a legal question, a dispute, a complaint); OR (b) the creator's question references specifics not present in the campaign context, templates, past example exchanges, or already-quoted offer (a different brand, a different campaign, a custom timeline, a special exception); OR (c) the message is unusual, emotionally heated, or otherwise needs a human decision. email=null, send_now=false; a human will take over. When in doubt about whether you have enough information to answer correctly, escalate — but prefer "answer_question" for benign factual questions the templates or past example exchanges DO cover.`,
+    `- "escalate": use this when (a) the creator asks about contractual terms outside what is already in the templates / approved offer (a different payment structure, a usage-rights ask, an NDA, a legal question, a dispute, a complaint); OR (b) the creator's question references specifics not present in the campaign context, templates, past example exchanges, or already-quoted offer (a different brand, a different campaign, a custom timeline, a special exception); OR (c) the message is unusual, emotionally heated, or otherwise needs a human decision. email=null, send_now=false; a human will take over. When in doubt about whether you have enough information to answer correctly, escalate — but prefer "answer_question" for benign factual questions the templates or past example exchanges DO cover, and prefer "request_our_offer" when the creator simply wants US to name/propose a first rate (that is handled by the admin pricing an offer, not a human reply).`,
     `- "other": only a trivial acknowledgement that needs no action (e.g. "got it, thanks"). email=null, send_now=false.`,
     '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
     '- Some (user → assistant) turn pairs may precede the real message below: those are REAL exchanges from our past negotiations, showing the correct output for a similar inbound. Treat the facts, decisions, and phrasing in their replies as team-approved knowledge. When the new message closely matches an example where our team answered directly, answer the same way instead of escalating — but never copy a dollar amount from an example, and never reuse another creator\'s name or deal specifics.',
@@ -368,6 +369,21 @@ function parseRateFromText(text) {
   return null;
 }
 
+// Does the creator turn the rate question back on us — asking us to name/quote
+// a price or make the first offer, rather than giving their own number? Used by
+// the heuristic fallback (Claude covers this via the request_our_offer action).
+function asksUsToQuoteFirst(text) {
+  if (!text) return false;
+  const s = String(text);
+  return (
+    /\b(quote|propose|suggest|offer|name|throw out|put together|make)\b[^.?!]{0,40}\b(a\s+)?(fair\s+|good\s+|reasonable\s+)?(rate|number|figure|price|offer|budget|amount)\b/i.test(s) &&
+    /\b(you|your|yourself|your\s+(team|side|end)|first)\b/i.test(s)
+  ) ||
+    /\bwhat('?s| is| are| do)\b[^.?!]{0,30}\b(your|you)\b[^.?!]{0,20}\b(budget|rate|offer(?:ing)?|pay(?:ing)?|number|price)\b/i.test(s) ||
+    /\bmake\s+me\s+an\s+offer\b/i.test(s) ||
+    /\byou\s+tell\s+me\s+(a\s+)?(number|price|rate)\b/i.test(s);
+}
+
 function heuristicReply(text, ctx) {
   const v = templateVars(ctx);
   const rate = parseRateFromText(text);
@@ -376,6 +392,16 @@ function heuristicReply(text, ctx) {
       understanding: '(heuristic) creator shared a rate',
       action: 'shared_rate',
       quoted_rate: rate,
+      email: null,
+      send_now: false,
+    };
+  }
+  // Creator asked US to price it first — route to the offer configurator.
+  if (asksUsToQuoteFirst(text)) {
+    return {
+      understanding: '(heuristic) creator asked us to quote a rate first',
+      action: 'request_our_offer',
+      quoted_rate: null,
       email: null,
       send_now: false,
     };
@@ -686,6 +712,14 @@ async function processReply(creatorId) {
     `[negotiation] creator ${creator.id}: action=${result.action} understanding="${(result.understanding || '').slice(0, 140)}"`,
   );
 
+  // Creator asked US to quote a rate first -> put it in front of the admin as an
+  // offer to price & send (the configurator), not a plain reply to write.
+  if (result.action === 'request_our_offer') {
+    const routed = await routeCreatorToOffer(creator, inbound);
+    await markHandled();
+    return routed;
+  }
+
   // Claude couldn't confidently handle it -> delegate instead of guessing.
   if (result.action === 'escalate' || result.action === 'other') {
     await delegate(
@@ -700,6 +734,46 @@ async function processReply(creatorId) {
   await applyReply(creator, ctx, result);
   await markHandled();
   return { action: result.action };
+}
+
+// The creator asked us to name a price / make the first offer. Instead of a
+// human-written reply, surface the offer configurator for this creator in the
+// Delegate page: compute the suggested offers (if not already), move to
+// AWAITING_APPROVAL so the offer is approvable/sendable, and clear any hand-off
+// flag so no plain reply box is shown. If we have no view stats yet there's no
+// basis to price an offer, so fall back to a normal human hand-off.
+async function routeCreatorToOffer(creator, inbound) {
+  if (!creator.ig_scraped_data) {
+    await delegate(
+      creator,
+      inbound,
+      'Creator asked us to make the first offer, but we have no view stats yet — scrape their reels to build an offer, then price & send it.',
+    );
+    return { action: 'delegated', reason: 'offer_requested_no_stats' };
+  }
+
+  let offers = Array.isArray(creator.suggested_offers) ? creator.suggested_offers : null;
+  if (!offers || !offers.length) {
+    const maxCpm =
+      creator.max_cpm != null ? Number(creator.max_cpm) : Number(process.env.TARGET_CPM || 15);
+    const quotedRate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
+    offers = pricing.computeOffers(creator.ig_scraped_data, maxCpm, quotedRate);
+  }
+
+  await db.query(
+    `UPDATE creators
+     SET suggested_offers = $2::jsonb,
+         negotiation_status = 'AWAITING_APPROVAL',
+         needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [creator.id, JSON.stringify(offers)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'offer_requested', $2)`,
+    [creator.id, { note: 'creator asked us to quote a rate first' }],
+  );
+  return { action: 'offer_requested' };
 }
 
 async function applyReply(creator, ctx, result) {
@@ -939,6 +1013,7 @@ module.exports = {
   detectSenderName,
   askedForReferences,
   extractOfferAmount,
+  asksUsToQuoteFirst,
   // Test-only.
   _setClient,
 };
