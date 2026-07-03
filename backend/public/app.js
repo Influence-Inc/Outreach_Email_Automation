@@ -38,7 +38,7 @@ async function refreshCampaigns() {
   }
 
   if (!groups.size) {
-    tree.innerHTML = '<p class="hint">No campaigns synced yet. Click Refresh.</p>';
+    tree.innerHTML = '<p class="hint" style="padding:0 8px;">No campaigns synced yet. Click Refresh.</p>';
     return;
   }
 
@@ -53,7 +53,24 @@ async function refreshCampaigns() {
       const item = document.createElement('div');
       item.className = 'campaign-item';
       if (c.id === state.selectedCampaignId) item.classList.add('active');
-      item.innerHTML = `<span>${c.name}</span><span class="meta">${c.creator_count}</span>`;
+      // A red pending dot appears when the campaign has anything awaiting a
+      // human (delegated replies or offers to approve) — mirrors action_count.
+      const hasPending = (c.action_count || 0) > 0;
+      if (hasPending) item.classList.add('has-pending');
+      const name = document.createElement('span');
+      name.className = 'campaign-name';
+      name.textContent = c.name;
+      item.appendChild(name);
+      if (hasPending) {
+        const dot = document.createElement('span');
+        dot.className = 'pending-dot';
+        dot.title = `${c.action_count} item(s) need you`;
+        item.appendChild(dot);
+      }
+      const count = document.createElement('span');
+      count.className = 'count-pill num';
+      count.textContent = c.creator_count;
+      item.appendChild(count);
       item.onclick = () => selectCampaign(c.id);
       group.appendChild(item);
     }
@@ -111,15 +128,28 @@ async function selectCampaign(id) {
   await refreshCampaigns();
   const c = state.campaigns.find((x) => x.id === id);
   if (!c) return;
-  el('campaign-title').textContent = `${c.brand_name} · ${c.name}`;
-  el('campaign-stats').innerHTML = `
-    <span>Creators: <b>${c.creator_count}</b></span>
-    <span>Pending: <b>${c.pending_extraction_count}</b></span>
-    <span>Email found: <b>${c.email_found_count}</b></span>
-    <span>Outreach: <b>${c.outreach_sent_count}</b></span>
-    <span>Follow-up: <b>${c.followup_sent_count}</b></span>
-    <span>Replied: <b>${c.replied_count}</b></span>
-  `;
+  const eyebrow = el('campaign-eyebrow');
+  eyebrow.textContent = c.brand_name;
+  eyebrow.hidden = false;
+  el('campaign-title').textContent = c.name;
+  const stats = [
+    { label: 'Creators', value: c.creator_count },
+    { label: 'Pending', value: c.pending_extraction_count },
+    { label: 'Email found', value: c.email_found_count },
+    { label: 'Outreach', value: c.outreach_sent_count },
+    { label: 'Follow-up', value: c.followup_sent_count },
+    { label: 'Replied', value: c.replied_count, accent: true },
+  ];
+  const statsEl = el('campaign-stats');
+  statsEl.hidden = false;
+  statsEl.innerHTML = stats
+    .map(
+      (s) => `<div class="stat-cell">
+        <div class="stat-label">${s.label}</div>
+        <div class="stat-value num${s.accent && Number(s.value) > 0 ? ' accent' : ''}">${s.value}</div>
+      </div>`,
+    )
+    .join('');
   updateDelegateBadge(c.action_count || 0);
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
@@ -224,20 +254,36 @@ function fmtAgo(s) {
   return new Date(s).toLocaleDateString();
 }
 
-function renderViewsCell(r, td) {
+// Avatar tints, cycled per row. First is the near-black accent.
+const AVATAR_COLORS = ['#191817', '#147a52', '#c2410c', '#0e7490', '#5b45e0', '#b83280'];
+
+function avatarInitial(r) {
+  const src = r.full_name || r.first_name || r.instagram_username || '?';
+  return String(src).replace(/^@/, '').charAt(0).toUpperCase() || '?';
+}
+
+// Status pill class + label. An accepted negotiation is surfaced as its own
+// pill even though the outreach status stays 'replied'.
+function statusPillFor(r) {
+  if (r.negotiation_status === 'ACCEPTED') return { cls: 'accepted', text: 'accepted' };
+  const st = r.status || 'pending_extraction';
+  return { cls: st, text: st.replace(/_/g, ' ') };
+}
+
+// Reach column: median reel views + reel count/low, editable to paste the raw
+// reel view counts (comma/space separated) when the scraper comes up short.
+function renderReachCell(r, cell) {
   const s = r.ig_scraped_data;
   if (s && s.reel_count) {
-    td.innerHTML =
-      `<b>${fmtViews(s.p50)}</b> <span class="meta">median</span>` +
-      `<br/><span class="meta">${s.reel_count} reels · low ${fmtViews(s.min_views)}</span>`;
+    cell.innerHTML =
+      `<div class="reach-main num">${fmtViews(s.p50)} <span class="unit">median</span></div>` +
+      `<div class="reach-sub">${s.reel_count} reels · low ${fmtViews(s.min_views)}</div>`;
   } else {
-    td.innerHTML = '<span class="meta">— no views</span>';
+    cell.innerHTML = '<span class="empty">— no views</span>';
   }
-  // Editable: paste the recent reel view counts (comma/space separated). Lets
-  // the admin seed or correct the numbers when the scraper comes up short.
   const rawViews =
     s && Array.isArray(s.views_raw) ? s.views_raw.map((n) => Math.round(n)).join(', ') : '';
-  makeEditable(td, {
+  makeEditable(cell, {
     value: rawViews,
     placeholder: 'reel views e.g. 120k, 95k, 210k',
     onSave: (v) => {
@@ -253,14 +299,13 @@ function renderViewsCell(r, td) {
   });
 }
 
-function renderRateCell(r, td) {
-  // The editable rate value lives in its own element so click-to-edit is scoped
-  // to it — clicking the timeline below never opens the editor, and the timeline
-  // survives an inline edit (makeEditable only clears the element it owns).
+// Rate column: just the editable quoted rate (the delivery timeline now lives
+// in the Status column).
+function renderRateCell(r, cell) {
   const valueDiv = document.createElement('div');
-  valueDiv.className = 'rate-value';
+  valueDiv.className = 'rate-value num' + (r.quoted_rate != null ? '' : ' empty');
   valueDiv.textContent = r.quoted_rate != null ? `$${fmtNum(r.quoted_rate)}` : '—';
-  td.appendChild(valueDiv);
+  cell.appendChild(valueDiv);
   makeEditable(valueDiv, {
     value: r.quoted_rate != null ? String(r.quoted_rate) : '',
     placeholder: 'rate $',
@@ -270,37 +315,101 @@ function renderRateCell(r, td) {
         body: JSON.stringify({ quoted_rate: Number(String(v).replace(/[^0-9.]/g, '')) }),
       }),
   });
-  const log = Array.isArray(r.rate_log) ? r.rate_log : [];
-  if (log.length) td.appendChild(renderRateLog(log));
 }
 
-// A compact, delivery-tracking-style timeline of rate updates, newest first.
-// The newest entry is the "current" step (emphasized); older ones are muted.
-function renderRateLog(log) {
-  const ol = document.createElement('ol');
-  ol.className = 'rate-log';
-  const items = log.slice().reverse(); // newest first
+const TRASH_SVG =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+
+// Status column: pill + delete + (send-outreach when pending) + timeline.
+function renderStatusCell(r, cell) {
+  const top = document.createElement('div');
+  top.className = 'cr-status-top';
+  const pill = statusPillFor(r);
+  const pillEl = document.createElement('span');
+  pillEl.className = `status-pill ${pill.cls}`;
+  pillEl.textContent = pill.text;
+  top.appendChild(pillEl);
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'icon-btn-sq';
+  del.title = 'Remove from campaign';
+  del.innerHTML = TRASH_SVG;
+  del.onclick = async () => {
+    if (!confirm('Remove this creator?')) return;
+    await api(`/api/creators/${r.id}`, { method: 'DELETE' });
+    await refreshCreators();
+    await refreshCampaigns();
+  };
+  top.appendChild(del);
+  cell.appendChild(top);
+
+  if (r.status === 'email_found') {
+    const send = document.createElement('button');
+    send.type = 'button';
+    send.className = 'ghost small cr-send-btn';
+    send.textContent = 'Send outreach';
+    send.onclick = async () => {
+      send.disabled = true;
+      try {
+        await api(`/api/creators/${r.id}/send-outreach`, { method: 'POST' });
+        await refreshCreators();
+        await refreshCampaigns();
+      } catch (err) {
+        alert(err.message);
+        send.disabled = false;
+      }
+    };
+    cell.appendChild(send);
+  }
+
+  const log = Array.isArray(r.rate_log) ? r.rate_log : [];
+  if (log.length) cell.appendChild(renderTimeline(log));
+}
+
+// A vertical delivery-tracking timeline, oldest → newest. The newest entry is
+// the "current" step (emphasized); a connecting line joins consecutive steps.
+function renderTimeline(log) {
+  const wrap = document.createElement('div');
+  wrap.className = 'timeline';
+  const items = Array.isArray(log) ? log : [];
   items.forEach((e, i) => {
-    const li = document.createElement('li');
-    li.className = `rate-log-item tone-${e.tone || 'done'}${i === 0 ? ' current' : ''}`;
-    const dot = document.createElement('span');
-    dot.className = 'rate-log-dot';
+    const isLast = i === items.length - 1;
+    const step = document.createElement('div');
+    step.className = 'timeline-step' + (isLast ? ' current' : '');
+    if (e.tone === 'success') step.classList.add('tone-success');
+
+    const rail = document.createElement('div');
+    rail.className = 'timeline-rail';
+    const dot = document.createElement('div');
+    dot.className = 'timeline-dot ' + (isLast ? 'current' : 'done');
+    if (e.tone === 'success') dot.classList.add('tone-success');
+    if (e.tone === 'muted') dot.classList.add('tone-muted');
+    rail.appendChild(dot);
+    if (!isLast) {
+      const line = document.createElement('div');
+      line.className = 'timeline-line';
+      rail.appendChild(line);
+    }
+
     const body = document.createElement('div');
-    body.className = 'rate-log-body';
-    const text = document.createElement('div');
-    text.className = 'rate-log-text';
-    text.textContent = e.text || '';
-    const when = document.createElement('div');
-    when.className = 'rate-log-when';
-    when.textContent = fmtAgo(e.at);
-    when.title = fmtDate(e.at);
-    body.appendChild(text);
-    body.appendChild(when);
-    li.appendChild(dot);
-    li.appendChild(body);
-    ol.appendChild(li);
+    body.className = 'timeline-body';
+    body.style.paddingBottom = isLast ? '0' : '4px';
+    const label = document.createElement('div');
+    label.className = 'timeline-label';
+    label.textContent = e.text || '';
+    const time = document.createElement('div');
+    time.className = 'timeline-time num';
+    time.textContent = fmtAgo(e.at);
+    time.title = fmtDate(e.at);
+    body.appendChild(label);
+    body.appendChild(time);
+
+    step.appendChild(rail);
+    step.appendChild(body);
+    wrap.appendChild(step);
   });
-  return ol;
+  return wrap;
 }
 
 // Offer dropdown + CPM slider + computed Fee + Approve & send. Returns a
@@ -366,7 +475,7 @@ function buildOfferControls(r, onRefresh) {
       <input type="range" class="neg-cpm" min="0" max="${cpmMax}" step="0.5" />
     </div>
     <div class="neg-fee-badge"></div>
-    <button class="small neg-approve">${approveLabel}</button>
+    <button class="neg-approve" type="button">${approveLabel}</button>
     <span class="neg-offer-status hint"></span>
   `;
   const sel = container.querySelector('.neg-offer-select');
@@ -467,42 +576,53 @@ function buildOfferControls(r, onRefresh) {
 async function refreshCreators() {
   if (!state.selectedCampaignId) return;
   const rows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
-  const tbody = document.querySelector('#creator-table tbody');
-  tbody.innerHTML = '';
-  for (const r of rows) {
-    const tr = document.createElement('tr');
-    tr.dataset.creatorId = r.id;
-    const lastActivity = r.replied_at || r.followup_sent_at || r.outreach_sent_at || r.updated_at;
-    tr.innerHTML = `
-      <td><a href="${r.instagram_url}" target="_blank" rel="noopener">@${r.instagram_username || r.instagram_url}</a></td>
-      <td>${r.first_name || ''} ${r.full_name && r.full_name !== r.first_name ? `<br/><span class="meta">${r.full_name}</span>` : ''}</td>
-      <td>${r.email || '<span class="meta">—</span>'}</td>
-      <td><span class="tag ${r.status}">${r.status.replace(/_/g, ' ')}</span></td>
-      <td><span class="meta">${fmtDate(lastActivity)}</span></td>
-      <td class="neg-views-cell"></td>
-      <td class="neg-rate-cell"></td>
-      <td></td>
-    `;
-    const cells = tr.querySelectorAll('td');
-    const nameTd = cells[1];
-    const emailTd = cells[2];
-    const actions = cells[cells.length - 1];
-    renderViewsCell(r, tr.querySelector('.neg-views-cell'));
-    renderRateCell(r, tr.querySelector('.neg-rate-cell'));
+  const container = el('creator-rows');
+  container.innerHTML = '';
+  if (!rows.length) {
+    container.innerHTML =
+      '<div class="hint" style="padding:26px 6px;">No creators yet. Paste Instagram links above to add some.</div>';
+    return;
+  }
+  rows.forEach((r, idx) => {
+    const row = document.createElement('div');
+    row.className = 'creator-row';
+    row.dataset.creatorId = r.id;
 
-    makeEditable(nameTd, {
+    // --- Creator (avatar + handle link + editable account name) ---
+    const creatorCell = document.createElement('div');
+    creatorCell.className = 'cr-creator';
+    const avatar = document.createElement('div');
+    avatar.className = 'cr-avatar';
+    avatar.style.background = AVATAR_COLORS[idx % AVATAR_COLORS.length];
+    avatar.textContent = avatarInitial(r);
+    const identity = document.createElement('div');
+    identity.className = 'cr-identity';
+    const handle = document.createElement('div');
+    handle.className = 'cr-handle';
+    handle.innerHTML = `<a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || r.instagram_url)}</a>`;
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'cr-name';
+    nameDiv.textContent = r.full_name || r.first_name || '';
+    identity.appendChild(handle);
+    identity.appendChild(nameDiv);
+    creatorCell.appendChild(avatar);
+    creatorCell.appendChild(identity);
+    makeEditable(nameDiv, {
       value: r.full_name || r.first_name || '',
       placeholder: 'Account name',
       onSave: (v) =>
         api(`/api/creators/${r.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({
-            full_name: v,
-            first_name: v.split(/\s+/)[0],
-          }),
+          body: JSON.stringify({ full_name: v, first_name: v.split(/\s+/)[0] }),
         }),
     });
-    makeEditable(emailTd, {
+
+    // --- Email (editable) ---
+    const emailCell = document.createElement('div');
+    emailCell.className = 'cr-email';
+    if (r.email) emailCell.textContent = r.email;
+    else emailCell.innerHTML = '<span class="empty">—</span>';
+    makeEditable(emailCell, {
       value: r.email || '',
       placeholder: 'creator@email.com',
       allowEmpty: true, // blanking the cell clears the email
@@ -513,36 +633,28 @@ async function refreshCreators() {
         }),
     });
 
-    if (r.status === 'email_found') {
-      const btn = document.createElement('button');
-      btn.className = 'small';
-      btn.textContent = 'Send outreach';
-      btn.onclick = async () => {
-        btn.disabled = true;
-        try {
-          await api(`/api/creators/${r.id}/send-outreach`, { method: 'POST' });
-          await refreshCreators();
-          await refreshCampaigns();
-        } catch (err) {
-          alert(err.message);
-          btn.disabled = false;
-        }
-      };
-      actions.appendChild(btn);
-    }
-    const del = document.createElement('button');
-    del.className = 'small ghost';
-    del.textContent = '✕';
-    del.title = 'Remove from campaign';
-    del.onclick = async () => {
-      if (!confirm('Remove this creator?')) return;
-      await api(`/api/creators/${r.id}`, { method: 'DELETE' });
-      await refreshCreators();
-      await refreshCampaigns();
-    };
-    actions.appendChild(del);
-    tbody.appendChild(tr);
-  }
+    // --- Reach ---
+    const reachCell = document.createElement('div');
+    reachCell.className = 'cr-reach';
+    renderReachCell(r, reachCell);
+
+    // --- Rate ---
+    const rateCell = document.createElement('div');
+    rateCell.className = 'cr-rate';
+    renderRateCell(r, rateCell);
+
+    // --- Status (pill + delete + send + timeline) ---
+    const statusCell = document.createElement('div');
+    statusCell.className = 'cr-status';
+    renderStatusCell(r, statusCell);
+
+    row.appendChild(creatorCell);
+    row.appendChild(emailCell);
+    row.appendChild(reachCell);
+    row.appendChild(rateCell);
+    row.appendChild(statusCell);
+    container.appendChild(row);
+  });
 }
 
 el('sync-btn').addEventListener('click', async () => {
@@ -868,6 +980,8 @@ el('open-guidelines-btn').addEventListener('click', async () => {
   await refreshSettings();
 });
 
+el('guidelines-back-btn').addEventListener('click', () => showView('campaign'));
+
 el('save-guidelines-btn').addEventListener('click', async () => {
   const btn = el('save-guidelines-btn');
   const status = el('guidelines-status');
@@ -1016,12 +1130,12 @@ function buildDelegateCard(r) {
     const block = document.createElement('div');
     block.className = 'delegate-reply-block';
     block.innerHTML = `
-      <label class="meta" style="display:block; margin-top:12px;">Your reply</label>
-      <textarea class="delegate-reply" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
-      <div class="row" style="justify-content: flex-end; align-items: center; margin-top: 8px;">
-        <span class="delegate-status hint" style="margin-right: auto;"></span>
+      <label>Your reply</label>
+      <textarea class="delegate-reply io-scroll" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
+      <div class="delegate-reply-foot">
+        <span class="delegate-status hint"></span>
         <button class="ghost small delegate-dismiss" type="button">Dismiss</button>
-        <button class="small delegate-send" type="button">Send reply</button>
+        <button class="btn-primary delegate-send" type="button">Send reply</button>
       </div>`;
     card.appendChild(block);
 

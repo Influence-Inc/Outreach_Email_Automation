@@ -3,142 +3,168 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Influence - Creator Outreach</title>
+  <title>Influence — Outreach Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <!-- Top bar -->
   <header class="topbar">
     <div class="topbar-left">
       <button id="sidebar-toggle" class="icon-btn" type="button" aria-label="Toggle sidebar">
         <span class="hamburger"></span>
       </button>
-      <div class="brand">Influence Outreach</div>
+      <svg class="topbar-logo" viewBox="0 0 793 70" role="img" aria-label="Influence">
+        <path d="M20.01 68.6729H1.35348e-05V1.03334H20.01V68.6729ZM126.221 69.8941L55.1993 29.4044V68.6729H42.5169V-4.03086e-05L113.538 40.3018V1.03334H126.221V69.8941ZM209.764 44.2475H168.992V68.6729H148.794V1.03334H219.816V11.9308H169.086V33.35H209.764V44.2475ZM306.528 68.6729H236.54V1.03334H256.738V57.7754H306.528V68.6729ZM389.07 34.6652V1.03334H401.847V34.6652C401.847 40.8029 400.813 46.1577 398.747 50.7296C396.742 55.3015 393.861 58.934 390.104 61.6271C386.409 64.3201 382.15 66.3243 377.327 67.6395C372.505 68.9547 367.119 69.6123 361.169 69.6123C348.706 69.6123 338.81 66.7627 331.483 61.0634C324.218 55.3642 320.585 46.6274 320.585 34.8531V1.03334H341.065V34.6652C341.065 38.8614 341.754 42.4939 343.132 45.5627C344.51 48.6315 346.357 51.0114 348.675 52.7024C351.054 54.3934 353.591 55.646 356.284 56.4602C359.04 57.2117 361.983 57.5875 365.115 57.5875C368.246 57.5875 371.158 57.2117 373.851 56.4602C376.607 55.646 379.144 54.3934 381.461 52.7024C383.841 51.0114 385.688 48.6315 387.004 45.5627C388.381 42.4939 389.07 38.8614 389.07 34.6652ZM494.814 68.6729H423.041V1.03334H494.814V11.9308H443.238V28.7468H484.386V39.6442H443.238V57.7754H494.814V68.6729ZM596.325 69.8941L525.303 29.4044V68.6729H512.621V-4.03086e-05L583.643 40.3018V1.03334H596.325V69.8941ZM702.321 52.6085V63.7878C692.989 67.796 681.778 69.8002 668.689 69.8002C657.917 69.8002 648.428 68.4536 640.224 65.7606C632.082 63.0049 625.694 58.9653 621.059 53.6418C616.425 48.3184 614.108 42.0555 614.108 34.8531C614.108 24.0809 619.087 15.6259 629.045 9.48828C639.003 3.28799 652.217 0.187845 668.689 0.187845C681.966 0.187845 693.177 2.19198 702.321 6.20025V18.5069C693.302 13.4965 682.78 10.9914 670.756 10.9914C659.545 10.9914 650.84 13.246 644.639 17.7553C638.439 22.202 635.339 27.9013 635.339 34.8531C635.339 41.8676 638.439 47.6294 644.639 52.1387C650.902 56.648 659.796 58.9027 671.319 58.9027C682.029 58.9027 692.363 56.8046 702.321 52.6085ZM792.821 68.6729H721.048V1.03334H792.821V11.9308H741.246V28.7468H782.393V39.6442H741.246V57.7754H792.821V68.6729Z" />
+      </svg>
+      <span class="topbar-divider"></span>
+      <span class="topbar-title">Outreach Studio</span>
     </div>
-    <div class="auth" id="sender-status">Outreach &amp; follow-ups sent via Instantly.ai</div>
+    <div class="auth" id="sender-status">
+      <span class="live-dot"></span>
+      Outreach &amp; follow-ups sent via <b>Instantly.ai</b>
+    </div>
   </header>
 
   <main class="layout">
     <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
-    <aside class="sidebar" id="sidebar">
-      <section>
-        <div class="sidebar-header">
-          <h3>Brands &amp; Campaigns</h3>
-          <button id="sync-btn" class="ghost small">Refresh</button>
-        </div>
-        <p class="hint" id="sync-status">Synced from campaigns.influence.technology</p>
-        <div id="brand-tree" class="tree"></div>
-      </section>
 
-      <section class="sidebar-section">
+    <!-- Sidebar -->
+    <aside class="sidebar io-scroll" id="sidebar">
+      <div class="sidebar-header">
+        <h3>Brands &amp; Campaigns</h3>
+        <button id="sync-btn" class="ghost small">Refresh</button>
+      </div>
+      <p class="sidebar-synced num" id="sync-status">Synced from campaigns.influence.technology</p>
+      <div id="brand-tree" class="tree"></div>
+
+      <div class="sidebar-footer">
         <button id="open-guidelines-btn" class="sidebar-nav-link" type="button">
           <span>Guidelines</span>
-          <span class="meta">&rarr;</span>
+          <span class="arrow">&rarr;</span>
         </button>
-      </section>
+      </div>
     </aside>
 
-    <section class="main">
-      <div id="campaign-view">
-        <div class="main-header">
-          <h2 id="campaign-title">Select a campaign</h2>
-          <div id="campaign-stats" class="stats"></div>
-        </div>
+    <!-- Main -->
+    <section class="main io-scroll">
+      <div class="main-inner">
 
-        <form id="creator-form" class="card" hidden>
-          <h3>Add creator Instagram links</h3>
-          <textarea id="ig-urls" rows="4" placeholder="Paste one or more Instagram URLs, one per line:&#10;https://www.instagram.com/username1/&#10;https://www.instagram.com/username2/" required></textarea>
-          <div class="row" style="justify-content: space-between; align-items: center; margin-top: 0.5rem;">
-            <p id="add-status" class="hint" style="margin: 0;">Paste one URL per line. Click &ldquo;Fetch emails&rdquo; after adding to look up emails.</p>
-            <button type="submit">Add creators</button>
+        <!-- Campaign view -->
+        <div id="campaign-view">
+          <div class="main-header">
+            <div class="main-heading">
+              <div id="campaign-eyebrow" class="eyebrow" hidden></div>
+              <h1 id="campaign-title">Select a campaign</h1>
+            </div>
+            <div id="campaign-stats" class="stats" hidden></div>
           </div>
-        </form>
 
-        <div id="creator-table-wrap" class="card" hidden>
-          <div class="card-header">
-            <h3>Creators</h3>
-            <div class="actions">
-              <button id="run-extension-btn" title="Open each profile in Chrome and scrape via the installed extension">Scrape Via Extension</button>
-              <button id="send-emails-btn" title="Add pending creators to Instantly.ai for outreach + automated follow-ups">Send emails</button>
-              <button id="open-delegate-btn" class="ghost" title="Replies the AI handed off for a human to answer">Delegate <span id="delegate-count" class="count-badge" hidden>0</span></button>
-              <button id="refresh-btn" class="ghost">Refresh</button>
-              <button id="remove-all-btn" class="ghost danger" title="Delete every creator in this campaign">Remove all</button>
+          <form id="creator-form" class="card" hidden>
+            <h2>Add creator Instagram links</h2>
+            <textarea id="ig-urls" class="io-scroll" rows="4" placeholder="Paste one or more Instagram URLs, one per line:&#10;https://www.instagram.com/username1/&#10;https://www.instagram.com/username2/" required></textarea>
+            <div class="form-foot">
+              <p id="add-status" class="hint">Paste one URL per line. Click &ldquo;Fetch emails&rdquo; after adding to look up emails.</p>
+              <button type="submit" class="btn-primary btn-lg">Add creators</button>
+            </div>
+          </form>
+
+          <div id="creator-table-wrap" class="card" hidden>
+            <div class="card-header">
+              <h2>Creators</h2>
+              <div class="actions">
+                <button id="run-extension-btn" class="btn-primary" title="Open each profile in Chrome and scrape via the installed extension">Scrape Via Extension</button>
+                <button id="send-emails-btn" class="btn-primary" title="Add pending creators to Instantly.ai for outreach + automated follow-ups">Send emails</button>
+                <button id="open-delegate-btn" class="ghost has-badge" title="Replies the AI handed off for a human to answer">
+                  <span>Delegate</span>
+                  <span id="delegate-count" class="count-badge" hidden>0</span>
+                </button>
+                <button id="refresh-btn" class="ghost">Refresh</button>
+                <button id="remove-all-btn" class="ghost danger" title="Delete every creator in this campaign">Remove all</button>
+              </div>
+            </div>
+
+            <div class="settings-rows">
+              <div class="setting-chip">
+                <span class="setting-label">Max CPM ($)</span>
+                <input id="campaign-max-cpm" class="num" type="number" min="0" step="0.01" placeholder="env default" />
+                <button id="save-cpm-btn" class="ghost small" type="button">Save &amp; recalc offers</button>
+                <span id="cpm-status" class="hint"></span>
+              </div>
+              <div class="setting-chip grow">
+                <span class="setting-label" title="UUID from the campaign URL in your Instantly.ai dashboard. This campaign's outreach + follow-up emails are sent from there.">Instantly campaign ID</span>
+                <input id="campaign-instantly-id" class="num grow-input" type="text" placeholder="env default (INSTANTLY_CAMPAIGN_ID)" />
+                <button id="save-instantly-btn" class="ghost small" type="button">Save</button>
+                <span id="instantly-status" class="hint"></span>
+              </div>
+            </div>
+
+            <p id="fetch-status" class="hint" hidden></p>
+            <div id="scrape-progress" class="hint scrape-progress" hidden>
+              <span id="scrape-progress-text"></span>
+              <button id="scrape-cancel-btn" class="ghost small" type="button">Cancel</button>
+            </div>
+
+            <div class="table-scroll">
+              <div id="creator-table" class="creator-grid">
+                <div class="grid-head">
+                  <div>Creator</div>
+                  <div>Email</div>
+                  <div>Reach</div>
+                  <div>Rate</div>
+                  <div>Status</div>
+                </div>
+                <div id="creator-rows"></div>
+              </div>
             </div>
           </div>
-          <div class="neg-cpm-row">
-            <label class="neg-cpm-label" for="campaign-max-cpm">Max CPM ($)</label>
-            <input id="campaign-max-cpm" class="neg-cpm-input" type="number" min="0" step="0.01" placeholder="env default" />
-            <button id="save-cpm-btn" class="small ghost" type="button">Save &amp; recalc offers</button>
-            <span id="cpm-status" class="hint"></span>
-          </div>
-          <div class="neg-cpm-row">
-            <label class="neg-cpm-label" for="campaign-instantly-id" title="UUID from the campaign URL in your Instantly.ai dashboard. This campaign's outreach + follow-up emails are sent from there.">Instantly campaign ID</label>
-            <input id="campaign-instantly-id" class="neg-cpm-input" type="text" style="width: 320px;" placeholder="env default (INSTANTLY_CAMPAIGN_ID)" />
-            <button id="save-instantly-btn" class="small ghost" type="button">Save</button>
-            <span id="instantly-status" class="hint"></span>
-          </div>
-          <p id="fetch-status" class="hint" hidden></p>
-          <div id="scrape-progress" class="hint" hidden>
-            <span id="scrape-progress-text"></span>
-            <button id="scrape-cancel-btn" class="small ghost" type="button">Cancel</button>
-          </div>
-          <div class="table-scroll">
-            <table id="creator-table">
-              <thead>
-                <tr>
-                  <th>Instagram</th>
-                  <th>Name</th>
-                  <th>Email</th>
-                  <th>Status</th>
-                  <th>Last activity</th>
-                  <th>Views</th>
-                  <th>Rate</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div id="guidelines-view" hidden>
-        <div class="main-header">
-          <h2>Guidelines</h2>
-          <p class="hint" style="margin: 0; max-width: 60ch;">Universal instructions for the AI when it reads creator replies and writes negotiation emails. Added to every AI prompt. (Outreach &amp; follow-up emails are configured in Instantly.ai, not here.)</p>
         </div>
 
-        <div class="card">
-          <div class="row" style="align-items: center; gap: 12px;">
-            <label class="checkbox-label" title="Master kill-switch. When off, every creator reply goes straight to the Delegate window — the AI never auto-replies.">
-              <input id="ai-replies-toggle" type="checkbox" />
-              <b>Auto-reply with AI</b>
-            </label>
-            <span id="ai-replies-status" class="hint"></span>
+        <!-- Guidelines view -->
+        <div id="guidelines-view" hidden>
+          <div class="main-header">
+            <div class="main-heading">
+              <button id="guidelines-back-btn" class="ghost small back-btn" type="button">&larr; Back to campaign</button>
+              <h1>Guidelines</h1>
+              <p class="hint subhead">Universal instructions for the AI when it reads creator replies and writes negotiation emails. Added to every AI prompt. (Outreach &amp; follow-up emails are configured in Instantly.ai, not here.)</p>
+            </div>
           </div>
-          <p class="hint" style="margin: 8px 0 0; max-width: 60ch;">When this is off, every creator reply is routed to the Delegate window for a human to handle. When on, the AI uses the Guidelines below + few-shot examples to draft replies automatically.</p>
+
+          <div class="card">
+            <div class="toggle-row">
+              <label class="checkbox-label" title="Master kill-switch. When off, every creator reply goes straight to the Delegate window — the AI never auto-replies.">
+                <input id="ai-replies-toggle" type="checkbox" />
+                <b>Auto-reply with AI</b>
+              </label>
+              <span id="ai-replies-status" class="hint"></span>
+            </div>
+            <p class="hint subhead">When this is off, every creator reply is routed to the Delegate window for a human to handle. When on, the AI uses the Guidelines below + few-shot examples to draft replies automatically.</p>
+          </div>
+
+          <div class="card">
+            <label for="guidelines-text" class="field-label">Universal prompt</label>
+            <textarea id="guidelines-text" class="io-scroll" rows="16" placeholder="e.g.&#10;- Always stay warm, concise and human.&#10;- Never agree to exclusivity or usage rights without a human.&#10;- Prefer view-based deals; keep CPM within the campaign ceiling.&#10;- If a creator asks anything outside standard deal terms, escalate to a human."></textarea>
+            <div class="form-foot end">
+              <span id="guidelines-status" class="hint push"></span>
+              <button id="save-guidelines-btn" class="btn-primary" type="button">Save guidelines</button>
+            </div>
+          </div>
         </div>
 
-        <div class="card">
-          <label for="guidelines-text" style="font-weight: 600; display: block; margin-bottom: 6px;">Universal prompt</label>
-          <textarea id="guidelines-text" rows="16" placeholder="e.g.&#10;- Always stay warm, concise and human.&#10;- Never agree to exclusivity or usage rights without a human.&#10;- Prefer view-based deals; keep CPM within the campaign ceiling.&#10;- If a creator asks anything outside standard deal terms, escalate to a human."></textarea>
-          <div class="row" style="justify-content: flex-end; align-items: center; margin-top: 10px;">
-            <span id="guidelines-status" class="hint" style="margin-right: auto;"></span>
-            <button id="save-guidelines-btn" type="button">Save guidelines</button>
+        <!-- Delegate view -->
+        <div id="delegate-view" hidden>
+          <div class="main-header">
+            <div class="main-heading">
+              <button id="delegate-back-btn" class="ghost small back-btn" type="button">&larr; Back to campaign</button>
+              <h1 id="delegate-title">Delegate</h1>
+              <p class="hint subhead">Replies the AI handed off &mdash; questions/situations it couldn&rsquo;t confidently handle, plus everything routed here while &ldquo;Auto-reply with AI&rdquo; is off. Your reply sends from the same email thread.</p>
+            </div>
           </div>
-        </div>
-      </div>
-
-      <div id="delegate-view" hidden>
-        <div class="main-header">
-          <div>
-            <button id="delegate-back-btn" class="ghost small" type="button">&larr; Back to campaign</button>
-            <h2 id="delegate-title" style="margin: 8px 0 0;">Delegate</h2>
-          </div>
-          <p class="hint" style="margin: 0; max-width: 52ch;">Replies the AI handed off &mdash; questions/situations it couldn&rsquo;t confidently handle, plus everything routed here while &ldquo;Auto-reply with AI&rdquo; is off. Your reply sends from the same email thread.</p>
-        </div>
-        <div class="card">
           <div id="delegate-list"></div>
         </div>
+
       </div>
     </section>
   </main>
