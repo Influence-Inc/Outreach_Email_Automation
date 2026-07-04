@@ -467,6 +467,12 @@ function buildOfferConfigurator(r, onRefresh) {
     ? '<span class="oc-badge sent">✓ Offer sent</span>'
     : '<span class="oc-badge pending">Awaiting approval</span>';
   const approveLabel = priorOfferSent ? 'Re-approve &amp; send counter offer' : 'Approve &amp; send offer';
+  // No quoted rate on an offer-actionable creator means the creator asked us to
+  // price it first — say so; otherwise reflect the rate they shared.
+  const subtitle =
+    r.quoted_rate != null
+      ? `Creator shared a rate of $${fmtNum(r.quoted_rate)} — shape an offer and send.`
+      : 'Creator asked us to quote a rate first — set a price and send the offer.';
 
   root.innerHTML = `
     <div class="oc-header">
@@ -482,6 +488,7 @@ function buildOfferConfigurator(r, onRefresh) {
       </div>
       ${badge}
     </div>
+    <div class="oc-subtitle">${subtitle}</div>
 
     <div class="oc-floor">
       <div class="oc-floor-main">
