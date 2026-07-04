@@ -288,15 +288,33 @@ function renderReachCell(r, cell) {
   });
 }
 
-// Rate column: just the editable quoted rate (the delivery timeline now lives
+// The rate the creator currently wants: once they've ACCEPTED, that's the offer
+// they accepted (the latest priced offer we sent), not their earlier quote. For
+// older accepted rows whose quoted_rate wasn't updated, we recover the amount
+// from the rate timeline. Otherwise it's their quoted_rate.
+function effectiveRate(r) {
+  if (r.negotiation_status === 'ACCEPTED') {
+    const log = Array.isArray(r.rate_log) ? r.rate_log : [];
+    for (let i = log.length - 1; i >= 0; i--) {
+      const e = log[i];
+      if (e && (e.type === 'rate_accepted' || e.type === 'rate_offer_sent') && e.amount != null) {
+        return Number(e.amount);
+      }
+    }
+  }
+  return r.quoted_rate != null ? Number(r.quoted_rate) : null;
+}
+
+// Rate column: the editable agreed/quoted rate (the delivery timeline now lives
 // in the Status column).
 function renderRateCell(r, cell) {
+  const rate = effectiveRate(r);
   const valueDiv = document.createElement('div');
-  valueDiv.className = 'rate-value num' + (r.quoted_rate != null ? '' : ' empty');
-  valueDiv.textContent = r.quoted_rate != null ? `$${fmtNum(r.quoted_rate)}` : '—';
+  valueDiv.className = 'rate-value num' + (rate != null ? '' : ' empty');
+  valueDiv.textContent = rate != null ? `$${fmtNum(rate)}` : '—';
   cell.appendChild(valueDiv);
   makeEditable(valueDiv, {
-    value: r.quoted_rate != null ? String(r.quoted_rate) : '',
+    value: rate != null ? String(rate) : '',
     placeholder: 'rate $',
     onSave: (v) =>
       api(`/api/creators/${r.id}/quoted-rate`, {
