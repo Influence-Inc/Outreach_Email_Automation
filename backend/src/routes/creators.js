@@ -49,8 +49,10 @@ function rateLogEntry(type, detail) {
     }
     case 'rate_counter_requested':
       return { text: 'Asked creator for their counter rate', tone: 'active' };
-    case 'rate_accepted':
-      return { text: 'Creator accepted ✓', tone: 'success' };
+    case 'rate_accepted': {
+      const fee = d.fee != null ? fmtMoney(d.fee) : null;
+      return { text: fee ? `Creator accepted ✓ — ${fee}` : 'Creator accepted ✓', tone: 'success' };
+    }
     case 'rate_declined':
       return { text: 'Creator declined', tone: 'muted' };
     case 'sent_delegate_reply':
@@ -78,6 +80,11 @@ async function attachRateLog(rows) {
     if (!entry) continue;
     entry.at = e.created_at;
     entry.type = e.type;
+    // Expose the numeric amount (offer fee / quoted rate) so the client can
+    // resolve the "agreed rate" for accepted deals without parsing the label.
+    const d = e.detail || {};
+    if (d.fee != null) entry.amount = Number(d.fee);
+    else if (d.to != null) entry.amount = Number(d.to);
     if (!byCreator.has(e.creator_id)) byCreator.set(e.creator_id, []);
     byCreator.get(e.creator_id).push(entry);
   }

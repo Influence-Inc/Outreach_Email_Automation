@@ -776,6 +776,28 @@ async function routeCreatorToOffer(creator, inbound) {
   return { action: 'offer_requested' };
 }
 
+// The fee of the offer the creator is accepting: the most recent priced offer
+// we logged as sent, falling back to the currently approved offer. Used to set
+// the agreed rate on acceptance.
+async function agreedOfferFee(creator) {
+  const ev = await db.one(
+    `SELECT detail FROM email_events
+     WHERE creator_id = $1 AND type = 'rate_offer_sent'
+     ORDER BY created_at DESC LIMIT 1`,
+    [creator.id],
+  );
+  if (ev && ev.detail && ev.detail.fee != null) {
+    const n = Number(ev.detail.fee);
+    if (Number.isFinite(n)) return Math.round(n);
+  }
+  const offer = resolveApprovedOffer(creator);
+  if (offer && offer.flat_fee != null) {
+    const n = Number(offer.flat_fee);
+    if (Number.isFinite(n)) return Math.round(n);
+  }
+  return null;
+}
+
 async function applyReply(creator, ctx, result) {
   const v = templateVars(ctx);
   switch (result.action) {
@@ -808,13 +830,21 @@ async function applyReply(creator, ctx, result) {
     }
     case 'accepted': {
       if (result.send_now) await sendNegotiationEmail(creator, result.email || templates.acceptance(v), 'acceptance');
+      // The agreed rate is now the offer the creator accepted, not their earlier
+      // quote — overwrite quoted_rate so the dashboard's Rate column reflects the
+      // final agreed amount. COALESCE guards the rare case with no priced offer.
+      const agreedFee = await agreedOfferFee(creator);
       await db.query(
-        `UPDATE creators SET negotiation_status = 'ACCEPTED', updated_at = NOW() WHERE id = $1`,
-        [creator.id],
+        `UPDATE creators
+         SET negotiation_status = 'ACCEPTED',
+             quoted_rate = COALESCE($2, quoted_rate),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [creator.id, agreedFee],
       );
       await db.query(
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
-        [creator.id, {}],
+        [creator.id, { fee: agreedFee }],
       );
       return;
     }
