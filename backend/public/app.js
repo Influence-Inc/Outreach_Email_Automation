@@ -376,22 +376,42 @@ function renderStatusCell(r, cell) {
 
 // A vertical delivery-tracking timeline, oldest → newest. The newest entry is
 // the "current" step (emphasized); a connecting line joins consecutive steps.
+// Consecutive entries with the same label (e.g. "Creator replied" ×3) collapse
+// into one expandable node to keep the column compact — distinct events (offers,
+// quotes, accepted) stay as their own steps.
 function renderTimeline(log) {
   const wrap = document.createElement('div');
   wrap.className = 'timeline';
   const items = Array.isArray(log) ? log : [];
-  items.forEach((e, i) => {
-    const isLast = i === items.length - 1;
+
+  // Group runs of consecutive identical-label entries.
+  const groups = [];
+  for (const e of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.text === (e.text || '')) last.entries.push(e);
+    else groups.push({ text: e.text || '', entries: [e] });
+  }
+
+  const dotClassFor = (entry, isCurrent) => {
+    let cls = 'timeline-dot ' + (isCurrent ? 'current' : 'done');
+    if (entry.tone === 'success') cls += ' tone-success';
+    if (entry.tone === 'muted') cls += ' tone-muted';
+    return cls;
+  };
+
+  groups.forEach((g, gi) => {
+    const isLast = gi === groups.length - 1;
+    const newest = g.entries[g.entries.length - 1]; // group's representative
+    const collapsed = g.entries.length > 1;
+
     const step = document.createElement('div');
     step.className = 'timeline-step' + (isLast ? ' current' : '');
-    if (e.tone === 'success') step.classList.add('tone-success');
+    if (newest.tone === 'success') step.classList.add('tone-success');
 
     const rail = document.createElement('div');
     rail.className = 'timeline-rail';
     const dot = document.createElement('div');
-    dot.className = 'timeline-dot ' + (isLast ? 'current' : 'done');
-    if (e.tone === 'success') dot.classList.add('tone-success');
-    if (e.tone === 'muted') dot.classList.add('tone-muted');
+    dot.className = dotClassFor(newest, isLast);
     rail.appendChild(dot);
     if (!isLast) {
       const line = document.createElement('div');
@@ -402,18 +422,63 @@ function renderTimeline(log) {
     const body = document.createElement('div');
     body.className = 'timeline-body';
     body.style.paddingBottom = isLast ? '0' : '4px';
-    const label = document.createElement('div');
-    label.className = 'timeline-label';
-    label.textContent = e.text || '';
-    const time = document.createElement('div');
-    time.className = 'timeline-time num';
-    time.textContent = fmtAgo(e.at);
-    time.title = fmtDate(e.at);
-    body.appendChild(label);
-    body.appendChild(time);
 
-    step.appendChild(rail);
-    step.appendChild(body);
+    if (collapsed) {
+      // Summary row: label + ×N count + chevron; click to reveal each occurrence.
+      const head = document.createElement('div');
+      head.className = 'timeline-group-head';
+      head.setAttribute('role', 'button');
+      head.tabIndex = 0;
+      const label = document.createElement('span');
+      label.className = 'timeline-label';
+      label.textContent = g.text;
+      const count = document.createElement('span');
+      count.className = 'timeline-count';
+      count.textContent = '×' + g.entries.length;
+      const chev = document.createElement('span');
+      chev.className = 'timeline-chevron';
+      chev.textContent = '▾';
+      head.append(label, count, chev);
+
+      const time = document.createElement('div');
+      time.className = 'timeline-time num';
+      time.textContent = fmtAgo(newest.at);
+      time.title = fmtDate(newest.at);
+
+      const subs = document.createElement('div');
+      subs.className = 'timeline-substeps';
+      subs.hidden = true;
+      // Oldest → newest within the group.
+      g.entries.forEach((e) => {
+        const li = document.createElement('div');
+        li.className = 'timeline-substep num';
+        li.textContent = fmtDate(e.at);
+        subs.appendChild(li);
+      });
+
+      const toggle = () => {
+        const open = subs.hidden;
+        subs.hidden = !open;
+        head.classList.toggle('open', open);
+      };
+      head.addEventListener('click', toggle);
+      head.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); }
+      });
+
+      body.append(head, time, subs);
+    } else {
+      const label = document.createElement('div');
+      label.className = 'timeline-label';
+      label.textContent = g.text;
+      const time = document.createElement('div');
+      time.className = 'timeline-time num';
+      time.textContent = fmtAgo(newest.at);
+      time.title = fmtDate(newest.at);
+      body.append(label, time);
+    }
+
+    step.append(rail, body);
     wrap.appendChild(step);
   });
   return wrap;
