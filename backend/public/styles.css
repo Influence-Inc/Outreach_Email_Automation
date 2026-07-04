@@ -381,6 +381,26 @@ button:disabled { opacity: 0.5; cursor: default; }
 .timeline-step.tone-success.current .timeline-label { color: var(--green); }
 .timeline-time { font-size: 11px; color: var(--faint-2); }
 
+/* Collapsed run of repeated statuses (e.g. "Creator replied ×3"). */
+.timeline-group-head {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  user-select: none; border-radius: 6px; margin: -1px -4px; padding: 1px 4px;
+}
+.timeline-group-head:hover { background: var(--surface-3); }
+.timeline-count {
+  font-size: 10px; font-weight: 600; color: var(--ink-2); background: var(--surface-3);
+  border: 1px solid var(--line); border-radius: 20px; padding: 0 6px; line-height: 16px;
+}
+.timeline-group-head:hover .timeline-count { background: var(--surface); }
+.timeline-chevron { font-size: 9px; color: var(--faint); transition: transform 0.15s; }
+.timeline-group-head.open .timeline-chevron { transform: rotate(180deg); }
+.timeline-substeps { display: flex; flex-direction: column; gap: 4px; margin-top: 5px; }
+.timeline-substep { position: relative; padding-left: 12px; font-size: 10.5px; color: var(--faint); }
+.timeline-substep::before {
+  content: ''; position: absolute; left: 1px; top: 5px;
+  width: 4px; height: 4px; border-radius: 50%; background: var(--accent-dot);
+}
+
 /* Editable cells */
 .editable { cursor: text; border-radius: 6px; }
 .editable:hover { background: var(--surface-3); box-shadow: 0 0 0 4px var(--surface-3); }
