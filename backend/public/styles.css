@@ -283,6 +283,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .setting-chip input.grow-input { flex: 1; min-width: 0; width: auto; color: var(--ink-2); }
 .setting-chip .hint { flex-basis: 100%; }
+.setting-chip .hint:empty { display: none; }
 
 .scrape-progress { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 #scrape-progress-text { flex: 1; }
