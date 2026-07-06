@@ -87,36 +87,124 @@ function guaranteedViewsOf(offer) {
   return null;
 }
 
+function bonusOf(offer) {
+  if (!offer) return { amount: null, threshold: null };
+  if (offer.offer_type === 'video_bonus') {
+    return {
+      amount: offer.bonus_amount != null ? Number(offer.bonus_amount) : null,
+      threshold: offer.bonus_threshold_views != null ? Number(offer.bonus_threshold_views) : null,
+    };
+  }
+  return { amount: null, threshold: null };
+}
+
+// Suggested per-video posting windows derived from the total window and video
+// count. The example contract lists windows like:
+//   - Video 1: December 11 - 14
+//   - Video 2: December 16 - 21
+// This is only a suggestion — the deadline is the hard constraint.
+function suggestPostingWindows(n, deadline) {
+  const end = deadline instanceof Date && !Number.isNaN(deadline.getTime()) ? deadline : null;
+  if (!end || !n || n < 1) return [];
+  const fmt = (d) =>
+    d.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+  const oneDay = 24 * 3600 * 1000;
+  const totalWindowDays = Math.max(7, n * 7);
+  const startMs = end.getTime() - totalWindowDays * oneDay;
+  const stepMs = (end.getTime() - startMs) / n;
+  const windows = [];
+  for (let i = 0; i < n; i += 1) {
+    const s = new Date(startMs + i * stepMs);
+    const e = new Date(s.getTime() + Math.min(stepMs, 5 * oneDay));
+    windows.push({ label: `Video ${i + 1}`, range: `${fmt(s)} - ${fmt(e).split(' ').pop()}` });
+  }
+  return windows;
+}
+
 // Deterministic contract fields from what we already know. Always complete; used
 // both as the no-Claude fallback and as the base Claude's extraction merges over.
+// The shape mirrors the fields the public contract page renders — see
+// public/contract.html for the layout that consumes each key.
 function baseContractData(creator, fee, offer) {
   const n = numDeliverables(offer);
   const cadence =
     process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week';
+  const brandName = creator.brand_name || process.env.BRAND_NAME || null;
+  const minViews = guaranteedViewsOf(offer);
+  const bonus = bonusOf(offer);
+  // Best-guess hard deadline: N weeks out from today, matching the cadence.
+  const weeks = Math.max(n, 3);
+  const deadlineDate = new Date(Date.now() + weeks * 7 * 24 * 3600 * 1000);
+  const deadlineHuman = deadlineDate.toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
   return {
+    // Identity — kept for the Creator-DB sync payload mapping.
     creatorName: creator.full_name || creator.first_name || null,
     email: creator.email || null,
     instagramUsername: creator.instagram_username || null,
-    brandName: creator.brand_name || process.env.BRAND_NAME || null,
+
+    // Company + brand.
+    companyLegalName: process.env.COMPANY_LEGAL_NAME || 'Influence Inc.',
+    companyLegalAddress:
+      process.env.COMPANY_LEGAL_ADDRESS ||
+      '8 The Green, STE R, Dover, Delaware, 19901, United States',
+    brandName,
+    brandLegalName: brandName,
     campaignName: creator.campaign_name || null,
-    platforms: ['Instagram', 'TikTok', 'YouTube Shorts'],
+
+    // Deliverables + platforms.
+    platforms: ['Instagram', 'TikTok'],
     deliverables: `${n} short-form video${n === 1 ? '' : 's'}`,
     numberOfDeliverables: n,
+    numberOfVideos: n,
+    minTotalViews: minViews,
+    includeDmAutomation: true,
+
+    // Revisions.
+    revisionRounds: 2,
+
+    // Timeline.
     timeline: cadence,
-    deadline: templates.approxDeadline(n, cadence),
+    deadline: deadlineHuman,
+    postingDeadline: deadlineHuman,
+    postingWindows: suggestPostingWindows(n, deadlineDate),
+
+    // Usage rights.
     usageRights: 'Organic only — no paid ad rights required',
+    usageRightsList: ['ads', 'reposting', 'promotion', 'testimonials', 'paid and organic marketing across any channels'],
+    usageScope: 'non exclusive, royalty free, and worldwide',
+    paidAdsIncluded: false,
     exclusivity: 'None',
+
+    // Content availability.
+    postLiveMonths: 6,
+
+    // Compensation.
     compensation: fee,
+    totalPayment: fee,
     currency: 'USD',
+    paymentTermsDays: 7,
     paymentTerms:
       'Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables',
-    guaranteedViews: guaranteedViewsOf(offer),
+    upfrontPercent: 30,
+    upfrontTrigger: 'upon sharing the first video draft',
+    remainderPercent: 70,
+    remainderTrigger:
+      'after deliverables outlined in this agreement are completed, posted and confirmed live',
+
+    // Bonus (present for video_bonus offer types).
+    bonusAmount: bonus.amount,
+    bonusThresholdViews: bonus.threshold,
+    bonusWindowDays: 30,
+
+    guaranteedViews: minViews,
     specialNotes: null,
     additionalTerms: [],
   };
 }
 
-const CONTRACT_SYSTEM = `You extract structured contract terms from an influencer-marketing email negotiation between a brand's manager and a creator.
+const CONTRACT_SYSTEM = `You extract structured contract terms from an influencer-marketing email negotiation between a brand's manager and a creator, in the exact shape needed to populate a standard Influencer Agreement.
 
 Return ONLY a JSON object — no prose, no markdown fences — with EXACTLY these keys:
 {
@@ -124,28 +212,58 @@ Return ONLY a JSON object — no prose, no markdown fences — with EXACTLY thes
   "email": string|null,
   "instagramUsername": string|null,
   "brandName": string|null,
+  "brandLegalName": string|null,
   "campaignName": string|null,
+
   "platforms": string[],
   "deliverables": string,
   "numberOfDeliverables": number|null,
+  "numberOfVideos": number|null,
+  "minTotalViews": number|null,
+  "includeDmAutomation": boolean|null,
+  "revisionRounds": number|null,
+
   "timeline": string|null,
   "deadline": string|null,
+  "postingDeadline": string|null,
+  "postingWindows": [{"label": string, "range": string}]|null,
+
   "usageRights": string|null,
+  "usageRightsList": string[]|null,
+  "usageScope": string|null,
+  "paidAdsIncluded": boolean|null,
   "exclusivity": string|null,
+  "postLiveMonths": number|null,
+
   "compensation": number|null,
+  "totalPayment": number|null,
   "currency": string,
+  "paymentTermsDays": number|null,
   "paymentTerms": string|null,
+  "upfrontPercent": number|null,
+  "upfrontTrigger": string|null,
+  "remainderPercent": number|null,
+  "remainderTrigger": string|null,
+  "bonusAmount": number|null,
+  "bonusThresholdViews": number|null,
+  "bonusWindowDays": number|null,
   "guaranteedViews": number|null,
+
   "specialNotes": string|null,
   "additionalTerms": string[]
 }
 
 Rules:
 - Use ONLY facts supported by the negotiation timeline and the provided KNOWN VALUES. Never invent numbers.
-- "compensation" is the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
+- "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
 - "currency" is a 3-letter ISO code (default "USD").
+- "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
+- "postingWindows" are suggested per-video windows, e.g. [{"label":"Video 1","range":"December 11 - 14"}]. Return null if the thread doesn't specify windows.
+- "usageRightsList" enumerates each usage (e.g. ["ads","reposting","promotion","testimonials","paid and organic marketing across any channels"]).
+- "paidAdsIncluded" — true only if the thread explicitly includes paid advertising usage rights.
+- "upfrontPercent" + "remainderPercent" should sum to 100 when split payment applies.
 - If a field is genuinely unknown, use null (or [] for array fields).
-- Put any extra negotiated terms (bonuses, revisions, whitelisting/usage, exclusivity windows, view guarantees, special timelines) into "additionalTerms" as short strings.`;
+- Put any extra negotiated terms (whitelisting, exclusivity windows, special timelines) into "additionalTerms" as short strings.`;
 
 // Extract the campaign-specific contract fields. Merges Claude's structured JSON
 // over the deterministic base so the result is always complete, and never lets a
