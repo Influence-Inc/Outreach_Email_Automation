@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Creator Collaboration Agreement — INFLUENCE</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <style>
+    :root {
+      --bg: #f5f4f0; --surface: #ffffff; --surface-2: #faf9f6; --surface-3: #f2f0eb;
+      --ink: #191817; --ink-2: #4d4b46; --muted: #8a8880; --faint: #a3a19b; --faint-2: #b4b2ac;
+      --line: #e6e4de; --line-2: #dcdad3; --line-3: #eeece6;
+      --accent: #191817; --accent-strong: #000000;
+      --green: #147a52; --green-bg: #e7f2ec; --danger: #c53127;
+      --radius: 16px; --radius-md: 12px; --radius-sm: 10px; --radius-xs: 8px;
+      --shadow-card: 0 1px 2px rgba(20,18,15,.04); --shadow-btn: 0 2px 6px rgba(20,18,15,.18);
+      --ring: 0 0 0 3px rgba(25,24,23,.12);
+      --font: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--font); color: var(--ink); background: var(--bg);
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+      line-height: 1.5;
+    }
+    .num { font-variant-numeric: tabular-nums; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 40px 22px 80px; }
+
+    /* Brand bar */
+    .brandbar { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; }
+    .brandbar svg { height: 20px; width: auto; fill: var(--ink); }
+    .brandbar .divider { width: 1px; height: 18px; background: var(--line-2); }
+    .brandbar .tag { font-size: 13px; color: var(--muted); font-weight: 500; letter-spacing: .01em; }
+
+    /* Document card */
+    .doc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow-card); overflow: hidden; }
+    .doc-head { padding: 34px 38px 26px; border-bottom: 1px solid var(--line); }
+    .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--faint); margin-bottom: 10px; }
+    .doc-head h1 { font-size: 27px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 8px; }
+    .doc-head p.sub { margin: 0; color: var(--ink-2); font-size: 14px; }
+
+    .banner { margin: 0; padding: 13px 38px; font-size: 13.5px; font-weight: 500; display: flex;
+      align-items: center; gap: 9px; }
+    .banner.signed { background: var(--green-bg); color: var(--green); border-bottom: 1px solid #d3e7db; }
+    .banner .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+    /* Sections */
+    .section { padding: 24px 38px; border-bottom: 1px solid var(--line-3); }
+    .section:last-of-type { border-bottom: 0; }
+    .section h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--faint); margin: 0 0 16px; }
+    .rows { display: grid; grid-template-columns: 190px 1fr; gap: 12px 20px; }
+    @media (max-width: 560px) { .rows { grid-template-columns: 1fr; gap: 4px 0; } .rows .k { margin-top: 12px; } }
+    .rows .k { color: var(--muted); font-size: 13.5px; }
+    .rows .v { color: var(--ink); font-size: 14.5px; font-weight: 500; }
+    .rows .v.big { font-size: 16px; font-weight: 600; }
+    .pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .pill { background: var(--surface-3); border: 1px solid var(--line); border-radius: 999px;
+      padding: 3px 11px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
+    ul.terms { margin: 4px 0 0; padding-left: 18px; }
+    ul.terms li { font-size: 14px; color: var(--ink); margin-bottom: 5px; }
+    .prose { font-size: 14px; color: var(--ink-2); }
+
+    /* Sign block */
+    .sign { padding: 30px 38px 34px; background: var(--surface-2); border-top: 1px solid var(--line); }
+    .sign h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.01em; }
+    .sign p.note { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
+    label.field { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+      margin-bottom: 7px; letter-spacing: .01em; }
+    input[type=text], input[type=email] {
+      width: 100%; font-family: var(--font); font-size: 15px; color: var(--ink);
+      padding: 12px 14px; background: var(--surface); border: 1px solid var(--line-2);
+      border-radius: var(--radius-sm); outline: none; transition: border-color .12s, box-shadow .12s;
+    }
+    input[type=text]:focus, input[type=email]:focus { border-color: var(--faint); box-shadow: var(--ring); }
+    .sig-name { font-size: 22px; font-family: 'Inter', cursive; letter-spacing: .01em; }
+    .agree { display: flex; align-items: flex-start; gap: 11px; margin: 20px 0 22px; cursor: pointer; }
+    .agree input { margin-top: 3px; width: 17px; height: 17px; accent-color: var(--accent); flex: none; }
+    .agree span { font-size: 13.5px; color: var(--ink-2); }
+    .btn { appearance: none; border: 0; cursor: pointer; font-family: var(--font); font-weight: 600;
+      font-size: 15px; color: #fff; background: var(--accent); padding: 13px 22px;
+      border-radius: var(--radius-sm); box-shadow: var(--shadow-btn); transition: transform .06s, opacity .12s; }
+    .btn:hover { background: var(--accent-strong); }
+    .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .err { color: var(--danger); font-size: 13px; margin-top: 12px; min-height: 16px; }
+
+    /* States */
+    .state { text-align: center; padding: 70px 24px; }
+    .state h1 { font-size: 22px; margin: 0 0 8px; }
+    .state p { color: var(--muted); margin: 0; }
+    .spinner { width: 26px; height: 26px; border: 3px solid var(--line-2); border-top-color: var(--accent);
+      border-radius: 50%; margin: 0 auto 16px; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .check { width: 54px; height: 54px; border-radius: 50%; background: var(--green-bg); color: var(--green);
+      display: flex; align-items: center; justify-content: center; margin: 0 auto 18px; font-size: 26px; }
+    .foot { text-align: center; color: var(--faint-2); font-size: 12px; margin-top: 26px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brandbar">
+      <svg viewBox="0 0 793 70" role="img" aria-label="Influence">
+        <path d="M20.01 68.6729H1.35348e-05V1.03334H20.01V68.6729ZM126.221 69.8941L55.1993 29.4044V68.6729H42.5169V-4.03086e-05L113.538 40.3018V1.03334H126.221V69.8941ZM209.764 44.2475H168.992V68.6729H148.794V1.03334H219.816V11.9308H169.086V33.35H209.764V44.2475ZM306.528 68.6729H236.54V1.03334H256.738V57.7754H306.528V68.6729ZM389.07 34.6652V1.03334H401.847V34.6652C401.847 40.8029 400.813 46.1577 398.747 50.7296C396.742 55.3015 393.861 58.934 390.104 61.6271C386.409 64.3201 382.15 66.3243 377.327 67.6395C372.505 68.9547 367.119 69.6123 361.169 69.6123C348.706 69.6123 338.81 66.7627 331.483 61.0634C324.218 55.3642 320.585 46.6274 320.585 34.8531V1.03334H341.065V34.6652C341.065 38.8614 341.754 42.4939 343.132 45.5627C344.51 48.6315 346.357 51.0114 348.675 52.7024C351.054 54.3934 353.591 55.646 356.284 56.4602C359.04 57.2117 361.983 57.5875 365.115 57.5875C368.246 57.5875 371.158 57.2117 373.851 56.4602C376.607 55.646 379.144 54.3934 381.461 52.7024C383.841 51.0114 385.688 48.6315 387.004 45.5627C388.381 42.4939 389.07 38.8614 389.07 34.6652ZM494.814 68.6729H423.041V1.03334H494.814V11.9308H443.238V28.7468H484.386V39.6442H443.238V57.7754H494.814V68.6729ZM596.325 69.8941L525.303 29.4044V68.6729H512.621V-4.03086e-05L583.643 40.3018V1.03334H596.325V69.8941ZM702.321 52.6085V63.7878C692.989 67.796 681.778 69.8002 668.689 69.8002C657.917 69.8002 648.428 68.4536 640.224 65.7606C632.082 63.0049 625.694 58.9653 621.059 53.6418C616.425 48.3184 614.108 42.0555 614.108 34.8531C614.108 24.0809 619.087 15.6259 629.045 9.48828C639.003 3.28799 652.217 0.187845 668.689 0.187845C681.966 0.187845 693.177 2.19198 702.321 6.20025V18.5069C693.302 13.4965 682.78 10.9914 670.756 10.9914C659.545 10.9914 650.84 13.246 644.639 17.7553C638.439 22.202 635.339 27.9013 635.339 34.8531C635.339 41.8676 638.439 47.6294 644.639 52.1387C650.902 56.648 659.796 58.9027 671.319 58.9027C682.029 58.9027 692.363 56.8046 702.321 52.6085ZM792.821 68.6729H721.048V1.03334H792.821V11.9308H741.246V28.7468H782.393V39.6442H741.246V57.7754H792.821V68.6729Z" />
+      </svg>
+      <span class="divider"></span>
+      <span class="tag">Creator Agreement</span>
+    </div>
+
+    <!-- Loading -->
+    <div id="loading" class="doc"><div class="state"><div class="spinner"></div><p>Loading your contract…</p></div></div>
+
+    <!-- Not found -->
+    <div id="notfound" class="doc" hidden><div class="state">
+      <h1>Contract not found</h1>
+      <p>This link may be incorrect or expired. Please check with your contact at INFLUENCE.</p>
+    </div></div>
+
+    <!-- Contract -->
+    <div id="contract" class="doc" hidden>
+      <div class="doc-head">
+        <div class="eyebrow" id="eyebrow"></div>
+        <h1>Creator Collaboration Agreement</h1>
+        <p class="sub" id="subhead"></p>
+      </div>
+      <div id="signed-banner" class="banner signed" hidden>
+        <span class="dot"></span><span id="signed-banner-text"></span>
+      </div>
+      <div id="sections"></div>
+
+      <form id="sign" class="sign">
+        <h2>Review &amp; sign</h2>
+        <p class="note">By typing your full legal name below and submitting, you agree to the terms of this agreement. This constitutes your electronic signature.</p>
+        <label class="field" for="full-name">Full legal name</label>
+        <input id="full-name" class="sig-name" type="text" autocomplete="name" placeholder="Your full name" />
+        <label class="agree">
+          <input id="agree" type="checkbox" />
+          <span>I have read, understood, and agree to the terms of this Creator Collaboration Agreement.</span>
+        </label>
+        <button id="sign-btn" class="btn" type="submit">Sign &amp; submit contract</button>
+        <div id="sign-error" class="err" role="alert"></div>
+      </form>
+    </div>
+
+    <!-- Done -->
+    <div id="done" class="doc" hidden><div class="state">
+      <div class="check">✓</div>
+      <h1>Contract signed 🎉</h1>
+      <p id="done-sub">Thank you! We've recorded your signature. We'll share a quick content brief before you start creating.</p>
+    </div></div>
+
+    <p class="foot">INFLUENCE · This document is confidential and intended only for the named creator.</p>
+  </div>
+
+  <script src="/contract.js"></script>
+</body>
+</html>

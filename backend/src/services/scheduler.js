@@ -75,6 +75,22 @@ async function pollNegotiations() {
         console.error(`negotiation follow-up failed for creator ${c.id}:`, err.message);
       }
     }
+
+    // 4. Contract backfill: any ACCEPTED creator without a contract yet (e.g. the
+    //    inline acceptance path errored). ensureContractSent is idempotent, so
+    //    this safely retries generation + the signing email once per creator.
+    const acceptedNoContract = await db.many(
+      `SELECT id FROM creators
+       WHERE negotiation_status = 'ACCEPTED'
+         AND NOT EXISTS (SELECT 1 FROM contracts ct WHERE ct.creator_id = creators.id)`,
+    );
+    for (const c of acceptedNoContract) {
+      try {
+        await negotiation.ensureContractSent(c.id);
+      } catch (err) {
+        console.error(`contract backfill failed for creator ${c.id}:`, err.message);
+      }
+    }
   } finally {
     negRunning = false;
   }

@@ -16,90 +16,19 @@ const instantly = require('./instantly');
 const { getGuidelines, getAiRepliesEnabled } = require('./settings');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
+const contracts = require('./contracts');
 
-// ── Claude client (lazy; optional dependency) ─────────────────────────────
-let _client;
-let _clientTried = false;
-function getClient() {
-  if (_clientTried) return _client;
-  _clientTried = true;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    _client = null;
-    return null;
-  }
-  try {
-    const Anthropic = require('@anthropic-ai/sdk');
-    _client = new Anthropic({ apiKey });
-  } catch (err) {
-    console.warn('[negotiation] @anthropic-ai/sdk unavailable, using templates only:', err.message);
-    _client = null;
-  }
-  return _client;
-}
-
-// Test-only: inject a fake client (anything exposing .messages.create) so the
-// reply-evaluation harness can replay labeled examples through Claude without
-// hitting the network. Passing null restores lazy initialization.
-function _setClient(client) {
-  _client = client;
-  _clientTried = client !== undefined;
-}
-const model = () => process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
-
-async function callClaudeText(system, user, maxTokens = 1200) {
-  return callClaudeMessages(system, [{ role: 'user', content: user }], maxTokens);
-}
-
-// Same as callClaudeText but takes the full messages array — used so the
-// caller can prepend few-shot (user/assistant) example turns BEFORE the real
-// user message.
-async function callClaudeMessages(system, messages, maxTokens = 1200) {
-  const client = getClient();
-  if (!client) return null;
-  try {
-    const resp = await client.messages.create({
-      model: model(),
-      max_tokens: maxTokens,
-      system,
-      messages,
-    });
-    return (resp.content || [])
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text)
-      .join('')
-      .trim();
-  } catch (err) {
-    console.error('[negotiation] Claude call failed:', err.message);
-    return null;
-  }
-}
-
-function stripFences(s) {
-  return String(s || '')
-    .replace(/^\s*```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/, '')
-    .trim();
-}
-
-function parseJsonLoose(s) {
-  if (!s) return null;
-  const cleaned = stripFences(s);
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    /* fall through */
-  }
-  const m = cleaned.match(/\{[\s\S]*\}/);
-  if (m) {
-    try {
-      return JSON.parse(m[0]);
-    } catch {
-      /* ignore */
-    }
-  }
-  return null;
-}
+// ── Claude client (shared) ────────────────────────────────────────────────
+// The lazy Anthropic client + JSON helpers live in ./claudeClient so the
+// contracts engine can reuse the exact same call/parse pattern without a
+// circular require through this module. `_setClient` is re-exported below so the
+// existing test harness (require('./negotiation')._setClient) keeps working.
+const {
+  callClaudeText,
+  callClaudeMessages,
+  parseJsonLoose,
+  _setClient,
+} = require('./claudeClient');
 
 const numOrNull = (x) => {
   if (x == null || x === '') return null;
@@ -798,6 +727,37 @@ async function agreedOfferFee(creator) {
   return null;
 }
 
+// Generate the creator's contract and email its signing link. Resilient by
+// design: any failure here is logged but never thrown out of applyReply — the
+// acceptance is already recorded, and the scheduler's contract backfill
+// (pollNegotiations) retries any ACCEPTED creator that has no contract yet.
+async function sendContractOnAcceptance(creator, ctx, result) {
+  try {
+    const { url } = await contracts.createContractForCreator(creator.id);
+    const v = templateVars(ctx);
+    const email = templates.contractEmail({ ...v, url });
+    if (result.send_now !== false) {
+      await sendNegotiationEmail(creator, email, 'contract');
+    }
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_sent', $2)`,
+      [creator.id, { url }],
+    );
+  } catch (err) {
+    console.error(`[contracts] failed to send contract for creator ${creator.id}:`, err.message);
+  }
+}
+
+// Backfill entry point for the scheduler: generate + email the contract for an
+// ACCEPTED creator that doesn't have one yet (e.g. the inline path errored).
+// Idempotent — contracts.createContractForCreator reuses any existing contract.
+async function ensureContractSent(creatorId) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) return { skipped: 'no creator' };
+  await sendContractOnAcceptance(creator, ctxFor(creator), { send_now: true });
+  return { ok: true };
+}
+
 async function applyReply(creator, ctx, result) {
   const v = templateVars(ctx);
   switch (result.action) {
@@ -829,7 +789,6 @@ async function applyReply(creator, ctx, result) {
       return;
     }
     case 'accepted': {
-      if (result.send_now) await sendNegotiationEmail(creator, result.email || templates.acceptance(v), 'acceptance');
       // The agreed rate is now the offer the creator accepted, not their earlier
       // quote — overwrite quoted_rate so the dashboard's Rate column reflects the
       // final agreed amount. COALESCE guards the rare case with no priced offer.
@@ -846,6 +805,10 @@ async function applyReply(creator, ctx, result) {
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
         [creator.id, { fee: agreedFee }],
       );
+      // Acceptance kicks off the contract workflow: generate the unique contract
+      // and email its signing link. This replaces the plain acceptance email —
+      // the contract email IS the warm acceptance + link.
+      await sendContractOnAcceptance(creator, ctx, result);
       return;
     }
     case 'declined': {
@@ -1034,6 +997,7 @@ module.exports = {
   processReply,
   sendApprovedOffer,
   sendDelegateReply,
+  ensureContractSent,
   runNegotiationFollowup,
   resolveApprovedOffer,
   aiRepliesEnabledForCreator,

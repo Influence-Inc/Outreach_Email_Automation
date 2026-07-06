@@ -254,6 +254,16 @@ function avatarInitial(r) {
 // Status pill class + label. An accepted negotiation is surfaced as its own
 // pill even though the outreach status stays 'replied'.
 function statusPillFor(r) {
+  // Once a contract exists the pill continues the SAME status flow into the
+  // contract stages (no separate column) — contract sent → signed → completed.
+  if (r.contract && r.contract.status) {
+    const contractPill = {
+      pending: { cls: 'accepted', text: 'contract sent' },
+      signed: { cls: 'accepted', text: 'contract signed' },
+      completed: { cls: 'accepted', text: 'completed' },
+    }[r.contract.status];
+    if (contractPill) return contractPill;
+  }
   if (r.negotiation_status === 'ACCEPTED') return { cls: 'accepted', text: 'accepted' };
   const st = r.status || 'pending_extraction';
   return { cls: st, text: st.replace(/_/g, ' ') };
@@ -368,6 +378,29 @@ function renderStatusCell(r, cell) {
       }
     };
     cell.appendChild(send);
+  }
+
+  // Contract link — shown once a contract exists, so the same Status column
+  // carries the signing link (no dedicated column). Copies the public URL.
+  if (r.contract && r.contract.url) {
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'ghost small cr-copy-contract';
+    copy.textContent = 'Copy contract link';
+    copy.title = r.contract.url;
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(r.contract.url);
+        const prev = copy.textContent;
+        copy.textContent = 'Copied ✓';
+        setTimeout(() => {
+          copy.textContent = prev;
+        }, 1400);
+      } catch (e) {
+        window.prompt('Contract link', r.contract.url);
+      }
+    };
+    cell.appendChild(copy);
   }
 
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];

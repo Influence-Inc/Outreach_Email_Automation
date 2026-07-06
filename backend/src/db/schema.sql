@@ -200,3 +200,31 @@ CREATE TABLE IF NOT EXISTS reply_examples (
   created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_reply_examples_enabled ON reply_examples(enabled) WHERE enabled;
+
+-- Creator Contracts. One row per generated contract. The public signing page is
+-- reached ONLY by `token` (a securely-random, unguessable id) — the SERIAL `id`
+-- is never exposed. `data` holds the Claude-extracted, campaign-specific contract
+-- fields; `submission` holds what the creator submitted when signing. Lifecycle:
+--   pending  — generated + emailed, awaiting the creator's signature
+--   signed   — creator submitted the signed contract
+--   completed— signed + synced into the Creator Database
+-- The audit trail lives in email_events (contract_created / contract_sent /
+-- contract_signed / contract_synced), so the dashboard timeline shows each step.
+CREATE TABLE IF NOT EXISTS contracts (
+  id                   SERIAL PRIMARY KEY,
+  token                TEXT NOT NULL UNIQUE,
+  creator_id           INTEGER NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  campaign_id          TEXT REFERENCES campaigns(id) ON DELETE SET NULL,
+  status               TEXT NOT NULL DEFAULT 'pending',   -- pending | signed | completed
+  data                 JSONB NOT NULL,                    -- extracted contract fields (structured JSON)
+  submission           JSONB,                             -- captured signing payload
+  signer_name          TEXT,
+  signer_email         TEXT,
+  signer_ip            TEXT,
+  signed_at            TIMESTAMPTZ,
+  synced_to_creator_db BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contracts_creator_id ON contracts(creator_id);
+CREATE INDEX IF NOT EXISTS idx_contracts_status ON contracts(status);

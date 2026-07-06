@@ -3,6 +3,7 @@ const db = require('../db');
 const { sendOutreach } = require('../services/outreach');
 const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
+const contracts = require('../services/contracts');
 
 // Event types that make up the per-creator "Rate" timeline (delivery-tracking
 // style). A curated subset of email_events — the offer email's own
@@ -18,6 +19,9 @@ const RATE_LOG_TYPES = [
   'rate_accepted',
   'rate_declined',
   'sent_delegate_reply',
+  'contract_sent',
+  'contract_signed',
+  'contract_synced',
 ];
 
 const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
@@ -57,6 +61,14 @@ function rateLogEntry(type, detail) {
       return { text: 'Creator declined', tone: 'muted' };
     case 'sent_delegate_reply':
       return { text: 'Reply sent (from delegate)', tone: 'done' };
+    case 'contract_sent':
+      return { text: 'Contract sent', tone: 'active' };
+    case 'contract_signed':
+      return { text: 'Contract signed ✓', tone: 'success' };
+    case 'contract_synced':
+      // Only the successful sync closes out the deal on the timeline; a failed
+      // sync stays quiet (it's retried) so the creator row never shows an error.
+      return d.ok ? { text: 'Contract completed ✓', tone: 'success' } : null;
     default:
       return null;
   }
@@ -119,6 +131,7 @@ router.get('/', async (req, res, next) => {
       params,
     );
     await attachRateLog(rows);
+    await contracts.attachContracts(rows);
     res.json(rows);
   } catch (err) { next(err); }
 });
