@@ -242,15 +242,40 @@ function declineDelay(vars) {
   };
 }
 
+// Sent automatically once the creator accepts the offer. Carries the unique
+// contract signing link ({url}). The delivery layer (instantly.renderMarkdown)
+// turns the bare URL into a clickable <a> in the HTML body while keeping it
+// usable as plain text. Subject is ignored by sendNegotiationEmail (it forces
+// the thread subject), but set for parity with the other templates.
+function contractEmail(vars) {
+  const v = withDefaults(vars);
+  return {
+    subject: fill(REPLY1_SUBJECT, v),
+    body: `Hi ${v.salutation},
+
+Here's the contract for your review and signing:
+
+${v.url}
+
+Once the contract is signed, I'll share a quick content brief before you start working on the content!
+
+So excited to be working together :)
+
+- ${v.managerName}`,
+  };
+}
+
 module.exports = {
   defaults,
   fill,
+  approxDeadline,
   reply1,
   offerEmail,
   describeOffer,
   followup1,
   followup2,
   acceptance,
+  contractEmail,
   declineDelay,
   stripReferences,
   // Raw template strings (canonical content fed to Claude).

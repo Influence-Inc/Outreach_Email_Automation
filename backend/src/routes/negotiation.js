@@ -133,6 +133,21 @@ router.post('/:id/delegate-reply', async (req, res, next) => {
   }
 });
 
+// Manually generate + email the contract for a creator. Covers deals accepted
+// by a human in the Delegate window, which don't hit the automatic 'accepted'
+// path. Idempotent — reuses the creator's existing contract if one exists.
+router.post('/:id/contract', async (req, res, next) => {
+  try {
+    const exists = await db.one(`SELECT id FROM creators WHERE id = $1`, [req.params.id]);
+    if (!exists) return res.status(404).json({ error: 'not found' });
+    const result = await negotiation.ensureContractSent(req.params.id);
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, contract_result: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Dismiss a delegated item without sending (clears the flag).
 router.post('/:id/dismiss-delegate', async (req, res, next) => {
   try {

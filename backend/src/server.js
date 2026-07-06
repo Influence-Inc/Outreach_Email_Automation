@@ -8,6 +8,7 @@ const creators = require('./routes/creators');
 const negotiation = require('./routes/negotiation');
 const settings = require('./routes/settings');
 const webhook = require('./routes/webhook');
+const { api: contractsApi, page: contractPage } = require('./routes/contracts');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
@@ -46,6 +47,10 @@ app.use('/api/creators', creators);
 app.use('/api/creators', negotiation);
 app.use('/api/settings', settings);
 app.use('/webhook', webhook);
+app.use('/api/contracts', contractsApi);
+// Public contract signing page. Registered before the SPA static handler so
+// /contracts/:token serves the contract page, not the dashboard shell.
+app.get('/contracts/:token', contractPage);
 
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
