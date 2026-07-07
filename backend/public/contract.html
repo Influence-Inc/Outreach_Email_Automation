@@ -39,7 +39,7 @@
 
     /* Document card */
     .doc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-      box-shadow: var(--shadow-card); overflow: hidden; }
+      box-shadow: var(--shadow-card); overflow: hidden; margin-bottom: 22px; }
     .doc-head { padding: 34px 38px 26px; border-bottom: 1px solid var(--line); }
     .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
       color: var(--faint); margin-bottom: 10px; }
@@ -64,26 +64,59 @@
     .pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
     .pill { background: var(--surface-3); border: 1px solid var(--line); border-radius: 999px;
       padding: 3px 11px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
-    ul.terms { margin: 4px 0 0; padding-left: 18px; }
-    ul.terms li { font-size: 14px; color: var(--ink); margin-bottom: 5px; }
     .prose { font-size: 14px; color: var(--ink-2); }
+
+    /* Editable form controls */
+    .field { margin-bottom: 14px; }
+    .field-label { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+      margin-bottom: 6px; letter-spacing: .01em; }
+    .field-hint { display: block; font-size: 12px; color: var(--muted); margin: -2px 0 6px; }
+    input[type=text], input[type=email], input[type=tel], input[type=date], select, textarea {
+      width: 100%; font-family: var(--font); font-size: 14.5px; color: var(--ink);
+      padding: 11px 13px; background: var(--surface); border: 1px solid var(--line-2);
+      border-radius: var(--radius-sm); outline: none; transition: border-color .12s, box-shadow .12s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--faint); box-shadow: var(--ring); }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    @media (max-width: 560px) { .row-2, .row-3 { grid-template-columns: 1fr; } }
+    /* "Your details" section uses light tinted background to signal editable */
+    .section.editable { background: var(--surface-2); }
 
     /* Sign block */
     .sign { padding: 30px 38px 34px; background: var(--surface-2); border-top: 1px solid var(--line); }
     .sign h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.01em; }
     .sign p.note { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
-    label.field { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2);
-      margin-bottom: 7px; letter-spacing: .01em; }
-    input[type=text], input[type=email] {
-      width: 100%; font-family: var(--font); font-size: 15px; color: var(--ink);
-      padding: 12px 14px; background: var(--surface); border: 1px solid var(--line-2);
-      border-radius: var(--radius-sm); outline: none; transition: border-color .12s, box-shadow .12s;
+
+    .sig-wrap { position: relative; margin-top: 6px; }
+    canvas.sig {
+      display: block; width: 100%; height: 170px; background: var(--surface);
+      border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+      cursor: crosshair; touch-action: none;
     }
-    input[type=text]:focus, input[type=email]:focus { border-color: var(--faint); box-shadow: var(--ring); }
-    .sig-name { font-size: 22px; font-family: 'Inter', cursive; letter-spacing: .01em; }
+    .sig-baseline {
+      position: absolute; left: 10%; right: 10%; bottom: 42px;
+      border-bottom: 1px dashed var(--faint-2); pointer-events: none;
+    }
+    .sig-caption {
+      position: absolute; bottom: 22px; left: 0; right: 0; text-align: center;
+      font-size: 11.5px; color: var(--faint-2); pointer-events: none;
+    }
+    .sig-tools {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 6px; font-size: 12px; color: var(--muted);
+    }
+    .sig-tools button {
+      appearance: none; background: none; border: 0; color: var(--muted);
+      font-family: var(--font); font-size: 12px; cursor: pointer;
+      text-decoration: underline; padding: 4px 0;
+    }
+    .sig-tools button:hover { color: var(--ink); }
+
     .agree { display: flex; align-items: flex-start; gap: 11px; margin: 20px 0 22px; cursor: pointer; }
     .agree input { margin-top: 3px; width: 17px; height: 17px; accent-color: var(--accent); flex: none; }
     .agree span { font-size: 13.5px; color: var(--ink-2); }
+
     .btn { appearance: none; border: 0; cursor: pointer; font-family: var(--font); font-weight: 600;
       font-size: 15px; color: #fff; background: var(--accent); padding: 13px 22px;
       border-radius: var(--radius-sm); box-shadow: var(--shadow-btn); transition: transform .06s, opacity .12s; }
@@ -123,42 +156,174 @@
       <p>This link may be incorrect or expired. Please check with your contact at INFLUENCE.</p>
     </div></div>
 
-    <!-- Contract -->
-    <div id="contract" class="doc" hidden>
-      <div class="doc-head">
-        <div class="eyebrow" id="eyebrow"></div>
-        <h1>Creator Collaboration Agreement</h1>
-        <p class="sub" id="subhead"></p>
-      </div>
-      <div id="signed-banner" class="banner signed" hidden>
-        <span class="dot"></span><span id="signed-banner-text"></span>
-      </div>
-      <div id="sections"></div>
+    <!-- PAGE 1 — contract review + your details + sign -->
+    <form id="page1" hidden>
+      <div class="doc">
+        <div class="doc-head">
+          <div class="eyebrow" id="eyebrow"></div>
+          <h1>Creator Collaboration Agreement</h1>
+          <p class="sub" id="subhead"></p>
+        </div>
+        <div id="signed-banner" class="banner signed" hidden>
+          <span class="dot"></span><span id="signed-banner-text"></span>
+        </div>
+        <div id="sections"></div>
 
-      <form id="sign" class="sign">
-        <h2>Review &amp; sign</h2>
-        <p class="note">By typing your full legal name below and submitting, you agree to the terms of this agreement. This constitutes your electronic signature.</p>
-        <label class="field" for="full-name">Full legal name</label>
-        <input id="full-name" class="sig-name" type="text" autocomplete="name" placeholder="Your full name" />
-        <label class="agree">
-          <input id="agree" type="checkbox" />
-          <span>I have read, understood, and agree to the terms of this Creator Collaboration Agreement.</span>
-        </label>
-        <button id="sign-btn" class="btn" type="submit">Sign &amp; submit contract</button>
-        <div id="sign-error" class="err" role="alert"></div>
-      </form>
-    </div>
+        <div class="section editable">
+          <h2>Your details</h2>
+          <div class="field">
+            <label class="field-label" for="legalName">Full legal name</label>
+            <input id="legalName" type="text" placeholder="Your full legal name" autocomplete="name" required />
+          </div>
+          <div class="row-2">
+            <div class="field">
+              <label class="field-label" for="gender">Gender</label>
+              <select id="gender">
+                <option value="">Select…</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Non-binary">Non-binary</option>
+                <option value="Prefer not to say">Prefer not to say</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="phone">Phone number</label>
+              <input id="phone" type="tel" placeholder="+91 98765 43210" autocomplete="tel" />
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label">Address</label>
+            <div class="field"><input id="addrLine1" type="text" placeholder="Address line 1" autocomplete="address-line1" /></div>
+            <div class="field"><input id="addrLine2" type="text" placeholder="Address line 2 (optional)" autocomplete="address-line2" /></div>
+            <div class="row-2">
+              <input id="addrCity" type="text" placeholder="City" autocomplete="address-level2" />
+              <input id="addrState" type="text" placeholder="State / Province" autocomplete="address-level1" />
+            </div>
+            <div class="row-2" style="margin-top:12px;">
+              <input id="addrZip" type="text" placeholder="Pincode / Zip / Postal code" autocomplete="postal-code" />
+              <select id="addrCountry" autocomplete="country-name"></select>
+            </div>
+          </div>
+        </div>
 
-    <!-- Done -->
+        <div class="sign">
+          <h2>Review &amp; sign</h2>
+          <p class="note">By signing below and submitting, you agree to the terms of this agreement. Drawing your signature constitutes your electronic signature.</p>
+
+          <label class="field-label" for="sig">Your signature</label>
+          <div class="sig-wrap">
+            <canvas id="sig" class="sig" width="1600" height="340"></canvas>
+            <div class="sig-baseline"></div>
+            <div class="sig-caption">Signature</div>
+          </div>
+          <div class="sig-tools">
+            <span>Draw your signature above (mouse or touch)</span>
+            <button type="button" id="sig-clear">Clear</button>
+          </div>
+
+          <div class="row-2" style="margin-top:18px;">
+            <div class="field">
+              <label class="field-label" for="signedDate">Date</label>
+              <input id="signedDate" type="date" />
+            </div>
+            <div></div>
+          </div>
+
+          <label class="agree">
+            <input id="agree" type="checkbox" />
+            <span>I confirm I have read, understood, and agree to the terms of this Creator Collaboration Agreement. I understand this agreement is legally binding.</span>
+          </label>
+
+          <button id="btn-continue" class="btn" type="submit">Continue to bank details →</button>
+          <div id="err1" class="err" role="alert"></div>
+        </div>
+      </div>
+    </form>
+
+    <!-- PAGE 2 — bank account -->
+    <form id="page2" hidden>
+      <div class="doc">
+        <div class="doc-head">
+          <div class="eyebrow">Step 2 of 2</div>
+          <h1>Your bank account</h1>
+          <p class="sub">We'll send your <span id="payCurrency">USD</span> payments to this bank account.</p>
+        </div>
+
+        <div class="section">
+          <div class="field">
+            <label class="field-label" for="bankHolder">Account holder name</label>
+            <p class="field-hint">Must match the name on your bank account exactly.</p>
+            <input id="bankHolder" type="text" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="bankName">Bank name</label>
+            <input id="bankName" type="text" />
+          </div>
+          <div class="row-2">
+            <div class="field">
+              <label class="field-label" for="bankAccount">Account number</label>
+              <input id="bankAccount" type="text" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="bankAccountConfirm">Confirm account number</label>
+              <input id="bankAccountConfirm" type="text" autocomplete="off" />
+            </div>
+          </div>
+
+          <div class="field" id="ibanBlock">
+            <label class="field-label" for="bankIban">IBAN <span class="field-hint" style="display:inline;margin:0;">(only for European countries)</span></label>
+            <p class="field-hint">Skip this if you aren't from a European country.</p>
+            <input id="bankIban" type="text" autocomplete="off" />
+          </div>
+
+          <div class="field" id="routingBlock" hidden>
+            <label class="field-label" for="bankRouting">Routing number</label>
+            <p class="field-hint">A nine-digit number printed on the bottom left corner of your cheques.</p>
+            <input id="bankRouting" type="text" autocomplete="off" />
+          </div>
+
+          <div class="row-2" id="indiaRow" hidden>
+            <div class="field" id="ifscBlock">
+              <label class="field-label" for="bankIfsc">IFSC code</label>
+              <input id="bankIfsc" type="text" autocomplete="off" />
+            </div>
+            <div class="field" id="panBlock">
+              <label class="field-label" for="bankPan">PAN number</label>
+              <input id="bankPan" type="text" autocomplete="off" />
+            </div>
+          </div>
+
+          <div class="field" id="swiftBlock">
+            <label class="field-label" for="bankSwift">SWIFT code</label>
+            <input id="bankSwift" type="text" autocomplete="off" />
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="bankTaxId">Tax ID Number</label>
+            <p class="field-hint">Enter the tax number issued by your country of residence.</p>
+            <input id="bankTaxId" type="text" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="sign">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button id="btn-back" type="button" class="btn" style="background:transparent;color:var(--ink);box-shadow:none;border:1px solid var(--line-2);">← Back</button>
+            <button id="btn-submit" class="btn" type="submit">Sign &amp; submit contract</button>
+          </div>
+          <div id="err2" class="err" role="alert"></div>
+        </div>
+      </div>
+    </form>
+
+    <!-- Confirmation -->
     <div id="done" class="doc" hidden><div class="state">
       <div class="check">✓</div>
       <h1>Contract signed 🎉</h1>
-      <p id="done-sub">Thank you! We've recorded your signature. We'll share a quick content brief before you start creating.</p>
+      <p>Thank you! We've recorded your signature and payment details. We'll share a quick content brief before you start creating.</p>
     </div></div>
 
     <p class="foot">INFLUENCE · This document is confidential and intended only for the named creator.</p>
   </div>
-
   <script src="/contract.js"></script>
 </body>
 </html>

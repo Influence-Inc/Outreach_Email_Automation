@@ -42,15 +42,47 @@ test('baseContractData fills a complete contract from known creator + offer', ()
   const offer = { offer_type: 'view_based', num_videos: 3, view_guarantee: 100000, flat_fee: 900 };
   const d = contracts.baseContractData(creator, 900, offer);
 
+  // Identity + campaign
   assert.strictEqual(d.creatorName, 'Alex Lee');
   assert.strictEqual(d.brandName, 'Reve');
   assert.strictEqual(d.campaignName, 'Spring Launch');
+  // Company legal defaults (used in the intro paragraph)
+  assert.strictEqual(d.companyLegalName, 'Influence Inc.');
+  assert.match(d.companyLegalAddress, /Dover, Delaware/);
+  // Deliverables
   assert.strictEqual(d.numberOfDeliverables, 3);
-  assert.strictEqual(d.compensation, 900);
+  assert.strictEqual(d.numberOfVideos, 3);
+  assert.strictEqual(d.minTotalViews, 100000);
   assert.strictEqual(d.guaranteedViews, 100000);
+  // Compensation split
+  assert.strictEqual(d.compensation, 900);
+  assert.strictEqual(d.totalPayment, 900);
+  assert.strictEqual(d.upfrontPercent + d.remainderPercent, 100);
+  assert.strictEqual(d.paymentTermsDays, 7);
+  // Usage rights
+  assert.strictEqual(d.paidAdsIncluded, false);
+  assert.ok(Array.isArray(d.usageRightsList) && d.usageRightsList.length >= 4);
+  // Timeline
+  assert.strictEqual(d.postLiveMonths, 6);
+  assert.strictEqual(d.revisionRounds, 2);
   assert.strictEqual(d.currency, 'USD');
   assert.ok(Array.isArray(d.platforms) && d.platforms.includes('Instagram'));
   assert.match(d.deliverables, /3 short-form videos/);
+  // Suggested per-video posting windows
+  assert.ok(Array.isArray(d.postingWindows) && d.postingWindows.length === 3);
+  assert.strictEqual(d.postingWindows[0].label, 'Video 1');
+});
+
+test('baseContractData surfaces video_bonus offer terms in the contract', () => {
+  const creator = { full_name: 'Sam', brand_name: 'Reve' };
+  const offer = {
+    offer_type: 'video_bonus', num_videos: 3, flat_fee: 2500,
+    bonus_amount: 750, bonus_threshold_views: 550000,
+  };
+  const d = contracts.baseContractData(creator, 2500, offer);
+  assert.strictEqual(d.bonusAmount, 750);
+  assert.strictEqual(d.bonusThresholdViews, 550000);
+  assert.strictEqual(d.bonusWindowDays, 30);
 });
 
 test('mergeContractData: Claude overrides base, but never wipes known values', () => {
