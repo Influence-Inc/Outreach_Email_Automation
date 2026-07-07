@@ -8,7 +8,7 @@
   };
   var token = (location.pathname.match(/\/contracts\/([^/?#]+)/) || [])[1] || '';
 
-  // ── Comprehensive country list (ISO 3166-1 plus common territories) ─────
+  // ── Country list (ISO 3166-1 + common territories) ──────────────────────
   var COUNTRIES = [
     'Aland Islands','Albania','Algeria','Afghanistan','American Samoa','Andorra','Angola','Anguilla',
     'Antarctica','Antigua and Barbuda','Argentina','Armenia','Aruba','Ascension Island','Australia',
@@ -42,7 +42,6 @@
     'Uganda','Ukraine','United Arab Emirates','United Kingdom','United States','Uruguay','Uzbekistan',
     'Vanuatu','Vatican City','Venezuela','Vietnam','Virgin Islands','Wallis and Futuna','Yemen','Zambia','Zimbabwe',
   ];
-  // Countries whose citizens typically use an IBAN (SEPA + a few extras).
   var IBAN_COUNTRIES = new Set([
     'Albania','Andorra','Austria','Belgium','Bosnia and Herzegovina','Bulgaria','Croatia','Cyprus','Czechia',
     'Denmark','Estonia','Faroe Islands','Finland','France','Georgia','Germany','Gibraltar','Greece','Greenland',
@@ -52,144 +51,95 @@
     'Ukraine','United Kingdom','Vatican City',
   ]);
 
+  // ── Formatters ─────────────────────────────────────────────────────────
   function fmtMoney(n, cur) {
     if (n == null || isNaN(Number(n))) return null;
     try {
-      return new Intl.NumberFormat('en-US', { style: 'currency', currency: cur || 'USD', maximumFractionDigits: 0 }).format(Number(n));
-    } catch (e) { return (cur ? cur + ' ' : '$') + Number(n).toLocaleString('en-US'); }
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency', currency: cur || 'USD', maximumFractionDigits: 0,
+      }).format(Number(n));
+    } catch (e) {
+      return (cur ? cur + ' ' : '$') + Number(n).toLocaleString('en-US');
+    }
   }
-  function fmtNum(n) { return n == null || isNaN(Number(n)) ? null : Number(n).toLocaleString('en-US'); }
-  function ord(n) {
-    var s = ['th','st','nd','rd'], v = n % 100;
-    return n + (s[(v - 20) % 10] || s[v] || s[0]);
-  }
-  function percentWord(n) {
-    var map = { 10:'ten', 20:'twenty', 25:'twenty-five', 30:'thirty', 33:'thirty-three', 40:'forty', 50:'fifty', 60:'sixty', 67:'sixty-seven', 70:'seventy', 75:'seventy-five', 80:'eighty', 90:'ninety' };
-    return map[n] ? map[n] : String(n);
+  function fmtNum(n) {
+    return n == null || isNaN(Number(n)) ? null : Number(n).toLocaleString('en-US');
   }
 
-  // ── Render the numbered contract sections from the extracted data ────────
+  // ── Row helpers (grey label + bold value pairs, v1 card style) ─────────
+  function row(k, v, opts) {
+    if (v == null || v === '') return '';
+    opts = opts || {};
+    return '<div class="k">' + esc(k) + '</div><div class="v' + (opts.big ? ' big' : '') + '">' +
+      (opts.html ? v : esc(v)) + '</div>';
+  }
+  function pills(arr) {
+    if (!arr || !arr.length) return null;
+    return '<div class="pill-list">' + arr.map(function (p) {
+      return '<span class="pill">' + esc(p) + '</span>';
+    }).join('') + '</div>';
+  }
+  function section(title, inner) {
+    return inner ? '<div class="section"><h2>' + esc(title) + '</h2>' + inner + '</div>' : '';
+  }
+  function rowsWrap(inner) { return inner ? '<div class="rows">' + inner + '</div>' : ''; }
+
+  // ── Render the read-only contract sections (v1 layout, no Additional Terms) ──
   function renderSections(d) {
-    var brand = d.brandLegalName || d.brandName || 'the brand';
-    // The brand often ends with a period (e.g. "Reve AI, Inc.") that already
-    // terminates a sentence — avoid printing "Inc.." by using this helper
-    // whenever we're about to append our own "." right after the brand.
-    var brandEnd = String(brand).replace(/\.$/, '');
-    var brandShort = d.brandName || brand;
-    var n = Number(d.numberOfVideos || d.numberOfDeliverables || 2);
-    var minViews = Number(d.minTotalViews || d.guaranteedViews || 0);
-    var platforms = Array.isArray(d.platforms) && d.platforms.length ? d.platforms : ['Instagram'];
-    var platformsText = platforms.length === 1 ? platforms[0] : platforms.slice(0, -1).join(', ') + ' and ' + platforms[platforms.length - 1];
-    var revisions = Number(d.revisionRounds || 2);
-    var deadlineText = d.postingDeadline || d.deadline || 'the agreed deadline';
-    var months = Number(d.postLiveMonths || 6);
-    var total = Number(d.totalPayment != null ? d.totalPayment : d.compensation);
-    var currency = d.currency || 'USD';
-    var paymentDays = Number(d.paymentTermsDays || 7);
-    var up = Number(d.upfrontPercent || 30);
-    var rem = Number(d.remainderPercent || (100 - up));
-    var upTrigger = d.upfrontTrigger || 'upon sharing the first video draft';
-    var remTrigger = d.remainderTrigger || 'after deliverables outlined in this agreement are completed, posted and confirmed live';
-    var bonusAmt = d.bonusAmount != null ? Number(d.bonusAmount) : null;
-    var bonusThr = d.bonusThresholdViews != null ? Number(d.bonusThresholdViews) : null;
-    var bonusWin = Number(d.bonusWindowDays || 30);
-    var usageList = Array.isArray(d.usageRightsList) && d.usageRightsList.length
-      ? d.usageRightsList
-      : ['ads', 'reposting', 'promotion', 'testimonials', 'paid and organic marketing across any channels'];
-    var usageScope = d.usageScope || 'non exclusive, royalty free, and worldwide';
-    var paidIncluded = d.paidAdsIncluded === true;
-    var includeDm = d.includeDmAutomation !== false;
-    var windows = Array.isArray(d.postingWindows) ? d.postingWindows : [];
-
     var html = '';
 
-    // 1. Deliverables
-    html += '<h2 class="section">1. Deliverables</h2>';
-    html += '<p class="clause">- The creator agrees to create and publish <strong>' + n + ' video' + (n === 1 ? '' : 's') + '</strong>.</p>';
-    html += '<hr class="rule" />';
-    html += '<p class="clause">The creator agrees to the following requirements:</p>';
-    if (minViews > 0) {
-      html += '<p class="clause">- Deliver a <strong>minimum total of ' + fmtNum(minViews) + ' views</strong> across all posted videos on ' + esc(platforms[0]) + '.</p>';
-      html += '<hr class="rule" />';
-      html += '<p class="clause">- The creator must publish additional videos until the total view count across all posted videos on ' + esc(platforms[0]) + ' meets or exceeds ' + fmtNum(minViews) + ' views.</p>';
-      html += '<hr class="rule" />';
-    }
-    if (includeDm) {
-      html += '<p class="clause">- Implement and run DM automation using ManyChat or a similar tool as part of the posting and distribution process.</p>';
-    }
+    html += section('Parties', rowsWrap(
+      row('Creator', d.creatorName, { big: true }) +
+      row('Instagram', d.instagramUsername ? '@' + String(d.instagramUsername).replace(/^@/, '') : null) +
+      row('Email', d.email) +
+      row('Brand', d.brandLegalName || d.brandName, { big: true })
+    ));
 
-    // 2. Platform and Posting Guidelines
-    html += '<h2 class="section">2. Platform and Posting Guidelines</h2>';
-    html += '<p class="clause">- All videos must be posted on <strong>' + esc(platformsText) + '.</strong></p>';
-    html += '<hr class="rule" />';
-    html += '<p class="clause">- Creator must send all drafts to INFLUENCE for review and approval before posting, with up to <strong>' + (revisions === 1 ? 'one round' : revisions === 2 ? 'two rounds' : revisions === 3 ? 'three rounds' : (revisions + ' rounds')) + '</strong> of revisions included.</p>';
-    html += '<hr class="rule" />';
-    html += '<p class="clause">- Creator agrees to make reasonable edits requested by INFLUENCE or ' + esc(brandEnd) + '.</p>';
+    var platforms = pills(Array.isArray(d.platforms) ? d.platforms : (d.platforms ? [d.platforms] : []));
+    var minViews = d.minTotalViews != null ? d.minTotalViews : d.guaranteedViews;
+    html += section('Campaign & Deliverables', rowsWrap(
+      row('Campaign', d.campaignName) +
+      (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
+      row('Deliverables', d.deliverables) +
+      row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos)) +
+      (minViews ? row('Guaranteed views', fmtNum(minViews)) : '') +
+      (d.bonusAmount && d.bonusThresholdViews
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
+        : '')
+    ));
 
-    // 3. Timeline
-    html += '<h2 class="section">3. Timeline</h2>';
-    html += '<p class="clause">- The required videos must be posted <strong>no later than ' + esc(deadlineText) + '</strong>.</p>';
-    if (windows.length) {
-      html += '<div class="italic-block"><p>- We\'re flexible with the exact dates of uploads, but here is a suggested posting window' + (minViews ? ', assuming you\'ll hit the ' + fmtNum(minViews) + ' minimum view requirement across ' + n + ' posts' : '') + ':</p><ul>';
-      windows.forEach(function (w) {
-        html += '<li>- ' + esc(w.label) + ': ' + esc(w.range) + '</li>';
-      });
-      html += '</ul></div>';
-    }
+    html += section('Timeline', rowsWrap(
+      row('Cadence', d.timeline) +
+      row('Deadline', d.postingDeadline || d.deadline) +
+      (d.postLiveMonths ? row('Posts remain live for', d.postLiveMonths + ' months') : '')
+    ));
 
-    // 4. Content Usage Rights
-    html += '<h2 class="section">4. Content Usage Rights</h2>';
-    html += '<p class="clause">- INFLUENCE and ' + esc(brand) + ' have the right to use the creator\'s content for:</p>';
-    html += '<ul class="bullets">';
-    usageList.forEach(function (u) { html += '<li>- ' + esc(u) + '</li>'; });
-    html += '</ul>';
-    html += '<p class="clause">- These rights are <strong>' + esc(usageScope) + '.</strong></p>';
-    html += '<hr class="rule" />';
-    if (paidIncluded) {
-      html += '<p class="clause">- INFLUENCE and ' + esc(brand) + ' have the right to use the content for <strong>paid and organic promotional purposes</strong>.</p>';
-      html += '<p class="clause"><strong>Paid advertising usage rights are included</strong> in this agreement.</p>';
-    } else {
-      html += '<p class="clause">- INFLUENCE and ' + esc(brand) + ' have the right to use the content for <strong>organic promotional purposes only</strong>.</p>';
-      html += '<p class="clause"><strong>- Paid advertising usage rights are not included</strong> in this agreement.</p>';
-    }
+    var compensation = d.totalPayment != null ? d.totalPayment : d.compensation;
+    var upPct = d.upfrontPercent, remPct = d.remainderPercent;
+    html += section('Compensation & Payment', rowsWrap(
+      row('Compensation', fmtMoney(compensation, d.currency), { big: true }) +
+      row('Currency', d.currency) +
+      (upPct && remPct
+        ? row('Payment schedule', upPct + '% upfront (' + (d.upfrontTrigger || 'on first draft') + '), ' + remPct + '% ' + (d.remainderTrigger || 'on completion'))
+        : row('Payment terms', d.paymentTerms))
+    ));
 
-    // 5. Content Availability
-    html += '<h2 class="section">5. Content Availability</h2>';
-    html += '<p class="clause">- All posts must remain live and public for <strong>at least ' + months + ' month' + (months === 1 ? '' : 's') + '</strong> from the posting date.</p>';
-
-    // 6. Compensation
-    html += '<h2 class="section">6. Compensation</h2>';
-    if (Number.isFinite(total)) {
-      html += '<p class="clause">- The total agreed payment for this collaboration is <strong>' + fmtMoney(total, currency) + ' ' + esc(currency) + '.</strong></p>';
-      html += '<hr class="rule" />';
-    }
-    html += '<p class="clause">- Payment will be made <strong>within ' + paymentDays + ' working days</strong> of completion of all deliverables, provided they are posted and confirmed live in accordance with the terms of this agreement.</p>';
-    html += '<hr class="rule" />';
-    html += '<p class="clause">- <strong>' + percentWord(up) + ' percent</strong> of the payment will be issued <strong>upfront</strong> ' + esc(upTrigger) + '.</p>';
-    html += '<p class="clause">- The remaining <strong>' + percentWord(rem) + ' percent</strong> will be issued <strong>' + esc(remTrigger) + '</strong>.</p>';
-    if (bonusAmt && bonusThr) {
-      html += '<p class="clause">- Additional bonus of <strong>' + fmtMoney(bonusAmt, currency) + ' ' + esc(currency) + '</strong> to be paid if the total views of all content posted on ' + esc(platforms[0]) + ' crosses <strong>' + fmtNum(bonusThr) + ' views</strong> within the first <strong>' + bonusWin + ' days</strong> from the date each piece of content is posted.</p>';
-    }
-    html += '<p class="clause">- If the creator fails to complete the required deliverables or does not meet the minimum requirements stated in this agreement, INFLUENCE reserves the right to withhold payment.</p>';
-
-    // Optional: additional negotiated terms captured by Claude
-    if (Array.isArray(d.additionalTerms) && d.additionalTerms.length) {
-      html += '<h2 class="section">7. Additional Terms</h2>';
-      html += '<ul class="bullets">';
-      d.additionalTerms.forEach(function (t) { html += '<li>- ' + esc(t) + '</li>'; });
-      html += '</ul>';
-    }
-    if (d.specialNotes) {
-      html += '<p class="clause"><em>' + esc(d.specialNotes) + '</em></p>';
-    }
+    html += section('Usage Rights & Exclusivity', rowsWrap(
+      row('Usage rights', d.usageRights) +
+      (Array.isArray(d.usageRightsList) && d.usageRightsList.length
+        ? '<div class="k">Permitted uses</div><div class="v">' + esc(d.usageRightsList.join(', ')) + '</div>'
+        : '') +
+      row('Scope', d.usageScope) +
+      row('Paid ads', d.paidAdsIncluded ? 'Included' : 'Not included') +
+      row('Exclusivity', d.exclusivity)
+    ));
 
     $('sections').innerHTML = html;
   }
 
-  // ── Signature pad ────────────────────────────────────────────────────────
+  // ── Drawn signature pad ────────────────────────────────────────────────
   function initSigPad(canvas) {
     var ctx = canvas.getContext('2d');
-    // Match the internal resolution to the CSS box for crisp strokes on any DPR.
     function resize() {
       var dpr = Math.max(1, window.devicePixelRatio || 1);
       var box = canvas.getBoundingClientRect();
@@ -229,57 +179,55 @@
     };
   }
 
-  // ── Bank-section visibility depending on the address country ────────────
+  // ── Conditional bank field visibility ──────────────────────────────────
   function updateBankVisibility(country) {
     var isUS = country === 'United States';
     var isIN = country === 'India';
     var isIBAN = IBAN_COUNTRIES.has(country);
     $('routingBlock').hidden = !isUS;
-    $('ifscBlock').hidden = !isIN;
-    $('panBlock').hidden = !isIN;
+    $('indiaRow').hidden = !isIN;
     $('swiftBlock').hidden = isIN; // India uses IFSC/PAN instead
     $('ibanBlock').hidden = !isIBAN;
   }
 
-  // ── Load + wire everything up ───────────────────────────────────────────
+  // ── States ─────────────────────────────────────────────────────────────
   function markSigned() {
     $('page1').hidden = true; $('page2').hidden = true; $('done').hidden = false;
   }
 
+  // ── Load contract ──────────────────────────────────────────────────────
   function load() {
     if (!token) { $('loading').hidden = true; $('notfound').hidden = false; return; }
     fetch('/api/contracts/' + encodeURIComponent(token))
       .then(function (r) { if (!r.ok) throw new Error('not found'); return r.json(); })
       .then(function (c) {
         var d = c.data || {};
-        // Title: "Influencer Agreement: INFLUENCE x <creator> for <brand>"
-        $('title').textContent = 'Influencer Agreement: INFLUENCE x ' + (d.creatorName || 'Creator Name') + ' for ' + (d.brandName || 'Brand Name');
-        // Intro line with company legal name + address.
-        $('intro').innerHTML = 'This agreement is between <strong>' + esc(d.companyLegalName || 'Influence Inc.') + '</strong>, located at ' + esc(d.companyLegalAddress || '8 The Green, STE R, Dover, Delaware, 19901, United States') + ' (the "Company"), and the creator listed below (the "Creator").';
-        // Static header lines
-        $('hdrIg').textContent = d.instagramUsername ? '@' + String(d.instagramUsername).replace(/^@/, '') : '—';
-        $('hdrBrand').textContent = d.brandLegalName || d.brandName || '—';
-        $('hdrCampaign').textContent = d.campaignName || '—';
-        // Prefill identity fields
-        if (d.creatorName) $('legalName').value = d.creatorName;
-        if (d.email) $('contactEmail').value = d.email;
-        // Numbered sections
+        $('eyebrow').textContent = [d.brandName, d.campaignName].filter(Boolean).join(' · ') || 'Collaboration';
+        $('subhead').textContent = d.creatorName ? 'Prepared for ' + d.creatorName : '';
         renderSections(d);
-        // Payment currency label on page 2
-        $('payCurrency').textContent = d.currency || 'USD';
 
-        // Country dropdown
+        // Prefill identity fields from the negotiation-known values.
+        if (d.creatorName) $('legalName').value = d.creatorName;
+
+        // Populate the country dropdown.
         var sel = $('addrCountry');
         sel.innerHTML = '<option value="">Country</option>' +
-          COUNTRIES.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
+          COUNTRIES.map(function (co) { return '<option value="' + esc(co) + '">' + esc(co) + '</option>'; }).join('');
         sel.addEventListener('change', function () { updateBankVisibility(sel.value); });
         updateBankVisibility('');
 
-        // Default the signed date to today
+        // Payment currency label on page 2.
+        $('payCurrency').textContent = d.currency || 'USD';
+
+        // Default the signed date to today.
         $('signedDate').value = new Date().toISOString().slice(0, 10);
 
         $('loading').hidden = true;
-        if (c.status && c.status !== 'pending') { markSigned(); return; }
+        if (c.status && c.status !== 'pending') {
+          // Already signed: show the confirmation state instead of the form.
+          markSigned();
+          return;
+        }
         $('page1').hidden = false;
       })
       .catch(function () { $('loading').hidden = true; $('notfound').hidden = false; });
@@ -287,21 +235,30 @@
 
   var sig;
 
+  // Continue → validates page 1 (details + signature + agreement) then shows page 2.
   function goToPage2(e) {
     e.preventDefault();
     var errEl = $('err1');
     errEl.textContent = '';
 
     var name = ($('legalName').value || '').trim();
-    if (!name) { errEl.textContent = 'Please type the creator\'s full legal name.'; return; }
-    if (sig.isEmpty()) { errEl.textContent = 'Please sign in the signature box above.'; return; }
-    if (!$('agree').checked) { errEl.textContent = 'Please confirm you understand and accept all terms.'; return; }
+    if (!name) { errEl.textContent = 'Please enter your full legal name.'; return; }
+    if (sig.isEmpty()) { errEl.textContent = 'Please draw your signature in the box above.'; return; }
+    if (!$('agree').checked) { errEl.textContent = 'Please confirm you understand and accept the terms.'; return; }
 
     $('page1').hidden = true;
     $('page2').hidden = false;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // Back button on page 2 → returns to page 1 without losing state.
+  function goBackToPage1() {
+    $('page2').hidden = true;
+    $('page1').hidden = false;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Final submit → package everything into the contract submission.
   function finalSubmit(e) {
     e.preventDefault();
     var btn = $('btn-submit');
@@ -327,7 +284,6 @@
           country: $('addrCountry').value || null,
         },
         phone: $('phone').value || null,
-        contactEmail: $('contactEmail').value || null,
         signatureDataUrl: sig.toDataUrl(),
         signedDate: $('signedDate').value || null,
         bankAccount: {
@@ -357,7 +313,7 @@
       })
       .catch(function (err) {
         errEl.textContent = err.message || 'Something went wrong. Please try again.';
-        btn.disabled = false; btn.textContent = 'Submit →';
+        btn.disabled = false; btn.textContent = 'Sign & submit contract';
       });
   }
 
@@ -366,6 +322,7 @@
     $('sig-clear').addEventListener('click', function () { sig.clear(); });
     $('page1').addEventListener('submit', goToPage2);
     $('page2').addEventListener('submit', finalSubmit);
+    $('btn-back').addEventListener('click', goBackToPage1);
     load();
   });
 })();

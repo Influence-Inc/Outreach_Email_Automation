@@ -4,228 +4,137 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>Influencer Agreement — INFLUENCE</title>
+  <title>Creator Collaboration Agreement — INFLUENCE</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=PT+Serif:ital,wght@0,400;0,700;1,400;1,700&family=Inter:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
   <style>
     :root {
-      --ink: #17150f;
-      --ink-2: #3f3c33;
-      --muted: #7a766c;
-      --faint: #a9a49a;
-      --line: #d8d3c7;
-      --line-2: #ebe6da;
-      --surface: #ffffff;
-      --paper: #fbf9f4;
-      --accent: #0b0906;
-      --danger: #b0361d;
-      --serif: 'PT Serif', 'Iowan Old Style', 'Georgia', 'Times New Roman', serif;
-      --sans: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      --radius: 6px;
+      --bg: #f5f4f0; --surface: #ffffff; --surface-2: #faf9f6; --surface-3: #f2f0eb;
+      --ink: #191817; --ink-2: #4d4b46; --muted: #8a8880; --faint: #a3a19b; --faint-2: #b4b2ac;
+      --line: #e6e4de; --line-2: #dcdad3; --line-3: #eeece6;
+      --accent: #191817; --accent-strong: #000000;
+      --green: #147a52; --green-bg: #e7f2ec; --danger: #c53127;
+      --radius: 16px; --radius-md: 12px; --radius-sm: 10px; --radius-xs: 8px;
+      --shadow-card: 0 1px 2px rgba(20,18,15,.04); --shadow-btn: 0 2px 6px rgba(20,18,15,.18);
+      --ring: 0 0 0 3px rgba(25,24,23,.12);
+      --font: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
     }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     html, body { margin: 0; padding: 0; }
     body {
-      font-family: var(--serif);
-      color: var(--ink);
-      background: var(--paper);
-      line-height: 1.55;
-      -webkit-font-smoothing: antialiased;
-      text-rendering: optimizeLegibility;
+      font-family: var(--font); color: var(--ink); background: var(--bg);
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+      line-height: 1.5;
     }
     .num { font-variant-numeric: tabular-nums; }
-    strong, b { font-weight: 700; }
-    em { font-style: italic; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 40px 22px 80px; }
 
-    /* Layout */
-    .wrap { max-width: 780px; margin: 0 auto; padding: 46px 26px 96px; }
-    .brandbar { display: flex; align-items: center; gap: 12px; margin-bottom: 34px; font-family: var(--sans); }
-    .brandbar svg { height: 18px; width: auto; fill: var(--ink); }
-    .brandbar .divider { width: 1px; height: 16px; background: var(--line); }
-    .brandbar .tag { font-size: 12px; color: var(--muted); font-weight: 500; letter-spacing: .04em; text-transform: uppercase; }
+    /* Brand bar */
+    .brandbar { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; }
+    .brandbar svg { height: 20px; width: auto; fill: var(--ink); }
+    .brandbar .divider { width: 1px; height: 18px; background: var(--line-2); }
+    .brandbar .tag { font-size: 13px; color: var(--muted); font-weight: 500; letter-spacing: .01em; }
 
-    /* Title */
-    h1.title {
-      font-family: var(--serif);
-      font-weight: 700;
-      font-size: 34px;
-      line-height: 1.22;
-      letter-spacing: -.005em;
-      margin: 0 0 34px;
-    }
-    @media (max-width: 560px) { h1.title { font-size: 27px; } }
+    /* Document card */
+    .doc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow-card); overflow: hidden; margin-bottom: 22px; }
+    .doc-head { padding: 34px 38px 26px; border-bottom: 1px solid var(--line); }
+    .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--faint); margin-bottom: 10px; }
+    .doc-head h1 { font-size: 27px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 8px; }
+    .doc-head p.sub { margin: 0; color: var(--ink-2); font-size: 14px; }
 
-    /* Intro & body prose */
-    .intro { font-size: 15.5px; margin: 0 0 26px; color: var(--ink); }
+    .banner { margin: 0; padding: 13px 38px; font-size: 13.5px; font-weight: 500; display: flex;
+      align-items: center; gap: 9px; }
+    .banner.signed { background: var(--green-bg); color: var(--green); border-bottom: 1px solid #d3e7db; }
+    .banner .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
-    /* Field group (typed inputs at top: legal name, gender, address, contact) */
-    .field { margin-bottom: 16px; }
-    .field-label {
-      display: block;
-      font-family: var(--sans);
-      font-weight: 600;
-      font-size: 12.5px;
-      color: var(--ink);
-      letter-spacing: .01em;
-      margin-bottom: 6px;
-    }
-    .field-hint {
-      display: block;
-      font-family: var(--sans);
-      font-size: 12px;
-      color: var(--muted);
-      margin: -2px 0 6px;
-    }
+    /* Sections */
+    .section { padding: 24px 38px; border-bottom: 1px solid var(--line-3); }
+    .section:last-of-type { border-bottom: 0; }
+    .section h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--faint); margin: 0 0 16px; }
+    .rows { display: grid; grid-template-columns: 190px 1fr; gap: 12px 20px; }
+    @media (max-width: 560px) { .rows { grid-template-columns: 1fr; gap: 4px 0; } .rows .k { margin-top: 12px; } }
+    .rows .k { color: var(--muted); font-size: 13.5px; }
+    .rows .v { color: var(--ink); font-size: 14.5px; font-weight: 500; }
+    .rows .v.big { font-size: 16px; font-weight: 600; }
+    .pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .pill { background: var(--surface-3); border: 1px solid var(--line); border-radius: 999px;
+      padding: 3px 11px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
+    .prose { font-size: 14px; color: var(--ink-2); }
+
+    /* Editable form controls */
+    .field { margin-bottom: 14px; }
+    .field-label { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+      margin-bottom: 6px; letter-spacing: .01em; }
+    .field-hint { display: block; font-size: 12px; color: var(--muted); margin: -2px 0 6px; }
     input[type=text], input[type=email], input[type=tel], input[type=date], select, textarea {
-      width: 100%;
-      font-family: var(--sans);
-      font-size: 14px;
-      color: var(--ink);
-      padding: 9px 12px;
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      outline: none;
-      transition: border-color .12s, box-shadow .12s;
+      width: 100%; font-family: var(--font); font-size: 14.5px; color: var(--ink);
+      padding: 11px 13px; background: var(--surface); border: 1px solid var(--line-2);
+      border-radius: var(--radius-sm); outline: none; transition: border-color .12s, box-shadow .12s;
     }
-    input:focus, select:focus, textarea:focus {
-      border-color: var(--ink);
-      box-shadow: 0 0 0 3px rgba(23, 21, 15, .08);
-    }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .row-3 { display: grid; grid-template-columns: 1.4fr 1fr .8fr; gap: 12px; }
-    @media (max-width: 560px) { .row, .row-3 { grid-template-columns: 1fr; } }
+    input:focus, select:focus, textarea:focus { border-color: var(--faint); box-shadow: var(--ring); }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    @media (max-width: 560px) { .row-2, .row-3 { grid-template-columns: 1fr; } }
+    /* "Your details" section uses light tinted background to signal editable */
+    .section.editable { background: var(--surface-2); }
 
-    /* Static campaign header (between fields and the contract body) */
-    .static-header {
-      margin: 22px 0 6px;
-      padding: 14px 0 22px;
-      border-bottom: 1px solid var(--line);
-      font-size: 15.5px;
-    }
-    .static-header p { margin: 4px 0; }
-    .static-header .k { color: var(--ink); }
+    /* Sign block */
+    .sign { padding: 30px 38px 34px; background: var(--surface-2); border-top: 1px solid var(--line); }
+    .sign h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.01em; }
+    .sign p.note { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
 
-    /* Numbered sections */
-    h2.section {
-      font-family: var(--serif);
-      font-weight: 700;
-      font-size: 22px;
-      letter-spacing: -.005em;
-      margin: 28px 0 12px;
-    }
-    .clause { font-size: 15.5px; margin: 10px 0; }
-    ul.bullets { list-style: none; margin: 6px 0 10px; padding-left: 22px; }
-    ul.bullets li { font-size: 15.5px; margin: 5px 0; text-indent: -12px; }
-    .rule { border: 0; border-top: 1px solid var(--line-2); margin: 12px 0; }
-    .italic-block { font-style: italic; color: var(--ink-2); margin: 10px 0; }
-    .italic-block ul { list-style: none; padding-left: 16px; }
-    .italic-block li { margin: 2px 0; }
-
-    /* Signature */
-    .sign-block { margin-top: 34px; }
-    .sig-label { font-family: var(--sans); font-weight: 600; font-size: 13px; margin-bottom: 8px; }
-    .sig-wrap { position: relative; }
+    .sig-wrap { position: relative; margin-top: 6px; }
     canvas.sig {
-      display: block;
-      width: 100%;
-      height: 170px;
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      cursor: crosshair;
-      touch-action: none;
+      display: block; width: 100%; height: 170px; background: var(--surface);
+      border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+      cursor: crosshair; touch-action: none;
     }
     .sig-baseline {
-      position: absolute;
-      left: 12%; right: 12%;
-      bottom: 42px;
-      border-bottom: 1px dashed var(--faint);
-      pointer-events: none;
+      position: absolute; left: 10%; right: 10%; bottom: 42px;
+      border-bottom: 1px dashed var(--faint-2); pointer-events: none;
     }
     .sig-caption {
-      position: absolute;
-      bottom: 22px; left: 0; right: 0;
-      text-align: center;
-      font-family: var(--sans);
-      font-size: 11.5px;
-      color: var(--faint);
-      pointer-events: none;
+      position: absolute; bottom: 22px; left: 0; right: 0; text-align: center;
+      font-size: 11.5px; color: var(--faint-2); pointer-events: none;
     }
     .sig-tools {
       display: flex; justify-content: space-between; align-items: center;
-      margin-top: 6px; font-family: var(--sans); font-size: 12px; color: var(--muted);
+      margin-top: 6px; font-size: 12px; color: var(--muted);
     }
     .sig-tools button {
       appearance: none; background: none; border: 0; color: var(--muted);
-      font-family: var(--sans); font-size: 12px; cursor: pointer;
+      font-family: var(--font); font-size: 12px; cursor: pointer;
       text-decoration: underline; padding: 4px 0;
     }
     .sig-tools button:hover { color: var(--ink); }
 
-    /* Agreement + submit */
-    .agreement { margin: 18px 0 22px; font-family: var(--serif); font-size: 16px; font-weight: 700; }
-    .agree-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 10px; cursor: pointer; font-family: var(--serif); font-size: 15px; font-weight: 400; }
-    .agree-row input { margin-top: 4px; width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+    .agree { display: flex; align-items: flex-start; gap: 11px; margin: 20px 0 22px; cursor: pointer; }
+    .agree input { margin-top: 3px; width: 17px; height: 17px; accent-color: var(--accent); flex: none; }
+    .agree span { font-size: 13.5px; color: var(--ink-2); }
 
-    .btn {
-      appearance: none; border: 0; cursor: pointer;
-      font-family: var(--sans); font-weight: 600; font-size: 14px;
-      color: #fff; background: var(--accent);
-      padding: 11px 18px; border-radius: var(--radius);
-      display: inline-flex; align-items: center; gap: 8px;
-      transition: transform .06s, opacity .12s;
-    }
-    .btn:hover { opacity: .88; }
+    .btn { appearance: none; border: 0; cursor: pointer; font-family: var(--font); font-weight: 600;
+      font-size: 15px; color: #fff; background: var(--accent); padding: 13px 22px;
+      border-radius: var(--radius-sm); box-shadow: var(--shadow-btn); transition: transform .06s, opacity .12s; }
+    .btn:hover { background: var(--accent-strong); }
     .btn:active { transform: translateY(1px); }
     .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .btn .arrow { display: inline-block; }
-    .err { color: var(--danger); font-size: 13.5px; margin-top: 12px; min-height: 18px; font-family: var(--sans); }
+    .err { color: var(--danger); font-size: 13px; margin-top: 12px; min-height: 16px; }
 
-    /* Page break to bank details */
-    .page-break {
-      display: flex; align-items: center; justify-content: center;
-      margin: 46px 0 24px; color: var(--faint);
-      font-family: var(--sans); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase;
-    }
-    .page-break::before, .page-break::after {
-      content: ''; flex: 1; height: 1px; background: var(--line-2);
-    }
-    .page-break span { padding: 0 16px; }
-    h2.page-title {
-      font-family: var(--serif);
-      font-weight: 700;
-      font-size: 28px;
-      letter-spacing: -.005em;
-      margin: 6px 0 8px;
-    }
-    .page-lead { font-family: var(--serif); font-size: 15.5px; margin: 0 0 24px; }
-    .bank-section { margin-top: 20px; }
-    .bank-section h3 { font-family: var(--serif); font-weight: 700; font-size: 20px; margin: 0 0 4px; }
-
-    /* Confirmation state */
+    /* States */
     .state { text-align: center; padding: 70px 24px; }
-    .state h1 { font-family: var(--serif); font-size: 28px; margin: 0 0 8px; }
-    .state p { font-family: var(--serif); color: var(--ink-2); margin: 0; font-size: 15.5px; }
-    .check {
-      width: 56px; height: 56px; border-radius: 50%;
-      background: #e6f0ea; color: #147a52;
-      display: flex; align-items: center; justify-content: center;
-      margin: 0 auto 18px; font-size: 30px; font-weight: 700;
-    }
-
-    /* Loading + notfound */
-    .center-msg { text-align: center; padding: 90px 20px; font-family: var(--serif); color: var(--ink-2); }
-    .center-msg h1 { font-family: var(--serif); font-size: 24px; margin: 0 0 8px; color: var(--ink); }
-    .spinner { width: 24px; height: 24px; border: 3px solid var(--line); border-top-color: var(--ink);
+    .state h1 { font-size: 22px; margin: 0 0 8px; }
+    .state p { color: var(--muted); margin: 0; }
+    .spinner { width: 26px; height: 26px; border: 3px solid var(--line-2); border-top-color: var(--accent);
       border-radius: 50%; margin: 0 auto 16px; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* Foot */
-    .foot { text-align: center; color: var(--faint); font-family: var(--sans); font-size: 11.5px; margin-top: 36px; }
+    .check { width: 54px; height: 54px; border-radius: 50%; background: var(--green-bg); color: var(--green);
+      display: flex; align-items: center; justify-content: center; margin: 0 auto 18px; font-size: 26px; }
+    .foot { text-align: center; color: var(--faint-2); font-size: 12px; margin-top: 26px; }
   </style>
 </head>
 <body>
@@ -235,169 +144,183 @@
         <path d="M20.01 68.6729H1.35348e-05V1.03334H20.01V68.6729ZM126.221 69.8941L55.1993 29.4044V68.6729H42.5169V-4.03086e-05L113.538 40.3018V1.03334H126.221V69.8941ZM209.764 44.2475H168.992V68.6729H148.794V1.03334H219.816V11.9308H169.086V33.35H209.764V44.2475ZM306.528 68.6729H236.54V1.03334H256.738V57.7754H306.528V68.6729ZM389.07 34.6652V1.03334H401.847V34.6652C401.847 40.8029 400.813 46.1577 398.747 50.7296C396.742 55.3015 393.861 58.934 390.104 61.6271C386.409 64.3201 382.15 66.3243 377.327 67.6395C372.505 68.9547 367.119 69.6123 361.169 69.6123C348.706 69.6123 338.81 66.7627 331.483 61.0634C324.218 55.3642 320.585 46.6274 320.585 34.8531V1.03334H341.065V34.6652C341.065 38.8614 341.754 42.4939 343.132 45.5627C344.51 48.6315 346.357 51.0114 348.675 52.7024C351.054 54.3934 353.591 55.646 356.284 56.4602C359.04 57.2117 361.983 57.5875 365.115 57.5875C368.246 57.5875 371.158 57.2117 373.851 56.4602C376.607 55.646 379.144 54.3934 381.461 52.7024C383.841 51.0114 385.688 48.6315 387.004 45.5627C388.381 42.4939 389.07 38.8614 389.07 34.6652ZM494.814 68.6729H423.041V1.03334H494.814V11.9308H443.238V28.7468H484.386V39.6442H443.238V57.7754H494.814V68.6729ZM596.325 69.8941L525.303 29.4044V68.6729H512.621V-4.03086e-05L583.643 40.3018V1.03334H596.325V69.8941ZM702.321 52.6085V63.7878C692.989 67.796 681.778 69.8002 668.689 69.8002C657.917 69.8002 648.428 68.4536 640.224 65.7606C632.082 63.0049 625.694 58.9653 621.059 53.6418C616.425 48.3184 614.108 42.0555 614.108 34.8531C614.108 24.0809 619.087 15.6259 629.045 9.48828C639.003 3.28799 652.217 0.187845 668.689 0.187845C681.966 0.187845 693.177 2.19198 702.321 6.20025V18.5069C693.302 13.4965 682.78 10.9914 670.756 10.9914C659.545 10.9914 650.84 13.246 644.639 17.7553C638.439 22.202 635.339 27.9013 635.339 34.8531C635.339 41.8676 638.439 47.6294 644.639 52.1387C650.902 56.648 659.796 58.9027 671.319 58.9027C682.029 58.9027 692.363 56.8046 702.321 52.6085ZM792.821 68.6729H721.048V1.03334H792.821V11.9308H741.246V28.7468H782.393V39.6442H741.246V57.7754H792.821V68.6729Z" />
       </svg>
       <span class="divider"></span>
-      <span class="tag">Influencer Agreement</span>
+      <span class="tag">Creator Agreement</span>
     </div>
 
-    <div id="loading" class="center-msg"><div class="spinner"></div><p>Loading your agreement…</p></div>
-    <div id="notfound" class="center-msg" hidden>
-      <h1>Agreement not found</h1>
+    <!-- Loading -->
+    <div id="loading" class="doc"><div class="state"><div class="spinner"></div><p>Loading your contract…</p></div></div>
+
+    <!-- Not found -->
+    <div id="notfound" class="doc" hidden><div class="state">
+      <h1>Contract not found</h1>
       <p>This link may be incorrect or expired. Please check with your contact at INFLUENCE.</p>
-    </div>
+    </div></div>
 
-    <!-- ─── PAGE 1: agreement + signature ─────────────────────────────── -->
+    <!-- PAGE 1 — contract review + your details + sign -->
     <form id="page1" hidden>
-      <h1 class="title" id="title">Influencer Agreement</h1>
-      <p class="intro" id="intro"></p>
-
-      <div class="field">
-        <label class="field-label" for="legalName">Legal name of the creator</label>
-        <input id="legalName" type="text" placeholder="Full Name" autocomplete="name" required />
-      </div>
-
-      <div class="field">
-        <label class="field-label" for="gender">Gender</label>
-        <select id="gender">
-          <option value="">Select…</option>
-          <option value="Male">Male</option>
-          <option value="Female">Female</option>
-          <option value="Non-binary">Non-binary</option>
-        </select>
-      </div>
-
-      <div class="field">
-        <label class="field-label">Current personal address of the creator</label>
-        <div class="field"><input id="addrLine1" type="text" placeholder="Line 1" autocomplete="address-line1" /></div>
-        <div class="field"><input id="addrLine2" type="text" placeholder="Line 2" autocomplete="address-line2" /></div>
-        <div class="row">
-          <input id="addrCity" type="text" placeholder="City" autocomplete="address-level2" />
-          <input id="addrState" type="text" placeholder="State" autocomplete="address-level1" />
+      <div class="doc">
+        <div class="doc-head">
+          <div class="eyebrow" id="eyebrow"></div>
+          <h1>Creator Collaboration Agreement</h1>
+          <p class="sub" id="subhead"></p>
         </div>
-        <div class="row" style="margin-top:12px;">
-          <input id="addrZip" type="text" placeholder="Zip/Postal code" autocomplete="postal-code" />
-          <select id="addrCountry" autocomplete="country-name"></select>
+        <div id="signed-banner" class="banner signed" hidden>
+          <span class="dot"></span><span id="signed-banner-text"></span>
+        </div>
+        <div id="sections"></div>
+
+        <div class="section editable">
+          <h2>Your details</h2>
+          <div class="field">
+            <label class="field-label" for="legalName">Full legal name</label>
+            <input id="legalName" type="text" placeholder="Your full legal name" autocomplete="name" required />
+          </div>
+          <div class="row-2">
+            <div class="field">
+              <label class="field-label" for="gender">Gender</label>
+              <select id="gender">
+                <option value="">Select…</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Non-binary">Non-binary</option>
+                <option value="Prefer not to say">Prefer not to say</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="phone">Phone number</label>
+              <input id="phone" type="tel" placeholder="+91 98765 43210" autocomplete="tel" />
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label">Address</label>
+            <div class="field"><input id="addrLine1" type="text" placeholder="Address line 1" autocomplete="address-line1" /></div>
+            <div class="field"><input id="addrLine2" type="text" placeholder="Address line 2 (optional)" autocomplete="address-line2" /></div>
+            <div class="row-2">
+              <input id="addrCity" type="text" placeholder="City" autocomplete="address-level2" />
+              <input id="addrState" type="text" placeholder="State / Province" autocomplete="address-level1" />
+            </div>
+            <div class="row-2" style="margin-top:12px;">
+              <input id="addrZip" type="text" placeholder="Pincode / Zip / Postal code" autocomplete="postal-code" />
+              <select id="addrCountry" autocomplete="country-name"></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="sign">
+          <h2>Review &amp; sign</h2>
+          <p class="note">By signing below and submitting, you agree to the terms of this agreement. Drawing your signature constitutes your electronic signature.</p>
+
+          <label class="field-label" for="sig">Your signature</label>
+          <div class="sig-wrap">
+            <canvas id="sig" class="sig" width="1600" height="340"></canvas>
+            <div class="sig-baseline"></div>
+            <div class="sig-caption">Signature</div>
+          </div>
+          <div class="sig-tools">
+            <span>Draw your signature above (mouse or touch)</span>
+            <button type="button" id="sig-clear">Clear</button>
+          </div>
+
+          <div class="row-2" style="margin-top:18px;">
+            <div class="field">
+              <label class="field-label" for="signedDate">Date</label>
+              <input id="signedDate" type="date" />
+            </div>
+            <div></div>
+          </div>
+
+          <label class="agree">
+            <input id="agree" type="checkbox" />
+            <span>I confirm I have read, understood, and agree to the terms of this Creator Collaboration Agreement. I understand this agreement is legally binding.</span>
+          </label>
+
+          <button id="btn-continue" class="btn" type="submit">Continue to bank details →</button>
+          <div id="err1" class="err" role="alert"></div>
         </div>
       </div>
-
-      <div class="field">
-        <label class="field-label">Contact details</label>
-        <div class="row">
-          <input id="phone" type="tel" placeholder="Phone number" autocomplete="tel" />
-          <input id="contactEmail" type="email" placeholder="Email" autocomplete="email" />
-        </div>
-      </div>
-
-      <div class="static-header">
-        <p><span class="k">Instagram username:</span> <strong id="hdrIg">@—</strong></p>
-        <p><span class="k">Campaign for:</span> <strong id="hdrBrand">—</strong></p>
-        <p><span class="k">Campaign Name:</span> <strong id="hdrCampaign">—</strong></p>
-      </div>
-
-      <div id="sections"></div>
-
-      <div class="sign-block">
-        <div class="sig-label">Signature of the creator</div>
-        <div class="sig-wrap">
-          <canvas id="sig" class="sig" width="1600" height="340"></canvas>
-          <div class="sig-baseline"></div>
-          <div class="sig-caption">Signature</div>
-        </div>
-        <div class="sig-tools">
-          <span id="sig-hint">Draw your signature above (mouse or touch)</span>
-          <button type="button" id="sig-clear">Clear</button>
-        </div>
-      </div>
-
-      <div class="field" style="margin-top:22px;">
-        <label class="field-label" for="signedDate">Date:</label>
-        <input id="signedDate" type="date" style="max-width: 200px;" />
-      </div>
-
-      <div class="agreement">
-        Agreement Confirmation
-        <label class="agree-row">
-          <input id="agree" type="checkbox" />
-          <span>I confirm I understand and accept all terms and this agreement is legally binding.</span>
-        </label>
-      </div>
-
-      <button id="btn-continue" class="btn" type="submit">Submit <span class="arrow">→</span></button>
-      <div id="err1" class="err" role="alert"></div>
     </form>
 
-    <!-- ─── PAGE 2: bank account ───────────────────────────────────────── -->
+    <!-- PAGE 2 — bank account -->
     <form id="page2" hidden>
-      <div class="page-break"><span>Page 2</span></div>
-      <h2 class="page-title">Your bank account</h2>
-      <p class="page-lead">We'll send your <span id="payCurrency">USD</span> payments to this bank account.</p>
+      <div class="doc">
+        <div class="doc-head">
+          <div class="eyebrow">Step 2 of 2</div>
+          <h1>Your bank account</h1>
+          <p class="sub">We'll send your <span id="payCurrency">USD</span> payments to this bank account.</p>
+        </div>
 
-      <div class="bank-section">
-        <h3>Account holder name</h3>
-        <p class="field-hint">Must match the name on your bank account exactly.</p>
-        <input id="bankHolder" type="text" />
-      </div>
+        <div class="section">
+          <div class="field">
+            <label class="field-label" for="bankHolder">Account holder name</label>
+            <p class="field-hint">Must match the name on your bank account exactly.</p>
+            <input id="bankHolder" type="text" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="bankName">Bank name</label>
+            <input id="bankName" type="text" />
+          </div>
+          <div class="row-2">
+            <div class="field">
+              <label class="field-label" for="bankAccount">Account number</label>
+              <input id="bankAccount" type="text" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="bankAccountConfirm">Confirm account number</label>
+              <input id="bankAccountConfirm" type="text" autocomplete="off" />
+            </div>
+          </div>
 
-      <div class="bank-section">
-        <h3>Bank name</h3>
-        <input id="bankName" type="text" />
-      </div>
+          <div class="field" id="ibanBlock">
+            <label class="field-label" for="bankIban">IBAN <span class="field-hint" style="display:inline;margin:0;">(only for European countries)</span></label>
+            <p class="field-hint">Skip this if you aren't from a European country.</p>
+            <input id="bankIban" type="text" autocomplete="off" />
+          </div>
 
-      <div class="bank-section">
-        <h3>Account number</h3>
-        <input id="bankAccount" type="text" autocomplete="off" />
-      </div>
+          <div class="field" id="routingBlock" hidden>
+            <label class="field-label" for="bankRouting">Routing number</label>
+            <p class="field-hint">A nine-digit number printed on the bottom left corner of your cheques.</p>
+            <input id="bankRouting" type="text" autocomplete="off" />
+          </div>
 
-      <div class="bank-section">
-        <h3>Confirm account number</h3>
-        <input id="bankAccountConfirm" type="text" autocomplete="off" />
-      </div>
+          <div class="row-2" id="indiaRow" hidden>
+            <div class="field" id="ifscBlock">
+              <label class="field-label" for="bankIfsc">IFSC code</label>
+              <input id="bankIfsc" type="text" autocomplete="off" />
+            </div>
+            <div class="field" id="panBlock">
+              <label class="field-label" for="bankPan">PAN number</label>
+              <input id="bankPan" type="text" autocomplete="off" />
+            </div>
+          </div>
 
-      <div class="bank-section" id="ibanBlock">
-        <h3>IBAN (only for citizens of European countries)</h3>
-        <p class="field-hint">Skip this if you aren't from a European country.</p>
-        <input id="bankIban" type="text" autocomplete="off" />
-      </div>
+          <div class="field" id="swiftBlock">
+            <label class="field-label" for="bankSwift">SWIFT code</label>
+            <input id="bankSwift" type="text" autocomplete="off" />
+          </div>
 
-      <div class="bank-section" id="routingBlock" hidden>
-        <h3>Routing number</h3>
-        <p class="field-hint">A nine-digit number printed on the bottom left corner of your cheques.</p>
-        <input id="bankRouting" type="text" autocomplete="off" />
-      </div>
+          <div class="field">
+            <label class="field-label" for="bankTaxId">Tax ID Number</label>
+            <p class="field-hint">Enter the tax number issued by your country of residence.</p>
+            <input id="bankTaxId" type="text" autocomplete="off" />
+          </div>
+        </div>
 
-      <div class="bank-section" id="ifscBlock" hidden>
-        <h3>IFSC code</h3>
-        <input id="bankIfsc" type="text" autocomplete="off" />
+        <div class="sign">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button id="btn-back" type="button" class="btn" style="background:transparent;color:var(--ink);box-shadow:none;border:1px solid var(--line-2);">← Back</button>
+            <button id="btn-submit" class="btn" type="submit">Sign &amp; submit contract</button>
+          </div>
+          <div id="err2" class="err" role="alert"></div>
+        </div>
       </div>
-
-      <div class="bank-section" id="panBlock" hidden>
-        <h3>PAN number</h3>
-        <input id="bankPan" type="text" autocomplete="off" />
-      </div>
-
-      <div class="bank-section" id="swiftBlock">
-        <h3>SWIFT code</h3>
-        <input id="bankSwift" type="text" autocomplete="off" />
-      </div>
-
-      <div class="bank-section">
-        <h3>Tax ID Number</h3>
-        <p class="field-hint">Enter the tax number issued by your country of residence.</p>
-        <input id="bankTaxId" type="text" autocomplete="off" />
-      </div>
-
-      <div style="margin-top: 26px;">
-        <button id="btn-submit" class="btn" type="submit">Submit <span class="arrow">→</span></button>
-      </div>
-      <div id="err2" class="err" role="alert"></div>
     </form>
 
     <!-- Confirmation -->
-    <div id="done" hidden>
-      <div class="state">
-        <div class="check">✓</div>
-        <h1>Contract signed 🎉</h1>
-        <p>Thank you! We've recorded your signature and payment details. We'll share a quick content brief before you start creating.</p>
-      </div>
-    </div>
+    <div id="done" class="doc" hidden><div class="state">
+      <div class="check">✓</div>
+      <h1>Contract signed 🎉</h1>
+      <p>Thank you! We've recorded your signature and payment details. We'll share a quick content brief before you start creating.</p>
+    </div></div>
 
     <p class="foot">INFLUENCE · This document is confidential and intended only for the named creator.</p>
   </div>
