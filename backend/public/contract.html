@@ -77,6 +77,13 @@
       border-radius: var(--radius-sm); outline: none; transition: border-color .12s, box-shadow .12s;
     }
     input:focus, select:focus, textarea:focus { border-color: var(--faint); box-shadow: var(--ring); }
+    /* Brief red ring on the first missing field when the user tries to
+       advance without filling everything on page 1. */
+    .field-focus, input.field-focus, select.field-focus, canvas.field-focus {
+      border-color: var(--danger) !important;
+      box-shadow: 0 0 0 3px rgba(197,49,39,.16) !important;
+    }
+    .agree.field-focus > span { color: var(--danger); }
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
     @media (max-width: 560px) { .row-2, .row-3 { grid-template-columns: 1fr; } }

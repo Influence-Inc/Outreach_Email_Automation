@@ -9,6 +9,7 @@ const negotiation = require('./routes/negotiation');
 const settings = require('./routes/settings');
 const webhook = require('./routes/webhook');
 const { api: contractsApi, page: contractPage } = require('./routes/contracts');
+const bot = require('./routes/bot');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
@@ -48,6 +49,9 @@ app.use('/api/creators', negotiation);
 app.use('/api/settings', settings);
 app.use('/webhook', webhook);
 app.use('/api/contracts', contractsApi);
+// Bot API for the campaigns dashboard (influence-stats) to fetch per-creator
+// contract URLs so it can render the "Contract submission" column.
+app.use('/api/bot', bot);
 // Public contract signing page. Registered before the SPA static handler so
 // /contracts/:token serves the contract page, not the dashboard shell.
 app.get('/contracts/:token', contractPage);
