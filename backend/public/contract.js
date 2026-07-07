@@ -140,18 +140,41 @@
   // ── Drawn signature pad ────────────────────────────────────────────────
   function initSigPad(canvas) {
     var ctx = canvas.getContext('2d');
+    var dirty = false;
+    // Preserve any strokes across resizes (the internal canvas resolution is
+    // tied to the CSS box, so we snapshot before resizing and repaint after).
     function resize() {
       var dpr = Math.max(1, window.devicePixelRatio || 1);
       var box = canvas.getBoundingClientRect();
-      canvas.width = Math.floor(box.width * dpr);
-      canvas.height = Math.floor(box.height * dpr);
+      var w = Math.floor(box.width * dpr);
+      var h = Math.floor(box.height * dpr);
+      // Skip while the canvas is hidden (0x0) so we don't lock the internal
+      // resolution to nothing — resize() will run again once it's visible.
+      if (w === 0 || h === 0) return;
+      if (canvas.width === w && canvas.height === h) return;
+      var snapshot = dirty ? canvas.toDataURL('image/png') : null;
+      canvas.width = w;
+      canvas.height = h;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.strokeStyle = '#101010';
+      if (snapshot) {
+        var img = new Image();
+        img.onload = function () { ctx.drawImage(img, 0, 0, box.width, box.height); };
+        img.src = snapshot;
+      }
+    }
+    // Fire on window resize AND on the canvas's own box changing — the box
+    // stays 0x0 until page1 becomes visible, and only then does the ResizeObserver
+    // trigger the actual first sizing. Without this, drawing lands on a 0-sized
+    // buffer and never appears.
+    window.addEventListener('resize', resize);
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(resize).observe(canvas);
     }
     resize();
-    window.addEventListener('resize', resize);
-    var drawing = false, last = null, dirty = false;
+
+    var drawing = false, last = null;
     function pos(e) {
       var box = canvas.getBoundingClientRect();
       var p = e.touches ? e.touches[0] : e;
@@ -166,7 +189,10 @@
     }
     function end() { drawing = false; last = null; }
     canvas.addEventListener('mousedown', start);
-    canvas.addEventListener('mousemove', move);
+    // Continue drawing even if the pointer leaves the canvas mid-stroke by
+    // listening on the window; without this, one stray pixel outside the box
+    // ends the stroke prematurely.
+    window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', end);
     canvas.addEventListener('touchstart', start, { passive: false });
     canvas.addEventListener('touchmove', move, { passive: false });
@@ -176,6 +202,7 @@
       isEmpty: function () { return !dirty; },
       clear: function () { ctx.clearRect(0, 0, canvas.width, canvas.height); dirty = false; },
       toDataUrl: function () { return dirty ? canvas.toDataURL('image/png') : null; },
+      resize: resize,
     };
   }
 
@@ -229,22 +256,70 @@
           return;
         }
         $('page1').hidden = false;
+        // Now that the canvas has a real box, size its internal buffer to match.
+        // Without this, drawing lands on a 0x0 buffer while the CSS box shows the
+        // signature area — the user sees no ink.
+        if (sig && sig.resize) sig.resize();
       })
       .catch(function () { $('loading').hidden = true; $('notfound').hidden = false; });
   }
 
   var sig;
 
-  // Continue → validates page 1 (details + signature + agreement) then shows page 2.
+  // Move focus to a field and (best-effort) scroll it into view. The
+  // .field-focus class briefly outlines the offender to draw the eye.
+  function highlight(id) {
+    var el = $(id);
+    if (!el) return;
+    el.classList.add('field-focus');
+    setTimeout(function () { el.classList.remove('field-focus'); }, 1600);
+    try { el.focus({ preventScroll: false }); } catch (_) { el.focus(); }
+    if (el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  // Continue → every required field on page 1 must be filled. Only line 2 of
+  // the address is optional; everything else, including the drawn signature and
+  // the agreement checkbox, is enforced before we let the creator advance.
   function goToPage2(e) {
     e.preventDefault();
     var errEl = $('err1');
     errEl.textContent = '';
 
-    var name = ($('legalName').value || '').trim();
-    if (!name) { errEl.textContent = 'Please enter your full legal name.'; return; }
-    if (sig.isEmpty()) { errEl.textContent = 'Please draw your signature in the box above.'; return; }
-    if (!$('agree').checked) { errEl.textContent = 'Please confirm you understand and accept the terms.'; return; }
+    // Ordered so the message + highlight always land on the FIRST missing field.
+    var checks = [
+      { id: 'legalName',    label: 'your full legal name' },
+      { id: 'gender',       label: 'your gender' },
+      { id: 'phone',        label: 'your phone number' },
+      { id: 'addrLine1',    label: 'address line 1' },
+      { id: 'addrCity',     label: 'your city' },
+      { id: 'addrState',    label: 'your state / province' },
+      { id: 'addrZip',      label: 'your pincode / zip code' },
+      { id: 'addrCountry',  label: 'your country' },
+    ];
+    for (var i = 0; i < checks.length; i += 1) {
+      var v = ($(checks[i].id).value || '').trim();
+      if (!v) {
+        errEl.textContent = 'Please enter ' + checks[i].label + '.';
+        highlight(checks[i].id);
+        return;
+      }
+    }
+    if (sig.isEmpty()) {
+      errEl.textContent = 'Please draw your signature in the box above.';
+      highlight('sig');
+      return;
+    }
+    var date = ($('signedDate').value || '').trim();
+    if (!date) {
+      errEl.textContent = 'Please pick the date you signed.';
+      highlight('signedDate');
+      return;
+    }
+    if (!$('agree').checked) {
+      errEl.textContent = 'Please confirm you understand and accept the terms.';
+      highlight('agree');
+      return;
+    }
 
     $('page1').hidden = true;
     $('page2').hidden = false;
