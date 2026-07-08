@@ -9,7 +9,7 @@ A Chrome extension that automatically sends follow-up emails directly within Gma
 - **Smart follow-ups**: Only sends if recipient hasn't replied
 - **Rule-based triggers**: Define custom follow-up messages based on email count
 - **External site compose**: Send emails from any website (Instagram, LinkedIn, etc.)
-- **Instagram auto-extraction**: Automatically extracts email and name from Instagram profiles
+- **Instagram auto-extraction**: Automatically extracts email and name from Instagram profiles. Long bios that hide the email behind a "… more" toggle are expanded automatically before scraping, so emails below the fold are still captured (applies to the dashboard "Scrape Via Extension" flow too).
 - **Template management**: Create and reuse email templates with subjects
 - **Name personalization**: Automatically extracts and inserts recipient's first name
 - **Markdown links**: Use [text](url) syntax for clickable links

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Influence Outreach Automator",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Influence Outreach: scrape Instagram profiles into the Outreach dashboard.",
   "permissions": [
     "tabs"

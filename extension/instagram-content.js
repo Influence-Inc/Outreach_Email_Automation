@@ -73,6 +73,45 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // Instagram truncates a long bio behind a "… more" toggle. Until it's
+  // clicked, the hidden tail of the bio is not in the DOM — so an email that
+  // sits below the fold is never scraped. Find the bio's "more" toggle in the
+  // profile header and click it so the full bio (and any email in it) renders
+  // before we read it.
+  //
+  // Safe + conservative: only clicks a small LEAF element whose visible text is
+  // exactly "more" (after stripping a leading ellipsis), scoped to the profile
+  // header so we never click "more" on a pinned-post caption or a suggested
+  // profile. Two passes in case expanding reveals a second truncated block.
+  async function expandBioMore() {
+    const header =
+      document.querySelector('header') ||
+      document.querySelector('main header') ||
+      document.querySelector('main') ||
+      document.body;
+    let clicked = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      let found = false;
+      for (const el of header.querySelectorAll('button, [role="button"], span, div, a')) {
+        if (el.childElementCount > 0) continue; // leaf only — not a wrapper containing "more"
+        const text = (el.textContent || '').trim().toLowerCase().replace(/^[.…\s]+/, '');
+        if (text !== 'more') continue;
+        try {
+          el.click();
+          clicked += 1;
+          found = true;
+        } catch {
+          /* ignore a non-clickable match and keep looking */
+        }
+        break;
+      }
+      if (!found) break;
+      await sleep(400); // let the bio re-render after expanding
+    }
+    if (clicked) console.log(`Expanded bio via "more" (${clicked} click${clicked === 1 ? '' : 's'})`);
+    return clicked > 0;
+  }
+
   // Parse "1.2K" -> 1200, "3M" -> 3_000_000, "1,234" -> 1234. Mirrors the
   // proven Reels Analyzer reference (commas tolerated as a safe superset).
   function parseViewCount(str) {
@@ -256,6 +295,15 @@
         console.log('Using username as fallback:', result.firstName);
       }
 
+      // Expand a truncated bio FIRST so an email hidden below the "more" fold
+      // is present in the DOM before we read it. Best-effort — a profile with a
+      // short (un-truncated) bio simply has no "more" toggle to click.
+      try {
+        await expandBioMore();
+      } catch (e) {
+        console.warn('Bio expand failed (continuing with visible bio):', e);
+      }
+
       // Extract email from bio (rest of the function remains the same)
       const bioSelectors = [
         'header section div.-vDIg span',
@@ -266,13 +314,23 @@
       ];
 
       let bioText = '';
-      
-      // Try multiple selectors to find bio
+
+      // Primary source: the (now-expanded) profile header's full text. This
+      // reliably contains the whole bio — including an email that the older
+      // per-span selectors below can miss when a long bio renders as a single
+      // node longer than the per-element cap.
+      const headerEl = document.querySelector('header') || document.querySelector('main header');
+      if (headerEl && headerEl.innerText) {
+        bioText += headerEl.innerText + ' ';
+      }
+
+      // Fallback/augment: per-span bio selectors (older layouts). Upper cap
+      // raised from 500 to 3000 so a long expanded bio isn't filtered out.
       for (const selector of bioSelectors) {
         const bioElements = document.querySelectorAll(selector);
         for (const element of bioElements) {
           const text = element.textContent;
-          if (text && text.length > 10 && text.length < 500) {
+          if (text && text.length > 10 && text.length < 3000) {
             bioText += text + ' ';
           }
         }
