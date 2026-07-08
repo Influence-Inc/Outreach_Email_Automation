@@ -207,6 +207,11 @@
   }
 
   // ── Conditional bank field visibility ──────────────────────────────────
+  // Country-driven blocks:
+  //   European countries → IBAN only (no plain Account number / Confirm pair)
+  //   United States      → Account number + Confirm + Routing number
+  //   India              → Account number + Confirm + IFSC + PAN (no SWIFT)
+  //   Everywhere else    → Account number + Confirm + SWIFT
   function updateBankVisibility(country) {
     var isUS = country === 'United States';
     var isIN = country === 'India';
@@ -215,6 +220,9 @@
     $('indiaRow').hidden = !isIN;
     $('swiftBlock').hidden = isIN; // India uses IFSC/PAN instead
     $('ibanBlock').hidden = !isIBAN;
+    // Europeans identify their account by IBAN — the plain Account number pair
+    // is only shown outside the SEPA region.
+    $('accountNumBlock').hidden = isIBAN;
   }
 
   // ── States ─────────────────────────────────────────────────────────────
