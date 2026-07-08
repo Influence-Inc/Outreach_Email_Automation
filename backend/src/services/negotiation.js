@@ -142,6 +142,13 @@ function ctxFor(creator, extra = {}) {
   };
 }
 
+// Formatting instruction shared by every Claude email-writing prompt (reply +
+// offer). The delivery layer (instantly.renderMarkdown) turns this markdown
+// subset into HTML in the sent email, so it must be identical everywhere.
+const FORMATTING_RULE =
+  'Formatting — the delivery layer renders inline markdown as HTML in the sent email. ' +
+  'Wrap EVERY section header / sub-topic label in **bold** (e.g. **Content Style**, **Deliverables & Rates**, **Platforms**, **Timelines**, **View-Based Offer**, **Flat Package**, **Payment details**, **Past content references**), and use [label](https://example.com) for any hyperlink (reference Instagram handles are already written as such links — keep them as links). Match the format spec in the team guidelines above when it prescribes what to bold or link; do not over-format. Everything else stays plain text with line breaks — no other markdown (no headings syntax, no italics, keep the existing "-" bullets as-is).';
+
 // Renders the team's universal Guidelines as a prompt block (or '' when unset).
 function guidelinesBlock(ctx) {
   const g = (ctx.guidelines || '').trim();
@@ -244,7 +251,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     '- Some (user → assistant) turn pairs may precede the real message below: those are REAL exchanges from our past negotiations, showing the correct output for a similar inbound. Treat the facts, decisions, and phrasing in their replies as team-approved knowledge. When the new message closely matches an example where our team answered directly, answer the same way instead of escalating — but never copy a dollar amount from an example, and never reuse another creator\'s name or deal specifics.',
     `- Salutation name — the reply may not be from the creator themselves. It may be from a manager, agent, assistant, MCN, agency, or brand-partnerships rep writing on the creator's behalf. Detect the sender's first name from the reply's opening ("Hi, this is Alex, ${v.firstName}'s manager"), signature block ("- Alex", "Best, Alex Chen"), or self-introduction ("I'm Alex from XYZ Talent"). If the sender's name is clearly different from "${v.firstName}", address that person by THEIR first name in the salutation ("Hi Alex,"). Still refer to the creator as "${v.firstName}" when discussing the collaboration itself — the deal is with the creator, not the sender. If the sender's identity is ambiguous, address "${v.firstName}" or fall back to "Hi there,"; never guess a name.`,
     `- Reference accounts (${v.refs}) are a portfolio credential — DO NOT include them proactively. Only include them when the sender explicitly asked to see examples of past work, other creators we've worked with, our portfolio, or references. When adapting REPLY 1 without such an ask, drop the "Past content references" section from your email entirely.`,
-    `- Formatting — the delivery layer renders inline markdown as HTML in the sent email. Use **text** to bold a section header or key label (e.g. **Content Style**, **Deliverables & Rates**, **Timelines**, **Payment details**), and [label](https://example.com) for any hyperlink. Match the format spec in the team guidelines above when it prescribes what to bold or link; do not over-format. Everything else stays plain text with line breaks — no other markdown (no headings, no lists syntax beyond the "-" bullets already in the templates, no italics).`,
+    `- ${FORMATTING_RULE}`,
     `- The creator's first name is "${v.firstName}" (used when talking about the creator; may be overridden by the sender's actual first name for the salutation, per the rule above).`,
   ].join('\n');
 
@@ -378,7 +385,9 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
       : `A flat package: ${offer.num_videos} video(s) for $${offer.flat_fee} total (full creative freedom; no exclusivity).`;
 
   const system = [
-    `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE writing to ${v.firstName} about a collaboration for "${v.brandName}".`,
+    `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE writing about a collaboration for "${v.brandName}". Greet ${v.salutation} by name ("Hi ${v.salutation},")${
+      v.salutation !== v.firstName ? ` — they are writing on ${v.firstName}'s behalf, so refer to the creator as ${v.firstName} when discussing the deal` : ''
+    }.`,
     'An admin has APPROVED exactly one offer. Use its numbers EXACTLY — do not invent or change amounts, and present only this one offer.',
     `Approved offer JSON: ${JSON.stringify(offer)}`,
     `In plain words: ${offerDesc}`,
@@ -387,7 +396,7 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
     } deal at that cadence; never print the cadence text where a date belongs.`,
     '',
     guidelinesBlock(ctx),
-    'Write ONE email by adapting this canonical offer template — keep its warm tone, the "Payment details" section, and the "- ' + v.managerName + '" sign-off:',
+    'Write ONE email by adapting this canonical offer template — keep its warm tone, the "**Payment details**" section, and the "- ' + v.managerName + '" sign-off:',
     '--- REPLY 2 ---',
     templates.REPLY2_BODY,
     combine
@@ -396,11 +405,13 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
           'This is the FIRST reply (the creator gave their rate immediately), so FIRST cover the collaboration details by adapting REPLY 1, THEN present the approved offer in the same email:',
           '--- REPLY 1 ---',
           templates.REPLY1_BODY,
-          `Use brand "${v.brandName}", references: ${v.refs}, and the cadence "${v.cadence}" for timelines.`,
+          `Use brand "${v.brandName}" and the cadence "${v.cadence}" for timelines. Do NOT include the "Past content references" section — an offer email should not introduce references unprompted.`,
         ].join('\n')
       : '',
     '',
-    'Respond with STRICT JSON ONLY (no markdown fences): {"subject": string, "body": string}. The body is plain text with line breaks.',
+    `- ${FORMATTING_RULE}`,
+    '',
+    'Respond with STRICT JSON ONLY (no markdown fences): {"subject": string, "body": string}. The body carries the small markdown subset described above (bold headers, links); no other markdown.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -606,16 +617,26 @@ async function processReply(creatorId) {
 
   if (!inbound || !inbound.text) return { skipped: 'no inbound text' };
 
+  // Resolve, from THIS inbound: who to greet (the sender may be replying on the
+  // creator's behalf) and whether they asked to see references. Computed up
+  // front so we can persist the salutation — a later offer email (sent at admin
+  // approval, after the inbound text has been consumed) reads it back.
+  const salutation = salutationFor(creator.first_name, inbound.text);
+  const includeRefs = askedForReferences(inbound.text);
+
   // Dedup by consuming the text: clear latest_inbound_text once handled so a
   // re-run sees nothing. We deliberately do NOT gate on instantly_reply_uuid —
   // it's a thread handle, stable across replies, so a uuid match would wrongly
   // skip every follow-up reply (counter-offers, acceptances) in the same thread.
+  // Persist the detected salutation on the same write so offer emails can greet
+  // the right person even after the inbound text is gone.
   const markHandled = () =>
     db.query(
       `UPDATE creators
-       SET latest_inbound_text = NULL, last_negotiation_msg_id = $2, updated_at = NOW()
+       SET latest_inbound_text = NULL, last_negotiation_msg_id = $2,
+           reply_salutation = $4, updated_at = NOW()
        WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $3`,
-      [creator.id, inbound.messageId || null, inbound.text],
+      [creator.id, inbound.messageId || null, inbound.text, salutation],
     );
 
   // AI off for this template -> always hand the reply to a human.
@@ -629,10 +650,6 @@ async function processReply(creatorId) {
   }
 
   const guidelines = await getGuidelines();
-  // Resolve, from THIS inbound: who to greet (the sender may be replying on
-  // the creator's behalf) and whether they asked to see references.
-  const salutation = salutationFor(creator.first_name, inbound.text);
-  const includeRefs = askedForReferences(inbound.text);
   const ctx = ctxFor(creator, { guidelines, salutation, includeRefs });
   const result = await handleCreatorReply(creator, inbound.text, ctx);
   // Visibility: surface Claude's classification + a snippet of its understanding
@@ -936,7 +953,12 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
   }
 
   const guidelines = await getGuidelines();
-  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines });
+  // Greet whoever's been corresponding (a manager may have shared the rate on
+  // the creator's behalf). The reply salutation was persisted when the rate
+  // came in; fall back to re-parsing any still-present inbound, then the name.
+  const salutation =
+    creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
+  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, salutation });
   const combine = (await countSentNegotiation(creatorId)) === 0;
   try {
     const email = await draftOfferEmail(creator, offer, ctx, { combine });

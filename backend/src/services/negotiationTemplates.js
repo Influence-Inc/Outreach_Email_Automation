@@ -147,14 +147,17 @@ Would love to work together and land on something that works well for both sides
 const fmtNum = (n) => Number(n || 0).toLocaleString('en-US');
 const fmtMoney = (n) => fmtNum(Math.round(Number(n || 0)));
 
-// The headline lines describing a single admin-approved offer.
+// The headline lines describing a single admin-approved offer. The offer-type
+// header is **bold** so it renders as a section heading (mirrors REPLY 2's
+// "**Option 1 / Option 2**" style) in the sent email.
 function describeOffer(offer, brandName) {
   if (!offer) return '';
   if (offer.offer_type === 'view_based') {
     const views = Number(offer.view_guarantee || 0);
     return (
       `We usually do performance-based deals with all our creators. We'd love to propose a view-based offer:\n\n` +
-      `$${fmtMoney(offer.flat_fee)} for a minimum of ${fmtNum(views)} combined total views on Instagram.\n` +
+      `**View-Based Offer ($${fmtMoney(offer.flat_fee)})**\n` +
+      `- $${fmtMoney(offer.flat_fee)} for a minimum of ${fmtNum(views)} combined total views on Instagram.\n` +
       `- Views can come from a single video or multiple posts — combined total views will be counted. ` +
       `So if the first video ends up crossing ${fmtNum(views * 2)} views, you don't have to upload further videos!\n` +
       `- Views counted for 7 days from each post's publish date.\n` +
@@ -172,6 +175,7 @@ function describeOffer(offer, brandName) {
     const threshold = Number(offer.bonus_threshold_views || 0);
     return (
       `We usually do performance-based deals with all our creators. We'd love to propose a flat package with a performance bonus:\n\n` +
+      `**Flat Package + Performance Bonus**\n` +
       `$${fmtMoney(base)} flat for ${n} video${n === 1 ? '' : 's'} — $${fmtMoney(per)} per video.\n` +
       `- Plus a $${fmtMoney(bonus)} bonus if the combined views cross ${fmtNum(threshold)} on Instagram.\n` +
       `- Views can come from a single video or multiple posts — combined total views will be counted.\n` +
@@ -185,7 +189,8 @@ function describeOffer(offer, brandName) {
   const per = offer.flat_per_video != null ? offer.flat_per_video : Math.round(Number(offer.flat_fee) / n);
   return (
     `We usually do performance-based deals with all our creators. We'd love to propose a flat package:\n\n` +
-    `${n} video package ($${fmtMoney(offer.flat_fee)}) — $${fmtMoney(per)} per video.\n` +
+    `**Flat Package ($${fmtMoney(offer.flat_fee)})**\n` +
+    `- ${n} video package — $${fmtMoney(per)} per video.\n` +
     `- Full creative freedom, so you can create engaging content around ${brandName} without it feeling like an ad!\n` +
     `- We're keen to turn this into a longer-term retainer if the first videos go well.\n` +
     `- No ad rights or exclusivity required.`
