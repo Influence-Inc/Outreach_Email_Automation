@@ -146,6 +146,11 @@ CREATE INDEX IF NOT EXISTS idx_creators_needs_human ON creators(needs_human) WHE
 -- the /webhook/instantly handler and consumed by negotiation.processReply().
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_reply_uuid TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_text  TEXT;
+-- Who to greet in our replies. Usually the creator's first name, but when a
+-- manager/agent replies on their behalf we detect and store that person's
+-- first name here so later emails (e.g. the admin-approved offer, sent after
+-- the inbound text has been consumed) still greet the right person.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS reply_salutation TEXT;
 -- The connected Instantly mailbox that handled the conversation (the webhook's
 -- email_account). Required as `eaccount` when sending a threaded reply via
 -- POST /api/v2/emails/reply.

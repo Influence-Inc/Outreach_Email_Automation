@@ -196,3 +196,37 @@ test('asksUsToQuoteFirst does NOT fire when the creator states their own rate or
   ];
   for (const t of no) assert.strictEqual(negotiation.asksUsToQuoteFirst(t), false, `should not fire: ${t}`);
 });
+
+// ── Offer email formatting (the "Reply 2" the user meant) ───────────────────
+
+test('describeOffer bolds the offer-type header for a view-based offer', () => {
+  const out = templates.describeOffer(
+    { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 500000 },
+    'Acme',
+  );
+  assert.ok(out.includes('**View-Based Offer ($1,500)**'), 'bold view-based header');
+});
+
+test('describeOffer bolds the offer-type header for a flat package', () => {
+  const out = templates.describeOffer({ offer_type: 'video_based', num_videos: 2, flat_fee: 1600 }, 'Acme');
+  assert.ok(out.includes('**Flat Package ($1,600)**'), 'bold flat-package header');
+});
+
+test('offer email keeps the bold Payment details header', () => {
+  const { body } = templates.offerEmail(
+    { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 500000 },
+    { firstName: 'Dua', brandName: 'Acme' },
+  );
+  assert.ok(body.includes('**Payment details**'), 'bold payment header present in the sent offer');
+});
+
+test('describeOffer bolds the header for a video_bonus offer', () => {
+  const out = templates.describeOffer(
+    { offer_type: 'video_bonus', num_videos: 3, base_fee: 9000, flat_per_video: 3000, bonus_amount: 2000, bonus_threshold_views: 5000000, flat_fee: 11000 },
+    'Acme',
+  );
+  assert.ok(out.includes('**Flat Package + Performance Bonus**'), 'bold bonus header');
+  // Main's structural facts still intact after adding the header.
+  assert.ok(out.includes('$9,000 flat for 3 videos'));
+  assert.ok(out.includes('$2,000 bonus'));
+});
