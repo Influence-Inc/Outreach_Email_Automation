@@ -352,7 +352,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* Status cell */
 .cr-status { display: flex; flex-direction: column; gap: 12px; position: relative; }
 .cr-status-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.cr-status-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.cr-status-left { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-width: 0; }
+.cr-status-left .status-pill { flex-shrink: 0; }
 .cr-copy-contract { flex-shrink: 0; }
 .status-pill {
   display: inline-flex; align-items: center; font-size: 11px; font-weight: 600;
