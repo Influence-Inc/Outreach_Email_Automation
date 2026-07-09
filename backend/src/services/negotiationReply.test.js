@@ -64,6 +64,9 @@ test('askedForReferences is true only on an explicit portfolio/examples ask', ()
     'which other creators have you worked with?',
     'got a portfolio i can look at?',
     'any samples of previous campaigns?',
+    'do you have any case studies?',
+    'brands you\'ve worked with?',
+    'have you partnered with other creators before?',
   ];
   const no = [
     'sounds great, tell me more',
@@ -73,6 +76,32 @@ test('askedForReferences is true only on an explicit portfolio/examples ask', ()
   ];
   for (const t of yes) assert.strictEqual(negotiation.askedForReferences(t), true, `should ask: ${t}`);
   for (const t of no) assert.strictEqual(negotiation.askedForReferences(t), false, `should not: ${t}`);
+});
+
+// Regression: a prior version of askedForReferences had bare-word triggers
+// (standalone "reference", "other creators", "showcase", "samples of" with no
+// object) that fired on completely unrelated replies — leaking the reference
+// list into emails that never asked for it. Each of these phrases contains one
+// of those old trigger words/phrases in a context that is NOT a references ask.
+test('askedForReferences does NOT fire on unrelated mentions of its old bare-word triggers', () => {
+  const shouldNotFire = [
+    // bare "other creators" with no "worked with" tied to US
+    "I've worked with other creators before, this looks fun!",
+    'we\'ve worked with brands before and loved it',
+    // bare "reference" with no share/send/provide ask
+    'she referenced your work ethic in her review',
+    'my manager can be a good reference for communication',
+    // bare "showcase" describing the creator's OWN content, not asking for ours
+    'I love to showcase brands I genuinely use in my content',
+    // "sample/samples of" attached to something that isn't our past work
+    "here's a sample of what I usually charge",
+    // "any work you" with no "worked with" — talking about OUR needs, not
+    // asking to see our past work
+    'let me know if there is any work you need from me before we start',
+  ];
+  for (const t of shouldNotFire) {
+    assert.strictEqual(negotiation.askedForReferences(t), false, `should NOT ask: ${t}`);
+  }
 });
 
 test('reply1 omits the references section by default', () => {
