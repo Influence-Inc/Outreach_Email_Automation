@@ -6,7 +6,10 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   };
-  var token = (location.pathname.match(/\/contracts\/([^/?#]+)/) || [])[1] || '';
+  // Accepts both the current singular path (/contract/{token}, including when
+  // proxied through campaigns.influence.technology) and the legacy plural path
+  // (/contracts/{token}) so links already emailed out keep working.
+  var token = (location.pathname.match(/\/contracts?\/([^/?#]+)/) || [])[1] || '';
 
   // ── Country list (ISO 3166-1 + common territories) ──────────────────────
   var COUNTRIES = [

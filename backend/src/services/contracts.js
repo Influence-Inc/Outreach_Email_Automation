@@ -28,8 +28,12 @@ function baseUrl() {
   ).replace(/\/$/, '');
 }
 
+// Singular "/contract/" — the public-facing path (e.g. under
+// campaigns.influence.technology, which proxies it through to this backend).
+// The plural "/contracts/:token" route still resolves on this backend too, so
+// links already emailed out before this change keep working.
 function contractUrl(token) {
-  return `${baseUrl()}/contracts/${token}`;
+  return `${baseUrl()}/contract/${token}`;
 }
 
 // ── Deal context ────────────────────────────────────────────────────────────

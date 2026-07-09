@@ -20,12 +20,12 @@ test('generateToken returns unique, unguessable, URL-safe tokens', () => {
   assert.match(a, /^[A-Za-z0-9_-]+$/); // base64url alphabet, no +/= to break URLs
 });
 
-test('contractUrl respects PUBLIC_BASE_URL and strips a trailing slash', () => {
+test('contractUrl respects PUBLIC_BASE_URL, strips a trailing slash, and uses the singular /contract/ path', () => {
   const prev = process.env.PUBLIC_BASE_URL;
   process.env.PUBLIC_BASE_URL = 'https://campaigns.influence.technology/';
   assert.strictEqual(
     contracts.contractUrl('TOK'),
-    'https://campaigns.influence.technology/contracts/TOK',
+    'https://campaigns.influence.technology/contract/TOK',
   );
   process.env.PUBLIC_BASE_URL = prev;
 });
