@@ -401,11 +401,43 @@ const TRASH_SVG =
 function renderStatusCell(r, cell) {
   const top = document.createElement('div');
   top.className = 'cr-status-top';
+
+  // Left group: the status pill and — once a contract exists — the copy-link
+  // button sit side by side, so the signing link reads as part of the
+  // "contract sent" status rather than a detached control below it.
+  const left = document.createElement('div');
+  left.className = 'cr-status-left';
   const pill = statusPillFor(r);
   const pillEl = document.createElement('span');
   pillEl.className = `status-pill ${pill.cls}`;
   pillEl.textContent = pill.text;
-  top.appendChild(pillEl);
+  left.appendChild(pillEl);
+
+  // Contract link — shown once a contract exists, next to the status pill so
+  // the same Status column carries the signing link (no dedicated column).
+  // Copies the public URL.
+  if (r.contract && r.contract.url) {
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'ghost small cr-copy-contract';
+    copy.textContent = 'Copy link';
+    copy.title = r.contract.url;
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(r.contract.url);
+        const prev = copy.textContent;
+        copy.textContent = 'Copied ✓';
+        setTimeout(() => {
+          copy.textContent = prev;
+        }, 1400);
+      } catch (e) {
+        window.prompt('Contract link', r.contract.url);
+      }
+    };
+    left.appendChild(copy);
+  }
+
+  top.appendChild(left);
 
   const del = document.createElement('button');
   del.type = 'button';
@@ -438,29 +470,6 @@ function renderStatusCell(r, cell) {
       }
     };
     cell.appendChild(send);
-  }
-
-  // Contract link — shown once a contract exists, so the same Status column
-  // carries the signing link (no dedicated column). Copies the public URL.
-  if (r.contract && r.contract.url) {
-    const copy = document.createElement('button');
-    copy.type = 'button';
-    copy.className = 'ghost small cr-copy-contract';
-    copy.textContent = 'Copy contract link';
-    copy.title = r.contract.url;
-    copy.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(r.contract.url);
-        const prev = copy.textContent;
-        copy.textContent = 'Copied ✓';
-        setTimeout(() => {
-          copy.textContent = prev;
-        }, 1400);
-      } catch (e) {
-        window.prompt('Contract link', r.contract.url);
-      }
-    };
-    cell.appendChild(copy);
   }
 
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
