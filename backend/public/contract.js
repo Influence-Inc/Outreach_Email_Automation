@@ -109,16 +109,19 @@
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
       row('Deliverables', d.deliverables) +
       (isViewBased ? '' : row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos))) +
-      (minViews ? row('Guaranteed views', fmtNum(minViews)) : '') +
+      (minViews ? row('Min. guaranteed views', fmtNum(minViews)) : '') +
       (d.bonusAmount && d.bonusThresholdViews
         ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
         : '')
     ));
 
+    // Cadence only makes sense when there's more than one video to pace out.
+    // A single-video deal has one drop date, not a rhythm.
+    var deliverableCount = Number(d.numberOfDeliverables != null ? d.numberOfDeliverables : d.numberOfVideos);
+    var showCadence = !(Number.isFinite(deliverableCount) && deliverableCount <= 1);
     html += section('Timeline', rowsWrap(
-      row('Cadence', d.timeline) +
-      row('Deadline', d.postingDeadline || d.deadline) +
-      (d.postLiveMonths ? row('Posts remain live for', d.postLiveMonths + ' months') : '')
+      (showCadence ? row('Cadence', d.timeline) : '') +
+      row('Deadline', d.postingDeadline || d.deadline)
     ));
 
     var compensation = d.totalPayment != null ? d.totalPayment : d.compensation;
@@ -126,9 +129,12 @@
     html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(compensation, d.currency), { big: true }) +
       row('Currency', d.currency) +
+      // Payment terms is a standard clause on every contract — always shown,
+      // even when the upfront/remainder split below is also present.
+      row('Payment terms', d.paymentTerms || 'Direct bank transfer upon completion of all agreed deliverables') +
       (upPct && remPct
         ? row('Payment schedule', upPct + '% upfront (' + (d.upfrontTrigger || 'on first draft') + '), ' + remPct + '% ' + (d.remainderTrigger || 'on completion'))
-        : row('Payment terms', d.paymentTerms))
+        : '')
     ));
 
     html += section('Usage Rights & Exclusivity', rowsWrap(
@@ -138,7 +144,10 @@
         : '') +
       row('Scope', d.usageScope) +
       row('Paid ads', d.paidAdsIncluded ? 'Included' : 'Not included') +
-      row('Exclusivity', d.exclusivity)
+      row('Exclusivity', d.exclusivity) +
+      // Standard on every contract — defaults to 6 months, never conditional,
+      // so it's never silently dropped if a field comes back empty.
+      row('Posts remain live for', (d.postLiveMonths || 6) + ' months')
     ));
 
     $('sections').innerHTML = html;
@@ -211,6 +220,22 @@
       toDataUrl: function () { return dirty ? canvas.toDataURL('image/png') : null; },
       resize: resize,
     };
+  }
+
+  // ── Secret fields (account number / IBAN) ──────────────────────────────
+  // Rendered as type=password so characters are masked. We additionally block
+  // copy / cut / drag / right-click so the entered value can't be lifted back
+  // out of the field even if it's still selected — the creator types their
+  // details, we accept them, and they stay hidden.
+  function lockSecretFields() {
+    var nodes = document.querySelectorAll('input.secret');
+    for (var i = 0; i < nodes.length; i += 1) {
+      var el = nodes[i];
+      el.addEventListener('copy', function (e) { e.preventDefault(); });
+      el.addEventListener('cut', function (e) { e.preventDefault(); });
+      el.addEventListener('dragstart', function (e) { e.preventDefault(); });
+      el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    }
   }
 
   // ── Conditional bank field visibility ──────────────────────────────────
@@ -348,6 +373,14 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // A field is "required" on page 2 only if the block wrapping it is visible
+  // for the selected country. That way we don't demand an IFSC from a US
+  // creator (whose India row is hidden) or an IBAN from an American.
+  function blockVisible(blockId) {
+    var el = $(blockId);
+    return !!el && !el.hidden;
+  }
+
   // Final submit → package everything into the contract submission.
   function finalSubmit(e) {
     e.preventDefault();
@@ -355,9 +388,38 @@
     var errEl = $('err2');
     errEl.textContent = '';
 
+    // Every visible page-2 field must be filled. Ordered so the highlight
+    // always lands on the FIRST missing field.
+    var checks = [
+      { id: 'bankHolder',  label: 'the account holder name', block: null },
+      { id: 'bankName',    label: 'your bank name',          block: null },
+      { id: 'bankAccount', label: 'your account number',     block: 'accountNumBlock' },
+      { id: 'bankAccountConfirm', label: 'the confirmation account number', block: 'accountNumBlock' },
+      { id: 'bankIban',    label: 'your IBAN',               block: 'ibanBlock' },
+      { id: 'bankRouting', label: 'your routing number',     block: 'routingBlock' },
+      { id: 'bankIfsc',    label: 'your IFSC code',          block: 'indiaRow' },
+      { id: 'bankPan',     label: 'your PAN number',         block: 'indiaRow' },
+      { id: 'bankSwift',   label: 'your SWIFT code',         block: 'swiftBlock' },
+      { id: 'bankTaxId',   label: 'your tax ID number',      block: null },
+    ];
+    for (var i = 0; i < checks.length; i += 1) {
+      var c = checks[i];
+      if (c.block && !blockVisible(c.block)) continue;
+      var v = ($(c.id).value || '').trim();
+      if (!v) {
+        errEl.textContent = 'Please enter ' + c.label + '.';
+        highlight(c.id);
+        return;
+      }
+    }
+
     var acct = ($('bankAccount').value || '').trim();
     var acct2 = ($('bankAccountConfirm').value || '').trim();
-    if (acct && acct !== acct2) { errEl.textContent = 'Account number and confirmation do not match.'; return; }
+    if (blockVisible('accountNumBlock') && acct !== acct2) {
+      errEl.textContent = 'Account number and confirmation do not match.';
+      highlight('bankAccountConfirm');
+      return;
+    }
 
     var payload = {
       signerName: ($('legalName').value || '').trim(),
@@ -410,6 +472,7 @@
   document.addEventListener('DOMContentLoaded', function () {
     sig = initSigPad($('sig'));
     $('sig-clear').addEventListener('click', function () { sig.clear(); });
+    lockSecretFields();
     $('page1').addEventListener('submit', goToPage2);
     $('page2').addEventListener('submit', finalSubmit);
     $('btn-back').addEventListener('click', goBackToPage1);
