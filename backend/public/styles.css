@@ -392,10 +392,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .cr-rate .deal-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-/* Status cell */
+/* Status cell — pill, copy-link and delete-icon share a single left-aligned
+   row so they read as one group. Previously the delete icon was pushed to the
+   far right via space-between, which created a large empty gap on wide
+   columns and made the pill visually detached from the timeline below it. */
 .cr-status { display: flex; flex-direction: column; gap: 12px; position: relative; }
-.cr-status-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.cr-status-left { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-width: 0; }
+.cr-status-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cr-status-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .cr-status-left .status-pill { flex-shrink: 0; }
 .cr-copy-contract { flex-shrink: 0; }
 .status-pill {

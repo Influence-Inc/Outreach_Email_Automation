@@ -1212,14 +1212,18 @@ document.querySelectorAll('#usage-rights-toggle .segmented-opt').forEach((btn) =
     const status = el('usage-rights-status');
     const buttons = document.querySelectorAll('#usage-rights-toggle .segmented-opt');
     buttons.forEach((b) => (b.disabled = true));
-    status.textContent = 'Saving…';
+    // The active class on the clicked option IS the confirmation — a toggle
+    // that snaps to the new value is self-evidently saved. So we don't print
+    // "Saving…"/"Saved." on the happy path; the status span only exists to
+    // carry a failure message (`.hint:empty` hides the empty span entirely,
+    // so the label + toggle stay on one line).
+    status.textContent = '';
     try {
       await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
         method: 'PATCH',
         body: JSON.stringify({ usage_rights_policy: value }),
       });
       setUsageRightsToggle(value);
-      status.textContent = 'Saved.';
       await refreshCampaigns();
     } catch (err) {
       status.textContent = `Failed: ${err.message}`;
