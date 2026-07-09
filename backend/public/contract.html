@@ -76,6 +76,15 @@
       padding: 11px 13px; background: var(--surface); border: 1px solid var(--line-2);
       border-radius: var(--radius-sm); outline: none; transition: border-color .12s, box-shadow .12s;
     }
+    /* Selects: drop the native OS widget so they share the text inputs' height,
+       metrics, and a consistently placed chevron (was misaligned before). */
+    select {
+      appearance: none; -webkit-appearance: none; -moz-appearance: none;
+      padding-right: 38px; line-height: 1.5; text-overflow: ellipsis;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%238a8880' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 13px center; background-size: 12px 8px;
+    }
+    select::-ms-expand { display: none; }
     input:focus, select:focus, textarea:focus { border-color: var(--faint); box-shadow: var(--ring); }
     /* Brief red ring on the first missing field when the user tries to
        advance without filling everything on page 1. */
