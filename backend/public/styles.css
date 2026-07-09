@@ -285,6 +285,21 @@ button:disabled { opacity: 0.5; cursor: default; }
 .setting-chip .hint { flex-basis: 100%; }
 .setting-chip .hint:empty { display: none; }
 
+/* --- Segmented toggle (3-way), e.g. the campaign Usage Rights control ---- */
+.segmented {
+  display: inline-flex; background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: 8px; padding: 2px; gap: 2px;
+}
+.segmented-opt {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 500; color: var(--ink-2);
+  padding: 7px 12px; border-radius: 6px; white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.segmented-opt:hover { color: var(--ink); }
+.segmented-opt.active { background: var(--accent); color: #fff; font-weight: 600; }
+.segmented-opt:disabled { opacity: .5; cursor: not-allowed; }
+
 .scrape-progress { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 #scrape-progress-text { flex: 1; }
 #fetch-status { margin-top: 12px; }

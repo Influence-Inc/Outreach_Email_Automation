@@ -39,7 +39,7 @@ function contractUrl(token) {
 // ── Deal context ────────────────────────────────────────────────────────────
 async function loadCreatorForContract(creatorId) {
   return db.one(
-    `SELECT c.*, ca.brand_name, ca.name AS campaign_name
+    `SELECT c.*, ca.brand_name, ca.name AS campaign_name, ca.usage_rights_policy
      FROM creators c JOIN campaigns ca ON ca.id = c.campaign_id
      WHERE c.id = $1`,
     [creatorId],
@@ -100,6 +100,33 @@ function bonusOf(offer) {
     };
   }
   return { amount: null, threshold: null };
+}
+
+// Usage-rights fields derived from the campaign's usage_rights_policy (see
+// schema.sql for the 3 values):
+//   no_rights  — ad rights never requested
+//   free_only  — ad rights included by default ("if not [mentioned], include
+//                it in all contracts"); the Claude extraction call below is
+//                what flips this to false when the negotiation thread shows
+//                the creator asked for separate payment for them
+//   required   — ad rights always included
+function usageRightsFor(policy) {
+  if (policy === 'required') {
+    return {
+      paidAdsIncluded: true,
+      usageRights: 'Paid ad rights included — the brand may use this content in paid advertising across their channels',
+    };
+  }
+  if (policy === 'free_only') {
+    return {
+      paidAdsIncluded: true,
+      usageRights: 'Paid ad rights included at no additional cost, alongside organic use',
+    };
+  }
+  return {
+    paidAdsIncluded: false,
+    usageRights: 'Organic only — no paid ad rights required',
+  };
 }
 
 // Suggested per-video posting windows derived from the total window and video
@@ -184,11 +211,10 @@ function baseContractData(creator, fee, offer) {
     postingDeadline: deadlineHuman,
     postingWindows: suggestPostingWindows(n, deadlineDate),
 
-    // Usage rights.
-    usageRights: 'Organic only — no paid ad rights required',
+    // Usage rights — see usageRightsFor() for the per-policy defaults.
+    ...usageRightsFor(creator.usage_rights_policy),
     usageRightsList: ['ads', 'reposting', 'promotion', 'testimonials', 'paid and organic marketing across any channels'],
     usageScope: 'non exclusive, royalty free, and worldwide',
-    paidAdsIncluded: false,
     exclusivity: 'None',
 
     // Content availability.
@@ -274,7 +300,10 @@ Rules:
 - "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
 - "postingWindows" are suggested per-video windows, e.g. [{"label":"Video 1","range":"December 11 - 14"}]. Return null if the thread doesn't specify windows.
 - "usageRightsList" enumerates each usage (e.g. ["ads","reposting","promotion","testimonials","paid and organic marketing across any channels"]).
-- "paidAdsIncluded" — true only if the thread explicitly includes paid advertising usage rights.
+- "paidAdsIncluded" and "usageRights" are governed by KNOWN VALUES.usageRightsPolicy:
+  - "no_rights" — paidAdsIncluded is ALWAYS false. usageRights: "Organic only — no paid ad rights required".
+  - "required" — paidAdsIncluded is ALWAYS true. usageRights should state paid ad rights ARE included.
+  - "free_only" — paidAdsIncluded is true UNLESS the negotiation timeline shows the creator explicitly asked for SEPARATE or ADDITIONAL payment specifically in exchange for granting paid-ad/usage rights (e.g. "I'd need extra for ad rights", "that's a separate fee", "usage rights cost more on top"). Only in that specific case, set it to false and write usageRights as "Organic only — no paid ad rights required". Otherwise (not mentioned, or the creator agreed to include them), paidAdsIncluded is true and usageRights should state paid ad rights are included.
 - "upfrontPercent" + "remainderPercent" should sum to 100 when split payment applies.
 - If a field is genuinely unknown, use null (or [] for array fields).
 - Put any extra negotiated terms (whitelisting, exclusivity windows, special timelines) into "additionalTerms" as short strings.`;
@@ -302,6 +331,7 @@ async function extractContractData(creator) {
     instagramUsername: creator.instagram_username || null,
     brandName: base.brandName,
     campaignName: base.campaignName,
+    usageRightsPolicy: creator.usage_rights_policy || 'no_rights',
     agreedFee: fee,
     quotedRate: creator.quoted_rate != null ? Number(creator.quoted_rate) : null,
     acceptedOffer: offer || null,
@@ -391,6 +421,54 @@ async function getByToken(token) {
   return db.one(`SELECT * FROM contracts WHERE token = $1`, [token]);
 }
 
+// ── Usage-rights dispute handling (free_only policy) ──────────────────────
+// A creator on a "free_only" campaign may reply AFTER accepting (contract
+// already generated, ad rights included by default) disputing/objecting to
+// those rights. Detect it, then drop ad rights from their contract.
+const USAGE_DISPUTE_SYSTEM = `You read one inbound message from a creator who has ALREADY accepted a paid collaboration and been sent a contract that includes paid ad/usage rights for the brand. Decide whether this message is the creator objecting to, disputing, or asking to remove those ad/usage rights (e.g. "please remove the ad rights clause", "I didn't agree to paid usage", "we need to renegotiate the usage rights", "can you take that ads section out", "I don't want you using this for paid ads").
+
+Return ONLY a JSON object: {"disputesUsageRights": boolean}
+- true only when the message is clearly about the CONTRACT'S usage/ad rights terms specifically.
+- false for anything else — payment amount, timeline, general questions, thanks, silence, or unrelated topics.`;
+
+async function disputesUsageRights(text) {
+  if (!text || !String(text).trim()) return false;
+  const out = claude.parseJsonLoose(await claude.callClaudeText(USAGE_DISPUTE_SYSTEM, String(text), 200));
+  if (out && typeof out.disputesUsageRights === 'boolean') return out.disputesUsageRights;
+  // Deterministic fallback when Claude is unavailable: both an ad/usage-rights
+  // noun AND an objection/removal verb must appear — conservative on purpose,
+  // a missed dispute just waits for a human to notice on the next reply.
+  const s = String(text).toLowerCase();
+  const mentionsUsageRights = /\b(ad rights?|usage rights?|paid ads?|advertising rights?|whitelisting)\b/.test(s);
+  const objects =
+    /\b(remove|don'?t agree|didn'?t agree|not okay|not ok|object|dispute|take (?:that|it) out|renegotiate|reconsider|withdraw|revoke)\b/.test(
+      s,
+    );
+  return mentionsUsageRights && objects;
+}
+
+// Drop paid-ad-rights from an already-generated contract. Only touches a
+// contract that hasn't been signed yet — amending a signed document is out of
+// scope here (that needs a human; see negotiation.js's delegate() call at the
+// caller). Returns null if there's no contract or it's already signed.
+async function removeUsageRightsFromContract(creatorId) {
+  const existing = await db.one(
+    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+  if (!existing || existing.status !== 'pending') return null;
+  const data = { ...existing.data, ...usageRightsFor('no_rights') };
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_usage_rights_removed', $2)`,
+    [creatorId, { token: existing.token }],
+  );
+  return row;
+}
+
 // Record the creator's signed submission: pending -> signed. Idempotent — a
 // second submit (or an unknown token) returns the current row without re-signing.
 async function recordSubmission(token, { signerName, signerEmail, signerIp, submission } = {}) {
@@ -466,8 +544,11 @@ module.exports = {
   recordSubmission,
   markSynced,
   attachContracts,
+  disputesUsageRights,
+  removeUsageRightsFromContract,
   // exposed for tests / reuse
   resolveOffer,
   agreedFeeFor,
   mergeContractData,
+  usageRightsFor,
 };

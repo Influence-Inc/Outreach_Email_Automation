@@ -88,10 +88,13 @@
 
             <div class="settings-rows">
               <div class="setting-chip">
-                <span class="setting-label">Max CPM ($)</span>
-                <input id="campaign-max-cpm" class="num" type="number" min="0" step="0.01" placeholder="env default" />
-                <button id="save-cpm-btn" class="ghost small" type="button">Save &amp; recalc offers</button>
-                <span id="cpm-status" class="hint"></span>
+                <span class="setting-label" title="Governs whether the generated contract includes paid ad rights, and whether Reply 1 tells the creator none are needed.">Usage Rights</span>
+                <div id="usage-rights-toggle" class="segmented" role="group" aria-label="Usage rights policy">
+                  <button type="button" class="segmented-opt" data-value="no_rights">No rights</button>
+                  <button type="button" class="segmented-opt" data-value="free_only">Okay if free</button>
+                  <button type="button" class="segmented-opt" data-value="required">Rights needed</button>
+                </div>
+                <span id="usage-rights-status" class="hint"></span>
               </div>
               <div class="setting-chip grow">
                 <span class="setting-label" title="UUID from the campaign URL in your Instantly.ai dashboard. This campaign's outreach + follow-up emails are sent from there.">Instantly campaign ID</span>

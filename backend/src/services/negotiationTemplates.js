@@ -83,6 +83,9 @@ We'd love the content to be in your natural style, with {brandName} integrated e
 **Platforms**
 We'd like the content to be posted on Instagram primarily, and cross-posted on TikTok & YouTube Shorts.
 
+**Usage Rights**
+No exclusivity or ad rights are required. The content remains yours, and {brandName} cannot use it for paid ads on their own channels without a separate agreement.
+
 **Timelines**
 We're flexible, but we'd love a steady pace of around {cadence}, with all videos ideally posted by {deadline}.
 
@@ -99,14 +102,26 @@ function stripReferences(body) {
   return body.replace(/\*\*Past content references\*\*\n[^\n]*\n\n/, '');
 }
 
+// Remove the "Usage Rights" block from a filled REPLY 1 body. It states no ad
+// rights are required — only true on a "no_rights" campaign; misleading on a
+// "free_only" or "required" campaign, where it must not be sent at all.
+function stripUsageRights(body) {
+  return body.replace(/\*\*Usage Rights\*\*\n[^\n]*\n\n/, '');
+}
+
 // includeRefs: share the reference accounts (default FALSE — only when the
 // creator explicitly asked to see examples / a portfolio / other creators).
-function reply1(vars, { includeRefs = false } = {}) {
+// includeUsageRights: state that no ad rights are required (default TRUE,
+// matching the "no_rights" campaign default — see contracts.js/negotiation.js
+// usageRightsPolicy). Callers on a "free_only" or "required" campaign must
+// pass false so Reply 1 never promises rights the campaign actually wants.
+function reply1(vars, { includeRefs = false, includeUsageRights = true } = {}) {
   const v = withDefaults(vars);
   // Reply 1 pitches a "2 or more video package"; estimate from 2 videos.
   v.deadline = approxDeadline(2, v.cadence);
   let body = fill(REPLY1_BODY, v);
   if (!includeRefs) body = stripReferences(body);
+  if (!includeUsageRights) body = stripUsageRights(body);
   return { subject: fill(REPLY1_SUBJECT, v), body };
 }
 
@@ -320,6 +335,7 @@ module.exports = {
   contractEmail,
   declineDelay,
   stripReferences,
+  stripUsageRights,
   // Raw template strings (canonical content fed to Claude).
   REPLY1_SUBJECT,
   REPLY1_BODY,

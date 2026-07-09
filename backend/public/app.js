@@ -153,7 +153,8 @@ async function selectCampaign(id) {
   updateDelegateBadge(c.action_count || 0);
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
-  el('campaign-max-cpm').value = c.max_cpm != null ? c.max_cpm : '';
+  setUsageRightsToggle(c.usage_rights_policy || 'no_rights');
+  el('usage-rights-status').textContent = '';
   el('campaign-instantly-id').value = c.instantly_campaign_id || '';
   el('instantly-status').textContent = '';
   await refreshCreators();
@@ -1196,31 +1197,36 @@ el('remove-all-btn').addEventListener('click', async () => {
   }
 });
 
-el('save-cpm-btn').addEventListener('click', async () => {
-  if (!state.selectedCampaignId) return;
-  const raw = el('campaign-max-cpm').value.trim();
-  const status = el('cpm-status');
-  const btn = el('save-cpm-btn');
-  btn.disabled = true;
-  status.textContent = 'Saving…';
-  try {
-    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ max_cpm: raw === '' ? null : Number(raw) }),
-    });
-    status.textContent = 'Recalculating…';
-    const r = await api(
-      `/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}/recalculate-offers`,
-      { method: 'POST' },
-    );
-    status.textContent = `Saved. ${r.updated} creator(s) updated.`;
-    await refreshCampaigns();
-    await refreshCreators();
-  } catch (err) {
-    status.textContent = `Failed: ${err.message}`;
-  } finally {
-    btn.disabled = false;
-  }
+// Usage Rights: a 3-way segmented toggle (no_rights / free_only / required)
+// that PATCHes the campaign the moment a new option is clicked — no separate
+// Save button, matching how a toggle is expected to behave.
+function setUsageRightsToggle(value) {
+  const buttons = document.querySelectorAll('#usage-rights-toggle .segmented-opt');
+  buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.value === value));
+}
+
+document.querySelectorAll('#usage-rights-toggle .segmented-opt').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    if (!state.selectedCampaignId) return;
+    const value = btn.dataset.value;
+    const status = el('usage-rights-status');
+    const buttons = document.querySelectorAll('#usage-rights-toggle .segmented-opt');
+    buttons.forEach((b) => (b.disabled = true));
+    status.textContent = 'Saving…';
+    try {
+      await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ usage_rights_policy: value }),
+      });
+      setUsageRightsToggle(value);
+      status.textContent = 'Saved.';
+      await refreshCampaigns();
+    } catch (err) {
+      status.textContent = `Failed: ${err.message}`;
+    } finally {
+      buttons.forEach((b) => (b.disabled = false));
+    }
+  });
 });
 
 el('save-instantly-btn').addEventListener('click', async () => {

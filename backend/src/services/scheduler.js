@@ -91,6 +91,23 @@ async function pollNegotiations() {
         console.error(`contract backfill failed for creator ${c.id}:`, err.message);
       }
     }
+
+    // 5. Post-acceptance usage-rights disputes: an ACCEPTED creator replied
+    //    again (webhook already wrote latest_inbound_text) but the scheduler
+    //    never looks at ACCEPTED creators otherwise — steps 1-2 only cover
+    //    negotiation_status IS NULL / AWAITING_*. checkAcceptedUsageRightsDispute
+    //    itself no-ops for anything other than a free_only-policy campaign.
+    const acceptedWithReply = await db.many(
+      `SELECT id FROM creators
+       WHERE negotiation_status = 'ACCEPTED' AND latest_inbound_text IS NOT NULL`,
+    );
+    for (const c of acceptedWithReply) {
+      try {
+        await negotiation.checkAcceptedUsageRightsDispute(c.id);
+      } catch (err) {
+        console.error(`usage-rights dispute check failed for creator ${c.id}:`, err.message);
+      }
+    }
   } finally {
     negRunning = false;
   }
