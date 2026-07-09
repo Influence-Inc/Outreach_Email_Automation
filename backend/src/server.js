@@ -53,7 +53,13 @@ app.use('/api/contracts', contractsApi);
 // contract URLs so it can render the "Contract submission" column.
 app.use('/api/bot', bot);
 // Public contract signing page. Registered before the SPA static handler so
-// /contracts/:token serves the contract page, not the dashboard shell.
+// these serve the contract page, not the dashboard shell.
+// - /contract/:token  (singular) is the current default — see contracts.js
+//   contractUrl(). It's also what campaigns.influence.technology proxies
+//   through to (see influence-stats' /contract/:token route).
+// - /contracts/:token (plural) is kept so links already emailed out under the
+//   old path keep working.
+app.get('/contract/:token', contractPage);
 app.get('/contracts/:token', contractPage);
 
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
