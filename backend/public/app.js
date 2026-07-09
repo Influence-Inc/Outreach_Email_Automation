@@ -959,22 +959,43 @@ async function refreshCreators() {
     const handle = document.createElement('div');
     handle.className = 'cr-handle';
     handle.innerHTML = `<a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || r.instagram_url)}</a>`;
-    const nameDiv = document.createElement('div');
-    nameDiv.className = 'cr-name';
-    nameDiv.textContent = r.full_name || r.first_name || '';
     identity.appendChild(handle);
-    identity.appendChild(nameDiv);
+
+    // First name and full name are separate, independently editable fields —
+    // NOT derived from one another. First name is what the outreach and
+    // negotiation emails greet the creator by (used verbatim, spaces and
+    // all — e.g. "Anvith K" stays "Anvith K" in "Hi Anvith K,"), so it needs
+    // its own field rather than being auto-split from whatever's typed into
+    // "full name".
+    const nameFields = [
+      { key: 'first_name', label: 'First', placeholder: 'First name' },
+      { key: 'full_name', label: 'Full', placeholder: 'Full name' },
+    ];
+    for (const { key, label, placeholder } of nameFields) {
+      const row = document.createElement('div');
+      row.className = 'cr-name-row';
+      const tag = document.createElement('span');
+      tag.className = 'cr-name-tag';
+      tag.textContent = label;
+      const valueSpan = document.createElement('span');
+      valueSpan.className = 'cr-name-value' + (r[key] ? '' : ' empty');
+      valueSpan.textContent = r[key] || '';
+      row.appendChild(tag);
+      row.appendChild(valueSpan);
+      identity.appendChild(row);
+      makeEditable(valueSpan, {
+        value: r[key] || '',
+        placeholder,
+        allowEmpty: true, // blanking the cell clears that field only
+        onSave: (v) =>
+          api(`/api/creators/${r.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ [key]: v || null }),
+          }),
+      });
+    }
     creatorCell.appendChild(avatar);
     creatorCell.appendChild(identity);
-    makeEditable(nameDiv, {
-      value: r.full_name || r.first_name || '',
-      placeholder: 'Account name',
-      onSave: (v) =>
-        api(`/api/creators/${r.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ full_name: v, first_name: v.split(/\s+/)[0] }),
-        }),
-    });
 
     // --- Email (editable) ---
     const emailCell = document.createElement('div');

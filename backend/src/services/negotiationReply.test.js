@@ -50,6 +50,31 @@ test('salutationFor falls back to "there" when neither name is known', () => {
   assert.strictEqual(negotiation.salutationFor(null, 'sounds great'), 'there');
 });
 
+// A creator's first_name can be more than one word (e.g. a compound name, a
+// nickname phrase, an admin-typed override) — the greeting must use it
+// VERBATIM, never truncated to its first token.
+test('salutationFor greets a multi-word first_name verbatim when the creator replies themselves', () => {
+  assert.strictEqual(negotiation.salutationFor('Anvith K', 'Sounds great, tell me more!'), 'Anvith K');
+  assert.strictEqual(negotiation.salutationFor('Anvith K', ''), 'Anvith K');
+});
+
+test('salutationFor still recognizes the creator signing with just their first token of a multi-word name', () => {
+  // first_name = "Anvith K", but the creator signs with only "Anvith" — this
+  // must still be read as the SAME person, greeted by the FULL stored name,
+  // not the single-token signature.
+  assert.strictEqual(
+    negotiation.salutationFor('Anvith K', "Sounds great, let's do it!\n- Anvith"),
+    'Anvith K',
+  );
+});
+
+test('salutationFor still detects a distinct sender when the creator has a multi-word first_name', () => {
+  assert.strictEqual(
+    negotiation.salutationFor('Anvith K', "Hi, this is Priya, Anvith's manager. He's interested!"),
+    'Priya',
+  );
+});
+
 test('detectSenderName returns null when there is no clear sender name', () => {
   assert.strictEqual(negotiation.detectSenderName('sounds great, tell me more'), null);
   assert.strictEqual(negotiation.detectSenderName(''), null);
