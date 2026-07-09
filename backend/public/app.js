@@ -315,8 +315,52 @@ function effectiveRate(r) {
   return r.quoted_rate != null ? Number(r.quoted_rate) : null;
 }
 
-// Rate column: the editable agreed/quoted rate (the delivery timeline now lives
-// in the Status column).
+// Deliverables to show under the accepted rate: number of videos, minimum
+// views, deadline, platforms, and usage rights — pulled from the creator's
+// contract (generated the moment they accept; see contracts.js). Returns a
+// short list of compact strings, each rendered as its own line so a narrow
+// column wraps cleanly instead of one long comma-packed line.
+function dealSummaryLines(data) {
+  if (!data) return [];
+  const lines = [];
+
+  const n = data.numberOfVideos != null ? Number(data.numberOfVideos) : null;
+  const minViews = data.minTotalViews != null ? Number(data.minTotalViews) : null;
+  if (n && Number.isFinite(n)) {
+    lines.push(
+      `${n} video${n === 1 ? '' : 's'}` +
+        (minViews && Number.isFinite(minViews) && minViews > 0 ? ` · min ${fmtViews(minViews)} views` : ''),
+    );
+  } else if (minViews && Number.isFinite(minViews) && minViews > 0) {
+    lines.push(`min ${fmtViews(minViews)} views`);
+  }
+
+  if (Array.isArray(data.platforms) && data.platforms.length) {
+    lines.push(data.platforms.join(', '));
+  }
+
+  const deadline = data.postingDeadline || data.deadline;
+  if (deadline) {
+    // Base contract data spells out "Monday, April 20, 2026"; drop the
+    // weekday prefix to keep this line short in a narrow column. Left as-is
+    // if it doesn't match that shape (e.g. a Claude-extracted date string).
+    lines.push(`Due ${String(deadline).replace(/^[A-Za-z]+day,\s*/, '')}`);
+  }
+
+  const usageBits = [];
+  if (data.paidAdsIncluded === true) usageBits.push('Paid ads OK');
+  else if (data.paidAdsIncluded === false) usageBits.push('No paid ads');
+  if (data.exclusivity && !/^(none|no exclusivity)$/i.test(String(data.exclusivity).trim())) {
+    usageBits.push(`Excl: ${data.exclusivity}`);
+  }
+  if (usageBits.length) lines.push(usageBits.join(' · '));
+
+  return lines;
+}
+
+// Rate column ("Deals"): the editable agreed/quoted rate, plus — once the
+// creator has accepted — the deliverables they agreed to (videos, min views,
+// deadline, platforms, usage rights), read from their contract.
 function renderRateCell(r, cell) {
   const rate = effectiveRate(r);
   const valueDiv = document.createElement('div');
@@ -332,6 +376,15 @@ function renderRateCell(r, cell) {
         body: JSON.stringify({ quoted_rate: Number(String(v).replace(/[^0-9.]/g, '')) }),
       }),
   });
+
+  if (r.negotiation_status === 'ACCEPTED' && r.contract && r.contract.data) {
+    for (const line of dealSummaryLines(r.contract.data)) {
+      const lineDiv = document.createElement('div');
+      lineDiv.className = 'deal-line';
+      lineDiv.textContent = line;
+      cell.appendChild(lineDiv);
+    }
+  }
 }
 
 const TRASH_SVG =
