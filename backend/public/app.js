@@ -315,35 +315,38 @@ function effectiveRate(r) {
   return r.quoted_rate != null ? Number(r.quoted_rate) : null;
 }
 
-// Deliverables to show under the accepted rate: number of videos, minimum
-// views, deadline, platforms, and usage rights — pulled from the creator's
+// Deliverables to show under the accepted rate, pulled from the creator's
 // contract (generated the moment they accept; see contracts.js). Returns a
-// short list of compact strings, each rendered as its own line so a narrow
-// column wraps cleanly instead of one long comma-packed line.
-function dealSummaryLines(data) {
+// list of structured items so the caller can render each as a tiny labelled
+// "TAG · value" line (readable at a glance in a narrow column) and the
+// offer-type item as a coloured pill.
+//
+// Item shapes:
+//   { kind: 'badge', text: 'View-based deal' }      // offer type — coloured pill
+//   { kind: 'field', label: 'MIN VIEWS', value: '100K' }
+function dealSummaryItems(data) {
   if (!data) return [];
-  const lines = [];
+  const items = [];
 
-  // Offer type ("View-based deal", "Video-based deal", "Video + bonus deal") —
-  // makes the shape of the accepted deal legible at a glance in the Deals column.
-  if (data.offerLabel) lines.push(data.offerLabel);
+  // Offer type first, as a coloured badge. Makes the shape of the accepted
+  // deal legible at a glance without having to parse the details below.
+  if (data.offerLabel) items.push({ kind: 'badge', text: data.offerLabel });
 
   const isViewBased = data.offerType === 'view_based';
   const n = data.numberOfVideos != null ? Number(data.numberOfVideos) : null;
   const minViews = data.minTotalViews != null ? Number(data.minTotalViews) : null;
-  // View-based deals are priced by guaranteed views (not by video count) — the
-  // "1 video" line is meaningless there and just adds noise.
+
+  // Videos — hidden for view-based deals (priced by guaranteed views, not by a
+  // fixed post count).
   if (!isViewBased && n && Number.isFinite(n)) {
-    lines.push(
-      `${n} video${n === 1 ? '' : 's'}` +
-        (minViews && Number.isFinite(minViews) && minViews > 0 ? ` · min ${fmtViews(minViews)} views` : ''),
-    );
-  } else if (minViews && Number.isFinite(minViews) && minViews > 0) {
-    lines.push(`min ${fmtViews(minViews)} views`);
+    items.push({ label: 'VIDEOS', value: String(n) });
+  }
+  if (minViews && Number.isFinite(minViews) && minViews > 0) {
+    items.push({ label: 'MIN VIEWS', value: fmtViews(minViews) });
   }
 
   if (Array.isArray(data.platforms) && data.platforms.length) {
-    lines.push(data.platforms.join(', '));
+    items.push({ label: 'PLATFORMS', value: data.platforms.join(', ') });
   }
 
   const deadline = data.postingDeadline || data.deadline;
@@ -351,7 +354,7 @@ function dealSummaryLines(data) {
     // Base contract data spells out "Monday, April 20, 2026"; drop the
     // weekday prefix to keep this line short in a narrow column. Left as-is
     // if it doesn't match that shape (e.g. a Claude-extracted date string).
-    lines.push(`Due ${String(deadline).replace(/^[A-Za-z]+day,\s*/, '')}`);
+    items.push({ label: 'DUE', value: String(deadline).replace(/^[A-Za-z]+day,\s*/, '') });
   }
 
   const usageBits = [];
@@ -360,9 +363,9 @@ function dealSummaryLines(data) {
   if (data.exclusivity && !/^(none|no exclusivity)$/i.test(String(data.exclusivity).trim())) {
     usageBits.push(`Excl: ${data.exclusivity}`);
   }
-  if (usageBits.length) lines.push(usageBits.join(' · '));
+  if (usageBits.length) items.push({ label: 'USAGE', value: usageBits.join(' · ') });
 
-  return lines;
+  return items;
 }
 
 // Rate column ("Deals"): the editable agreed/quoted rate, plus — once the
@@ -385,10 +388,24 @@ function renderRateCell(r, cell) {
   });
 
   if (r.negotiation_status === 'ACCEPTED' && r.contract && r.contract.data) {
-    for (const line of dealSummaryLines(r.contract.data)) {
+    for (const item of dealSummaryItems(r.contract.data)) {
+      if (item.kind === 'badge') {
+        const badge = document.createElement('span');
+        badge.className = 'deal-badge';
+        badge.textContent = item.text;
+        cell.appendChild(badge);
+        continue;
+      }
       const lineDiv = document.createElement('div');
       lineDiv.className = 'deal-line';
-      lineDiv.textContent = line;
+      const tag = document.createElement('span');
+      tag.className = 'deal-tag';
+      tag.textContent = item.label;
+      const value = document.createElement('span');
+      value.className = 'deal-val';
+      value.textContent = item.value;
+      lineDiv.appendChild(tag);
+      lineDiv.appendChild(value);
       cell.appendChild(lineDiv);
     }
   }
@@ -786,6 +803,7 @@ function buildOfferConfigurator(r, onRefresh) {
       </div>
       <div class="oc-sendbar-actions">
         <span class="oc-send-status hint"></span>
+        <button class="oc-dismiss ghost small" type="button">Dismiss</button>
         <button class="oc-approve btn-primary" type="button">${approveLabel} →</button>
       </div>
     </div>
@@ -796,6 +814,7 @@ function buildOfferConfigurator(r, onRefresh) {
   };
   const statusEl = root.querySelector('.oc-send-status');
   const approveBtn = root.querySelector('.oc-approve');
+  const dismissBtn = root.querySelector('.oc-dismiss');
   let computed = {};
 
   function recompute() {
@@ -910,7 +929,16 @@ function buildOfferConfigurator(r, onRefresh) {
   }
 
   approveBtn.onclick = async () => {
+    // Belt-and-braces guard: even though we disable the button below, the
+    // browser can still queue the "click" from a rapid double-tap BEFORE the
+    // disabled flag lands. Track a per-click sentinel too, so a queued second
+    // click bails out on entry. Combined with the server-side atomic claim,
+    // this makes a duplicate approve-send-offer literally impossible from one
+    // click.
+    if (approveBtn.dataset.busy === '1') return;
+    approveBtn.dataset.busy = '1';
     approveBtn.disabled = true;
+    dismissBtn.disabled = true;
     statusEl.textContent = 'Approving…';
     const offer = buildCustomOffer();
     try {
@@ -929,8 +957,14 @@ function buildOfferConfigurator(r, onRefresh) {
       if (sr && sr.sent) {
         statusEl.textContent = `✓ ${offer.label} sent.`;
       } else if (sr && sr.error) {
-        statusEl.textContent = `Approved, but sending failed: ${sr.error}`;
-        hold = 4000;
+        // The send may or may not have gone through (network timeout mid-flight
+        // is ambiguous). We deliberately do NOT roll the stage back on the
+        // server, and we deliberately do NOT re-enable Approve here — the admin
+        // must check the mailbox and re-approve manually if needed, to avoid a
+        // duplicate email in the creator's inbox.
+        statusEl.textContent =
+          `Send failed: ${sr.error}. Check the creator's inbox before re-approving to avoid a duplicate.`;
+        hold = 6000;
       } else if (sr && sr.skipped) {
         statusEl.textContent = `Approved, not sent — ${sr.skipped}. Approve again when ready.`;
         hold = 4500;
@@ -939,8 +973,30 @@ function buildOfferConfigurator(r, onRefresh) {
       }
       setTimeout(onRefresh, hold);
     } catch (err) {
+      // Only network-layer failures reach here (the /offer PATCH itself never
+      // hit the server, or hit and got a non-2xx). Re-enable the buttons so
+      // the admin can retry — the server-side atomic claim + this button's
+      // dataset.busy sentinel prevent a duplicate send.
       statusEl.textContent = err.message;
       approveBtn.disabled = false;
+      dismissBtn.disabled = false;
+      approveBtn.dataset.busy = '';
+    }
+  };
+
+  dismissBtn.onclick = async () => {
+    if (!confirm('Dismiss this offer without sending? The creator will be removed from Delegate.')) return;
+    approveBtn.disabled = true;
+    dismissBtn.disabled = true;
+    statusEl.textContent = 'Dismissing…';
+    try {
+      await api(`/api/creators/${r.id}/dismiss-offer`, { method: 'POST' });
+      statusEl.textContent = 'Dismissed.';
+      setTimeout(onRefresh, 800);
+    } catch (err) {
+      statusEl.textContent = `Failed to dismiss: ${err.message}`;
+      approveBtn.disabled = false;
+      dismissBtn.disabled = false;
     }
   };
 

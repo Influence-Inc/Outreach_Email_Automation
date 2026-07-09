@@ -148,6 +148,44 @@ router.post('/:id/contract', async (req, res, next) => {
   }
 });
 
+// Dismiss an awaiting-approval offer without sending it. Clears the pending
+// offer state (offer_approved flag, custom_offer draft) and moves the creator
+// to CLOSED so they drop out of the Delegate window. Distinct from
+// dismiss-delegate (which only clears the AI hand-off flag) — this one exists
+// so the admin can decline / postpone an offer straight from the offer
+// configurator without accidentally firing a send.
+router.post('/:id/dismiss-offer', async (req, res, next) => {
+  try {
+    const row = await db.one(
+      `UPDATE creators
+       SET negotiation_status = 'CLOSED',
+           offer_approved = FALSE,
+           custom_offer = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+         AND negotiation_status IN ('AWAITING_APPROVAL','AWAITING_RATE')
+       RETURNING *`,
+      [req.params.id],
+    );
+    if (!row) {
+      const exists = await db.one(`SELECT id, negotiation_status FROM creators WHERE id = $1`, [req.params.id]);
+      if (!exists) return res.status(404).json({ error: 'not found' });
+      return res.status(409).json({
+        error: `Cannot dismiss — creator is not awaiting an offer (stage: ${
+          exists.negotiation_status ? exists.negotiation_status.replace(/_/g, ' ').toLowerCase() : 'no reply yet'
+        }).`,
+      });
+    }
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'offer_dismissed', $2)`,
+      [req.params.id, { by: 'admin' }],
+    );
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Dismiss a delegated item without sending (clears the flag).
 router.post('/:id/dismiss-delegate', async (req, res, next) => {
   try {
