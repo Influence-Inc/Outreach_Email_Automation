@@ -269,17 +269,23 @@
           <div class="row-2" id="accountNumBlock">
             <div class="field">
               <label class="field-label" for="bankAccount">Account number</label>
-              <input id="bankAccount" type="text" autocomplete="off" />
+              <input id="bankAccount" class="secret" type="password" autocomplete="off"
+                     spellcheck="false" autocapitalize="off"
+                     data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
             </div>
             <div class="field">
               <label class="field-label" for="bankAccountConfirm">Confirm account number</label>
-              <input id="bankAccountConfirm" type="text" autocomplete="off" />
+              <input id="bankAccountConfirm" class="secret" type="password" autocomplete="off"
+                     spellcheck="false" autocapitalize="off"
+                     data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
             </div>
           </div>
 
           <div class="field" id="ibanBlock">
             <label class="field-label" for="bankIban">IBAN</label>
-            <input id="bankIban" type="text" autocomplete="off" />
+            <input id="bankIban" class="secret" type="password" autocomplete="off"
+                   spellcheck="false" autocapitalize="off"
+                   data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
           </div>
 
           <div class="field" id="routingBlock" hidden>

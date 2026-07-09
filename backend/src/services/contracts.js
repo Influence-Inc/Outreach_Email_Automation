@@ -131,8 +131,11 @@ function suggestPostingWindows(n, deadline) {
 // public/contract.html for the layout that consumes each key.
 function baseContractData(creator, fee, offer) {
   const n = numDeliverables(offer);
-  const cadence =
-    process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week';
+  // Cadence describes the rhythm across multiple videos; a single-video deal
+  // has one drop date, not a rhythm, so the contract omits it entirely.
+  const cadence = n <= 1
+    ? null
+    : (process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week');
   const brandName = creator.brand_name || process.env.BRAND_NAME || null;
   const minViews = guaranteedViewsOf(offer);
   const bonus = bonusOf(offer);
@@ -312,7 +315,13 @@ async function extractContractData(creator) {
 
   const out = claude.parseJsonLoose(await claude.callClaudeText(CONTRACT_SYSTEM, user, 1200));
   if (!out || typeof out !== 'object') return base;
-  return mergeContractData(base, out);
+  const merged = mergeContractData(base, out);
+  // Cadence never applies to a single-video deal, no matter what Claude
+  // extracted from the thread — keep it out of the stored contract.
+  if (Number(merged.numberOfDeliverables || merged.numberOfVideos) <= 1) {
+    merged.timeline = null;
+  }
+  return merged;
 }
 
 function isMeaningful(v) {
