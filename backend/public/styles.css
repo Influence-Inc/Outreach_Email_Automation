@@ -538,7 +538,11 @@ button:disabled { opacity: 0.5; cursor: default; }
 .oc-row-total span:first-child {
   font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
 }
-.oc-fee {
+/* .oc-row-total prefix bumps specificity above ".oc-row span" (which also
+   matches this element, being both a class+type selector) so the intended
+   white text isn't silently overridden by the muted gray meant for the other
+   row labels. */
+.oc-row-total .oc-fee {
   display: inline-flex; align-items: center; background: var(--accent); color: #fff;
   padding: 9px 15px; border-radius: 11px; font-size: 20px; font-weight: 700; letter-spacing: -0.01em;
 }
