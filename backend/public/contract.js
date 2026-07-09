@@ -133,16 +133,16 @@
       // even when the upfront/remainder split below is also present.
       row('Payment terms', d.paymentTerms || 'Direct bank transfer upon completion of all agreed deliverables') +
       (upPct && remPct
-        ? row('Payment schedule', upPct + '% upfront (' + (d.upfrontTrigger || 'on first draft') + '), ' + remPct + '% ' + (d.remainderTrigger || 'on completion'))
+        ? row('Payment schedule', upPct + '% upfront, ' + remPct + '% ' + (d.remainderTrigger || 'on completion'))
         : '')
     ));
 
+    // Scope ("non exclusive, royalty free, and worldwide") is an organic-usage
+    // concept — only include it when the contract actually grants organic use.
+    var includesOrganic = /organic/i.test(String(d.usageRights || ''));
     html += section('Usage Rights & Exclusivity', rowsWrap(
       row('Usage rights', d.usageRights) +
-      (Array.isArray(d.usageRightsList) && d.usageRightsList.length
-        ? '<div class="k">Permitted uses</div><div class="v">' + esc(d.usageRightsList.join(', ')) + '</div>'
-        : '') +
-      row('Scope', d.usageScope) +
+      (includesOrganic ? row('Scope', d.usageScope) : '') +
       row('Paid ads', d.paidAdsIncluded ? 'Included' : 'Not included') +
       row('Exclusivity', d.exclusivity) +
       // Standard on every contract — defaults to 6 months, never conditional,
