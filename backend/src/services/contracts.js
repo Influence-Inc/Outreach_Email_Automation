@@ -153,8 +153,9 @@ function baseContractData(creator, fee, offer) {
     brandLegalName: brandName,
     campaignName: creator.campaign_name || null,
 
-    // Deliverables + platforms.
-    platforms: ['Instagram', 'TikTok'],
+    // Deliverables + platforms. Matches what REPLY 1 promises the creator
+    // (Instagram primarily, cross-posted on TikTok & YouTube Shorts).
+    platforms: ['Instagram', 'TikTok', 'YouTube Shorts'],
     deliverables: `${n} short-form video${n === 1 ? '' : 's'}`,
     numberOfDeliverables: n,
     numberOfVideos: n,
@@ -414,12 +415,16 @@ async function markSynced(token, ok, detail = {}) {
 }
 
 // Hang the latest contract summary on each creator row (mirrors attachRateLog in
-// routes/creators.js) so the dashboard Status column can show stage + copy-link.
+// routes/creators.js) so the dashboard Status column can show stage + copy-link,
+// and the Deals column can show the accepted deliverables (videos, min views,
+// deadline, platforms, usage rights) once a contract exists — `data` is only
+// ever generated after the creator accepts (see sendContractOnAcceptance), so
+// its mere presence is already an "accepted" signal for the dashboard.
 async function attachContracts(rows) {
   const ids = (rows || []).map((r) => r.id).filter((x) => x != null);
   if (!ids.length) return rows;
   const contracts = await db.many(
-    `SELECT DISTINCT ON (creator_id) creator_id, token, status
+    `SELECT DISTINCT ON (creator_id) creator_id, token, status, data
      FROM contracts WHERE creator_id = ANY($1::int[])
      ORDER BY creator_id, created_at DESC`,
     [ids],
@@ -427,7 +432,7 @@ async function attachContracts(rows) {
   const byCreator = new Map(contracts.map((c) => [c.creator_id, c]));
   for (const r of rows) {
     const c = byCreator.get(r.id);
-    r.contract = c ? { token: c.token, status: c.status, url: contractUrl(c.token) } : null;
+    r.contract = c ? { token: c.token, status: c.status, url: contractUrl(c.token), data: c.data } : null;
   }
   return rows;
 }

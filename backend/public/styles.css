@@ -331,10 +331,14 @@ button:disabled { opacity: 0.5; cursor: default; }
 .cr-reach .reach-sub { font-size: 12px; color: var(--muted); }
 .cr-reach .empty { font-size: 13px; color: var(--faint-2); }
 
-/* Rate cell */
-.cr-rate { display: flex; align-items: center; font-size: 15px; font-weight: 500; }
+/* Rate cell (Deals column) */
+.cr-rate { display: flex; flex-direction: column; justify-content: center; gap: 3px; font-size: 15px; font-weight: 500; }
 .cr-rate .rate-value { color: var(--green); }
 .cr-rate .rate-value.empty { color: var(--faint-2); }
+/* Deliverables shown once the creator has accepted (videos, min views,
+   deadline, platforms, usage rights) — same size/weight as the Reach
+   column's sub-text so the two columns read consistently. */
+.cr-rate .deal-line { font-size: 12px; color: var(--muted); line-height: 1.35; }
 
 /* Status cell */
 .cr-status { display: flex; flex-direction: column; gap: 12px; position: relative; }
