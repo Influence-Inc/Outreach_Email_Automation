@@ -91,18 +91,26 @@ function detectSenderName(text) {
 }
 
 // The greeting name for our reply: the sender's name when someone clearly
-// replied on the creator's behalf, otherwise the creator's own first name.
-// Guards: the detected name must differ from the creator's, be a single
-// plausible token, and not be a role/brand word.
+// replied on the creator's behalf, otherwise the creator's own first name —
+// used VERBATIM, exactly as stored in the first_name field (including any
+// internal spaces, e.g. "Anvith K" greets "Hi Anvith K,"). Guards: the
+// detected sender name must differ from the creator's, be a single plausible
+// token, and not be a role/brand word.
+//
+// `firstToken()` is used ONLY to compare the detected sender against the
+// creator's own name (a creator signing "- Anvith" should match a first_name
+// of "Anvith K", not be mistaken for someone else) — the returned greeting
+// name is always the full, untruncated first_name.
 const NOT_A_PERSON = new Set([
   'the', 'team', 'hi', 'hello', 'hey', 'manager', 'agent', 'influence', 'thanks',
 ]);
 function salutationFor(creatorFirstName, inboundText) {
-  const creator = firstToken(creatorFirstName);
+  const fullCreatorName = String(creatorFirstName || '').trim() || null;
+  const creatorToken = firstToken(creatorFirstName);
   const sender = detectSenderName(inboundText);
-  if (!sender) return creator || 'there';
-  if (NOT_A_PERSON.has(sender.toLowerCase())) return creator || 'there';
-  if (creator && sender.toLowerCase() === creator.toLowerCase()) return creator;
+  if (!sender) return fullCreatorName || 'there';
+  if (NOT_A_PERSON.has(sender.toLowerCase())) return fullCreatorName || 'there';
+  if (creatorToken && sender.toLowerCase() === creatorToken.toLowerCase()) return fullCreatorName;
   return sender; // someone else is writing on the creator's behalf
 }
 
