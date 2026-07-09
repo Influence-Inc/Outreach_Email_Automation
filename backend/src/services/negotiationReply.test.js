@@ -144,6 +144,37 @@ test('reply1 includes the references section (with links) when asked', () => {
   );
 });
 
+// ── Usage Rights section (campaign usage_rights_policy) ────────────────────
+
+test('reply1 includes the Usage Rights section by default (no_rights policy)', () => {
+  const { body } = templates.reply1({ firstName: 'Dua', brandName: 'Acme' });
+  assert.ok(body.includes('**Usage Rights**'), 'usage rights block present by default');
+  assert.ok(
+    body.includes('No exclusivity or ad rights are required'),
+    'states no ad rights required',
+  );
+  assert.ok(body.includes('Acme cannot use it for paid ads'), 'names the brand');
+});
+
+test('reply1 omits the Usage Rights section when includeUsageRights is false (free_only / required policy)', () => {
+  const { body } = templates.reply1(
+    { firstName: 'Dua', brandName: 'Acme' },
+    { includeUsageRights: false },
+  );
+  assert.ok(!body.includes('**Usage Rights**'), 'no usage rights header');
+  assert.ok(!body.includes('No exclusivity or ad rights are required'), 'no disclaimer leaks in');
+});
+
+test('reply1 keeps other sections intact when Usage Rights is stripped', () => {
+  const { body } = templates.reply1(
+    { firstName: 'Dua', brandName: 'Acme' },
+    { includeUsageRights: false },
+  );
+  for (const h of ['**Content Style**', '**Deliverables & Rates**', '**Platforms**', '**Timelines**']) {
+    assert.ok(body.includes(h), `expected bold header ${h} to survive stripping Usage Rights`);
+  }
+});
+
 // ── 3. Formatting: bold headers, sender salutation ──────────────────────────
 
 test('reply1 bolds the section headers', () => {

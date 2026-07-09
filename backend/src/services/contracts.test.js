@@ -149,3 +149,93 @@ test('contractEmail carries the signing link and the expected copy', () => {
   assert.match(body, /content brief/i);
   assert.match(body, /Jennifer/);
 });
+
+// ── Usage rights policy (campaigns.usage_rights_policy) ─────────────────────
+
+test('usageRightsFor: no_rights (default) excludes paid ad rights', () => {
+  const r = contracts.usageRightsFor('no_rights');
+  assert.strictEqual(r.paidAdsIncluded, false);
+  assert.match(r.usageRights, /no paid ad rights required/i);
+});
+
+test('usageRightsFor: required always includes paid ad rights', () => {
+  const r = contracts.usageRightsFor('required');
+  assert.strictEqual(r.paidAdsIncluded, true);
+  assert.match(r.usageRights, /included/i);
+});
+
+test('usageRightsFor: free_only defaults to included (Claude flips it off when negotiated away)', () => {
+  const r = contracts.usageRightsFor('free_only');
+  assert.strictEqual(r.paidAdsIncluded, true);
+  assert.match(r.usageRights, /included/i);
+});
+
+test('usageRightsFor: unset/unknown policy falls back to no_rights (preserves pre-existing behavior)', () => {
+  assert.strictEqual(contracts.usageRightsFor(undefined).paidAdsIncluded, false);
+  assert.strictEqual(contracts.usageRightsFor(null).paidAdsIncluded, false);
+  assert.strictEqual(contracts.usageRightsFor('something_else').paidAdsIncluded, false);
+});
+
+test('baseContractData wires the campaign usage_rights_policy through', () => {
+  const offer = { num_videos: 2 };
+  const noRights = contracts.baseContractData(
+    { full_name: 'Alex', usage_rights_policy: 'no_rights' },
+    500,
+    offer,
+  );
+  const freeOnly = contracts.baseContractData(
+    { full_name: 'Alex', usage_rights_policy: 'free_only' },
+    500,
+    offer,
+  );
+  const required = contracts.baseContractData(
+    { full_name: 'Alex', usage_rights_policy: 'required' },
+    500,
+    offer,
+  );
+  assert.strictEqual(noRights.paidAdsIncluded, false);
+  assert.strictEqual(freeOnly.paidAdsIncluded, true);
+  assert.strictEqual(required.paidAdsIncluded, true);
+});
+
+// ── Usage-rights dispute detection (free_only policy, post-acceptance) ──────
+// No ANTHROPIC_API_KEY is set in the test environment, so disputesUsageRights
+// exercises its deterministic keyword fallback here — the same path a
+// production deployment falls back to on any Claude error.
+
+test('disputesUsageRights: empty/blank text never disputes', async () => {
+  assert.strictEqual(await contracts.disputesUsageRights(''), false);
+  assert.strictEqual(await contracts.disputesUsageRights(null), false);
+  assert.strictEqual(await contracts.disputesUsageRights('   '), false);
+});
+
+test('disputesUsageRights: clear objection to ad rights is detected', async () => {
+  const cases = [
+    'Please remove the ad rights clause from the contract, I did not agree to that.',
+    "I don't agree to the usage rights section, can you take that out?",
+    'Actually I want to dispute the paid ads rights in this contract.',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(await contracts.disputesUsageRights(text), true, `should dispute: "${text}"`);
+  }
+});
+
+test('disputesUsageRights: unrelated messages are not disputes', async () => {
+  const cases = [
+    'Thanks so much, excited to get started!',
+    'When will the payment go through?',
+    'Can we push the deadline by a week?',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(await contracts.disputesUsageRights(text), false, `should NOT dispute: "${text}"`);
+  }
+});
+
+test('removeUsageRightsFromContract exports usageRightsFor(no_rights) shape for reuse', () => {
+  // Smoke-check the shared shape rather than the DB write (covered by the
+  // end-to-end Postgres verification) — confirms the "removed" state matches
+  // the same no_rights defaults every other path uses.
+  const removed = contracts.usageRightsFor('no_rights');
+  assert.strictEqual(removed.paidAdsIncluded, false);
+  assert.match(removed.usageRights, /no paid ad rights required/i);
+});

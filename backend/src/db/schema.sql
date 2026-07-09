@@ -233,3 +233,17 @@ CREATE TABLE IF NOT EXISTS contracts (
 );
 CREATE INDEX IF NOT EXISTS idx_contracts_creator_id ON contracts(creator_id);
 CREATE INDEX IF NOT EXISTS idx_contracts_status ON contracts(status);
+
+-- Per-campaign usage-rights policy, replacing the old per-campaign Max CPM
+-- dashboard control. Governs whether the generated contract includes paid ad
+-- rights, and whether Reply 1 tells the creator no ad rights are needed.
+-- Validated at the application layer (routes/campaigns.js), not here, to keep
+-- the enum easy to extend without a migration.
+--   no_rights  — ad rights never requested; Reply 1 states none are required
+--                (this is the pre-existing default behavior for every campaign)
+--   free_only  — ad rights included in the contract unless the creator asks
+--                for separate payment for them (see contracts.js); dropped
+--                automatically if the creator disputes usage rights after the
+--                contract is sent (see negotiation.js)
+--   required   — ad rights are always included in the contract
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS usage_rights_policy TEXT NOT NULL DEFAULT 'no_rights';

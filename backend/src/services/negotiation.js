@@ -152,7 +152,7 @@ function askedForReferences(text) {
 // ── Context ───────────────────────────────────────────────────────────────
 async function loadCreator(creatorId) {
   return db.one(
-    `SELECT c.*, ca.brand_name, ca.name AS campaign_name, ca.max_cpm
+    `SELECT c.*, ca.brand_name, ca.name AS campaign_name, ca.max_cpm, ca.usage_rights_policy
      FROM creators c JOIN campaigns ca ON ca.id = c.campaign_id
      WHERE c.id = $1`,
     [creatorId],
@@ -172,9 +172,18 @@ function ctxFor(creator, extra = {}) {
     hasStats: creator.ig_scraped_data != null,
     approvedOffer: extra.approvedOffer || null,
     guidelines: extra.guidelines || '',
+    // Governs the Usage Rights section in Reply 1 (see negotiationTemplates.js
+    // reply1()) and paid-ad-rights inclusion in the generated contract (see
+    // contracts.js). Defaults to 'no_rights' — the pre-existing behavior.
+    usageRightsPolicy: creator.usage_rights_policy || 'no_rights',
     ...extra,
   };
 }
+
+// Reply 1 should only claim "no ad rights required" when that's actually true
+// for the campaign — i.e. the "no_rights" policy. "free_only" and "required"
+// both want ad rights (conditionally or always), so the section is dropped.
+const includeUsageRightsFor = (ctx) => ctx.usageRightsPolicy === 'no_rights';
 
 // Formatting instruction shared by every Claude email-writing prompt (reply +
 // offer). The delivery layer (instantly.renderMarkdown) turns this markdown
@@ -250,6 +259,9 @@ async function handleCreatorReply(creator, replyText, ctx) {
     ctx.includeRefs
       ? 'The sender asked to see examples of past work, so you MAY include the reference accounts.'
       : 'The sender did NOT ask for references — do NOT include the reference accounts or a "Past content references" section in this reply.',
+    includeUsageRightsFor(ctx)
+      ? 'This campaign does not need paid ad rights — when you adapt REPLY 1, keep the "Usage Rights" section stating none are required.'
+      : 'This campaign DOES want paid ad rights (conditionally or always) — when you adapt REPLY 1, DROP the "Usage Rights" section entirely. Never tell the creator that no ad rights are required.',
     '',
     `Current stage: ${describeStage(ctx.stage)}`,
     ctx.hasStats
@@ -401,7 +413,7 @@ function heuristicReply(text, ctx) {
     understanding: '(heuristic) creator interested, no rate yet',
     action: 'asking_details',
     quoted_rate: null,
-    email: templates.reply1(v, { includeRefs: ctx.includeRefs }),
+    email: templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx) }),
     send_now: true,
   };
 }
@@ -815,6 +827,40 @@ async function ensureContractSent(creatorId) {
   return { ok: true };
 }
 
+// Post-acceptance usage-rights dispute check (scheduler-callable, free_only
+// policy only — see contracts.js usageRightsFor). A creator who already
+// accepted may reply again disputing the ad-rights clause in the contract
+// they were sent. When detected: drop ad rights from their stored, not-yet-
+// signed contract, and hand off to a human — usage-rights conversations
+// always go through a person for the reply itself (same posture as the
+// general "escalate" rule for usage-rights asks during negotiation).
+async function checkAcceptedUsageRightsDispute(creatorId) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) return { skipped: 'no creator' };
+  if (creator.usage_rights_policy !== 'free_only') return { skipped: 'policy' };
+  const inbound = creator.latest_inbound_text;
+  if (!inbound) return { skipped: 'no inbound text' };
+
+  const disputed = await contracts.disputesUsageRights(inbound);
+  // Consume the text regardless of outcome — mirrors processReply's
+  // markHandled so an unrelated ACCEPTED-stage reply isn't re-classified by
+  // Claude on every scheduler tick forever.
+  await db.query(
+    `UPDATE creators SET latest_inbound_text = NULL, updated_at = NOW()
+     WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $2`,
+    [creator.id, inbound],
+  );
+  if (!disputed) return { disputed: false };
+
+  const updated = await contracts.removeUsageRightsFromContract(creator.id);
+  await delegate(
+    creator,
+    { text: inbound },
+    'Creator disputed usage rights after accepting — ad rights have been removed from their (unsigned) contract; a human should confirm with them.',
+  );
+  return { disputed: true, contractUpdated: !!updated };
+}
+
 async function applyReply(creator, ctx, result) {
   const v = templateVars(ctx);
   switch (result.action) {
@@ -885,7 +931,7 @@ async function applyReply(creator, ctx, result) {
       // "what rate would work for you?" reply, move to AWAITING_RATE so the
       // dashboard shows we're waiting on their counter, and log the request
       // on the rate timeline so the admin sees the negotiation re-opened.
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx) });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, 'request_counter_rate');
       }
@@ -904,7 +950,7 @@ async function applyReply(creator, ctx, result) {
       // Claude wrote, and PRESERVE the existing negotiation stage — asking a
       // clarifying question shouldn't regress AWAITING_DECISION back to
       // AWAITING_RATE. Only set AWAITING_RATE if there's no stage yet.
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx) });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, 'reply_qa');
       }
@@ -923,7 +969,7 @@ async function applyReply(creator, ctx, result) {
     }
     default: {
       // asking_details / other
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs });
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx) });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, result.action === 'other' ? 'reply' : 'reply1');
       }
@@ -1083,6 +1129,7 @@ module.exports = {
   sendApprovedOffer,
   sendDelegateReply,
   ensureContractSent,
+  checkAcceptedUsageRightsDispute,
   runNegotiationFollowup,
   resolveApprovedOffer,
   aiRepliesEnabledForCreator,

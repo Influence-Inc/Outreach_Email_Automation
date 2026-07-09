@@ -5,11 +5,13 @@ const { computeOffers } = require('../services/pricing');
 
 const router = express.Router();
 
+const USAGE_RIGHTS_POLICIES = ['no_rights', 'free_only', 'required'];
+
 router.get('/', async (_req, res, next) => {
   try {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
-              c.template_id, c.max_cpm, c.instantly_campaign_id,
+              c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
               COUNT(cr.id)::int AS creator_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'pending_extraction')::int AS pending_extraction_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
@@ -48,15 +50,19 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Update campaign settings: template_id, max_cpm and/or instantly_campaign_id.
+// Update campaign settings: template_id, max_cpm, instantly_campaign_id
+// and/or usage_rights_policy.
 router.patch('/:id', async (req, res, next) => {
   try {
     const body = req.body || {};
     const hasTemplate = Object.prototype.hasOwnProperty.call(body, 'template_id');
     const hasMaxCpm = Object.prototype.hasOwnProperty.call(body, 'max_cpm');
     const hasInstantly = Object.prototype.hasOwnProperty.call(body, 'instantly_campaign_id');
-    if (!hasTemplate && !hasMaxCpm && !hasInstantly) {
-      return res.status(400).json({ error: 'template_id, max_cpm or instantly_campaign_id is required' });
+    const hasUsageRights = Object.prototype.hasOwnProperty.call(body, 'usage_rights_policy');
+    if (!hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights) {
+      return res.status(400).json({
+        error: 'template_id, max_cpm, instantly_campaign_id or usage_rights_policy is required',
+      });
     }
 
     const sets = [];
@@ -88,6 +94,17 @@ router.patch('/:id', async (req, res, next) => {
       const id = raw === null || raw === undefined ? null : String(raw).trim() || null;
       params.push(id);
       sets.push(`instantly_campaign_id = $${params.length}`);
+    }
+
+    if (hasUsageRights) {
+      const policy = body.usage_rights_policy;
+      if (!USAGE_RIGHTS_POLICIES.includes(policy)) {
+        return res.status(400).json({
+          error: `usage_rights_policy must be one of: ${USAGE_RIGHTS_POLICIES.join(', ')}`,
+        });
+      }
+      params.push(policy);
+      sets.push(`usage_rights_policy = $${params.length}`);
     }
 
     const row = await db.one(
