@@ -226,14 +226,18 @@
   // Rendered as type=password so characters are masked. We additionally block
   // copy / cut / drag / right-click so the entered value can't be lifted back
   // out of the field even if it's still selected — the creator types their
-  // details, we accept them, and they stay hidden.
+  // details, we accept them, and they stay hidden. Pasting is blocked too so
+  // the account number / IBAN must be typed (and the confirm field can't just
+  // be pasted to match).
   function lockSecretFields() {
     var nodes = document.querySelectorAll('input.secret');
     for (var i = 0; i < nodes.length; i += 1) {
       var el = nodes[i];
       el.addEventListener('copy', function (e) { e.preventDefault(); });
       el.addEventListener('cut', function (e) { e.preventDefault(); });
+      el.addEventListener('paste', function (e) { e.preventDefault(); });
       el.addEventListener('dragstart', function (e) { e.preventDefault(); });
+      el.addEventListener('drop', function (e) { e.preventDefault(); });
       el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     }
   }
