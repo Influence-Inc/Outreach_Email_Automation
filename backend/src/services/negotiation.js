@@ -106,13 +106,39 @@ function salutationFor(creatorFirstName, inboundText) {
   return sender; // someone else is writing on the creator's behalf
 }
 
-// Did the sender ask to see references / a portfolio / other creators? We only
-// share reference accounts on an explicit ask.
+// Did the sender explicitly ask to see references / a portfolio / other
+// creators we've worked with? We only share reference accounts on a clear ask.
+//
+// Conservative by design: several of the previous alternatives were bare
+// words with no surrounding context — bare "reference" (matches "she
+// referenced your work"), bare "other creators" (matches "I've worked with
+// other creators before, this looks fun!"), bare "showcase" (matches "I love
+// to showcase brands I use"), and "samples of X" for ANY X (matches "here's a
+// sample of what I usually charge"). Those false-positive triggers leaked the
+// reference list into replies that never asked for it. Every pattern here
+// requires the noun to be tied to OUR past work/portfolio, not just present
+// anywhere in the message — biasing toward a missed ask (references stay
+// hidden, the safe default) over a false trigger.
 function askedForReferences(text) {
   if (!text) return false;
-  return /\b(reference|portfolio|examples?\s+(of\s+)?(your|past|previous|prior)\s+(work|content|collab|campaign)|past\s+work|previous\s+work|other\s+creators?|case\s+stud(y|ies)|who\s+(have|'?ve)\s+you\s+worked\s+with|brands?\s+you\s+(have|'?ve)?\s*worked\s+with|samples?\s+of|showcase|any\s+work\s+you)/i.test(
-    String(text),
-  );
+  const s = String(text);
+  const workNoun = '(?:past|previous|prior)?\\s*(?:work|content|collabs?|campaigns?)';
+  const patterns = [
+    /\bportfolio\b/i,
+    /\bcase\s+stud(?:y|ies)\b/i,
+    /\b(?:any|some|got)\s+references?\b/i,
+    /\breferences?\s+(?:you\s+can\s+)?(?:share|send|provide)\b/i,
+    new RegExp(`\\bexamples?\\s+of\\s+(?:your\\s+)?${workNoun}\\b`, 'i'),
+    new RegExp(`\\bsamples?\\s+of\\s+(?:your\\s+)?${workNoun}\\b`, 'i'),
+    new RegExp(`\\bshowcase\\s+of\\s+(?:your\\s+)?${workNoun}\\b`, 'i'),
+    /\b(?:see|share|send)\s+(?:some\s+|any\s+)?(?:examples?|references?)\b/i,
+    // "have you worked with" / "who have you worked with" / "you've worked
+    // with" / "brands you've worked with" — the "you" requirement is what
+    // excludes the creator describing THEIR OWN history ("I've worked with
+    // other creators", "we've worked with brands before").
+    /\b(?:have\s+you|you(?:'?ve|\s+have))\s+(?:worked|partnered|collaborated)\s+with\b/i,
+  ];
+  return patterns.some((re) => re.test(s));
 }
 
 // ── Context ───────────────────────────────────────────────────────────────
