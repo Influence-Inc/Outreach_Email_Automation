@@ -100,11 +100,15 @@
 
     var platforms = pills(Array.isArray(d.platforms) ? d.platforms : (d.platforms ? [d.platforms] : []));
     var minViews = d.minTotalViews != null ? d.minTotalViews : d.guaranteedViews;
+    // View-based deals are priced by a guaranteed view total, not by a fixed
+    // video count — showing "Number of deliverables" there is misleading
+    // (it's just "at least 1 post"), so omit it entirely for view_based.
+    var isViewBased = d.offerType === 'view_based';
     html += section('Campaign & Deliverables', rowsWrap(
       row('Campaign', d.campaignName) +
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
       row('Deliverables', d.deliverables) +
-      row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos)) +
+      (isViewBased ? '' : row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos))) +
       (minViews ? row('Min. guaranteed views', fmtNum(minViews)) : '') +
       (d.bonusAmount && d.bonusThresholdViews
         ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
