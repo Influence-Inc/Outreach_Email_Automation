@@ -324,9 +324,16 @@ function dealSummaryLines(data) {
   if (!data) return [];
   const lines = [];
 
+  // Offer type ("View-based deal", "Video-based deal", "Video + bonus deal") —
+  // makes the shape of the accepted deal legible at a glance in the Deals column.
+  if (data.offerLabel) lines.push(data.offerLabel);
+
+  const isViewBased = data.offerType === 'view_based';
   const n = data.numberOfVideos != null ? Number(data.numberOfVideos) : null;
   const minViews = data.minTotalViews != null ? Number(data.minTotalViews) : null;
-  if (n && Number.isFinite(n)) {
+  // View-based deals are priced by guaranteed views (not by video count) — the
+  // "1 video" line is meaningless there and just adds noise.
+  if (!isViewBased && n && Number.isFinite(n)) {
     lines.push(
       `${n} video${n === 1 ? '' : 's'}` +
         (minViews && Number.isFinite(minViews) && minViews > 0 ? ` · min ${fmtViews(minViews)} views` : ''),
@@ -979,7 +986,10 @@ async function refreshCreators() {
       tag.textContent = label;
       const valueSpan = document.createElement('span');
       valueSpan.className = 'cr-name-value' + (r[key] ? '' : ' empty');
-      valueSpan.textContent = r[key] || '';
+      // Empty needs a visible placeholder ("—") so the span has a click target;
+      // an empty span collapses to zero width and can't be clicked open. Matches
+      // the email cell's empty-state pattern.
+      valueSpan.textContent = r[key] || '—';
       row.appendChild(tag);
       row.appendChild(valueSpan);
       identity.appendChild(row);

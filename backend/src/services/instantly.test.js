@@ -3,7 +3,7 @@
 // Run with: npm test  (node --test)
 const test = require('node:test');
 const assert = require('node:assert');
-const { renderMarkdown, stripMarkdown } = require('./instantly');
+const { renderMarkdown, stripMarkdown, replyToEmail } = require('./instantly');
 
 // ── renderMarkdown ─────────────────────────────────────────────────────────
 
@@ -85,4 +85,83 @@ test('stripMarkdown leaves bare URLs untouched (they render fine in text)', () =
     stripMarkdown('Details at https://influence.co/collab today.'),
     'Details at https://influence.co/collab today.',
   );
+});
+
+// ── replyToEmail retry policy (regression guard) ───────────────────────────
+// The reported production bug: the "Approve & send offer" click showed
+// "aborted / failed" in the UI but the creator received 2-3 duplicate emails.
+// Root cause: request() retried POST /emails/reply on AbortError / TypeError,
+// which are AMBIGUOUS outcomes (the server may have accepted and sent the
+// email — we just missed the response). replyToEmail now passes sendOnce:true
+// so those ambiguous errors are fatal after the first attempt. Explicit
+// server-side rejections (5xx / 429) are still retried because the server
+// confirmed it did NOT process the request.
+
+async function withStubbedFetch(fn, stub) {
+  const original = globalThis.fetch;
+  const originalKey = process.env.INSTANTLY_API_KEY;
+  process.env.INSTANTLY_API_KEY = 'test-key';
+  globalThis.fetch = stub;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = original;
+    if (originalKey === undefined) delete process.env.INSTANTLY_API_KEY;
+    else process.env.INSTANTLY_API_KEY = originalKey;
+  }
+}
+
+test('replyToEmail does NOT retry on AbortError — one attempt only (prevents duplicate sends)', async () => {
+  let calls = 0;
+  await withStubbedFetch(
+    async () => {
+      await assert.rejects(
+        replyToEmail({ replyToUuid: 'u', eaccount: 'a@b.co', subject: 's', body: 'b' }),
+        /aborted|AbortError/i,
+      );
+    },
+    async () => {
+      calls += 1;
+      const err = new Error('The operation was aborted');
+      err.name = 'AbortError';
+      throw err;
+    },
+  );
+  assert.strictEqual(calls, 1, 'timed-out send must NOT retry — the server may have already sent it');
+});
+
+test('replyToEmail does NOT retry on TypeError (network drop) — one attempt only', async () => {
+  let calls = 0;
+  await withStubbedFetch(
+    async () => {
+      await assert.rejects(
+        replyToEmail({ replyToUuid: 'u', eaccount: 'a@b.co', subject: 's', body: 'b' }),
+        /fetch failed/i,
+      );
+    },
+    async () => {
+      calls += 1;
+      const err = new TypeError('fetch failed');
+      throw err;
+    },
+  );
+  assert.strictEqual(calls, 1, 'network-error send must NOT retry — ambiguous outcome');
+});
+
+test('replyToEmail DOES retry on explicit 5xx — server confirmed no-op, safe to resend', async () => {
+  let calls = 0;
+  await withStubbedFetch(
+    async () => {
+      const res = await replyToEmail({ replyToUuid: 'u', eaccount: 'a@b.co', subject: 's', body: 'b' });
+      assert.deepStrictEqual(res, { ok: true });
+    },
+    async () => {
+      calls += 1;
+      if (calls < 2) {
+        return { status: 503, ok: false, text: async () => 'busy', json: async () => ({}) };
+      }
+      return { status: 200, ok: true, text: async () => '', json: async () => ({ ok: true }) };
+    },
+  );
+  assert.strictEqual(calls, 2, '5xx retry is safe — server said it did NOT process the request');
 });

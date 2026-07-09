@@ -13,7 +13,15 @@ const MAX_ATTEMPTS = 3;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function request(method, path, body) {
+// `sendOnce` — when true, treat this as a non-idempotent send: a timeout or
+// network error (AbortError / TypeError) is AMBIGUOUS (the server may have
+// already processed the request and sent the email), so we do NOT retry. We
+// still retry on explicit 5xx / 429 because those confirm the server rejected
+// the request, so re-sending is safe. Used by /emails/reply to prevent the
+// same offer email going out multiple times when the first POST times out
+// mid-flight — the exact "showed aborted and failed but 2-3 emails arrived"
+// symptom we saw in the dashboard.
+async function request(method, path, body, { sendOnce = false } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const ctrl = new AbortController();
@@ -42,8 +50,13 @@ async function request(method, path, body) {
       return res.json();
     } catch (err) {
       lastErr = err;
-      // AbortError (timeout) and network errors are retryable; explicit 4xx is not.
-      const retryable = err.retryable || err.name === 'AbortError' || err.name === 'TypeError';
+      // Server-signalled retryables (5xx / 429) are always safe to retry — the
+      // server confirmed it did NOT process the request. AbortError / TypeError
+      // are ambiguous: the server may have processed it and we just missed the
+      // response. For non-idempotent sends (`sendOnce`), treat those as fatal
+      // — one attempt only — to avoid double-sending an offer email.
+      const ambiguous = err.name === 'AbortError' || err.name === 'TypeError';
+      const retryable = err.retryable || (!sendOnce && ambiguous);
       if (!retryable || attempt === MAX_ATTEMPTS) throw err;
       await sleep(2 ** attempt * 1000); // 2s, 4s
     } finally {
@@ -121,6 +134,11 @@ async function addLeadToCampaign({ email, firstName, campaignId, companyName }) 
 // correct thread; eaccount is the connected sending mailbox to reply FROM
 // (Instantly requires it — it's the email_account from the reply webhook).
 async function replyToEmail({ replyToUuid, eaccount, subject, body }) {
+  // `sendOnce`: sending an email isn't idempotent — a timeout after the server
+  // has already accepted the request produces a real duplicate email in the
+  // creator's inbox. Retrying on timeout/network is what caused the "showed
+  // aborted, still got 3 emails" bug. We only retry on explicit server-side
+  // rejections (5xx / 429), which are safe.
   return request('POST', '/emails/reply', {
     reply_to_uuid: replyToUuid,
     eaccount,
@@ -128,7 +146,7 @@ async function replyToEmail({ replyToUuid, eaccount, subject, body }) {
     // text = markdown-stripped so text-only clients see clean prose;
     // html = markdown-rendered so bold and links land as formatting.
     body: { text: stripMarkdown(body), html: renderMarkdown(body) },
-  });
+  }, { sendOnce: true });
 }
 
 // One page of mailbox emails (sent + received) from the Instantly unibox —

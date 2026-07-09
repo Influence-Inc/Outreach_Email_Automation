@@ -157,6 +157,12 @@ function baseContractData(creator, fee, offer) {
     brandLegalName: brandName,
     campaignName: creator.campaign_name || null,
 
+    // Offer shape — used by the dashboard Deals column and the contract page
+    // to hide video-count fields on view-based deals (there's no "N videos"
+    // to talk about — it's pay-per-guaranteed-view).
+    offerType: (offer && offer.offer_type) || null,
+    offerLabel: (offer && offer.label) || null,
+
     // Deliverables + platforms. Matches what REPLY 1 promises the creator
     // (Instagram primarily, cross-posted on TikTok & YouTube Shorts).
     platforms: ['Instagram', 'TikTok', 'YouTube Shorts'],
