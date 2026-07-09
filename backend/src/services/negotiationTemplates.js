@@ -154,12 +154,16 @@ function describeOffer(offer, brandName) {
   if (!offer) return '';
   if (offer.offer_type === 'view_based') {
     const views = Number(offer.view_guarantee || 0);
+    // View-based deals are priced by TOTAL guaranteed views — the creator
+    // decides how many posts to publish to reach that view total. So the copy
+    // must never name a specific video count. Any language like "the first
+    // video", "further videos", "N-video package" is misleading here (it makes
+    // the deal sound video-count-bounded when it isn't).
     return (
       `We usually do performance-based deals with all our creators. We'd love to propose a view-based offer:\n\n` +
       `**View-Based Offer ($${fmtMoney(offer.flat_fee)})**\n` +
       `- $${fmtMoney(offer.flat_fee)} for a minimum of ${fmtNum(views)} combined total views on Instagram.\n` +
-      `- Views can come from a single video or multiple posts — combined total views will be counted. ` +
-      `So if the first video ends up crossing ${fmtNum(views * 2)} views, you don't have to upload further videos!\n` +
+      `- Views are counted across all your posts for this collab — publish as many or as few as you'd like to hit the guaranteed view total.\n` +
       `- Views counted for 7 days from each post's publish date.\n` +
       `- Full creative freedom, so you can create engaging content around ${brandName} without it feeling like an ad!\n` +
       `- You can commit to fewer views if you'd like, or higher views with payment adjusted accordingly.\n` +
@@ -197,17 +201,50 @@ function describeOffer(offer, brandName) {
   );
 }
 
+// REPLY 1 with the "Deliverables & Rates" block rewritten for a view-based
+// offer — no "2 or more video package" language, since the deal is priced by
+// total guaranteed views, not video count. Used only in combine mode when
+// the approved offer is view_based.
+const REPLY1_BODY_VIEW_BASED = `Hi {salutation},
+
+So great to hear from you! Here are all the details:
+
+**Content Style**
+We'd love the content to be in your natural style, with {brandName} integrated effortlessly. Nothing overly promotional. Full creative freedom on your end.
+
+**Deliverables & Rates**
+- We usually do view-based deals — you commit to a total guaranteed view count across the campaign, and post as many or as few pieces as you'd like to hit it.
+- We're keen on exploring a long-term retainer deal. This first collab acts as a test run, and if things go well, this could turn into a recurring monthly collaboration!
+- Additionally, through INFLUENCE, we aim to bring you consistent deal flow from other brands we work with.
+
+**Platforms**
+We'd like the content to be posted on Instagram primarily, and cross-posted on TikTok & YouTube Shorts.
+
+**Timelines**
+We're flexible on pacing — you decide how many posts you want to publish to reach the guaranteed view total, ideally all live by {deadline}.
+
+**Past content references**
+{refs}
+
+If everything sounds good, please let me know your rates :)
+
+- {managerName}`;
+
 // Deterministic single-offer email built from the approved offer. When
 // `combine` is true (rate arrived in the creator's first reply), prepend the
 // Reply 1 details so the one email covers both.
 function offerEmail(offer, vars, { combine = false } = {}) {
   const v = withDefaults(vars);
-  const videos = offer && offer.offer_type !== 'view_based' ? Number(offer.num_videos || 2) : 2;
+  const isViewBased = offer && offer.offer_type === 'view_based';
+  const videos = !isViewBased ? Number(offer.num_videos || 2) : 2;
   v.deadline = approxDeadline(videos, v.cadence);
   // Combine mode reuses REPLY 1's details but never the references block — an
-  // offer email is not the place to introduce a portfolio unprompted.
+  // offer email is not the place to introduce a portfolio unprompted. For a
+  // view-based approved offer, use the view-based REPLY 1 variant so no
+  // "N-video package" language leaks into the combined lead.
+  const reply1Body = isViewBased ? REPLY1_BODY_VIEW_BASED : REPLY1_BODY;
   const lead = combine
-    ? stripReferences(fill(REPLY1_BODY, v)).replace(/\n\nIf everything sounds good[\s\S]*$/, '\n')
+    ? stripReferences(fill(reply1Body, v)).replace(/\n\nIf everything sounds good[\s\S]*$/, '\n')
     : `Hi ${v.salutation},\n\nThanks for sharing your rates!\n`;
   const body = `${lead}\n${describeOffer(offer, v.brandName)}\n\n${fill(PAYMENT_AND_CLOSE, v)}`;
   const subject = fill(REPLY1_SUBJECT, v);

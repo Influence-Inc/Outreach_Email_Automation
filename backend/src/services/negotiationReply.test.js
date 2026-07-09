@@ -261,6 +261,37 @@ test('describeOffer bolds the offer-type header for a view-based offer', () => {
   assert.ok(out.includes('**View-Based Offer ($1,500)**'), 'bold view-based header');
 });
 
+// View-based deals are priced by TOTAL guaranteed views — the creator decides
+// how many posts to publish. The email must not name a specific video count
+// or use per-video framing anywhere ("the first video", "further videos",
+// "N-video package"), or the deal reads as bounded to a fixed post count
+// when it isn't.
+test('describeOffer view_based body does NOT mention any video count', () => {
+  const out = templates.describeOffer(
+    { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 500000 },
+    'Acme',
+  );
+  assert.ok(!/first video/i.test(out), 'no "first video" language');
+  assert.ok(!/further videos/i.test(out), 'no "further videos" language');
+  assert.ok(!/\b\d+\s*video/i.test(out), 'no "N video(s)" count language');
+});
+
+test('offerEmail combine mode for view_based does NOT use the video-package REPLY 1', () => {
+  const offer = { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 500000 };
+  const { body } = templates.offerEmail(
+    offer,
+    { firstName: 'Dua', salutation: 'Dua', brandName: 'Acme' },
+    { combine: true },
+  );
+  // The default REPLY 1 body says "we'd love to do a 2 or more video package"
+  // — for a view-based offer this is exactly the wrong framing.
+  assert.ok(!/\d+\s*or more video package/i.test(body), 'no "N or more video package" copy');
+  assert.ok(!/\bvideo package\b/i.test(body), 'no "video package" copy at all in view_based combine');
+  // But it must still cover the collab details (single, combined email).
+  assert.ok(body.includes('**Content Style**'), 'view_based combine still opens with content-style details');
+  assert.ok(body.includes('**View-Based Offer'), 'view_based combine still presents the approved offer');
+});
+
 test('describeOffer bolds the offer-type header for a flat package', () => {
   const out = templates.describeOffer({ offer_type: 'video_based', num_videos: 2, flat_fee: 1600 }, 'Acme');
   assert.ok(out.includes('**Flat Package ($1,600)**'), 'bold flat-package header');

@@ -411,12 +411,12 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
   const v = templateVars(ctx);
   const fallback = templates.offerEmail(offer, v, { combine });
 
-  const offerDesc =
-    offer.offer_type === 'view_based'
-      ? `A view-based deal: $${offer.flat_fee} for a minimum of ${offer.view_guarantee} combined total views on Instagram (views counted for 7 days per post; combined across posts; full creative freedom; no exclusivity).`
-      : offer.offer_type === 'video_bonus'
-      ? `A flat package with a performance bonus: ${offer.num_videos} video(s) for $${offer.base_fee != null ? offer.base_fee : offer.flat_fee} base, plus a $${offer.bonus_amount} bonus if combined views cross ${offer.bonus_threshold_views} on Instagram (full creative freedom; no exclusivity).`
-      : `A flat package: ${offer.num_videos} video(s) for $${offer.flat_fee} total (full creative freedom; no exclusivity).`;
+  const isViewBased = offer.offer_type === 'view_based';
+  const offerDesc = isViewBased
+    ? `A view-based deal: $${offer.flat_fee} for a minimum of ${offer.view_guarantee} combined total views on Instagram (views counted for 7 days per post; combined across posts; full creative freedom; no exclusivity). This deal is priced by TOTAL GUARANTEED VIEWS, not by a fixed video count — the creator decides how many posts to publish to reach the view total.`
+    : offer.offer_type === 'video_bonus'
+    ? `A flat package with a performance bonus: ${offer.num_videos} video(s) for $${offer.base_fee != null ? offer.base_fee : offer.flat_fee} base, plus a $${offer.bonus_amount} bonus if combined views cross ${offer.bonus_threshold_views} on Instagram (full creative freedom; no exclusivity).`
+    : `A flat package: ${offer.num_videos} video(s) for $${offer.flat_fee} total (full creative freedom; no exclusivity).`;
 
   const system = [
     `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE writing about a collaboration for "${v.brandName}". Greet ${v.salutation} by name ("Hi ${v.salutation},")${
@@ -425,8 +425,14 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
     'An admin has APPROVED exactly one offer. Use its numbers EXACTLY — do not invent or change amounts, and present only this one offer.',
     `Approved offer JSON: ${JSON.stringify(offer)}`,
     `In plain words: ${offerDesc}`,
+    // View-based deals must not mention a specific video count anywhere in
+    // the sent email — it makes the deal sound bounded to a fixed number of
+    // posts when it isn't. Framing is per-view, not per-video.
+    isViewBased
+      ? 'HARD RULE: This is a VIEW-BASED offer — do NOT mention a number of videos or posts anywhere in the email. No "N-video package", no "the first video", no "further videos", no "N posts". Talk only about the guaranteed VIEW TOTAL and let the creator decide the post count.'
+      : '',
     `Today's date is ${todayStr()}. Desired posting cadence: "${v.cadence}". If you mention timelines, give an approximate posted-by date computed from today for this ${
-      offer.offer_type === 'view_based' ? '1-2 post' : `${offer.num_videos}-video`
+      isViewBased ? 'view-based' : `${offer.num_videos}-video`
     } deal at that cadence; never print the cadence text where a date belongs.`,
     '',
     guidelinesBlock(ctx),
@@ -994,25 +1000,48 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
     creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
   const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, salutation });
   const combine = (await countSentNegotiation(creatorId)) === 0;
+
+  // Draft is fully reversible — a Claude failure here left NO email in-flight,
+  // so we can safely roll the atomic-claim back to AWAITING_APPROVAL and let
+  // the admin retry.
+  let email;
   try {
-    const email = await draftOfferEmail(creator, offer, ctx, { combine });
-    await sendNegotiationEmail(creator, email, 'offer');
-    // Timeline entry for the Rate column: the priced offer we sent. Kept
-    // separate from the 'sent_negotiation' email event (which the thread view
-    // uses) so the rate timeline can show the fee/CPM without the email body.
-    await db.query(
-      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_offer_sent', $2)`,
-      [creatorId, { fee: offer.flat_fee, cpm: offer.cpm_applied, label: offer.label }],
-    );
-    return { sent: true };
+    email = await draftOfferEmail(creator, offer, ctx, { combine });
   } catch (err) {
     await db.query(
       `UPDATE creators SET negotiation_status = 'AWAITING_APPROVAL', updated_at = NOW() WHERE id = $1`,
       [creatorId],
     );
-    console.error(`[negotiation] sendApprovedOffer failed for creator ${creatorId}:`, err.message);
+    console.error(`[negotiation] draftOfferEmail failed for creator ${creatorId}:`, err.message);
     throw err;
   }
+
+  // ⚠ Past this point we DO NOT roll the stage back on failure. The moment
+  // sendNegotiationEmail starts, the email is either in-flight to Instantly
+  // or already delivered — even if we hit a network timeout / DB write error
+  // afterwards. Rolling back to AWAITING_APPROVAL would let the admin's next
+  // click re-fire the send and put a DUPLICATE offer email in the creator's
+  // inbox. Instead we leave the stage at AWAITING_DECISION (send was
+  // attempted) and surface the error so the admin sees "check the mailbox
+  // and only re-send if the creator did NOT receive the offer".
+  await sendNegotiationEmail(creator, email, 'offer');
+  // Timeline entry for the Rate column: the priced offer we sent. Kept
+  // separate from the 'sent_negotiation' email event (which the thread view
+  // uses) so the rate timeline can show the fee/CPM without the email body.
+  // Best-effort — if the log INSERT fails we already sent the email, so DO
+  // NOT roll the stage back; just record the error and keep AWAITING_DECISION.
+  try {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_offer_sent', $2)`,
+      [creatorId, { fee: offer.flat_fee, cpm: offer.cpm_applied, label: offer.label }],
+    );
+  } catch (logErr) {
+    console.error(
+      `[negotiation] rate_offer_sent log failed for creator ${creatorId} (email already sent):`,
+      logErr.message,
+    );
+  }
+  return { sent: true };
 }
 
 // Idle follow-up: bump once, up to NEGOTIATION_MAX_FOLLOWUPS, then CLOSED.

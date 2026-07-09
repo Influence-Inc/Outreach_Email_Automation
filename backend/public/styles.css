@@ -341,13 +341,41 @@ button:disabled { opacity: 0.5; cursor: default; }
 .cr-reach .empty { font-size: 13px; color: var(--faint-2); }
 
 /* Rate cell (Deals column) */
-.cr-rate { display: flex; flex-direction: column; justify-content: center; gap: 3px; font-size: 15px; font-weight: 500; }
+.cr-rate { display: flex; flex-direction: column; justify-content: center; gap: 4px; font-size: 15px; font-weight: 500; }
 .cr-rate .rate-value { color: var(--green); }
 .cr-rate .rate-value.empty { color: var(--faint-2); }
-/* Deliverables shown once the creator has accepted (videos, min views,
-   deadline, platforms, usage rights) — same size/weight as the Reach
-   column's sub-text so the two columns read consistently. */
-.cr-rate .deal-line { font-size: 12px; color: var(--muted); line-height: 1.35; }
+/* Deliverables shown once the creator has accepted. Offer type is a coloured
+   pill (badge) so the deal shape reads at a glance; the individual fields are
+   tiny-tag prefixed rows so each line is self-explanatory. */
+.cr-rate .deal-badge {
+  align-self: flex-start;
+  margin-top: 3px;
+  padding: 3px 9px;
+  background: var(--surface-3);
+  color: var(--ink);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+}
+.cr-rate .deal-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+  min-width: 0;
+}
+.cr-rate .deal-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+.cr-rate .deal-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Status cell */
 .cr-status { display: flex; flex-direction: column; gap: 12px; position: relative; }
@@ -578,6 +606,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .oc-sendbar-meta { font-size: 13px; color: var(--muted); margin-top: 3px; }
 .oc-sendbar-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .oc-approve { padding: 14px 26px; font-size: 15px; border-radius: 12px; }
+/* Dismiss sits next to Approve. Ghost-styled and slightly muted so Approve
+   still reads as the primary CTA — but tall enough to be an equal click
+   target. */
+.oc-dismiss { padding: 12px 20px; font-size: 14px; border-radius: 12px; }
 .oc-send-status { font-size: 13px; }
 
 /* --- Responsive ---------------------------------------------------------- */
