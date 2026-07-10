@@ -265,6 +265,39 @@ test('disputesUsageRights: unrelated messages are not disputes', async () => {
   }
 });
 
+// ── Post-acceptance term-change detection ───────────────────────────────────
+// No ANTHROPIC_API_KEY in the test env, so changesContractTerms exercises its
+// deterministic keyword fallback here — the same path production falls back to.
+
+test('changesContractTerms: empty/blank text never counts as a change', async () => {
+  assert.strictEqual(await contracts.changesContractTerms(''), false);
+  assert.strictEqual(await contracts.changesContractTerms(null), false);
+  assert.strictEqual(await contracts.changesContractTerms('   '), false);
+});
+
+test('changesContractTerms: a real term change is detected', async () => {
+  const cases = [
+    "Actually, let's make it 2 videos instead of 1.",
+    'I can also post this on YouTube Shorts.',
+    'Can we push the deadline to the 30th?',
+    'Update: I can only do Instagram now, not TikTok.',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(await contracts.changesContractTerms(text), true, `should be a change: "${text}"`);
+  }
+});
+
+test('changesContractTerms: questions/acknowledgements are not changes', async () => {
+  const cases = [
+    'Thanks so much, excited to get started!',
+    'When will the payment go through?',
+    'Sounds good, looking forward to it.',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(await contracts.changesContractTerms(text), false, `should NOT be a change: "${text}"`);
+  }
+});
+
 test('removeUsageRightsFromContract exports usageRightsFor(no_rights) shape for reuse', () => {
   // Smoke-check the shared shape rather than the DB write (covered by the
   // end-to-end Postgres verification) — confirms the "removed" state matches

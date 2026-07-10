@@ -504,6 +504,71 @@ async function removeUsageRightsFromContract(creatorId) {
   return row;
 }
 
+// ── Post-acceptance term changes ──────────────────────────────────────────
+// A contract is a point-in-time snapshot taken when the creator accepts, but
+// the creator can still change a deal term afterwards ("let's make it 2 videos",
+// "I can also post on YouTube Shorts", "push the deadline to the 30th"). Detect
+// such a message so the caller can re-sync the (unsigned) contract from the
+// now-updated thread. Deliberately broad — payment, deliverables, platforms,
+// timeline, views, exclusivity, usage rights — but only genuine CHANGES, not
+// questions or acknowledgements.
+const TERM_CHANGE_SYSTEM = `You read one inbound message from a creator who has ALREADY accepted a paid collaboration and been sent a contract. Decide whether this message CHANGES, ADDS, or REMOVES any material deal term in that contract — for example: which platforms they'll post on (Instagram / TikTok / YouTube Shorts / Reels / etc.), the number or type of deliverables, the timeline or posting deadline, the fee or payment structure/split, guaranteed views, exclusivity, or usage/ad rights.
+
+Return ONLY a JSON object: {"changesTerms": boolean}
+- true ONLY when the message actually alters a deal term, e.g. "let's make it 2 videos instead of 1", "I can also post on YouTube Shorts", "I can only do Instagram now", "can we push the deadline to the 30th", "actually my rate is $X".
+- false for everything else — acknowledgements, thanks, benign logistics or payment-timing questions that do not change a term, or unrelated topics. A QUESTION about a term ("when do I get paid?") is not a change.`;
+
+async function changesContractTerms(text) {
+  if (!text || !String(text).trim()) return false;
+  const out = claude.parseJsonLoose(await claude.callClaudeText(TERM_CHANGE_SYSTEM, String(text), 200));
+  if (out && typeof out.changesTerms === 'boolean') return out.changesTerms;
+  // Deterministic fallback when Claude is unavailable: a deal-term noun AND a
+  // change marker must co-occur. Conservative — a missed change just waits for
+  // a human to notice on the next reply (the reply is delegated regardless).
+  const s = String(text).toLowerCase();
+  const term =
+    /\b(platform|instagram|tiktok|tik tok|youtube|shorts?|reels?|videos?|deliverable|deadline|timeline|rate|fee|price|pricing|payment|views?|exclusiv|usage rights?|ad rights?)\b/.test(
+      s,
+    );
+  const change =
+    /\b(instead|change[ds]?|updat(?:e|ed|ing)|revis(?:e|ed)|actually|can also|also (?:do|post)|add|drop|remove|only (?:do|post)|push (?:the|it|back)|move (?:the|it)|make it|bump|increase|decrease|lower|raise)\b/.test(
+      s,
+    );
+  return term && change;
+}
+
+// Re-sync a creator's contract from the current (persisted) email thread after
+// a post-acceptance term change. ONLY touches a contract that is still pending —
+// a signed contract is executed and must never be silently altered (a human
+// handles that amendment). Re-runs the same extraction used at creation, so the
+// updated data flows to both the contract page and the dashboard Deals column
+// (both read this row). Returns {updated, signed, row}:
+//   updated:true  — the pending contract's data was refreshed
+//   signed:true   — a contract exists but is already signed (left untouched)
+//   both false    — no contract on file yet
+async function updateContractTermsFromThread(creatorId) {
+  const existing = await db.one(
+    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+  if (!existing) return { updated: false, signed: false, row: null };
+  if (existing.status !== 'pending') return { updated: false, signed: true, row: existing };
+
+  const creator = await loadCreatorForContract(creatorId);
+  if (!creator) return { updated: false, signed: false, row: existing };
+
+  const data = await extractContractData(creator);
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_terms_updated', $2)`,
+    [creatorId, { token: existing.token }],
+  );
+  return { updated: true, signed: false, row };
+}
+
 // Record the creator's signed submission: pending -> signed. Idempotent — a
 // second submit (or an unknown token) returns the current row without re-signing.
 async function recordSubmission(token, { signerName, signerEmail, signerIp, submission } = {}) {
@@ -581,6 +646,8 @@ module.exports = {
   attachContracts,
   disputesUsageRights,
   removeUsageRightsFromContract,
+  changesContractTerms,
+  updateContractTermsFromThread,
   // exposed for tests / reuse
   resolveOffer,
   agreedFeeFor,

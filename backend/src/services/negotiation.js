@@ -975,6 +975,26 @@ async function handleAcceptedReply(creatorId) {
     return { disputed: true, contractUpdated: !!updated };
   }
 
+  // 1b. A material term change after accepting (more videos, a platform added
+  //     or dropped, a new deadline, a different rate). Re-sync the contract from
+  //     the now-updated thread so the contract link AND the dashboard Deals
+  //     column stay truthful, then hand to a human to confirm and re-send. A
+  //     SIGNED contract is executed — never auto-changed; we delegate only.
+  if (await contracts.changesContractTerms(inbound)) {
+    const res = await contracts.updateContractTermsFromThread(creator.id);
+    await delegate(
+      creator,
+      { text: inbound },
+      res.updated
+        ? 'Creator changed deal terms after accepting — their (unsigned) contract has been re-synced from the thread; a human should confirm the new terms and re-send the contract link.'
+        : res.signed
+          ? 'Creator changed deal terms after accepting, but their contract is already SIGNED — it was NOT auto-changed; a human must handle this amendment.'
+          : 'Creator changed deal terms after accepting — a human should review (no contract on file yet to update).',
+    );
+    await markHandled();
+    return { termsChanged: true, contractUpdated: res.updated, signed: res.signed };
+  }
+
   // AI auto-reply off -> hand every post-acceptance reply to a human.
   if (!(await aiRepliesEnabledForCreator(creator))) {
     await delegate(creator, { text: inbound }, 'AI replies are turned off for this template');
