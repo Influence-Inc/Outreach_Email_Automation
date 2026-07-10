@@ -391,20 +391,6 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--faint);
 }
 .cr-rate .deal-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* Stacked variant — label on its own row, value flows under the full column
-   width so a long comma-list (PLATFORMS · Instagram, TikTok, YouTube Shorts)
-   wraps as one clean paragraph instead of one word per line beside the tag. */
-.cr-rate .deal-line-stacked {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-}
-.cr-rate .deal-line-stacked .deal-val {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
-  line-height: 1.4;
-}
 
 /* Status cell — pill, copy-link and delete-icon share a single left-aligned
    row so they read as one group. Previously the delete icon was pushed to the
