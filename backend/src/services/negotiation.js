@@ -911,38 +911,102 @@ async function ensureContractSent(creatorId) {
   return { ok: true };
 }
 
-// Post-acceptance usage-rights dispute check (scheduler-callable, free_only
-// policy only — see contracts.js usageRightsFor). A creator who already
-// accepted may reply again disputing the ad-rights clause in the contract
-// they were sent. When detected: drop ad rights from their stored, not-yet-
-// signed contract, and hand off to a human — usage-rights conversations
-// always go through a person for the reply itself (same posture as the
-// general "escalate" rule for usage-rights asks during negotiation).
-async function checkAcceptedUsageRightsDispute(creatorId) {
+// Post-acceptance reply handler (scheduler-callable). A creator who already
+// ACCEPTED — the offer is agreed, the contract has been sent, and may already
+// be signed — can still reply: a payment question, a scheduling detail, a
+// usage-rights objection, a change of heart. The main negotiation loop
+// (processReply) only runs for NULL / AWAITING_* stages, so without this those
+// replies would sit in latest_inbound_text forever, neither answered nor
+// delegated. The contract is done, but the creator is still owed a response.
+//
+// The rule here is simple and safe: NEVER drop a post-acceptance reply.
+//   1. free_only-policy usage-rights dispute  -> amend the unsigned contract +
+//      hand to a human (the pre-existing special case).
+//   2. a benign factual question we can answer from the templates / campaign
+//      context  -> answer it (Claude's conservative "answer_question" path).
+//   3. anything else — a payment-structure or contractual question, a dispute,
+//      an escalation, an ambiguous message, or AI auto-reply being off — goes
+//      to a human via the Delegate queue.
+//   4. a trivial acknowledgement that needs no reply ("got it, thanks") is
+//      consumed silently.
+// Crucially we do NOT run applyReply here: post-acceptance we never re-quote,
+// re-send REPLY 1, or regress the negotiation stage — we only answer or delegate.
+async function handleAcceptedReply(creatorId) {
   const creator = await loadCreator(creatorId);
   if (!creator) return { skipped: 'no creator' };
-  if (creator.usage_rights_policy !== 'free_only') return { skipped: 'policy' };
   const inbound = creator.latest_inbound_text;
   if (!inbound) return { skipped: 'no inbound text' };
 
-  const disputed = await contracts.disputesUsageRights(inbound);
-  // Consume the text regardless of outcome — mirrors processReply's
-  // markHandled so an unrelated ACCEPTED-stage reply isn't re-classified by
-  // Claude on every scheduler tick forever.
-  await db.query(
-    `UPDATE creators SET latest_inbound_text = NULL, updated_at = NOW()
-     WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $2`,
-    [creator.id, inbound],
-  );
-  if (!disputed) return { disputed: false };
+  // Consume the inbound exactly once, whichever branch handles it, so a later
+  // scheduler tick never re-processes the same message. Mirrors processReply's
+  // markHandled guard: only clears if the text is still the one we read.
+  const markHandled = () =>
+    db.query(
+      `UPDATE creators SET latest_inbound_text = NULL, updated_at = NOW()
+       WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $2`,
+      [creator.id, inbound],
+    );
 
-  const updated = await contracts.removeUsageRightsFromContract(creator.id);
+  // 1. Usage-rights dispute on a free_only campaign — drop ad rights from the
+  //    (unsigned) contract and hand to a human. Usage-rights conversations
+  //    always go through a person (same posture as the "escalate" rule during
+  //    negotiation), so this is a delegate, never an auto-reply.
+  if (
+    creator.usage_rights_policy === 'free_only' &&
+    (await contracts.disputesUsageRights(inbound))
+  ) {
+    const updated = await contracts.removeUsageRightsFromContract(creator.id);
+    await delegate(
+      creator,
+      { text: inbound },
+      'Creator disputed usage rights after accepting — ad rights have been removed from their (unsigned) contract; a human should confirm with them.',
+    );
+    await markHandled();
+    return { disputed: true, contractUpdated: !!updated };
+  }
+
+  // AI auto-reply off -> hand every post-acceptance reply to a human.
+  if (!(await aiRepliesEnabledForCreator(creator))) {
+    await delegate(creator, { text: inbound }, 'AI replies are turned off for this template');
+    await markHandled();
+    return { action: 'delegated', reason: 'ai_off' };
+  }
+
+  // 2/3. Classify the reply. Answer only the benign factual questions Claude is
+  //      confident it can answer from the templates / campaign context; send
+  //      everything else — payment-structure and contractual questions, disputes,
+  //      escalations, ambiguity — to a human so no creator question is dropped.
+  const guidelines = await getGuidelines();
+  const ctx = ctxFor(creator, {
+    guidelines,
+    salutation: salutationFor(creator.first_name, inbound),
+    includeRefs: askedForReferences(inbound),
+  });
+  const result = await handleCreatorReply(creator, inbound, ctx);
+  console.log(
+    `[negotiation] ACCEPTED creator ${creator.id}: post-accept reply action=${result.action}`,
+  );
+
+  if (result.action === 'answer_question' && result.email && result.send_now !== false) {
+    await sendNegotiationEmail(creator, result.email, 'reply_qa');
+    await db.query(`UPDATE creators SET updated_at = NOW() WHERE id = $1`, [creator.id]);
+    await markHandled();
+    return { action: 'answer_question' };
+  }
+
+  // 4. Trivial acknowledgement that needs no reply — consume it, don't bother a human.
+  if (result.action === 'other') {
+    await markHandled();
+    return { action: 'other' };
+  }
+
   await delegate(
     creator,
     { text: inbound },
-    'Creator disputed usage rights after accepting — ad rights have been removed from their (unsigned) contract; a human should confirm with them.',
+    result.understanding || 'Creator replied after accepting — needs a human response.',
   );
-  return { disputed: true, contractUpdated: !!updated };
+  await markHandled();
+  return { action: 'delegated', reason: result.action };
 }
 
 async function applyReply(creator, ctx, result) {
@@ -1227,7 +1291,7 @@ module.exports = {
   sendApprovedOffer,
   sendDelegateReply,
   ensureContractSent,
-  checkAcceptedUsageRightsDispute,
+  handleAcceptedReply,
   runNegotiationFollowup,
   resolveApprovedOffer,
   aiRepliesEnabledForCreator,
