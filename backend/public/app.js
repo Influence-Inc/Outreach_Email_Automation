@@ -490,8 +490,91 @@ function renderStatusCell(r, cell) {
     cell.appendChild(send);
   }
 
+  // Quoted-rates disclosure — every rate the creator has named, shown ONLY
+  // while the deal is still open (once ACCEPTED the Deals column takes over
+  // with the final agreed terms). Single quote renders inline; two or more
+  // collapse into a mini dropdown to keep the column compact.
+  const openStages = ['AWAITING_APPROVAL', 'AWAITING_RATE', 'AWAITING_DECISION'];
+  if (openStages.includes(r.negotiation_status)) {
+    const opts = Array.isArray(r.quoted_rate_options) ? r.quoted_rate_options : [];
+    if (opts.length) cell.appendChild(renderQuotedRates(opts));
+  }
+
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
   if (log.length) cell.appendChild(renderTimeline(log));
+}
+
+// Compact "Quoted rates" disclosure for the Status column.
+// - 1 option  → inline single-line summary ("QUOTED · $1,500").
+// - 2+ options → collapsible; header shows count, click to expand the list.
+// Each row is `$<amount> · <label-tail>` where label-tail is the label with
+// the amount removed (so the amount doesn't render twice).
+function renderQuotedRates(options) {
+  const wrap = document.createElement('div');
+  wrap.className = 'cr-quoted-rates';
+
+  const fmt = (n) => `$${fmtNum(Math.round(Number(n) || 0))}`;
+
+  if (options.length === 1) {
+    const one = options[0];
+    const line = document.createElement('div');
+    line.className = 'cr-quoted-single';
+    const tag = document.createElement('span');
+    tag.className = 'cr-quoted-tag';
+    tag.textContent = 'QUOTED';
+    const val = document.createElement('span');
+    val.className = 'cr-quoted-val num';
+    // If the label already contains the amount (verbatim from the reply),
+    // show it as-is; otherwise prepend the amount.
+    val.textContent = one.label && /\$/.test(one.label) ? one.label : `${fmt(one.amount)} · ${one.label}`;
+    line.appendChild(tag);
+    line.appendChild(val);
+    wrap.appendChild(line);
+    return wrap;
+  }
+
+  // 2+ options → dropdown. Closed by default.
+  const details = document.createElement('details');
+  details.className = 'cr-quoted-details';
+  const summary = document.createElement('summary');
+  summary.className = 'cr-quoted-summary';
+  const tag = document.createElement('span');
+  tag.className = 'cr-quoted-tag';
+  tag.textContent = 'QUOTED RATES';
+  const count = document.createElement('span');
+  count.className = 'cr-quoted-count';
+  count.textContent = String(options.length);
+  const chevron = document.createElement('span');
+  chevron.className = 'cr-quoted-chevron';
+  chevron.textContent = '▾';
+  summary.appendChild(tag);
+  summary.appendChild(count);
+  summary.appendChild(chevron);
+  details.appendChild(summary);
+
+  const list = document.createElement('ul');
+  list.className = 'cr-quoted-list';
+  for (const o of options) {
+    const li = document.createElement('li');
+    li.className = 'cr-quoted-item';
+    const amt = document.createElement('span');
+    amt.className = 'cr-quoted-amt num';
+    amt.textContent = fmt(o.amount);
+    const desc = document.createElement('span');
+    desc.className = 'cr-quoted-desc';
+    // Trim the amount out of the label if the label starts with it, to avoid
+    // "$3,500 · $3,500 for 300,000 combined views".
+    const amtStr = fmt(o.amount);
+    let d = String(o.label || '').trim();
+    if (d.startsWith(amtStr)) d = d.slice(amtStr.length).replace(/^[\s·:,-]+/, '');
+    desc.textContent = d || 'no description';
+    li.appendChild(amt);
+    li.appendChild(desc);
+    list.appendChild(li);
+  }
+  details.appendChild(list);
+  wrap.appendChild(details);
+  return wrap;
 }
 
 // A vertical delivery-tracking timeline, oldest → newest. The newest entry is

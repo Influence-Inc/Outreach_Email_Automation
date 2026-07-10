@@ -227,6 +227,65 @@ test('offer email renders the video_bonus structure (base fee + bonus on thresho
   assert.ok(body.includes('5,000,000 on Instagram'), 'states the bonus view threshold');
 });
 
+// ── 3.5. Multi-rate extraction — the creator quotes a tiered menu ──────────
+// Creators frequently list several rates in one reply. We store every rate
+// they name, with the surrounding text as a label, so the dashboard's Status
+// column can show every option instead of collapsing to one number.
+
+test('parseRateOptionsFromText captures each tier of a bulleted view-based ladder', () => {
+  const inbound = [
+    "I'm open to a viewership-based structure, but I would need more upside:",
+    '- $3,500 for 300,000 combined views',
+    '- $5,000 for 600,000 combined views',
+    '- $7,500 for 1,000,000 combined views',
+    '',
+    'Let me know if this could work on your end.',
+  ].join('\n');
+  const options = negotiation.parseRateOptionsFromText(inbound);
+  assert.deepStrictEqual(
+    options.map((o) => o.amount),
+    [3500, 5000, 7500],
+    'all three tier amounts extracted in order',
+  );
+  assert.ok(options[0].label.includes('300,000'), 'first label carries "300,000 views" context');
+  assert.ok(options[2].label.includes('1,000,000'), 'third label carries "1,000,000 views" context');
+  // The list marker "- " must be stripped from the labels.
+  assert.ok(!options.some((o) => o.label.startsWith('-')), 'labels do not carry list markers');
+});
+
+test('parseRateOptionsFromText captures inline "$X per reel, $Y for a package" phrasing', () => {
+  const inbound =
+    "My rate is $900 per reel, but for a package of 3 this month I can work at $2,500 total. Let's do it!";
+  const options = negotiation.parseRateOptionsFromText(inbound);
+  assert.deepStrictEqual(
+    options.map((o) => o.amount),
+    [900, 2500],
+    'both the per-reel and the package rate are captured',
+  );
+  assert.ok(/per reel/i.test(options[0].label), 'per-reel label preserved');
+  assert.ok(/package of 3|2,500 total/i.test(options[1].label), 'package label preserved');
+});
+
+test('parseRateOptionsFromText returns [] when no dollar amount appears', () => {
+  assert.deepStrictEqual(negotiation.parseRateOptionsFromText('Sounds great, tell me more!'), []);
+  assert.deepStrictEqual(negotiation.parseRateOptionsFromText(''), []);
+  assert.deepStrictEqual(negotiation.parseRateOptionsFromText(null), []);
+});
+
+test('parseRateOptionsFromText dedupes exact repeats of the same amount + label', () => {
+  const inbound = 'My rate is $1,500. My rate is $1,500.';
+  const options = negotiation.parseRateOptionsFromText(inbound);
+  assert.strictEqual(options.length, 1, 'duplicates collapse to a single entry');
+});
+
+test('parseRateOptionsFromText caps very long labels so the dropdown stays compact', () => {
+  const long = 'X'.repeat(300);
+  const inbound = `${long} $500 ${long}`;
+  const options = negotiation.parseRateOptionsFromText(inbound);
+  assert.strictEqual(options.length, 1);
+  assert.ok(options[0].label.length <= 120, `label capped at 120 chars, got ${options[0].label.length}`);
+});
+
 // ── 4. Delegate reply offer detection ───────────────────────────────────────
 
 test('extractOfferAmount picks up "$10k" shorthand from a delegate reply', () => {
