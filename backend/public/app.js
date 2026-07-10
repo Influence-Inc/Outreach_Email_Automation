@@ -347,11 +347,7 @@ function dealSummaryItems(data) {
   }
 
   if (Array.isArray(data.platforms) && data.platforms.length) {
-    // Platforms wrap awkwardly one-word-per-line when they sit inline beside
-    // the tiny PLATFORMS tag (column is narrow, value is long — "Instagram,
-    // TikTok, YouTube Shorts"). Rendered stacked: label on its own row, value
-    // flowing under the full column width.
-    items.push({ label: 'PLATFORMS', value: data.platforms.join(', '), stacked: true });
+    items.push({ label: 'PLATFORMS', value: data.platforms.join(', ') });
   }
 
   const deadline = data.postingDeadline || data.deadline;
@@ -402,7 +398,7 @@ function renderRateCell(r, cell) {
         continue;
       }
       const lineDiv = document.createElement('div');
-      lineDiv.className = 'deal-line' + (item.stacked ? ' deal-line-stacked' : '');
+      lineDiv.className = 'deal-line';
       const tag = document.createElement('span');
       tag.className = 'deal-tag';
       tag.textContent = item.label;
