@@ -197,11 +197,11 @@ function baseContractData(creator, fee, offer) {
     offerType: (offer && offer.offer_type) || null,
     offerLabel: (offer && offer.label) || null,
 
-    // Deliverables + platforms. Platforms match what REPLY 1 promises the
-    // creator — Instagram primarily, cross-posted on TikTok & YouTube Shorts —
-    // and are a fixed policy on every deal, not re-derived per negotiation
-    // thread (which is why extractContractData never lets a narrow extraction
-    // shrink them down to a single platform).
+    // Deliverables + platforms. REPLY 1 proposes all three platforms
+    // (Instagram, TikTok & YouTube Shorts) but the creator ultimately picks
+    // which they post on — so this all-three set is only the DEFAULT, used when
+    // the thread never narrows it. The Claude extraction replaces it with the
+    // subset the creator actually agreed to when they specified one.
     platforms: ['Instagram', 'TikTok', 'YouTube Shorts'],
     // View-based deals state no video count (see isViewBased above); flat deals
     // name the agreed number of videos.
@@ -306,7 +306,7 @@ Return ONLY a JSON object — no prose, no markdown fences — with EXACTLY thes
 
 Rules:
 - Use ONLY facts supported by the negotiation timeline and the provided KNOWN VALUES. Never invent numbers.
-- "platforms" is the fixed cross-post set for every deal: ["Instagram","TikTok","YouTube Shorts"]. Do NOT narrow it to a single platform even when one is emphasised in the thread.
+- "platforms" are the platforms the CREATOR agreed to post the content on. REPLY 1 proposes all three — Instagram, TikTok and YouTube Shorts — but the creator decides: return only the platforms the creator actually agreed to. DEFAULT to all three ["Instagram","TikTok","YouTube Shorts"] whenever the creator never restricted them in the thread; return a subset ONLY when the creator explicitly chose or limited which platforms they'll post on. Note: a view-based deal counts guaranteed views "on Instagram" for PRICING only — that view-counting reference does NOT limit the posting platforms, so never narrow to Instagram-only because of it.
 - "deliverables": when KNOWN VALUES.acceptedOffer.offer_type is "view_based", the deal is priced by TOTAL guaranteed views reached across as many posts as the creator needs — describe the content WITHOUT any video count (e.g. "Short-form video content") and set numberOfDeliverables and numberOfVideos to null. Never write "1 video" / "1 Reel" for a view-based deal. For flat (video-based) deals, state the agreed number of videos.
 - "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
 - "currency" is a 3-letter ISO code (default "USD").
@@ -365,11 +365,9 @@ async function extractContractData(creator) {
   const out = claude.parseJsonLoose(await claude.callClaudeText(CONTRACT_SYSTEM, user, 1200));
   if (!out || typeof out !== 'object') return base;
   const merged = mergeContractData(base, out);
-  // Platforms are a fixed cross-post policy (Instagram + TikTok + YouTube
-  // Shorts on every deal), not a per-thread fact — a narrow extraction that
-  // drops down to just the platform a message happened to emphasise would
-  // misstate the deal, so the campaign's full platform set always wins.
-  merged.platforms = base.platforms;
+  // Platforms follow the creator's choice: mergeContractData already keeps the
+  // all-three default whenever the extraction returns nothing meaningful (the
+  // creator never narrowed them), and takes the extracted subset when they did.
   // On a view-based deal the fee buys a TOTAL guaranteed-view count that can be
   // reached across multiple posts, so there is no fixed number of videos to
   // name. Never let the extraction pin a count onto it (e.g. "1 Instagram

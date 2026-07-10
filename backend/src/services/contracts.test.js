@@ -126,6 +126,19 @@ test('mergeContractData: Claude overrides base, but never wipes known values', (
   assert.strictEqual(out.creatorName, 'Alex Lee'); // untouched base identity
 });
 
+test('mergeContractData: platforms follow the creator — subset wins, default kept when unspecified', () => {
+  const base = contracts.baseContractData({ full_name: 'Vo Anh Duy' }, 300, { num_videos: 1 });
+  assert.deepStrictEqual(base.platforms, ['Instagram', 'TikTok', 'YouTube Shorts']);
+
+  // Creator explicitly chose a subset in the thread → that subset wins.
+  const chose = contracts.mergeContractData(base, { platforms: ['Instagram', 'TikTok'] });
+  assert.deepStrictEqual(chose.platforms, ['Instagram', 'TikTok']);
+
+  // Creator never narrowed them (extraction empty/absent) → all-three default kept.
+  assert.deepStrictEqual(contracts.mergeContractData(base, { platforms: [] }).platforms, base.platforms);
+  assert.deepStrictEqual(contracts.mergeContractData(base, {}).platforms, base.platforms);
+});
+
 test('creatorDb.buildPayload maps a signed contract to the Creator-DB DTO', () => {
   const contract = {
     token: 'tok123',
