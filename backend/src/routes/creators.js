@@ -12,6 +12,7 @@ const contracts = require('../services/contracts');
 // the offer without the email body.
 const RATE_LOG_TYPES = [
   'sent_outreach',
+  'sent_followup',
   'replied',
   'rate_quoted',
   'rate_offer_sent',
@@ -33,6 +34,13 @@ function rateLogEntry(type, detail) {
   switch (type) {
     case 'sent_outreach':
       return { text: 'Outreach sent', tone: 'done' };
+    case 'sent_followup': {
+      const step = Number(d.step);
+      return {
+        text: Number.isFinite(step) && step > 0 ? `Follow-up sent (step ${step})` : 'Follow-up sent',
+        tone: 'done',
+      };
+    }
     case 'replied':
       return { text: 'Creator replied', tone: 'done' };
     case 'rate_quoted': {

@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { markReplied } = require('../services/outreach');
+const { markReplied, markFollowupSent } = require('../services/outreach');
 
 const router = express.Router();
 
@@ -29,8 +29,45 @@ function verifySignature(req) {
 // to make any future mismatch obvious in the Railway logs instead of a silent drop.
 const REPLY_EVENTS = new Set(['reply_received', 'email_reply', 'lead_replied', 'reply']);
 
+// Instantly fires an email_sent event for EVERY sequence step it sends — the
+// Step 1 outreach and each follow-up. We use these to advance the dashboard
+// status from "outreach sent" → "follow up sent" when a follow-up goes out
+// (markFollowupSent guards against the Step 1 event flipping the status).
+const SENT_EVENTS = new Set([
+  'email_sent',
+  'email_sent_success',
+  'sent',
+  'lead_email_sent',
+]);
+
 function pickEventType(body) {
   return body.event_type || body.event || body.type || null;
+}
+// Which sequence step this send is. Instantly is 1-indexed (Step 1 = outreach,
+// Step 2+ = follow-ups). Field name varies by version, so read defensively.
+function pickStep(body) {
+  const raw =
+    body.step ??
+    body.step_number ??
+    body.stepNumber ??
+    body.email_seq_number ??
+    body.sequence_step ??
+    body.sequence_step_number ??
+    (body.email && (body.email.step ?? body.email.step_number)) ??
+    null;
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+// The sent message's own id (distinct from a reply's uuid), for the audit trail.
+function pickSentMessageId(body) {
+  return (
+    body.message_id ||
+    body.email_id ||
+    body.sent_message_id ||
+    (body.email && (body.email.message_id || body.email.id)) ||
+    null
+  );
 }
 function pickEmail(body) {
   return (
@@ -79,6 +116,41 @@ function pickReplySubject(body) {
   return body.reply_subject || body.subject || null;
 }
 
+// Resolve the creator row an Instantly event belongs to. The same address can
+// be a lead in multiple campaigns, so prefer the row in the campaign the event
+// names; fall back to email-only (most recently emailed) when the campaign is
+// unmapped or absent. Shared by the reply and email_sent flows so both
+// attribute events to the same row. Returns the creator row or null.
+async function resolveCreator(email, campaignId) {
+  let creator = null;
+  if (campaignId) {
+    creator = await db.one(
+      `SELECT c.id, c.status FROM creators c
+       JOIN campaigns ca ON ca.id = c.campaign_id
+       WHERE LOWER(c.email) = LOWER($1)
+         AND COALESCE(ca.instantly_campaign_id, $3) = $2
+       ORDER BY c.outreach_sent_at DESC NULLS LAST
+       LIMIT 1`,
+      [email, campaignId, process.env.INSTANTLY_CAMPAIGN_ID || null],
+    );
+  }
+  if (!creator) {
+    creator = await db.one(
+      `SELECT id, status FROM creators
+       WHERE LOWER(email) = LOWER($1)
+       ORDER BY outreach_sent_at DESC NULLS LAST
+       LIMIT 1`,
+      [email],
+    );
+    if (creator && campaignId) {
+      console.warn(
+        `[webhook/instantly] no creator mapped to instantly campaign ${campaignId} for ${email}; fell back to email-only attribution (creator ${creator.id})`,
+      );
+    }
+  }
+  return creator;
+}
+
 router.post('/instantly', async (req, res) => {
   // Respond 200 immediately — Instantly retries on non-2xx and gives only 30s.
   res.json({ ok: true });
@@ -94,6 +166,34 @@ router.post('/instantly', async (req, res) => {
 
     if (!verifySignature(req)) {
       console.warn('[webhook/instantly] signature mismatch — ignoring');
+      return;
+    }
+
+    // email_sent events advance outreach_sent → followup_sent when Instantly
+    // sends a follow-up step. Handle them before the reply-only guard below.
+    if (SENT_EVENTS.has(eventType)) {
+      const email = pickEmail(body);
+      const campaignId = pickCampaignId(body);
+      if (!email) {
+        console.warn(
+          `[webhook/instantly] email_sent missing email; raw=${JSON.stringify(body).slice(0, 800)}`,
+        );
+        return;
+      }
+      const creator = await resolveCreator(email, campaignId);
+      if (!creator) {
+        console.warn(`[webhook/instantly] email_sent for unknown email: ${email}`);
+        return;
+      }
+      const step = pickStep(body);
+      const advanced = await markFollowupSent(creator.id, {
+        step,
+        messageId: pickSentMessageId(body),
+      });
+      console.log(
+        `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} ` +
+          `(instantly campaign ${campaignId || 'n/a'}) → ${advanced ? 'followup_sent' : 'no status change'}`,
+      );
       return;
     }
 
@@ -117,39 +217,8 @@ router.post('/instantly', async (req, res) => {
 
     // The same address can be a lead in multiple campaigns. The webhook tells us
     // which Instantly campaign the reply came from, so attribute it to the creator
-    // row in THAT campaign — never an arbitrary other one. COALESCE maps campaigns
-    // that rely on the INSTANTLY_CAMPAIGN_ID env fallback (instantly_campaign_id
-    // IS NULL) onto the env value so they still match.
-    // db.one returns null on no row in this codebase (not pg-promise's throwing
-    // variant), so it is the right helper for an optional match.
-    let creator = null;
-    if (campaignId) {
-      creator = await db.one(
-        `SELECT c.id, c.status FROM creators c
-         JOIN campaigns ca ON ca.id = c.campaign_id
-         WHERE LOWER(c.email) = LOWER($1)
-           AND COALESCE(ca.instantly_campaign_id, $3) = $2
-         ORDER BY c.outreach_sent_at DESC NULLS LAST
-         LIMIT 1`,
-        [email, campaignId, process.env.INSTANTLY_CAMPAIGN_ID || null],
-      );
-    }
-    if (!creator) {
-      // No campaign match (unmapped campaign, or campaign_id absent) — fall back
-      // to email-only, most recently emailed.
-      creator = await db.one(
-        `SELECT id, status FROM creators
-         WHERE LOWER(email) = LOWER($1)
-         ORDER BY outreach_sent_at DESC NULLS LAST
-         LIMIT 1`,
-        [email],
-      );
-      if (creator && campaignId) {
-        console.warn(
-          `[webhook/instantly] no creator mapped to instantly campaign ${campaignId} for ${email}; fell back to email-only attribution (creator ${creator.id})`,
-        );
-      }
-    }
+    // row in THAT campaign — never an arbitrary other one.
+    const creator = await resolveCreator(email, campaignId);
     if (!creator) {
       console.warn(`[webhook/instantly] reply from unknown email: ${email}`);
       return;
@@ -176,5 +245,13 @@ router.post('/instantly', async (req, res) => {
     console.error('[webhook/instantly] error:', err.message);
   }
 });
+
+// Attach the pure payload helpers to the router (which is itself a function, so
+// `app.use('/webhook', webhook)` still works) so they can be unit-tested.
+router.pickEventType = pickEventType;
+router.pickStep = pickStep;
+router.pickSentMessageId = pickSentMessageId;
+router.SENT_EVENTS = SENT_EVENTS;
+router.REPLY_EVENTS = REPLY_EVENTS;
 
 module.exports = router;
