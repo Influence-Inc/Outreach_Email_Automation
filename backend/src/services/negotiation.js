@@ -17,6 +17,7 @@ const { getGuidelines, getAiRepliesEnabled } = require('./settings');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const contracts = require('./contracts');
+const thread = require('./thread');
 
 // ── Claude client (shared) ────────────────────────────────────────────────
 // The lazy Anthropic client + JSON helpers live in ./claudeClient so the
@@ -608,6 +609,15 @@ async function sendNegotiationEmail(creator, email, kind) {
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'sent_negotiation', $2)`,
     [creator.id, detail],
   );
+  // Persist this outbound message to the full conversation thread (used later
+  // by the contract extractor to see what WE proposed — e.g. Reply 1's platform
+  // offer). Best-effort: the email is already sent, so a logging failure here
+  // must not surface as a send error.
+  try {
+    await thread.recordMessage(creator.id, { direction: 'outbound', kind, subject, body: email.body });
+  } catch (e) {
+    console.warn(`[negotiation] thread record (outbound ${kind}) failed for creator ${creator.id}: ${e.message}`);
+  }
   await db.query(
     `UPDATE creators SET last_negotiation_email_at = NOW(), updated_at = NOW() WHERE id = $1`,
     [creator.id],
@@ -963,6 +973,26 @@ async function handleAcceptedReply(creatorId) {
     );
     await markHandled();
     return { disputed: true, contractUpdated: !!updated };
+  }
+
+  // 1b. A material term change after accepting (more videos, a platform added
+  //     or dropped, a new deadline, a different rate). Re-sync the contract from
+  //     the now-updated thread so the contract link AND the dashboard Deals
+  //     column stay truthful, then hand to a human to confirm and re-send. A
+  //     SIGNED contract is executed — never auto-changed; we delegate only.
+  if (await contracts.changesContractTerms(inbound)) {
+    const res = await contracts.updateContractTermsFromThread(creator.id);
+    await delegate(
+      creator,
+      { text: inbound },
+      res.updated
+        ? 'Creator changed deal terms after accepting — their (unsigned) contract has been re-synced from the thread; a human should confirm the new terms and re-send the contract link.'
+        : res.signed
+          ? 'Creator changed deal terms after accepting, but their contract is already SIGNED — it was NOT auto-changed; a human must handle this amendment.'
+          : 'Creator changed deal terms after accepting — a human should review (no contract on file yet to update).',
+    );
+    await markHandled();
+    return { termsChanged: true, contractUpdated: res.updated, signed: res.signed };
   }
 
   // AI auto-reply off -> hand every post-acceptance reply to a human.

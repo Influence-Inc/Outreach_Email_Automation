@@ -39,7 +39,7 @@ test('baseContractData fills a complete contract from known creator + offer', ()
     brand_name: 'Reve',
     campaign_name: 'Spring Launch',
   };
-  const offer = { offer_type: 'view_based', num_videos: 3, view_guarantee: 100000, flat_fee: 900 };
+  const offer = { offer_type: 'video_based', num_videos: 3, view_guarantee: 100000, flat_fee: 900 };
   const d = contracts.baseContractData(creator, 900, offer);
 
   // Identity + campaign
@@ -73,6 +73,27 @@ test('baseContractData fills a complete contract from known creator + offer', ()
   assert.strictEqual(d.postingWindows[0].label, 'Video 1');
 });
 
+test('baseContractData: a view-based deal names no video count', () => {
+  // Priced by TOTAL guaranteed views reached across as many posts as needed —
+  // so the contract states neither "N videos" nor a per-video cadence.
+  const creator = { full_name: 'Vo Anh Duy', brand_name: 'Reve' };
+  const offer = { offer_type: 'view_based', num_videos: 1, view_guarantee: 100000, flat_fee: 300 };
+  const d = contracts.baseContractData(creator, 300, offer);
+
+  assert.strictEqual(d.offerType, 'view_based');
+  // No count anywhere the contract page renders it.
+  assert.doesNotMatch(d.deliverables, /\d/, 'deliverables must not carry a video count');
+  assert.strictEqual(d.numberOfDeliverables, null);
+  assert.strictEqual(d.numberOfVideos, null);
+  // The guaranteed view total is still surfaced — that is what the deal is priced on.
+  assert.strictEqual(d.minTotalViews, 100000);
+  assert.strictEqual(d.guaranteedViews, 100000);
+  // Cadence is a multi-video rhythm; a view-based deal has none.
+  assert.strictEqual(d.timeline, null);
+  // Platforms remain the fixed cross-post set.
+  assert.deepStrictEqual(d.platforms, ['Instagram', 'TikTok', 'YouTube Shorts']);
+});
+
 test('baseContractData surfaces video_bonus offer terms in the contract', () => {
   const creator = { full_name: 'Sam', brand_name: 'Reve' };
   const offer = {
@@ -103,6 +124,19 @@ test('mergeContractData: Claude overrides base, but never wipes known values', (
   assert.deepStrictEqual(out.additionalTerms, ['2 rounds of revisions']);
   assert.strictEqual(out.compensation, 900, 'bad compensation falls back to the known fee');
   assert.strictEqual(out.creatorName, 'Alex Lee'); // untouched base identity
+});
+
+test('mergeContractData: platforms follow the creator — subset wins, default kept when unspecified', () => {
+  const base = contracts.baseContractData({ full_name: 'Vo Anh Duy' }, 300, { num_videos: 1 });
+  assert.deepStrictEqual(base.platforms, ['Instagram', 'TikTok', 'YouTube Shorts']);
+
+  // Creator explicitly chose a subset in the thread → that subset wins.
+  const chose = contracts.mergeContractData(base, { platforms: ['Instagram', 'TikTok'] });
+  assert.deepStrictEqual(chose.platforms, ['Instagram', 'TikTok']);
+
+  // Creator never narrowed them (extraction empty/absent) → all-three default kept.
+  assert.deepStrictEqual(contracts.mergeContractData(base, { platforms: [] }).platforms, base.platforms);
+  assert.deepStrictEqual(contracts.mergeContractData(base, {}).platforms, base.platforms);
 });
 
 test('creatorDb.buildPayload maps a signed contract to the Creator-DB DTO', () => {
@@ -228,6 +262,39 @@ test('disputesUsageRights: unrelated messages are not disputes', async () => {
   ];
   for (const text of cases) {
     assert.strictEqual(await contracts.disputesUsageRights(text), false, `should NOT dispute: "${text}"`);
+  }
+});
+
+// ── Post-acceptance term-change detection ───────────────────────────────────
+// No ANTHROPIC_API_KEY in the test env, so changesContractTerms exercises its
+// deterministic keyword fallback here — the same path production falls back to.
+
+test('changesContractTerms: empty/blank text never counts as a change', async () => {
+  assert.strictEqual(await contracts.changesContractTerms(''), false);
+  assert.strictEqual(await contracts.changesContractTerms(null), false);
+  assert.strictEqual(await contracts.changesContractTerms('   '), false);
+});
+
+test('changesContractTerms: a real term change is detected', async () => {
+  const cases = [
+    "Actually, let's make it 2 videos instead of 1.",
+    'I can also post this on YouTube Shorts.',
+    'Can we push the deadline to the 30th?',
+    'Update: I can only do Instagram now, not TikTok.',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(await contracts.changesContractTerms(text), true, `should be a change: "${text}"`);
+  }
+});
+
+test('changesContractTerms: questions/acknowledgements are not changes', async () => {
+  const cases = [
+    'Thanks so much, excited to get started!',
+    'When will the payment go through?',
+    'Sounds good, looking forward to it.',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(await contracts.changesContractTerms(text), false, `should NOT be a change: "${text}"`);
   }
 });
 

@@ -4,6 +4,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const { markReplied, markFollowupSent } = require('../services/outreach');
+const thread = require('../services/thread');
 
 const router = express.Router();
 
@@ -236,6 +237,20 @@ router.post('/instantly', async (req, res) => {
        WHERE id = $1`,
       [creator.id, reply_text, reply_to_uuid || null, email_account, reply_subject],
     );
+
+    // Persist this inbound message to the full conversation thread (used later
+    // by the contract extractor). latest_inbound_text above only ever holds the
+    // MOST RECENT reply; this keeps every one. Best-effort — never let a logging
+    // failure drop the reply we just received.
+    try {
+      await thread.recordMessage(creator.id, {
+        direction: 'inbound',
+        subject: reply_subject || null,
+        body: reply_text,
+      });
+    } catch (e) {
+      console.warn(`[webhook/instantly] thread record (inbound) failed for creator ${creator.id}: ${e.message}`);
+    }
 
     await markReplied(creator.id);
     console.log(

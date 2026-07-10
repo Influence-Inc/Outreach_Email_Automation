@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const claude = require('./claudeClient');
 const templates = require('./negotiationTemplates');
+const thread = require('./thread');
 
 // 24 random bytes -> 32-char base64url string. Unguessable; never the DB id.
 function generateToken() {
@@ -158,9 +159,13 @@ function suggestPostingWindows(n, deadline) {
 // public/contract.html for the layout that consumes each key.
 function baseContractData(creator, fee, offer) {
   const n = numDeliverables(offer);
-  // Cadence describes the rhythm across multiple videos; a single-video deal
-  // has one drop date, not a rhythm, so the contract omits it entirely.
-  const cadence = n <= 1
+  // A view-based deal is priced by TOTAL guaranteed views, not a fixed post
+  // count — the creator publishes as many videos as needed to reach the total —
+  // so it has no video count and no multi-video rhythm to describe.
+  const isViewBased = !!(offer && offer.offer_type === 'view_based');
+  // Cadence describes the rhythm across multiple videos; a single-video (or
+  // view-based) deal has one drop, not a rhythm, so the contract omits it.
+  const cadence = isViewBased || n <= 1
     ? null
     : (process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week');
   const brandName = creator.brand_name || process.env.BRAND_NAME || null;
@@ -193,12 +198,19 @@ function baseContractData(creator, fee, offer) {
     offerType: (offer && offer.offer_type) || null,
     offerLabel: (offer && offer.label) || null,
 
-    // Deliverables + platforms. Matches what REPLY 1 promises the creator
-    // (Instagram primarily, cross-posted on TikTok & YouTube Shorts).
+    // Deliverables + platforms. REPLY 1 proposes all three platforms
+    // (Instagram, TikTok & YouTube Shorts) but the creator ultimately picks
+    // which they post on — so this all-three set is only the DEFAULT, used when
+    // the thread never narrows it. The Claude extraction replaces it with the
+    // subset the creator actually agreed to when they specified one.
     platforms: ['Instagram', 'TikTok', 'YouTube Shorts'],
-    deliverables: `${n} short-form video${n === 1 ? '' : 's'}`,
-    numberOfDeliverables: n,
-    numberOfVideos: n,
+    // View-based deals state no video count (see isViewBased above); flat deals
+    // name the agreed number of videos.
+    deliverables: isViewBased
+      ? 'Short-form video content'
+      : `${n} short-form video${n === 1 ? '' : 's'}`,
+    numberOfDeliverables: isViewBased ? null : n,
+    numberOfVideos: isViewBased ? null : n,
     minTotalViews: minViews,
     includeDmAutomation: true,
 
@@ -294,7 +306,9 @@ Return ONLY a JSON object — no prose, no markdown fences — with EXACTLY thes
 }
 
 Rules:
-- Use ONLY facts supported by the negotiation timeline and the provided KNOWN VALUES. Never invent numbers.
+- Use ONLY facts supported by the EMAIL THREAD, the negotiation timeline, and the provided KNOWN VALUES. Never invent numbers.
+- "platforms" are the platforms the CREATOR agreed to post the content on. REPLY 1 proposes all three — Instagram, TikTok and YouTube Shorts — but the creator decides: return only the platforms the creator actually agreed to. DEFAULT to all three ["Instagram","TikTok","YouTube Shorts"] whenever the creator never restricted them in the thread; return a subset ONLY when the creator explicitly chose or limited which platforms they'll post on. Note: a view-based deal counts guaranteed views "on Instagram" for PRICING only — that view-counting reference does NOT limit the posting platforms, so never narrow to Instagram-only because of it.
+- "deliverables": when KNOWN VALUES.acceptedOffer.offer_type is "view_based", the deal is priced by TOTAL guaranteed views reached across as many posts as the creator needs — describe the content WITHOUT any video count (e.g. "Short-form video content") and set numberOfDeliverables and numberOfVideos to null. Never write "1 video" / "1 Reel" for a view-based deal. For flat (video-based) deals, state the agreed number of videos.
 - "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
 - "currency" is a 3-letter ISO code (default "USD").
 - "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
@@ -339,11 +353,20 @@ async function extractContractData(creator) {
     latestReply: creator.latest_inbound_text || null,
   };
 
+  // The full stored conversation — the creator's own words are the primary
+  // source for which platforms they'll post on and the terms they agreed to
+  // (the structured timeline below only carries rates/actions, not prose).
+  const messages = await thread.loadThread(creator.id);
+  const transcript = thread.renderTranscript(messages);
+
   const user = [
     'KNOWN VALUES (authoritative unless the thread clearly overrides them):',
     JSON.stringify(known, null, 2),
     '',
-    'NEGOTIATION TIMELINE (oldest first):',
+    "EMAIL THREAD (verbatim, oldest first). The creator's own words here are the primary source for which platforms they will post on, the deliverables they agreed to, and any terms they set:",
+    transcript || '(no stored messages — rely on KNOWN VALUES and the latest reply)',
+    '',
+    'NEGOTIATION TIMELINE (structured events, oldest first):',
     events.map((e) => `- ${e.type}: ${JSON.stringify(e.detail)}`).join('\n') || '(none logged)',
     '',
     'Extract the contract JSON now.',
@@ -352,8 +375,20 @@ async function extractContractData(creator) {
   const out = claude.parseJsonLoose(await claude.callClaudeText(CONTRACT_SYSTEM, user, 1200));
   if (!out || typeof out !== 'object') return base;
   const merged = mergeContractData(base, out);
-  // Cadence never applies to a single-video deal, no matter what Claude
-  // extracted from the thread — keep it out of the stored contract.
+  // Platforms follow the creator's choice: mergeContractData already keeps the
+  // all-three default whenever the extraction returns nothing meaningful (the
+  // creator never narrowed them), and takes the extracted subset when they did.
+  // On a view-based deal the fee buys a TOTAL guaranteed-view count that can be
+  // reached across multiple posts, so there is no fixed number of videos to
+  // name. Never let the extraction pin a count onto it (e.g. "1 Instagram
+  // Reel") — keep the count-less base deliverables and drop any video count.
+  if (base.offerType === 'view_based') {
+    merged.deliverables = base.deliverables;
+    merged.numberOfDeliverables = null;
+    merged.numberOfVideos = null;
+  }
+  // Cadence never applies to a single-video (or view-based) deal, no matter
+  // what Claude extracted from the thread — keep it out of the stored contract.
   if (Number(merged.numberOfDeliverables || merged.numberOfVideos) <= 1) {
     merged.timeline = null;
   }
@@ -469,6 +504,71 @@ async function removeUsageRightsFromContract(creatorId) {
   return row;
 }
 
+// ── Post-acceptance term changes ──────────────────────────────────────────
+// A contract is a point-in-time snapshot taken when the creator accepts, but
+// the creator can still change a deal term afterwards ("let's make it 2 videos",
+// "I can also post on YouTube Shorts", "push the deadline to the 30th"). Detect
+// such a message so the caller can re-sync the (unsigned) contract from the
+// now-updated thread. Deliberately broad — payment, deliverables, platforms,
+// timeline, views, exclusivity, usage rights — but only genuine CHANGES, not
+// questions or acknowledgements.
+const TERM_CHANGE_SYSTEM = `You read one inbound message from a creator who has ALREADY accepted a paid collaboration and been sent a contract. Decide whether this message CHANGES, ADDS, or REMOVES any material deal term in that contract — for example: which platforms they'll post on (Instagram / TikTok / YouTube Shorts / Reels / etc.), the number or type of deliverables, the timeline or posting deadline, the fee or payment structure/split, guaranteed views, exclusivity, or usage/ad rights.
+
+Return ONLY a JSON object: {"changesTerms": boolean}
+- true ONLY when the message actually alters a deal term, e.g. "let's make it 2 videos instead of 1", "I can also post on YouTube Shorts", "I can only do Instagram now", "can we push the deadline to the 30th", "actually my rate is $X".
+- false for everything else — acknowledgements, thanks, benign logistics or payment-timing questions that do not change a term, or unrelated topics. A QUESTION about a term ("when do I get paid?") is not a change.`;
+
+async function changesContractTerms(text) {
+  if (!text || !String(text).trim()) return false;
+  const out = claude.parseJsonLoose(await claude.callClaudeText(TERM_CHANGE_SYSTEM, String(text), 200));
+  if (out && typeof out.changesTerms === 'boolean') return out.changesTerms;
+  // Deterministic fallback when Claude is unavailable: a deal-term noun AND a
+  // change marker must co-occur. Conservative — a missed change just waits for
+  // a human to notice on the next reply (the reply is delegated regardless).
+  const s = String(text).toLowerCase();
+  const term =
+    /\b(platform|instagram|tiktok|tik tok|youtube|shorts?|reels?|videos?|deliverable|deadline|timeline|rate|fee|price|pricing|payment|views?|exclusiv|usage rights?|ad rights?)\b/.test(
+      s,
+    );
+  const change =
+    /\b(instead|change[ds]?|updat(?:e|ed|ing)|revis(?:e|ed)|actually|can also|also (?:do|post)|add|drop|remove|only (?:do|post)|push (?:the|it|back)|move (?:the|it)|make it|bump|increase|decrease|lower|raise)\b/.test(
+      s,
+    );
+  return term && change;
+}
+
+// Re-sync a creator's contract from the current (persisted) email thread after
+// a post-acceptance term change. ONLY touches a contract that is still pending —
+// a signed contract is executed and must never be silently altered (a human
+// handles that amendment). Re-runs the same extraction used at creation, so the
+// updated data flows to both the contract page and the dashboard Deals column
+// (both read this row). Returns {updated, signed, row}:
+//   updated:true  — the pending contract's data was refreshed
+//   signed:true   — a contract exists but is already signed (left untouched)
+//   both false    — no contract on file yet
+async function updateContractTermsFromThread(creatorId) {
+  const existing = await db.one(
+    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+  if (!existing) return { updated: false, signed: false, row: null };
+  if (existing.status !== 'pending') return { updated: false, signed: true, row: existing };
+
+  const creator = await loadCreatorForContract(creatorId);
+  if (!creator) return { updated: false, signed: false, row: existing };
+
+  const data = await extractContractData(creator);
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_terms_updated', $2)`,
+    [creatorId, { token: existing.token }],
+  );
+  return { updated: true, signed: false, row };
+}
+
 // Record the creator's signed submission: pending -> signed. Idempotent — a
 // second submit (or an unknown token) returns the current row without re-signing.
 async function recordSubmission(token, { signerName, signerEmail, signerIp, submission } = {}) {
@@ -546,6 +646,8 @@ module.exports = {
   attachContracts,
   disputesUsageRights,
   removeUsageRightsFromContract,
+  changesContractTerms,
+  updateContractTermsFromThread,
   // exposed for tests / reuse
   resolveOffer,
   agreedFeeFor,
