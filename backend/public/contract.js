@@ -266,6 +266,34 @@
     $('page1').hidden = true; $('page2').hidden = true; $('done').hidden = false;
   }
 
+  // A returning visitor whose contract is already signed sees the actual
+  // contract — read-only — with a banner noting who signed it and when,
+  // rather than the bare "Contract signed" confirmation.
+  function showSigned(c) {
+    var d = c.data || {};
+    var who = (c.signerName || d.creatorName || '').trim();
+    var when = '';
+    if (c.signedAt) {
+      var dt = new Date(c.signedAt);
+      if (!isNaN(dt.getTime())) {
+        when = dt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+      }
+    }
+    $('signed-banner-text').textContent =
+      'This contract has been signed by ' + (who || 'the creator') +
+      (when ? ' on ' + when : '') + '.';
+    $('signed-banner').hidden = false;
+
+    // Hide the interactive parts — the contract is already executed, so the
+    // "Your details" form and the signature/continue section aren't shown.
+    var page1 = $('page1');
+    var details = page1.querySelector('.section.editable');
+    var sign = page1.querySelector('.sign');
+    if (details) details.hidden = true;
+    if (sign) sign.hidden = true;
+    page1.hidden = false;
+  }
+
   // ── Load contract ──────────────────────────────────────────────────────
   function load() {
     if (!token) { $('loading').hidden = true; $('notfound').hidden = false; return; }
@@ -295,8 +323,9 @@
 
         $('loading').hidden = true;
         if (c.status && c.status !== 'pending') {
-          // Already signed: show the confirmation state instead of the form.
-          markSigned();
+          // Already signed: show the contract itself (read-only) with a banner
+          // noting the creator has signed, instead of the bare confirmation.
+          showSigned(c);
           return;
         }
         $('page1').hidden = false;
