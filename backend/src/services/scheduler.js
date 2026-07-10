@@ -92,20 +92,22 @@ async function pollNegotiations() {
       }
     }
 
-    // 5. Post-acceptance usage-rights disputes: an ACCEPTED creator replied
-    //    again (webhook already wrote latest_inbound_text) but the scheduler
-    //    never looks at ACCEPTED creators otherwise — steps 1-2 only cover
-    //    negotiation_status IS NULL / AWAITING_*. checkAcceptedUsageRightsDispute
-    //    itself no-ops for anything other than a free_only-policy campaign.
+    // 5. Post-acceptance replies: an ACCEPTED creator replied again (webhook
+    //    already wrote latest_inbound_text) but the scheduler never looks at
+    //    ACCEPTED creators otherwise — steps 1-2 only cover negotiation_status
+    //    IS NULL / AWAITING_*. handleAcceptedReply answers benign factual
+    //    questions and delegates everything else (payment/contract questions,
+    //    disputes, usage-rights objections) so no post-signing creator reply is
+    //    ever left unattended.
     const acceptedWithReply = await db.many(
       `SELECT id FROM creators
        WHERE negotiation_status = 'ACCEPTED' AND latest_inbound_text IS NOT NULL`,
     );
     for (const c of acceptedWithReply) {
       try {
-        await negotiation.checkAcceptedUsageRightsDispute(c.id);
+        await negotiation.handleAcceptedReply(c.id);
       } catch (err) {
-        console.error(`usage-rights dispute check failed for creator ${c.id}:`, err.message);
+        console.error(`post-acceptance reply handling failed for creator ${c.id}:`, err.message);
       }
     }
   } finally {
