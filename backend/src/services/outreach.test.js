@@ -8,7 +8,7 @@
 // jarring "Hi ," greeting.
 const test = require('node:test');
 const assert = require('node:assert');
-const { outreachFirstName } = require('./outreach');
+const { outreachFirstName, isExplicitFollowupStep } = require('./outreach');
 
 test('outreachFirstName uses first_name verbatim when present', () => {
   assert.strictEqual(
@@ -60,4 +60,26 @@ test('outreachFirstName returns "" when neither first_name nor handle exist', ()
   // Instagram context has no way to reach outreach anyway).
   assert.strictEqual(outreachFirstName({}), '');
   assert.strictEqual(outreachFirstName({ first_name: null, instagram_username: null }), '');
+});
+
+// isExplicitFollowupStep decides whether an Instantly email_sent event is a
+// follow-up (Step 2+) purely from the step number. Step 1 is the outreach
+// email and must NOT be treated as a follow-up.
+test('isExplicitFollowupStep treats step >= 2 as a follow-up', () => {
+  assert.strictEqual(isExplicitFollowupStep(2), true);
+  assert.strictEqual(isExplicitFollowupStep(3), true);
+  assert.strictEqual(isExplicitFollowupStep('2'), true); // string from JSON payload
+});
+
+test('isExplicitFollowupStep does NOT treat the outreach step (1) as a follow-up', () => {
+  assert.strictEqual(isExplicitFollowupStep(1), false);
+  assert.strictEqual(isExplicitFollowupStep('1'), false);
+  assert.strictEqual(isExplicitFollowupStep(0), false);
+});
+
+test('isExplicitFollowupStep is false when the step is missing/unparseable', () => {
+  // The time-gap guard in markFollowupSent covers this case instead.
+  assert.strictEqual(isExplicitFollowupStep(null), false);
+  assert.strictEqual(isExplicitFollowupStep(undefined), false);
+  assert.strictEqual(isExplicitFollowupStep('abc'), false);
 });
