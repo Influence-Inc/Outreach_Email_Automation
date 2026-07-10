@@ -439,55 +439,18 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .cr-send-btn { align-self: flex-start; }
 
-/* Quoted-rates disclosure (Status column). Reuses the same tiny-uppercase-tag
-   pattern as the Deals column so the two columns read consistently. Compact
-   by default; 2+ rates collapse into a dropdown so the column never grows
-   more than one line's height until the admin clicks to expand. */
-.cr-quoted-rates {
-  display: flex; flex-direction: column; gap: 4px;
-  align-self: stretch; min-width: 0;
-}
-.cr-quoted-single { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.cr-quoted-tag {
-  flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--faint);
-}
-.cr-quoted-val {
-  font-size: 12.5px; color: var(--ink-2); line-height: 1.3; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.cr-quoted-details { min-width: 0; }
-.cr-quoted-summary {
-  display: inline-flex; align-items: center; gap: 6px;
-  list-style: none; cursor: pointer; padding: 3px 6px; margin: -1px -4px;
-  border-radius: 6px;
-  color: var(--ink-2);
-}
-.cr-quoted-summary::-webkit-details-marker { display: none; }
-.cr-quoted-summary:hover { background: var(--surface-3); }
-.cr-quoted-count {
-  font-size: 10px; font-weight: 600; color: var(--ink-2);
-  background: var(--surface-3); border: 1px solid var(--line);
-  border-radius: 20px; padding: 0 6px; line-height: 16px;
-}
-.cr-quoted-details[open] .cr-quoted-summary { background: var(--surface-3); }
-.cr-quoted-chevron { font-size: 9px; color: var(--faint); transition: transform 0.15s; }
-.cr-quoted-details[open] .cr-quoted-chevron { transform: rotate(180deg); }
-.cr-quoted-list {
-  list-style: none; margin: 5px 0 0; padding: 0;
-  display: flex; flex-direction: column; gap: 3px;
-}
-.cr-quoted-item {
+/* Rate substep (used when a "Creator quoted rates" timeline step expands into
+   its per-option list). Same dot-prefix as the plain substep, but with an
+   amount+description row so "$3,500 · for 300,000 combined views" reads
+   cleanly. */
+.timeline-substep-rate {
   display: flex; align-items: baseline; gap: 8px;
-  padding: 3px 0 3px 12px; position: relative;
-  font-size: 12px; color: var(--muted); line-height: 1.35;
+  padding-right: 4px;
 }
-.cr-quoted-item::before {
-  content: ''; position: absolute; left: 2px; top: 8px;
-  width: 4px; height: 4px; border-radius: 50%; background: var(--accent-dot);
+.timeline-substep-amt {
+  flex-shrink: 0; color: var(--green); font-weight: 600; font-size: 11px;
 }
-.cr-quoted-amt { flex-shrink: 0; color: var(--green); font-weight: 600; }
-.cr-quoted-desc {
+.timeline-substep-desc {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
