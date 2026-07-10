@@ -158,9 +158,13 @@ function suggestPostingWindows(n, deadline) {
 // public/contract.html for the layout that consumes each key.
 function baseContractData(creator, fee, offer) {
   const n = numDeliverables(offer);
-  // Cadence describes the rhythm across multiple videos; a single-video deal
-  // has one drop date, not a rhythm, so the contract omits it entirely.
-  const cadence = n <= 1
+  // A view-based deal is priced by TOTAL guaranteed views, not a fixed post
+  // count — the creator publishes as many videos as needed to reach the total —
+  // so it has no video count and no multi-video rhythm to describe.
+  const isViewBased = !!(offer && offer.offer_type === 'view_based');
+  // Cadence describes the rhythm across multiple videos; a single-video (or
+  // view-based) deal has one drop, not a rhythm, so the contract omits it.
+  const cadence = isViewBased || n <= 1
     ? null
     : (process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week');
   const brandName = creator.brand_name || process.env.BRAND_NAME || null;
@@ -193,12 +197,19 @@ function baseContractData(creator, fee, offer) {
     offerType: (offer && offer.offer_type) || null,
     offerLabel: (offer && offer.label) || null,
 
-    // Deliverables + platforms. Matches what REPLY 1 promises the creator
-    // (Instagram primarily, cross-posted on TikTok & YouTube Shorts).
+    // Deliverables + platforms. Platforms match what REPLY 1 promises the
+    // creator — Instagram primarily, cross-posted on TikTok & YouTube Shorts —
+    // and are a fixed policy on every deal, not re-derived per negotiation
+    // thread (which is why extractContractData never lets a narrow extraction
+    // shrink them down to a single platform).
     platforms: ['Instagram', 'TikTok', 'YouTube Shorts'],
-    deliverables: `${n} short-form video${n === 1 ? '' : 's'}`,
-    numberOfDeliverables: n,
-    numberOfVideos: n,
+    // View-based deals state no video count (see isViewBased above); flat deals
+    // name the agreed number of videos.
+    deliverables: isViewBased
+      ? 'Short-form video content'
+      : `${n} short-form video${n === 1 ? '' : 's'}`,
+    numberOfDeliverables: isViewBased ? null : n,
+    numberOfVideos: isViewBased ? null : n,
     minTotalViews: minViews,
     includeDmAutomation: true,
 
@@ -295,6 +306,8 @@ Return ONLY a JSON object — no prose, no markdown fences — with EXACTLY thes
 
 Rules:
 - Use ONLY facts supported by the negotiation timeline and the provided KNOWN VALUES. Never invent numbers.
+- "platforms" is the fixed cross-post set for every deal: ["Instagram","TikTok","YouTube Shorts"]. Do NOT narrow it to a single platform even when one is emphasised in the thread.
+- "deliverables": when KNOWN VALUES.acceptedOffer.offer_type is "view_based", the deal is priced by TOTAL guaranteed views reached across as many posts as the creator needs — describe the content WITHOUT any video count (e.g. "Short-form video content") and set numberOfDeliverables and numberOfVideos to null. Never write "1 video" / "1 Reel" for a view-based deal. For flat (video-based) deals, state the agreed number of videos.
 - "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
 - "currency" is a 3-letter ISO code (default "USD").
 - "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
@@ -352,8 +365,22 @@ async function extractContractData(creator) {
   const out = claude.parseJsonLoose(await claude.callClaudeText(CONTRACT_SYSTEM, user, 1200));
   if (!out || typeof out !== 'object') return base;
   const merged = mergeContractData(base, out);
-  // Cadence never applies to a single-video deal, no matter what Claude
-  // extracted from the thread — keep it out of the stored contract.
+  // Platforms are a fixed cross-post policy (Instagram + TikTok + YouTube
+  // Shorts on every deal), not a per-thread fact — a narrow extraction that
+  // drops down to just the platform a message happened to emphasise would
+  // misstate the deal, so the campaign's full platform set always wins.
+  merged.platforms = base.platforms;
+  // On a view-based deal the fee buys a TOTAL guaranteed-view count that can be
+  // reached across multiple posts, so there is no fixed number of videos to
+  // name. Never let the extraction pin a count onto it (e.g. "1 Instagram
+  // Reel") — keep the count-less base deliverables and drop any video count.
+  if (base.offerType === 'view_based') {
+    merged.deliverables = base.deliverables;
+    merged.numberOfDeliverables = null;
+    merged.numberOfVideos = null;
+  }
+  // Cadence never applies to a single-video (or view-based) deal, no matter
+  // what Claude extracted from the thread — keep it out of the stored contract.
   if (Number(merged.numberOfDeliverables || merged.numberOfVideos) <= 1) {
     merged.timeline = null;
   }

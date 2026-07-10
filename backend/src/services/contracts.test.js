@@ -39,7 +39,7 @@ test('baseContractData fills a complete contract from known creator + offer', ()
     brand_name: 'Reve',
     campaign_name: 'Spring Launch',
   };
-  const offer = { offer_type: 'view_based', num_videos: 3, view_guarantee: 100000, flat_fee: 900 };
+  const offer = { offer_type: 'video_based', num_videos: 3, view_guarantee: 100000, flat_fee: 900 };
   const d = contracts.baseContractData(creator, 900, offer);
 
   // Identity + campaign
@@ -71,6 +71,27 @@ test('baseContractData fills a complete contract from known creator + offer', ()
   // Suggested per-video posting windows
   assert.ok(Array.isArray(d.postingWindows) && d.postingWindows.length === 3);
   assert.strictEqual(d.postingWindows[0].label, 'Video 1');
+});
+
+test('baseContractData: a view-based deal names no video count', () => {
+  // Priced by TOTAL guaranteed views reached across as many posts as needed —
+  // so the contract states neither "N videos" nor a per-video cadence.
+  const creator = { full_name: 'Vo Anh Duy', brand_name: 'Reve' };
+  const offer = { offer_type: 'view_based', num_videos: 1, view_guarantee: 100000, flat_fee: 300 };
+  const d = contracts.baseContractData(creator, 300, offer);
+
+  assert.strictEqual(d.offerType, 'view_based');
+  // No count anywhere the contract page renders it.
+  assert.doesNotMatch(d.deliverables, /\d/, 'deliverables must not carry a video count');
+  assert.strictEqual(d.numberOfDeliverables, null);
+  assert.strictEqual(d.numberOfVideos, null);
+  // The guaranteed view total is still surfaced — that is what the deal is priced on.
+  assert.strictEqual(d.minTotalViews, 100000);
+  assert.strictEqual(d.guaranteedViews, 100000);
+  // Cadence is a multi-video rhythm; a view-based deal has none.
+  assert.strictEqual(d.timeline, null);
+  // Platforms remain the fixed cross-post set.
+  assert.deepStrictEqual(d.platforms, ['Instagram', 'TikTok', 'YouTube Shorts']);
 });
 
 test('baseContractData surfaces video_bonus offer terms in the contract', () => {
