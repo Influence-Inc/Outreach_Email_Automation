@@ -3,6 +3,18 @@ const db = require('../db');
 const { verifyEmail } = require('./emailVerify');
 const instantly = require('./instantly');
 
+// The name that flows into Instantly's {{firstName}} merge tag for the
+// outreach email. Some Instagram profiles have no scraped display name at
+// send time (bio hides it, private account, extraction miss). In that case
+// we fall back to the creator's @handle so the greeting reads "Hi @rabin,"
+// instead of a jarring "Hi ,". The @ is included verbatim per the ask.
+function outreachFirstName(creator) {
+  const first = String(creator.first_name || '').trim();
+  if (first) return first;
+  const handle = String(creator.instagram_username || '').trim().replace(/^@+/, '');
+  return handle ? `@${handle}` : '';
+}
+
 // Pre-send verification is on by default; set EMAIL_VERIFY=0 to disable.
 const verifyEnabled = !/^(0|false|no|off)$/i.test(process.env.EMAIL_VERIFY || '');
 
@@ -111,7 +123,7 @@ async function sendOutreach(creatorId) {
   try {
     const resp = await instantly.addLeadToCampaign({
       email: to,
-      firstName: creator.first_name || '',
+      firstName: outreachFirstName(creator),
       campaignId: instantlyCampaignId,
       // Populates Instantly's {{companyName}} merge tag with the brand so the
       // outreach subject ("Paid Partnership with {{companyName}}") renders the
@@ -195,4 +207,6 @@ module.exports = {
   sendOutreach,
   markReplied,
   prepareOutreach,
+  // Exposed for tests.
+  outreachFirstName,
 };
