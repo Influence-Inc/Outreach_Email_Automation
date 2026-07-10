@@ -134,11 +134,10 @@ async function selectCampaign(id) {
   el('campaign-title').textContent = c.name;
   const stats = [
     { label: 'Creators', value: c.creator_count },
-    { label: 'Pending', value: c.pending_extraction_count },
-    { label: 'Email found', value: c.email_found_count },
+    { label: 'Pending', value: c.pending_count },
     { label: 'Outreach', value: c.outreach_sent_count },
-    { label: 'Follow-up', value: c.followup_sent_count },
     { label: 'Replied', value: c.replied_count, accent: true },
+    { label: 'Contracted', value: c.contracted_count },
   ];
   const statsEl = el('campaign-stats');
   statsEl.hidden = false;

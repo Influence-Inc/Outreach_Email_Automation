@@ -13,11 +13,23 @@ router.get('/', async (_req, res, next) => {
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
               COUNT(cr.id)::int AS creator_count,
-              COUNT(cr.id) FILTER (WHERE cr.status = 'pending_extraction')::int AS pending_extraction_count,
+              -- email_found_count feeds the "Send outreach" confirmation dialog
+              -- (creators with an email but no outreach yet); not shown as a stat.
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
-              COUNT(cr.id) FILTER (WHERE cr.status = 'outreach_sent')::int AS outreach_sent_count,
-              COUNT(cr.id) FILTER (WHERE cr.status = 'followup_sent')::int AS followup_sent_count,
+              -- Outreach: creators the outreach email has actually gone out to,
+              -- regardless of any later follow-ups/replies. outreach_sent_at is
+              -- set once when outreach sends and never cleared.
+              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS outreach_sent_count,
+              -- Pending: creators still awaiting their outreach email.
+              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NULL)::int AS pending_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
+              -- Contracted: creators a contract has been sent to.
+              COUNT(cr.id) FILTER (
+                WHERE EXISTS (
+                  SELECT 1 FROM email_events ee
+                  WHERE ee.creator_id = cr.id AND ee.type = 'contract_sent'
+                )
+              )::int AS contracted_count,
               COUNT(cr.id) FILTER (WHERE cr.needs_human)::int AS needs_human_count,
               COUNT(cr.id) FILTER (
                 WHERE cr.needs_human
