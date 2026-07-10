@@ -347,7 +347,11 @@ function dealSummaryItems(data) {
   }
 
   if (Array.isArray(data.platforms) && data.platforms.length) {
-    items.push({ label: 'PLATFORMS', value: data.platforms.join(', ') });
+    // Platforms wrap awkwardly one-word-per-line when they sit inline beside
+    // the tiny PLATFORMS tag (column is narrow, value is long — "Instagram,
+    // TikTok, YouTube Shorts"). Rendered stacked: label on its own row, value
+    // flowing under the full column width.
+    items.push({ label: 'PLATFORMS', value: data.platforms.join(', '), stacked: true });
   }
 
   const deadline = data.postingDeadline || data.deadline;
@@ -398,7 +402,7 @@ function renderRateCell(r, cell) {
         continue;
       }
       const lineDiv = document.createElement('div');
-      lineDiv.className = 'deal-line';
+      lineDiv.className = 'deal-line' + (item.stacked ? ' deal-line-stacked' : '');
       const tag = document.createElement('span');
       tag.className = 'deal-tag';
       tag.textContent = item.label;
@@ -522,7 +526,17 @@ function renderTimeline(log) {
   groups.forEach((g, gi) => {
     const isLast = gi === groups.length - 1;
     const newest = g.entries[g.entries.length - 1]; // group's representative
-    const collapsed = g.entries.length > 1;
+    // Two ways a step collapses into a "label + count + chevron" group:
+    //   1) A run of consecutive identical-text events ("Creator replied ×3").
+    //   2) A single "Creator quoted rates" event whose detail carries an
+    //      `options` array — one negotiation reply where the creator named
+    //      multiple rates ("$3,500 for 300k views / $5,000 for 600k / …").
+    // The rate options render as substeps in that same expand-on-click UI.
+    const rateOptions =
+      g.entries.length === 1 && Array.isArray(newest.options) && newest.options.length > 1
+        ? newest.options
+        : null;
+    const collapsed = g.entries.length > 1 || !!rateOptions;
 
     const step = document.createElement('div');
     step.className = 'timeline-step' + (isLast ? ' current' : '');
@@ -544,7 +558,9 @@ function renderTimeline(log) {
     body.style.paddingBottom = isLast ? '0' : '4px';
 
     if (collapsed) {
-      // Summary row: label + ×N count + chevron; click to reveal each occurrence.
+      // Summary row: label + count + chevron; click to reveal each substep.
+      // Count semantics: for repeated events show "×N" (three replies); for
+      // rate options show "(N)" (three tiered rates in one reply).
       const head = document.createElement('div');
       head.className = 'timeline-group-head';
       head.setAttribute('role', 'button');
@@ -554,7 +570,8 @@ function renderTimeline(log) {
       label.textContent = g.text;
       const count = document.createElement('span');
       count.className = 'timeline-count';
-      count.textContent = '×' + g.entries.length;
+      const subCount = rateOptions ? rateOptions.length : g.entries.length;
+      count.textContent = rateOptions ? String(subCount) : '×' + subCount;
       const chev = document.createElement('span');
       chev.className = 'timeline-chevron';
       chev.textContent = '▾';
@@ -568,13 +585,35 @@ function renderTimeline(log) {
       const subs = document.createElement('div');
       subs.className = 'timeline-substeps';
       subs.hidden = true;
-      // Oldest → newest within the group.
-      g.entries.forEach((e) => {
-        const li = document.createElement('div');
-        li.className = 'timeline-substep num';
-        li.textContent = fmtDate(e.at);
-        subs.appendChild(li);
-      });
+      if (rateOptions) {
+        // Each rate option becomes one substep: "$3,500 · for 300,000 views".
+        // If the label already starts with the amount (extracted verbatim from
+        // the reply), strip the leading amount so it isn't rendered twice.
+        const fmtMoney = (n) => `$${fmtNum(Math.round(Number(n) || 0))}`;
+        rateOptions.forEach((o) => {
+          const li = document.createElement('div');
+          li.className = 'timeline-substep timeline-substep-rate';
+          const amt = document.createElement('span');
+          amt.className = 'timeline-substep-amt num';
+          amt.textContent = fmtMoney(o.amount);
+          const desc = document.createElement('span');
+          desc.className = 'timeline-substep-desc';
+          const amtStr = fmtMoney(o.amount);
+          let d = String(o.label || '').trim();
+          if (d.startsWith(amtStr)) d = d.slice(amtStr.length).replace(/^[\s·:,-]+/, '');
+          desc.textContent = d;
+          li.append(amt, desc);
+          subs.appendChild(li);
+        });
+      } else {
+        // Repeated identical-text events: show each occurrence's timestamp.
+        g.entries.forEach((e) => {
+          const li = document.createElement('div');
+          li.className = 'timeline-substep num';
+          li.textContent = fmtDate(e.at);
+          subs.appendChild(li);
+        });
+      }
 
       const toggle = () => {
         const open = subs.hidden;

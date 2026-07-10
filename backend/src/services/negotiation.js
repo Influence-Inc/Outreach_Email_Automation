@@ -279,11 +279,12 @@ async function handleCreatorReply(creator, replyText, ctx) {
     templates.REPLY2_BODY,
     '',
     'Read the creator\'s plain-text reply and respond with STRICT JSON ONLY (no prose, no markdown fences), exactly this shape:',
-    '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"request_our_offer"|"request_counter_rate"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
+    '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"request_our_offer"|"request_counter_rate"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "quoted_rate_options": [{"amount": number, "label": string}] | null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
     '',
     'Rules:',
     `- Judge the creator's intent from the MEANING and tone of the whole reply, NEVER from specific keywords. Any enthusiasm, curiosity, or request to hear more — e.g. "sounds great", "amazing", "interesting", "cool", "tell me more", "share the details", "what did you have in mind", "I'd love to know more", "I'm in", "sure", a simple "yes", or even just a positive emoji — all mean the creator wants to proceed. Treat those as interest: classify as "asking_details" when REPLY 1 has not been sent yet, otherwise "answer_question". A creator does NOT have to say the word "yes" or "interested" to be interested. Reserve "declined" strictly for replies whose overall meaning is that they do NOT want to proceed.`,
-    '- "shared_rate": the creator stated a rate/budget/price. Put the numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
+    '- "shared_rate": the creator stated a rate/budget/price. Put the primary numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
+    '- quoted_rate_options: whenever the creator lists MORE THAN ONE rate — a tiered / performance ladder ("$3,500 for 300k views, $5,000 for 600k views, $7,500 for 1M views"), a per-item + package pair ("$900 per reel, $2,500 for 3 reels"), or any menu of alternatives — return EVERY rate as an ordered array of {"amount": number, "label": string}. `label` is a short human-readable description of what THAT specific rate covers (e.g. "$3,500 for 300k views", "package of 3 reels — $2,500 total"), taken from the surrounding text — don\'t paraphrase, but drop bullet markers and trailing punctuation. Use quoted_rate for the primary/reference amount (usually the lowest tier or the per-item price). If the creator gave exactly ONE rate, set quoted_rate_options to null. Also set this on "counter" when the creator lists multiple counter-numbers.',
     `- "request_our_offer": the creator is interested but turns the rate question back on us — they ask US to name/quote/propose a rate, state a budget, or make the FIRST offer instead of giving their own number ("can you quote a fair rate first?", "what's your budget?", "what are you offering?", "make me an offer", "what do you usually pay for this?", "you tell me a number"). This is NOT a rate from them and NOT a complaint about an existing offer — it's a request for us to price it. email=null, send_now=false — an admin will set the price and send an offer from the dashboard. quoted_rate=null.`,
     '- "counter": the creator pushed back on a prior offer with a different number/terms. Put any numeric amount in quoted_rate. email=null, send_now=false.',
     `- "request_counter_rate": the creator pushed back on the offer we already sent ("this rate is too low", "can you do better?", "I usually charge more", "not quite what I had in mind") but did NOT name a specific number. Use this ONLY when an offer is already on the table (the current stage is AWAITING_DECISION) — otherwise prefer "asking_details" or "answer_question". Write a SHORT plain-text reply that (1) warmly acknowledges their hesitation without committing to anything specific, (2) asks them directly what rate would work for them, (3) signals openness to working it out together. Do NOT propose a number, do NOT promise to match, do NOT mention any offer specifics — those come from admin approval. Sign "- ${v.managerName}". send_now=true. quoted_rate=null.`,
@@ -321,10 +322,27 @@ async function handleCreatorReply(creator, replyText, ctx) {
       out.email && out.email.body
         ? { subject: out.email.subject || defaultSubject, body: out.email.body }
         : null;
+    // Normalise quoted_rate_options: keep only well-formed entries; if empty
+    // after filtering, fall back to running the deterministic extractor over
+    // the raw reply so an older Claude JSON without the new field still
+    // captures multi-rate structure.
+    let options = Array.isArray(out.quoted_rate_options)
+      ? out.quoted_rate_options
+          .map((o) => ({
+            amount: numOrNull(o && o.amount),
+            label: typeof (o && o.label) === 'string' ? o.label.trim().slice(0, 120) : '',
+          }))
+          .filter((o) => o.amount != null && o.label)
+      : [];
+    if (!options.length && (out.action === 'shared_rate' || out.action === 'counter')) {
+      const extracted = parseRateOptionsFromText(replyText);
+      if (extracted.length > 1) options = extracted;
+    }
     return {
       understanding: out.understanding || '',
       action: out.action,
       quoted_rate: numOrNull(out.quoted_rate),
+      quoted_rate_options: options.length ? options : null,
       email,
       send_now: out.send_now !== false,
     };
@@ -351,6 +369,67 @@ function parseRateFromText(text) {
   return null;
 }
 
+// Extract EVERY rate the creator quoted in one reply, with the surrounding
+// context as a label. Creators frequently send tiered pricing like:
+//   - $3,500 for 300,000 combined views
+//   - $5,000 for 600,000 combined views
+//   - $7,500 for 1,000,000 combined views
+// or inline: "My rate is $900 per reel, but for a package of 3 this month I
+// can work at $2,500 total." Returns an array of `{ amount: number, label:
+// string }` (label is the containing line/clause, trimmed and stripped of
+// list markers, capped at 120 chars). Returns [] if no plausible amounts.
+// Dedupes by (amount + normalised label) so the same rate stated twice
+// doesn't appear twice.
+function parseRateOptionsFromText(text) {
+  if (!text) return [];
+  const s = String(text).replace(/\r/g, '');
+  const results = [];
+  const seen = new Set();
+
+  // Walk each line (a creator's bulleted list is line-per-option) and, within
+  // each line, split on semicolons / " or " so inline alternatives become
+  // separate options.
+  const lines = s.split(/\n+/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    // Split inline alternatives without swallowing the whole sentence.
+    const clauses = line.split(/;\s+|\s+\bor\b\s+(?=\$)|\s{2,}/);
+    for (const rawClause of clauses) {
+      const clause = rawClause.trim();
+      if (!clause) continue;
+      // Find every $-amount in this clause.
+      const amountRe = /\$\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*([kKmM])?/g;
+      let m;
+      const amountsHere = [];
+      while ((m = amountRe.exec(clause)) !== null) {
+        let val = parseFloat(m[1].replace(/,/g, ''));
+        if (m[2]) val *= m[2].toLowerCase() === 'k' ? 1e3 : 1e6;
+        if (Number.isFinite(val) && val >= 50) amountsHere.push(Math.round(val));
+      }
+      if (!amountsHere.length) continue;
+      // The label is the clause with any leading bullet marker stripped, so
+      // "- $3,500 for 300,000 combined views" reads as "$3,500 for 300,000
+      // combined views". Cap length to keep the dropdown compact.
+      const label = clause
+        .replace(/^[-*•·]\s*/, '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 120)
+        .trim();
+      // One clause can technically hold two amounts ("between $500 and
+      // $700"); we still record them as separate options so the reader sees
+      // both endpoints — the label carries the surrounding context.
+      for (const amount of amountsHere) {
+        const key = `${amount}|${label.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({ amount, label });
+      }
+    }
+  }
+  return results;
+}
+
 // Does the creator turn the rate question back on us — asking us to name/quote
 // a price or make the first offer, rather than giving their own number? Used by
 // the heuristic fallback (Claude covers this via the request_our_offer action).
@@ -370,10 +449,15 @@ function heuristicReply(text, ctx) {
   const v = templateVars(ctx);
   const rate = parseRateFromText(text);
   if (rate != null) {
+    // Multi-rate replies are common enough that even the heuristic path should
+    // capture them — otherwise a Claude-unavailable session drops all but the
+    // first amount.
+    const options = parseRateOptionsFromText(text);
     return {
       understanding: '(heuristic) creator shared a rate',
       action: 'shared_rate',
       quoted_rate: rate,
+      quoted_rate_options: options.length > 1 ? options : null,
       email: null,
       send_now: false,
     };
@@ -872,21 +956,35 @@ async function applyReply(creator, ctx, result) {
       if (rate != null && stats) {
         offers = pricing.computeOffers(stats, ctx.maxCpm, Number(rate));
       }
+      // Every rate the creator quoted in THIS reply. When they only stated one,
+      // we still store a single-option array so the dashboard has a uniform
+      // shape; overwriting on each new reply means the latest set wins (a
+      // counter with fresh numbers replaces stale tiered pricing).
+      let rateOptions = Array.isArray(result.quoted_rate_options) ? result.quoted_rate_options : null;
+      if (!rateOptions && rate != null) {
+        rateOptions = [{ amount: Number(rate), label: `$${Number(rate).toLocaleString('en-US')}` }];
+      }
       await db.query(
         `UPDATE creators
          SET quoted_rate = COALESCE($2, quoted_rate),
-             suggested_offers = COALESCE($3::jsonb, suggested_offers),
+             quoted_rate_options = COALESCE($3::jsonb, quoted_rate_options),
+             suggested_offers = COALESCE($4::jsonb, suggested_offers),
              negotiation_status = 'AWAITING_APPROVAL',
              updated_at = NOW()
          WHERE id = $1`,
-        [creator.id, rate != null ? rate : null, offers ? JSON.stringify(offers) : null],
+        [
+          creator.id,
+          rate != null ? rate : null,
+          rateOptions ? JSON.stringify(rateOptions) : null,
+          offers ? JSON.stringify(offers) : null,
+        ],
       );
       // Timeline entry: the creator named/changed a rate (NUMERIC -> string in pg).
       if (rate != null) {
         const prevRate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
         await db.query(
           `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_quoted', $2)`,
-          [creator.id, { from: prevRate, to: Number(rate), by: 'creator' }],
+          [creator.id, { from: prevRate, to: Number(rate), by: 'creator', options: rateOptions || null }],
         );
       }
       return;
@@ -1139,6 +1237,7 @@ module.exports = {
   detectSenderName,
   askedForReferences,
   extractOfferAmount,
+  parseRateOptionsFromText,
   asksUsToQuoteFirst,
   // Test-only.
   _setClient,

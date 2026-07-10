@@ -37,8 +37,23 @@ function rateLogEntry(type, detail) {
       return { text: 'Creator replied', tone: 'done' };
     case 'rate_quoted': {
       const to = d.to != null ? fmtMoney(d.to) : null;
+      // If the creator quoted MULTIPLE rates in one reply, attach them to the
+      // entry so the client can render this step as an expandable group
+      // ("Creator quoted (3) ▾") — same collapse-and-reveal pattern used for
+      // repeated "Creator replied" runs. Each option renders as a substep.
+      const options = Array.isArray(d.options) && d.options.length > 1
+        ? d.options
+            .filter((o) => o && Number.isFinite(Number(o.amount)))
+            .map((o) => ({
+              amount: Number(o.amount),
+              label: typeof o.label === 'string' ? o.label.trim() : '',
+            }))
+        : null;
       if (d.by === 'creator') {
-        return { text: to ? `Creator quoted ${to}` : 'Creator shared a rate', tone: 'active' };
+        const text = options
+          ? 'Creator quoted rates'
+          : (to ? `Creator quoted ${to}` : 'Creator shared a rate');
+        return { text, tone: 'active', ...(options ? { options } : {}) };
       }
       if (d.from != null && d.to != null) {
         return { text: `Rate updated ${fmtMoney(d.from)} → ${fmtMoney(d.to)}`, tone: 'active' };

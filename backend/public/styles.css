@@ -391,6 +391,20 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--faint);
 }
 .cr-rate .deal-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Stacked variant — label on its own row, value flows under the full column
+   width so a long comma-list (PLATFORMS · Instagram, TikTok, YouTube Shorts)
+   wraps as one clean paragraph instead of one word per line beside the tag. */
+.cr-rate .deal-line-stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.cr-rate .deal-line-stacked .deal-val {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.4;
+}
 
 /* Status cell — pill, copy-link and delete-icon share a single left-aligned
    row so they read as one group. Previously the delete icon was pushed to the
@@ -424,6 +438,21 @@ button:disabled { opacity: 0.5; cursor: default; }
 .icon-btn-sq:hover { background: #fbeee7; border-color: #ecc9bb; }
 
 .cr-send-btn { align-self: flex-start; }
+
+/* Rate substep (used when a "Creator quoted rates" timeline step expands into
+   its per-option list). Same dot-prefix as the plain substep, but with an
+   amount+description row so "$3,500 · for 300,000 combined views" reads
+   cleanly. */
+.timeline-substep-rate {
+  display: flex; align-items: baseline; gap: 8px;
+  padding-right: 4px;
+}
+.timeline-substep-amt {
+  flex-shrink: 0; color: var(--green); font-weight: 600; font-size: 11px;
+}
+.timeline-substep-desc {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* Status timeline (delivery-tracking) */
 .timeline { display: flex; flex-direction: column; }

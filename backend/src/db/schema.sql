@@ -102,6 +102,13 @@ ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES em
 --   (NULL = not in negotiation)
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS negotiation_status TEXT;
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS quoted_rate NUMERIC(10,2);
+-- Every rate the creator has quoted, as they gave them — creators frequently
+-- send tiered / multi-option pricing in one reply (e.g. "$3.5k for 300k views
+-- / $5k for 600k / $7.5k for 1M", or "$900 per reel or $2,500 for a package
+-- of 3"). Kept as an ordered array of `{ amount, label }` objects so the
+-- Status column can show every option. `quoted_rate` remains the single
+-- primary number used for offer-pricing math.
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS quoted_rate_options JSONB;
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS ig_scraped_data JSONB;
   -- {p10,p25,p50,p75,reel_count,min_views,views_raw:[...]}
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS suggested_offers JSONB;
