@@ -17,6 +17,7 @@ const { getGuidelines, getAiRepliesEnabled } = require('./settings');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const contracts = require('./contracts');
+const thread = require('./thread');
 
 // ── Claude client (shared) ────────────────────────────────────────────────
 // The lazy Anthropic client + JSON helpers live in ./claudeClient so the
@@ -608,6 +609,15 @@ async function sendNegotiationEmail(creator, email, kind) {
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'sent_negotiation', $2)`,
     [creator.id, detail],
   );
+  // Persist this outbound message to the full conversation thread (used later
+  // by the contract extractor to see what WE proposed — e.g. Reply 1's platform
+  // offer). Best-effort: the email is already sent, so a logging failure here
+  // must not surface as a send error.
+  try {
+    await thread.recordMessage(creator.id, { direction: 'outbound', kind, subject, body: email.body });
+  } catch (e) {
+    console.warn(`[negotiation] thread record (outbound ${kind}) failed for creator ${creator.id}: ${e.message}`);
+  }
   await db.query(
     `UPDATE creators SET last_negotiation_email_at = NOW(), updated_at = NOW() WHERE id = $1`,
     [creator.id],

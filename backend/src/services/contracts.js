@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const claude = require('./claudeClient');
 const templates = require('./negotiationTemplates');
+const thread = require('./thread');
 
 // 24 random bytes -> 32-char base64url string. Unguessable; never the DB id.
 function generateToken() {
@@ -305,7 +306,7 @@ Return ONLY a JSON object — no prose, no markdown fences — with EXACTLY thes
 }
 
 Rules:
-- Use ONLY facts supported by the negotiation timeline and the provided KNOWN VALUES. Never invent numbers.
+- Use ONLY facts supported by the EMAIL THREAD, the negotiation timeline, and the provided KNOWN VALUES. Never invent numbers.
 - "platforms" are the platforms the CREATOR agreed to post the content on. REPLY 1 proposes all three — Instagram, TikTok and YouTube Shorts — but the creator decides: return only the platforms the creator actually agreed to. DEFAULT to all three ["Instagram","TikTok","YouTube Shorts"] whenever the creator never restricted them in the thread; return a subset ONLY when the creator explicitly chose or limited which platforms they'll post on. Note: a view-based deal counts guaranteed views "on Instagram" for PRICING only — that view-counting reference does NOT limit the posting platforms, so never narrow to Instagram-only because of it.
 - "deliverables": when KNOWN VALUES.acceptedOffer.offer_type is "view_based", the deal is priced by TOTAL guaranteed views reached across as many posts as the creator needs — describe the content WITHOUT any video count (e.g. "Short-form video content") and set numberOfDeliverables and numberOfVideos to null. Never write "1 video" / "1 Reel" for a view-based deal. For flat (video-based) deals, state the agreed number of videos.
 - "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
@@ -352,11 +353,20 @@ async function extractContractData(creator) {
     latestReply: creator.latest_inbound_text || null,
   };
 
+  // The full stored conversation — the creator's own words are the primary
+  // source for which platforms they'll post on and the terms they agreed to
+  // (the structured timeline below only carries rates/actions, not prose).
+  const messages = await thread.loadThread(creator.id);
+  const transcript = thread.renderTranscript(messages);
+
   const user = [
     'KNOWN VALUES (authoritative unless the thread clearly overrides them):',
     JSON.stringify(known, null, 2),
     '',
-    'NEGOTIATION TIMELINE (oldest first):',
+    "EMAIL THREAD (verbatim, oldest first). The creator's own words here are the primary source for which platforms they will post on, the deliverables they agreed to, and any terms they set:",
+    transcript || '(no stored messages — rely on KNOWN VALUES and the latest reply)',
+    '',
+    'NEGOTIATION TIMELINE (structured events, oldest first):',
     events.map((e) => `- ${e.type}: ${JSON.stringify(e.detail)}`).join('\n') || '(none logged)',
     '',
     'Extract the contract JSON now.',

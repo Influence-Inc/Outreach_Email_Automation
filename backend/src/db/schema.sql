@@ -254,3 +254,22 @@ CREATE INDEX IF NOT EXISTS idx_contracts_status ON contracts(status);
 --                contract is sent (see negotiation.js)
 --   required   — ad rights are always included in the contract
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS usage_rights_policy TEXT NOT NULL DEFAULT 'no_rights';
+
+-- Full email conversation, one row per message, persisted as each email is sent
+-- or received. Purpose: give the contract extractor (contracts.js) the WHOLE
+-- back-and-forth — where the creator states which platforms they'll post on,
+-- the deliverables they agreed to, timelines, etc. — instead of only the single
+-- most recent inbound reply (creators.latest_inbound_text). Written best-effort
+-- by the reply webhook (inbound) and sendNegotiationEmail (outbound); a failure
+-- here never blocks sending/receiving. `kind` mirrors the sendNegotiationEmail
+-- kind for outbound rows (reply1 / offer / contract / …), NULL for inbound.
+CREATE TABLE IF NOT EXISTS email_messages (
+  id          SERIAL PRIMARY KEY,
+  creator_id  INTEGER NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  direction   TEXT NOT NULL,                 -- 'inbound' (creator) | 'outbound' (us)
+  kind        TEXT,                          -- outbound send kind; NULL for inbound
+  subject     TEXT,
+  body        TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_email_messages_creator ON email_messages(creator_id, created_at, id);
