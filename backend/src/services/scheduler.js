@@ -48,6 +48,24 @@ async function pollNegotiations() {
       }
     }
 
+    // 2b. Mid-approval replies: a creator whose offer is awaiting the admin's
+    //     approval (AWAITING_APPROVAL) replied again. Steps 1–2 don't cover that
+    //     stage, so the message would otherwise sit unseen in latest_inbound_text
+    //     until the offer is sent. Surface it in the Delegate window (as a
+    //     hand-off) so the admin sees it next to the offer configurator — we
+    //     never auto-reply here; a human is deliberately in the loop at approval.
+    const awaitingApprovalReplies = await db.many(
+      `SELECT id FROM creators
+       WHERE negotiation_status = 'AWAITING_APPROVAL' AND latest_inbound_text IS NOT NULL`,
+    );
+    for (const c of awaitingApprovalReplies) {
+      try {
+        await negotiation.surfaceApprovalReply(c.id);
+      } catch (err) {
+        console.error(`mid-approval reply surfacing failed for creator ${c.id}:`, err.message);
+      }
+    }
+
     // NOTE: Offer emails are sent ONLY when an admin approves an offer in the
     // dashboard (the PATCH /api/creators/:id/offer route). The scheduler does
     // NOT auto-send approved offers — a creator sitting in AWAITING_APPROVAL

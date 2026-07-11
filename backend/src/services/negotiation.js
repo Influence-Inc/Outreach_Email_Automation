@@ -736,11 +736,20 @@ async function sendDelegateReply(creatorId, { subject, body }) {
     })
     .catch((err) => console.warn('[negotiation] delegate-reply learning failed:', err.message));
 
+  // Clear the hand-off flags AND consume any inbound that was pending when the
+  // admin replied — the manual reply IS our response to it, so the scheduler's
+  // negotiation poll must not re-process it and fire a second, automatic reply
+  // afterwards. The CASE guard only clears the message we loaded, so a NEWER
+  // reply that arrived while this reply was being sent is left for the next tick.
   await db.query(
     `UPDATE creators
-     SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL, updated_at = NOW()
+     SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
+         latest_inbound_text = CASE
+           WHEN latest_inbound_text IS NOT DISTINCT FROM $2 THEN NULL
+           ELSE latest_inbound_text END,
+         updated_at = NOW()
      WHERE id = $1`,
-    [creatorId],
+    [creatorId, creator.latest_inbound_text],
   );
   return { sent: true };
 }
@@ -821,6 +830,29 @@ async function processReply(creatorId) {
     );
     await markHandled();
     return { action: 'delegated', reason: result.action };
+  }
+
+  // Never auto-re-send REPLY 1 once the negotiation has moved past its opening.
+  // `asking_details` (→ REPLY 1: "here are the details, what's your rate?") is
+  // only valid as the FIRST substantive reply, when no negotiation email has
+  // gone out yet (negotiation_status IS NULL). If it comes back at any later
+  // stage — most importantly AWAITING_DECISION, where an offer is already on the
+  // table — it's a misread (Claude, or the heuristic fallback when Claude is
+  // down). Re-sending REPLY 1 there duplicates it out of context, which is the
+  // "another reply went out and it was the reply 1 email" bug the Delegate
+  // offer-approval race produced. Hand it to a human instead of firing the
+  // template again.
+  if (result.action === 'asking_details' && creator.negotiation_status) {
+    console.log(
+      `[negotiation] creator ${creator.id}: asking_details returned at stage ${creator.negotiation_status} — delegating instead of re-sending REPLY 1`,
+    );
+    await delegate(
+      creator,
+      inbound,
+      'A reply after the intro details were already sent looked like a fresh intro — a human should respond so we do not re-send the details email.',
+    );
+    await markHandled();
+    return { action: 'delegated', reason: 'reply1_after_start' };
   }
 
   await applyReply(creator, ctx, result);
@@ -1037,6 +1069,39 @@ async function handleAcceptedReply(creatorId) {
   );
   await markHandled();
   return { action: 'delegated', reason: result.action };
+}
+
+// A creator whose offer is awaiting the admin's approval (AWAITING_APPROVAL)
+// replies again. The main negotiation loop (processReply) only runs for
+// NULL / AWAITING_RATE / AWAITING_DECISION, so without this the message would
+// sit unseen in latest_inbound_text until the admin sent the offer (which
+// consumes it) — the reply would never reach the admin. We deliberately do NOT
+// auto-reply at this stage (a human is in the loop, shaping the offer); instead
+// we SURFACE the message in the Delegate window by flagging it as a hand-off,
+// right next to the offer configurator. The admin can then answer it (a delegate
+// reply) or just send the offer. Idempotent per message: we consume the inbound
+// we surfaced, so a later tick doesn't re-flag the same one — each new reply is
+// surfaced exactly once, and the newest one is what the admin sees.
+async function surfaceApprovalReply(creatorId) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) return { skipped: 'no creator' };
+  if (creator.negotiation_status !== 'AWAITING_APPROVAL') return { skipped: 'stage' };
+  const inbound = creator.latest_inbound_text;
+  if (!inbound) return { skipped: 'no inbound text' };
+
+  await delegate(
+    creator,
+    { text: inbound },
+    'Creator replied while their offer was awaiting your approval — read their message, then answer it or send the offer.',
+  );
+  // Consume the message we just surfaced (guard on the exact text so a newer
+  // reply that arrived mid-run is left for the next tick to surface).
+  await db.query(
+    `UPDATE creators SET latest_inbound_text = NULL, updated_at = NOW()
+     WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $2`,
+    [creatorId, inbound],
+  );
+  return { action: 'surfaced' };
 }
 
 async function applyReply(creator, ctx, result) {
@@ -1263,6 +1328,36 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
   // attempted) and surface the error so the admin sees "check the mailbox
   // and only re-send if the creator did NOT receive the offer".
   await sendNegotiationEmail(creator, email, 'offer');
+  // Sending the offer resolves this creator's turn in the Delegate window:
+  //   - Clear any hand-off flags (needs_human / delegate_*) — a reply the creator
+  //     sent while the offer was awaiting approval is surfaced there as a hand-off
+  //     (see surfaceApprovalReply); sending the offer is the admin acting on it,
+  //     so the creator should drop out of the window cleanly.
+  //   - Consume any still-pending inbound (guarded on the value we loaded) so the
+  //     scheduler's poll — which now sees this creator at AWAITING_DECISION —
+  //     doesn't re-process it and fire an automatic reply (e.g. a duplicate
+  //     REPLY 1) on top of the offer. A NEWER reply that arrived while the offer
+  //     was being drafted/sent is left in place to be handled as a real
+  //     post-offer reply.
+  // Best-effort: the offer is already sent, so a failure here must not surface as
+  // a send error.
+  try {
+    await db.query(
+      `UPDATE creators
+       SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
+           latest_inbound_text = CASE
+             WHEN latest_inbound_text IS NOT DISTINCT FROM $2 THEN NULL
+             ELSE latest_inbound_text END,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [creatorId, creator.latest_inbound_text],
+    );
+  } catch (clrErr) {
+    console.error(
+      `[negotiation] post-offer cleanup (flags/inbound) failed for creator ${creatorId} (offer already sent):`,
+      clrErr.message,
+    );
+  }
   // Timeline entry for the Rate column: the priced offer we sent. Kept
   // separate from the 'sent_negotiation' email event (which the thread view
   // uses) so the rate timeline can show the fee/CPM without the email body.
@@ -1322,6 +1417,7 @@ module.exports = {
   sendDelegateReply,
   ensureContractSent,
   handleAcceptedReply,
+  surfaceApprovalReply,
   runNegotiationFollowup,
   resolveApprovedOffer,
   aiRepliesEnabledForCreator,
