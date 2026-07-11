@@ -454,10 +454,18 @@ button:disabled { opacity: 0.5; cursor: default; }
 .timeline-dot.tone-muted { background: var(--faint-2); }
 .timeline-line { width: 2px; flex: 1; background: var(--line); margin-top: 2px; min-height: 10px; }
 .timeline-body { min-width: 0; }
-.timeline-label { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.timeline-label { font-size: 12.5px; font-weight: 500; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .timeline-step.current .timeline-label { font-weight: 600; color: #2b2a27; }
 .timeline-step.tone-success.current .timeline-label { color: var(--green); }
 .timeline-time { font-size: 11px; color: var(--faint-2); }
+
+/* Outreach read-receipt ticks (WhatsApp-style), rendered inline inside the
+   "Outreach sent" timeline step. Gray = sent / not-seen, green = seen or
+   replied. Fed by Instantly opens + follow-up sends via the webhook. */
+.outreach-ticks { display: inline-flex; align-items: center; line-height: 0; }
+.outreach-ticks svg { display: block; }
+.outreach-ticks.tone-gray  { color: var(--faint); }
+.outreach-ticks.tone-green { color: #1aa06d; }
 
 /* Collapsed run of repeated statuses (e.g. "Creator replied ×3"). */
 .timeline-group-head {

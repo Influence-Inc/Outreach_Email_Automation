@@ -557,7 +557,52 @@ function renderStatusCell(r, cell) {
   }
 
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
-  if (log.length) cell.appendChild(renderTimeline(log));
+  if (log.length) cell.appendChild(renderTimeline(log, r));
+}
+
+// Read-receipt tick badge for the "Outreach sent" timeline step. Rendered
+// INSIDE the timeline (next to the label), not next to the main status pill —
+// three states, driven by Instantly (opens + follow-up sends via the webhook):
+//   • single gray  — outreach sent; no follow-up, no reply, not seen
+//   • double gray  — a follow-up was sent, but the creator hasn't seen it
+//   • double green — creator opened an email (seen) or replied
+// Returns null when there's nothing to show (outreach not sent yet, or the deal
+// has moved on to accepted/contract, where the pill already tells the story).
+function outreachTicksFor(r) {
+  if (!r || !r.outreach_sent_at) return null;
+  if (r.negotiation_status === 'ACCEPTED' || (r.contract && r.contract.status)) return null;
+  const replied = r.status === 'replied' || r.replied_at != null;
+  const seen = Number(r.open_count) > 0 || r.last_open_at != null;
+  const followedUp =
+    r.status === 'followup_sent' || r.followup_sent_at != null || Number(r.followup_step) >= 2;
+  if (replied || seen) {
+    return { count: 2, tone: 'green', title: replied ? 'Creator replied' : 'Seen — creator opened the email' };
+  }
+  if (followedUp) return { count: 2, tone: 'gray', title: 'Follow-up sent · not seen yet' };
+  return { count: 1, tone: 'gray', title: 'Outreach sent · no follow-up or reply yet' };
+}
+
+// One or two overlapping check marks, drawn with currentColor so the wrapper's
+// tone class (gray / green) drives the fill.
+function ticksSvg(count) {
+  const stroke = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  if (count >= 2) {
+    return `<svg viewBox="0 0 22 12" width="18" height="10" ${stroke} aria-hidden="true">` +
+      '<path d="M1 6.5 L4.6 10 L10.6 2.5"/><path d="M8 6.5 L11.6 10 L17.6 2.5"/></svg>';
+  }
+  return `<svg viewBox="0 0 13 12" width="11" height="10" ${stroke} aria-hidden="true">` +
+    '<path d="M1 6.5 L4.6 10 L11 2.5"/></svg>';
+}
+
+function renderOutreachTicks(r) {
+  const t = outreachTicksFor(r);
+  if (!t) return null;
+  const span = document.createElement('span');
+  span.className = `outreach-ticks tone-${t.tone}`;
+  span.title = t.title;
+  span.setAttribute('aria-label', t.title);
+  span.innerHTML = ticksSvg(t.count);
+  return span;
 }
 
 // A vertical delivery-tracking timeline, oldest → newest. The newest entry is
@@ -565,7 +610,7 @@ function renderStatusCell(r, cell) {
 // Consecutive entries with the same label (e.g. "Creator replied" ×3) collapse
 // into one expandable node to keep the column compact — distinct events (offers,
 // quotes, accepted) stay as their own steps.
-function renderTimeline(log) {
+function renderTimeline(log, r) {
   const wrap = document.createElement('div');
   wrap.className = 'timeline';
   const items = Array.isArray(log) ? log : [];
@@ -692,6 +737,13 @@ function renderTimeline(log) {
       const label = document.createElement('div');
       label.className = 'timeline-label';
       label.textContent = g.text;
+      // Read-receipt ticks live inline with the "Outreach sent" step's label,
+      // so the engagement signal reads as part of that single tracking node
+      // rather than a separate control anywhere else in the row.
+      if (newest.type === 'sent_outreach') {
+        const ticks = renderOutreachTicks(r);
+        if (ticks) label.appendChild(ticks);
+      }
       const time = document.createElement('div');
       time.className = 'timeline-time num';
       time.textContent = fmtAgo(newest.at);

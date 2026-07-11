@@ -203,6 +203,21 @@ async function markReplied(creatorId) {
   );
 }
 
+// Record an email open reported by Instantly (the email_opened webhook). Bumps
+// the open counter + timestamp so the dashboard's outreach ticks can turn green
+// once the creator has seen an email. Never changes the funnel status — an open
+// is a read receipt, not a reply. Safe to call on every open event.
+async function markOpened(creatorId) {
+  await db.query(
+    `UPDATE creators
+        SET open_count = open_count + 1,
+            last_open_at = NOW(),
+            updated_at = NOW()
+      WHERE id = $1`,
+    [creatorId],
+  );
+}
+
 // A follow-up (Step 2+) is anything past the first sequence step. Instantly is
 // 1-indexed, so the outreach email is Step 1 and every follow-up is Step >= 2.
 // Exported so the value can be unit-tested without a DB.
@@ -263,6 +278,7 @@ module.exports = {
   sendOutreach,
   markReplied,
   markFollowupSent,
+  markOpened,
   prepareOutreach,
   // Exposed for tests.
   outreachFirstName,
