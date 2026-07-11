@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { markReplied, markFollowupSent } = require('../services/outreach');
+const { markReplied, markFollowupSent, markOpened } = require('../services/outreach');
 const thread = require('../services/thread');
 
 const router = express.Router();
@@ -39,6 +39,17 @@ const SENT_EVENTS = new Set([
   'email_sent_success',
   'sent',
   'lead_email_sent',
+]);
+
+// Instantly email_opened webhook aliases — a read receipt for one of the emails
+// we sent (outreach or a follow-up). Drives the "seen" (double-green) outreach
+// tick in Deal Studio; never changes the funnel status.
+const OPEN_EVENTS = new Set([
+  'email_opened',
+  'lead_opened',
+  'email_open',
+  'opened',
+  'open',
 ]);
 
 function pickEventType(body) {
@@ -170,6 +181,29 @@ router.post('/instantly', async (req, res) => {
       return;
     }
 
+    // email_opened events are read receipts — the creator opened one of our
+    // emails. Bumps open_count / last_open_at so the Deal Studio outreach ticks
+    // can flip to double-green. Never changes the funnel status. Handled before
+    // the reply-only guard below.
+    if (OPEN_EVENTS.has(eventType)) {
+      const email = pickEmail(body);
+      const campaignId = pickCampaignId(body);
+      if (!email) {
+        console.warn(
+          `[webhook/instantly] email_opened missing email; raw=${JSON.stringify(body).slice(0, 400)}`,
+        );
+        return;
+      }
+      const creator = await resolveCreator(email, campaignId);
+      if (!creator) {
+        console.warn(`[webhook/instantly] email_opened for unknown email: ${email}`);
+        return;
+      }
+      await markOpened(creator.id);
+      console.log(`[webhook/instantly] email_opened for creator ${creator.id}`);
+      return;
+    }
+
     // email_sent events advance outreach_sent → followup_sent when Instantly
     // sends a follow-up step. Handle them before the reply-only guard below.
     if (SENT_EVENTS.has(eventType)) {
@@ -267,6 +301,7 @@ router.pickEventType = pickEventType;
 router.pickStep = pickStep;
 router.pickSentMessageId = pickSentMessageId;
 router.SENT_EVENTS = SENT_EVENTS;
+router.OPEN_EVENTS = OPEN_EVENTS;
 router.REPLY_EVENTS = REPLY_EVENTS;
 
 module.exports = router;

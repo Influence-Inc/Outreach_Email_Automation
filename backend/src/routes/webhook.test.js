@@ -41,3 +41,22 @@ test('pickSentMessageId reads the sent message id defensively', () => {
   assert.strictEqual(webhook.pickSentMessageId({ email: { id: 'ghi' } }), 'ghi');
   assert.strictEqual(webhook.pickSentMessageId({}), null);
 });
+
+// email_opened webhooks are read receipts for the Deal Studio outreach ticks
+// (see outreachTicksFor in app.js). They must NOT be confused with an actual
+// send or a reply, or the tick would jump straight from single-gray to something
+// misleading.
+test('OPEN_EVENTS recognises Instantly email_opened event names', () => {
+  assert.strictEqual(webhook.OPEN_EVENTS.has('email_opened'), true);
+  assert.strictEqual(webhook.OPEN_EVENTS.has('lead_opened'), true);
+  assert.strictEqual(webhook.OPEN_EVENTS.has('opened'), true);
+});
+
+test('OPEN_EVENTS is disjoint from send + reply event sets', () => {
+  // A send is not an open, and an open is not a send / reply. If any of these
+  // overlapped, the same webhook would fire two handlers on the same event.
+  for (const t of webhook.OPEN_EVENTS) {
+    assert.strictEqual(webhook.SENT_EVENTS.has(t), false, `${t} must not be a send event`);
+    assert.strictEqual(webhook.REPLY_EVENTS.has(t), false, `${t} must not be a reply event`);
+  }
+});
