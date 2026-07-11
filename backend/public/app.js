@@ -71,7 +71,7 @@ async function refreshCampaigns() {
       count.className = 'count-pill num';
       count.textContent = c.creator_count;
       item.appendChild(count);
-      item.onclick = () => navigate(`campaign/${encodeURIComponent(c.id)}`);
+      item.onclick = () => navigate('campaign', c.id);
       group.appendChild(item);
     }
     tree.appendChild(group);
@@ -94,27 +94,30 @@ function showView(name) {
   closeSidebarOnMobile();
 }
 
-// --- Hash routing --------------------------------------------------------
-// Each view is reflected in location.hash so a refresh (or a shared/bookmarked
-// link) lands back on the same campaign instead of the empty picker. Routes:
-//   #campaign/<id>            → a campaign's creators
-//   #campaign/<id>/delegate   → that campaign's Delegate window
-//   #guidelines               → the global Guidelines page
-// Navigation always goes through the hash (see navigate()); handleRoute() is
-// the single place that renders a view, keeping the URL and the UI in sync.
-function navigate(hash) {
-  const next = `#${hash}`;
-  if (location.hash === next) {
-    // Setting an identical hash won't fire hashchange, so route explicitly.
-    handleRoute();
-  } else {
-    location.hash = next;
+// --- Path routing --------------------------------------------------------
+// Each view has its own path URL so a refresh (or a shared/bookmarked link)
+// lands back on the same campaign instead of the empty picker. Routes:
+//   /campaign/<id>            → a campaign's creators
+//   /campaign/<id>/delegate   → that campaign's Delegate window
+//   /guidelines               → the global Guidelines page
+//   /                         → empty picker
+// The server serves the app shell for all of these (see the SPA fallback in
+// server.js); navigation goes through navigate() and handleRoute() is the
+// single place that renders a view, keeping the URL and the UI in sync.
+function routePath(parts) {
+  return parts.length ? `/${parts.map(encodeURIComponent).join('/')}` : '/';
+}
+
+function navigate(...parts) {
+  const path = routePath(parts);
+  if (location.pathname !== path) {
+    history.pushState({}, '', path);
   }
+  handleRoute();
 }
 
 function parseRoute() {
-  return (location.hash || '')
-    .replace(/^#\/?/, '')
+  return (location.pathname || '/')
     .split('/')
     .filter(Boolean)
     .map((p) => {
@@ -137,7 +140,8 @@ async function handleRoute() {
     if (state.selectedCampaignId !== id) {
       if (!state.campaigns.some((c) => c.id === id)) {
         // Unknown/stale campaign id — drop back to the empty picker.
-        if (location.hash) { navigate(''); } else { showView('campaign'); }
+        if (location.pathname !== '/') { history.replaceState({}, '', '/'); }
+        showView('campaign');
         return;
       }
       await selectCampaign(id);
@@ -154,7 +158,8 @@ async function handleRoute() {
   showView('campaign');
 }
 
-window.addEventListener('hashchange', handleRoute);
+// Browser Back/Forward moves through the pushState history above.
+window.addEventListener('popstate', handleRoute);
 
 // --- Mobile sidebar drawer -----------------------------------------------
 
@@ -1538,7 +1543,8 @@ async function refreshSettings() {
 el('open-guidelines-btn').addEventListener('click', () => navigate('guidelines'));
 
 el('guidelines-back-btn').addEventListener('click', () => {
-  navigate(state.selectedCampaignId ? `campaign/${encodeURIComponent(state.selectedCampaignId)}` : '');
+  if (state.selectedCampaignId) { navigate('campaign', state.selectedCampaignId); }
+  else { navigate(); }
 });
 
 el('save-guidelines-btn').addEventListener('click', async () => {
@@ -1599,11 +1605,12 @@ async function openDelegate() {
 
 el('open-delegate-btn').addEventListener('click', () => {
   if (!state.selectedCampaignId) return;
-  navigate(`campaign/${encodeURIComponent(state.selectedCampaignId)}/delegate`);
+  navigate('campaign', state.selectedCampaignId, 'delegate');
 });
 
 el('delegate-back-btn').addEventListener('click', () => {
-  navigate(state.selectedCampaignId ? `campaign/${encodeURIComponent(state.selectedCampaignId)}` : '');
+  if (state.selectedCampaignId) { navigate('campaign', state.selectedCampaignId); }
+  else { navigate(); }
 });
 
 // A creator has an offer the admin can act on: priced offers exist and we're
