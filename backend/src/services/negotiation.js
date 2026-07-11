@@ -1384,6 +1384,25 @@ async function runNegotiationFollowup(creatorId) {
   if (!['AWAITING_RATE', 'AWAITING_DECISION'].includes(creator.negotiation_status)) {
     return { skipped: 'stage' };
   }
+  // A follow-up is a nudge for a SILENT creator — "did you get a chance to check
+  // my last email?". It must NEVER go out to a creator who has already replied.
+  // Two ways that can be true:
+  //   1. A reply is sitting unprocessed in latest_inbound_text (the scheduler
+  //      hasn't classified it yet), or
+  //   2. The creator's most recent reply is newer than our last outbound
+  //      negotiation email — i.e. the ball is in OUR court, not theirs.
+  // Either way, bail WITHOUT sending or bumping the counter (which would also
+  // eventually close the conversation out on a creator who is actually engaged).
+  // This is the exact mistake we're guarding against: a nudge firing — and
+  // re-firing — after the rate had already been agreed in a prior reply.
+  if (creator.latest_inbound_text) return { skipped: 'pending_reply' };
+  const repliedAt = creator.replied_at ? new Date(creator.replied_at).getTime() : null;
+  const lastEmailAt = creator.last_negotiation_email_at
+    ? new Date(creator.last_negotiation_email_at).getTime()
+    : null;
+  if (repliedAt != null && (lastEmailAt == null || repliedAt > lastEmailAt)) {
+    return { skipped: 'creator_replied' };
+  }
   const max = Number(process.env.NEGOTIATION_MAX_FOLLOWUPS || 2);
   const count = creator.negotiation_followup_count || 0;
   if (count >= max) {
@@ -1403,7 +1422,7 @@ async function runNegotiationFollowup(creatorId) {
   const email = awaitingRate ? templates.followup1(v) : templates.followup2(v);
   await sendNegotiationEmail(creator, email, awaitingRate ? 'followup1' : 'followup2');
   await db.query(
-    `UPDATE creators SET negotiation_followup_count = negotiation_followup_count + 1, updated_at = NOW() WHERE id = $1`,
+    `UPDATE creators SET negotiation_followup_count = COALESCE(negotiation_followup_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
     [creatorId],
   );
   return { sent: true, step: count + 1 };

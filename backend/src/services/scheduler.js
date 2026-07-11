@@ -76,12 +76,22 @@ async function pollNegotiations() {
     const idleMs = negotiationFollowupDays() * 24 * 3600_000;
     const now = Date.now();
     // Skip creators parked for a human (needs_human) — don't auto-nudge a
-    // conversation that's waiting on the Delegate window.
+    // conversation that's waiting on the Delegate window. Also skip any creator
+    // who has already replied: a follow-up is a nudge for SILENCE, so exclude
+    // rows with a pending inbound (latest_inbound_text) or whose most recent
+    // reply is newer than our last outbound negotiation email (the ball is in
+    // our court). runNegotiationFollowup re-checks this on the freshly loaded
+    // row, but excluding here avoids even attempting the nudge.
     const waiting = await db.many(
       `SELECT id, last_negotiation_email_at, replied_at, updated_at
        FROM creators
        WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')
-         AND needs_human = FALSE`,
+         AND needs_human = FALSE
+         AND latest_inbound_text IS NULL
+         AND (
+           replied_at IS NULL
+           OR (last_negotiation_email_at IS NOT NULL AND replied_at <= last_negotiation_email_at)
+         )`,
     );
     for (const c of waiting) {
       const last = c.last_negotiation_email_at || c.replied_at || c.updated_at;
