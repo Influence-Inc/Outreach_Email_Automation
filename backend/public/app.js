@@ -71,7 +71,7 @@ async function refreshCampaigns() {
       count.className = 'count-pill num';
       count.textContent = c.creator_count;
       item.appendChild(count);
-      item.onclick = () => selectCampaign(c.id);
+      item.onclick = () => navigate('campaign', c.id);
       group.appendChild(item);
     }
     tree.appendChild(group);
@@ -93,6 +93,73 @@ function showView(name) {
   el('delegate-view').hidden = name !== 'delegate';
   closeSidebarOnMobile();
 }
+
+// --- Path routing --------------------------------------------------------
+// Each view has its own path URL so a refresh (or a shared/bookmarked link)
+// lands back on the same campaign instead of the empty picker. Routes:
+//   /campaign/<id>            → a campaign's creators
+//   /campaign/<id>/delegate   → that campaign's Delegate window
+//   /guidelines               → the global Guidelines page
+//   /                         → empty picker
+// The server serves the app shell for all of these (see the SPA fallback in
+// server.js); navigation goes through navigate() and handleRoute() is the
+// single place that renders a view, keeping the URL and the UI in sync.
+function routePath(parts) {
+  return parts.length ? `/${parts.map(encodeURIComponent).join('/')}` : '/';
+}
+
+function navigate(...parts) {
+  const path = routePath(parts);
+  if (location.pathname !== path) {
+    history.pushState({}, '', path);
+  }
+  handleRoute();
+}
+
+function parseRoute() {
+  return (location.pathname || '/')
+    .split('/')
+    .filter(Boolean)
+    .map((p) => {
+      try { return decodeURIComponent(p); } catch { return p; }
+    });
+}
+
+async function handleRoute() {
+  const parts = parseRoute();
+
+  if (parts[0] === 'guidelines') {
+    showView('guidelines');
+    el('guidelines-status').textContent = '';
+    await refreshSettings();
+    return;
+  }
+
+  if (parts[0] === 'campaign' && parts[1]) {
+    const id = parts[1];
+    if (state.selectedCampaignId !== id) {
+      if (!state.campaigns.some((c) => c.id === id)) {
+        // Unknown/stale campaign id — drop back to the empty picker.
+        if (location.pathname !== '/') { history.replaceState({}, '', '/'); }
+        showView('campaign');
+        return;
+      }
+      await selectCampaign(id);
+    }
+    if (parts[2] === 'delegate') {
+      await openDelegate();
+    } else {
+      showView('campaign');
+    }
+    return;
+  }
+
+  // No route (or unrecognised) — show the campaign view's empty state.
+  showView('campaign');
+}
+
+// Browser Back/Forward moves through the pushState history above.
+window.addEventListener('popstate', handleRoute);
 
 // --- Mobile sidebar drawer -----------------------------------------------
 
@@ -1473,13 +1540,12 @@ async function refreshSettings() {
   }
 }
 
-el('open-guidelines-btn').addEventListener('click', async () => {
-  showView('guidelines');
-  el('guidelines-status').textContent = '';
-  await refreshSettings();
-});
+el('open-guidelines-btn').addEventListener('click', () => navigate('guidelines'));
 
-el('guidelines-back-btn').addEventListener('click', () => showView('campaign'));
+el('guidelines-back-btn').addEventListener('click', () => {
+  if (state.selectedCampaignId) { navigate('campaign', state.selectedCampaignId); }
+  else { navigate(); }
+});
 
 el('save-guidelines-btn').addEventListener('click', async () => {
   const btn = el('save-guidelines-btn');
@@ -1529,15 +1595,23 @@ function updateDelegateBadge(n) {
   badge.hidden = !(n > 0);
 }
 
-el('open-delegate-btn').addEventListener('click', async () => {
+async function openDelegate() {
   if (!state.selectedCampaignId) return;
   showView('delegate');
   const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
   el('delegate-title').textContent = c ? `Delegate · ${c.brand_name} · ${c.name}` : 'Delegate';
   await renderDelegateList();
+}
+
+el('open-delegate-btn').addEventListener('click', () => {
+  if (!state.selectedCampaignId) return;
+  navigate('campaign', state.selectedCampaignId, 'delegate');
 });
 
-el('delegate-back-btn').addEventListener('click', () => showView('campaign'));
+el('delegate-back-btn').addEventListener('click', () => {
+  if (state.selectedCampaignId) { navigate('campaign', state.selectedCampaignId); }
+  else { navigate(); }
+});
 
 // A creator has an offer the admin can act on: priced offers exist and we're
 // waiting on internal approval. Mirrors the send gate (AWAITING_APPROVAL) and
@@ -1703,4 +1777,7 @@ function buildReplyBlock(r) {
 
 (async () => {
   await refreshCampaigns();
+  // Restore the view encoded in the URL so a refresh keeps the current
+  // campaign instead of dropping back to the empty picker.
+  await handleRoute();
 })();

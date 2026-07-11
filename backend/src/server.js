@@ -64,6 +64,22 @@ app.get('/contracts/:token', contractPage);
 
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
+// SPA fallback: the dashboard uses real path URLs (e.g. /campaign/:id) so each
+// campaign page can be refreshed, bookmarked and shared. Any GET that isn't an
+// API/webhook/contract call and wasn't served as a static asset above returns
+// the app shell, letting the client-side router render the right view.
+app.get('*', (req, res, next) => {
+  if (
+    req.path.startsWith('/api/') ||
+    req.path.startsWith('/webhook') ||
+    req.path.startsWith('/contract') ||
+    req.path === '/health'
+  ) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: err.message });
