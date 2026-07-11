@@ -1592,7 +1592,14 @@ function buildDelegateCard(r) {
     const item = document.createElement('div');
     item.className = 'delegate-offer-item';
     item.appendChild(buildOfferConfigurator(r, refreshDelegateAndCampaigns));
-    if (isHandoff) item.appendChild(buildReplyBlock(r));
+    // If the creator also has a hand-off (e.g. they replied while the offer was
+    // awaiting approval), show their message + a reply box beneath the offer so
+    // it isn't missed. The admin can answer it, or just send the offer.
+    if (isHandoff) {
+      const msg = buildHandoffMessage(r);
+      if (msg) item.appendChild(msg);
+      item.appendChild(buildReplyBlock(r));
+    }
     return item;
   }
 
@@ -1618,6 +1625,30 @@ function buildDelegateCard(r) {
   }
   card.appendChild(buildReplyBlock(r));
   return card;
+}
+
+// The creator's parked message (+ the hand-off reason) shown above the reply
+// box on an offer-configurator card, so a reply that arrived while the offer was
+// awaiting approval is visible instead of silent. The plain hand-off card
+// renders the reason in its own header, so this helper is only used on the offer
+// card. Returns null when there's nothing to show.
+function buildHandoffMessage(r) {
+  if (!r.delegate_reason && !r.delegate_question) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'delegate-handoff-msg';
+  if (r.delegate_reason) {
+    const label = document.createElement('div');
+    label.className = 'delegate-handoff-label';
+    label.textContent = r.delegate_reason;
+    wrap.appendChild(label);
+  }
+  if (r.delegate_question) {
+    const q = document.createElement('div');
+    q.className = 'delegate-question';
+    q.textContent = r.delegate_question;
+    wrap.appendChild(q);
+  }
+  return wrap;
 }
 
 // The "Your reply" textarea + Dismiss/Send, used by hand-off cards (standalone,

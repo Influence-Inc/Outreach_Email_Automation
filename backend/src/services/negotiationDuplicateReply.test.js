@@ -98,9 +98,12 @@ test('sendApprovedOffer consumes the pending inbound so the scheduler cannot re-
     });
     assert.strictEqual(res.sent, true, 'the offer is sent');
     const clear = writes.find(
-      (w) => /latest_inbound_text\s*=\s*NULL/i.test(w.sql) && /IS NOT DISTINCT FROM/i.test(w.sql),
+      (w) =>
+        /latest_inbound_text/i.test(w.sql) &&
+        /IS NOT DISTINCT FROM/i.test(w.sql) &&
+        /needs_human\s*=\s*FALSE/i.test(w.sql),
     );
-    assert.ok(clear, 'the pending inbound is cleared after the offer send');
+    assert.ok(clear, 'the pending inbound is consumed (with the hand-off flags) after the offer send');
     assert.strictEqual(
       clear.params[1],
       creator.latest_inbound_text,
