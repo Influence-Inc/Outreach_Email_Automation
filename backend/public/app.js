@@ -566,10 +566,15 @@ function renderStatusCell(r, cell) {
 //   • single gray  — outreach sent; no follow-up, no reply, not seen
 //   • double gray  — a follow-up was sent, but the creator hasn't seen it
 //   • double green — creator opened an email (seen) or replied
-// Returns null when there's nothing to show (outreach not sent yet, or the deal
-// has moved on to accepted/contract, where the pill already tells the story).
+// The tick is only rendered when the timeline actually contains the "Outreach
+// sent" step (see renderTimeline), so its very presence already proves outreach
+// happened — this function must NOT gate on r.outreach_sent_at (some legacy /
+// imported rows have status='outreach_sent' + a sent_outreach event but a NULL
+// outreach_sent_at column; the tick was silently missing for those creators).
+// Once the deal moves past acceptance the pill's "accepted / contract sent /
+// signed" states tell the story instead, so hide the tick there.
 function outreachTicksFor(r) {
-  if (!r || !r.outreach_sent_at) return null;
+  if (!r) return null;
   if (r.negotiation_status === 'ACCEPTED' || (r.contract && r.contract.status)) return null;
   const replied = r.status === 'replied' || r.replied_at != null;
   const seen = Number(r.open_count) > 0 || r.last_open_at != null;
