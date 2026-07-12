@@ -28,8 +28,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // "Decide offer" launcher. The dashboard hands off a creator (id + username +
 // its own origin as apiBase); we remember it as a one-shot target keyed by
 // username, persist the dashboard URL so the Instagram side panel can reach the
-// API, then open the creator's profile. The panel content script picks up the
-// stored target and opens itself against the right creator.
+// API, then open the creator's Reels tab (where per-reel view counts render, so
+// you can eyeball recent reach while pricing). The panel content script picks up
+// the stored target and opens itself against the right creator.
 // ---------------------------------------------------------------------------
 async function openDecideOffer(payload) {
   const { creatorId, username, campaignId, apiBase } = payload;
@@ -49,7 +50,7 @@ async function openDecideOffer(payload) {
   if (base) set.infDashboardApiBase = base;
   await chrome.storage.local.set(set);
 
-  const url = `https://www.instagram.com/${encodeURIComponent(uname)}/`;
+  const url = `https://www.instagram.com/${encodeURIComponent(uname)}/reels/`;
   const tab = await chrome.tabs.create({ url, active: true });
   return { tabId: tab.id };
 }
