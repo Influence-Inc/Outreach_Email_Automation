@@ -139,6 +139,44 @@ test('draftOfferEmail puts the creator\'s message into the offer prompt', async 
   }
 });
 
+test('draftOfferEmail (revised) tells the model NOT to re-pitch the deal, uses the concise numbers', async () => {
+  // A prior offer was already sent, so this send is a REVISED counter.
+  db.many = async () => [];
+  const client = capturingClient(JSON.stringify({ subject: 'Re: deal', body: 'Hi Joe, ... - Jennifer' }));
+  negotiation._setClient(client);
+  try {
+    const creator = { ...baseCtxCreator, first_name: 'Joe', latest_inbound_text: 'Can you do $3,500 for 300k?' };
+    const offer = { offer_type: 'view_based', flat_fee: 3500, view_guarantee: 500000, label: 'View-Based Offer' };
+    const ctx = negotiation.ctxFor(creator, { approvedOffer: offer });
+    await negotiation.draftOfferEmail(creator, offer, ctx, { revised: true });
+    const { system } = client.calls[0];
+    assert.ok(/REVISED counter-offer/i.test(system), 'the prompt marks this a revised counter');
+    assert.ok(system.includes('**Revised Offer ($3,500)**'), 'the concise revised numbers are supplied');
+    // The full REPLY 2 template must not be injected for a revised offer. (We
+    // check REPLY 2's own lead line, not "performance-based deals", since the
+    // HARD RULE instruction deliberately quotes that phrase to forbid it.)
+    assert.ok(!/Thanks for sharing your rates/i.test(system), 'the REPLY 2 template is not injected in a revised offer');
+  } finally {
+    restore();
+  }
+});
+
+test('draftOfferEmail (revised) falls back to the concise template when Claude is unavailable', async () => {
+  db.many = async () => [];
+  negotiation._setClient(null);
+  try {
+    const creator = { ...baseCtxCreator, first_name: 'Joe', latest_inbound_text: 'Can you do $3,500?' };
+    const offer = { offer_type: 'view_based', flat_fee: 3500, view_guarantee: 500000, label: 'View-Based Offer' };
+    const ctx = negotiation.ctxFor(creator, { approvedOffer: offer });
+    const email = await negotiation.draftOfferEmail(creator, offer, ctx, { revised: true });
+    assert.ok(email.body.includes('**Revised Offer ($3,500)**'), 'concise revised template used');
+    assert.ok(!/performance-based deals/i.test(email.body), 'no deal re-pitch in the fallback');
+    assert.ok(!/7 days/i.test(email.body), 'no standing-terms restatement in the fallback');
+  } finally {
+    restore();
+  }
+});
+
 test('draftOfferEmail falls back to the template when Claude is unavailable', async () => {
   db.many = async () => [];
   negotiation._setClient(null);
