@@ -238,6 +238,57 @@ function describeOffer(offer, brandName) {
   );
 }
 
+// The revised numbers ONLY, for a counter-offer to a creator who has already
+// seen a prior offer. Unlike describeOffer this omits the "we usually do
+// performance-based deals..." preamble and every standing-terms bullet (how
+// views are counted, the 7-day window, creative freedom, no exclusivity,
+// adjustability) — the creator already has all of that from the first offer, so
+// repeating it reads as a fresh pitch. Just the headline + what the number buys.
+function describeOfferConcise(offer) {
+  if (!offer) return '';
+  if (offer.offer_type === 'view_based') {
+    const views = Number(offer.view_guarantee || 0);
+    return (
+      `**Revised Offer ($${fmtMoney(offer.flat_fee)})**\n` +
+      `- $${fmtMoney(offer.flat_fee)} for a minimum of ${fmtNum(views)} combined total views on Instagram.`
+    );
+  }
+  if (offer.offer_type === 'video_bonus') {
+    const n = Number(offer.num_videos || 1);
+    const base = Number(offer.base_fee != null ? offer.base_fee : offer.flat_fee || 0);
+    const bonus = Number(offer.bonus_amount || 0);
+    const threshold = Number(offer.bonus_threshold_views || 0);
+    return (
+      `**Revised Offer**\n` +
+      `- $${fmtMoney(base)} flat for ${n} video${n === 1 ? '' : 's'}, plus a $${fmtMoney(
+        bonus,
+      )} bonus if the combined views cross ${fmtNum(threshold)} on Instagram.`
+    );
+  }
+  const n = Number(offer.num_videos || 1);
+  return (
+    `**Revised Offer ($${fmtMoney(offer.flat_fee)})**\n` +
+    `- ${n} video${n === 1 ? '' : 's'} for $${fmtMoney(offer.flat_fee)} total.`
+  );
+}
+
+// Deterministic fallback for a counter-offer from us (used when Claude is
+// unavailable). Acknowledges the creator's counter and presents ONLY the
+// revised numbers — no re-pitch of the deal structure or standing terms.
+function revisedOfferEmail(offer, vars) {
+  const v = withDefaults(vars);
+  const body = `Hi ${v.salutation},
+
+Thanks for the counter — really appreciate you sharing where you'd like to land.
+
+${describeOfferConcise(offer)}
+
+Let me know if this works for you and we'll get things moving :)
+
+- ${v.managerName}`;
+  return { subject: fill(REPLY1_SUBJECT, v), body };
+}
+
 // REPLY 1 with the "Deliverables & Rates" block rewritten for a view-based
 // offer — no "2 or more video package" language, since the deal is priced by
 // total guaranteed views, not video count. Used only in combine mode when
@@ -357,6 +408,8 @@ module.exports = {
   referencesReply,
   offerEmail,
   describeOffer,
+  describeOfferConcise,
+  revisedOfferEmail,
   followup1,
   followup2,
   acceptance,

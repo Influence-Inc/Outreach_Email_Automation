@@ -460,6 +460,55 @@ test('offerEmail combine mode for view_based does NOT use the video-package REPL
   assert.ok(body.includes('**View-Based Offer'), 'view_based combine still presents the approved offer');
 });
 
+// ── Revised counter-offer (concise; no re-pitch of standing terms) ─────────
+
+test('describeOfferConcise shows only the revised numbers, not the deal re-pitch', () => {
+  const out = templates.describeOfferConcise({
+    offer_type: 'view_based',
+    flat_fee: 3500,
+    view_guarantee: 500000,
+  });
+  assert.ok(out.includes('**Revised Offer ($3,500)**'), 'bold revised header with the new number');
+  assert.ok(out.includes('500,000 combined total views'), 'states what the number buys');
+  // None of the standing terms the creator already has from the first offer.
+  assert.ok(!/performance-based deals/i.test(out), 'no "we usually do performance-based deals" pitch');
+  assert.ok(!/7 days/i.test(out), 'no 7-day view-counting restatement');
+  assert.ok(!/creative freedom/i.test(out), 'no creative-freedom restatement');
+  assert.ok(!/exclusivity/i.test(out), 'no exclusivity restatement');
+});
+
+test('revisedOfferEmail acknowledges the counter and drops the standing terms', () => {
+  const { body } = templates.revisedOfferEmail(
+    { offer_type: 'view_based', flat_fee: 3500, view_guarantee: 500000 },
+    { firstName: 'Joe', salutation: 'Joe', managerName: 'Jennifer' },
+  );
+  assert.ok(body.startsWith('Hi Joe,'), 'greets the creator');
+  assert.ok(/counter/i.test(body), 'acknowledges their counter');
+  assert.ok(body.includes('**Revised Offer ($3,500)**'), 'presents the revised number');
+  assert.ok(body.includes('- Jennifer'), 'signed by the manager');
+  // The whole point: no repeat of the view-based mechanics / standing terms.
+  assert.ok(!/performance-based deals/i.test(body), 'no deal re-pitch');
+  assert.ok(!/7 days/i.test(body), 'no 7-day restatement');
+  assert.ok(!/creative freedom/i.test(body), 'no creative-freedom restatement');
+});
+
+test('describeOfferConcise handles video_bonus and flat offers without standing terms', () => {
+  const bonus = templates.describeOfferConcise({
+    offer_type: 'video_bonus',
+    num_videos: 2,
+    base_fee: 4000,
+    bonus_amount: 1000,
+    bonus_threshold_views: 500000,
+  });
+  assert.ok(bonus.includes('$4,000 flat for 2 videos'), 'bonus base + count');
+  assert.ok(bonus.includes('$1,000 bonus'), 'bonus amount');
+  assert.ok(!/creative freedom/i.test(bonus), 'no standing terms on the bonus revision');
+
+  const flat = templates.describeOfferConcise({ offer_type: 'video_based', num_videos: 3, flat_fee: 4500 });
+  assert.ok(flat.includes('**Revised Offer ($4,500)**'));
+  assert.ok(flat.includes('3 videos for $4,500 total'));
+});
+
 test('describeOffer bolds the offer-type header for a flat package', () => {
   const out = templates.describeOffer({ offer_type: 'video_based', num_videos: 2, flat_fee: 1600 }, 'Acme');
   assert.ok(out.includes('**Flat Package ($1,600)**'), 'bold flat-package header');

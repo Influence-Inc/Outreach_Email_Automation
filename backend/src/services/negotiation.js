@@ -609,9 +609,13 @@ async function draftAcknowledgmentLine(creator, ctx, { situation }) {
 }
 
 // ── (b) Write the offer email — Claude adapts REPLY 2 ─────────────────────
-async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
+async function draftOfferEmail(creator, offer, ctx, { combine = false, revised = false } = {}) {
   const v = templateVars(ctx);
-  const fallback = templates.offerEmail(offer, v, { combine });
+  // A revised counter never combines REPLY 1 — the creator is well past the intro.
+  if (revised) combine = false;
+  const fallback = revised
+    ? templates.revisedOfferEmail(offer, v)
+    : templates.offerEmail(offer, v, { combine });
   // The creator's own words, so the offer opens by acknowledging what they said
   // (their rate, a preference) instead of a cold "Thanks for sharing your rates".
   const lastCreatorMsg = await latestCreatorMessage(creator);
@@ -649,18 +653,30 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
       : '',
     '',
     guidelinesBlock(ctx),
-    'Write ONE email by adapting this canonical offer template — keep its warm tone, the "**Payment details**" section, and the "- ' + v.managerName + '" sign-off:',
-    '--- REPLY 2 ---',
-    templates.REPLY2_BODY,
-    combine
+    // A revised counter goes to a creator who already has our first offer and
+    // all its standing terms — so it must be SHORT and present just the new
+    // numbers, not re-pitch the deal. A first offer adapts the full REPLY 2.
+    revised
       ? [
-          '',
-          'This is the FIRST reply (the creator gave their rate immediately), so FIRST cover the collaboration details by adapting REPLY 1, THEN present the approved offer in the same email:',
-          '--- REPLY 1 ---',
-          templates.REPLY1_BODY,
-          `Use brand "${v.brandName}" and the cadence "${v.cadence}" for timelines. Do NOT include the "Past content references" section — an offer email should not introduce references unprompted.`,
+          'This is a REVISED counter-offer. The creator has ALREADY received a prior offer from us and knows the deal structure and standing terms. Write a SHORT email that: (1) opens by acknowledging their counter (per the acknowledgment rule above), (2) presents the revised numbers using the concise form below, (3) closes warmly inviting them to confirm, signed "- ' + v.managerName + '".',
+          'HARD RULES: do NOT re-introduce the deal with "we usually do performance-based deals..." or any similar pitch; do NOT restate standing terms the creator already has (how views are counted, the 7-day counting window, full creative freedom, no exclusivity / no ad rights, the "commit to fewer/more views" adjustability). Mention a term ONLY if THIS revision actually changes it. Keep it brief and focused on the new numbers.',
+          '--- REVISED OFFER (concise — reproduce these numbers exactly) ---',
+          templates.describeOfferConcise(offer),
         ].join('\n')
-      : '',
+      : [
+          'Write ONE email by adapting this canonical offer template — keep its warm tone, the "**Payment details**" section, and the "- ' + v.managerName + '" sign-off:',
+          '--- REPLY 2 ---',
+          templates.REPLY2_BODY,
+          combine
+            ? [
+                '',
+                'This is the FIRST reply (the creator gave their rate immediately), so FIRST cover the collaboration details by adapting REPLY 1, THEN present the approved offer in the same email:',
+                '--- REPLY 1 ---',
+                templates.REPLY1_BODY,
+                `Use brand "${v.brandName}" and the cadence "${v.cadence}" for timelines. Do NOT include the "Past content references" section — an offer email should not introduce references unprompted.`,
+              ].join('\n')
+            : '',
+        ].join('\n'),
     '',
     `- ${FORMATTING_RULE}`,
     '',
@@ -678,6 +694,18 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
 async function countSentNegotiation(creatorId) {
   const r = await db.one(
     `SELECT COUNT(*)::int AS n FROM email_events WHERE creator_id = $1 AND type = 'sent_negotiation'`,
+    [creatorId],
+  );
+  return r ? r.n : 0;
+}
+
+// How many priced offers have already gone out to this creator (auto-sent or an
+// admin's manual delegate offer — both log 'rate_offer_sent'). >0 means the next
+// offer is a REVISED counter, so its email should present just the new numbers,
+// not re-pitch the whole deal structure the creator already has.
+async function countOffersSent(creatorId) {
+  const r = await db.one(
+    `SELECT COUNT(*)::int AS n FROM email_events WHERE creator_id = $1 AND type = 'rate_offer_sent'`,
     [creatorId],
   );
   return r ? r.n : 0;
@@ -1523,13 +1551,16 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
     creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
   const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, salutation });
   const combine = (await countSentNegotiation(creatorId)) === 0;
+  // A prior priced offer already went out -> this is a REVISED counter, so its
+  // email presents just the new numbers instead of re-pitching the whole deal.
+  const revised = (await countOffersSent(creatorId)) > 0;
 
   // Draft is fully reversible — a Claude failure here left NO email in-flight,
   // so we can safely roll the atomic-claim back to AWAITING_APPROVAL and let
   // the admin retry.
   let email;
   try {
-    email = await draftOfferEmail(creator, offer, ctx, { combine });
+    email = await draftOfferEmail(creator, offer, ctx, { combine, revised });
   } catch (err) {
     await db.query(
       `UPDATE creators SET negotiation_status = 'AWAITING_APPROVAL', updated_at = NOW() WHERE id = $1`,
