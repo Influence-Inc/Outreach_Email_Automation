@@ -125,6 +125,28 @@ function reply1(vars, { includeRefs = false, includeUsageRights = true } = {}) {
   return { subject: fill(REPLY1_SUBJECT, v), body };
 }
 
+// ── References-only reply ─────────────────────────────────────────────────
+// A short, standalone reply that shares ONLY the reference accounts. Used when
+// the creator asks to see our past work / previous creators AFTER REPLY 1 has
+// already gone out: we must answer the ask directly (share references) WITHOUT
+// re-sending the whole REPLY 1 details pitch. The subject is unused by the
+// sender (it echoes the thread subject) but returned for shape-consistency.
+const REFERENCES_REPLY_BODY = `Hi {salutation},
+
+Absolutely — here are some of the creators we've partnered with, so you can get a feel for the style and quality of the content:
+
+**Past content references**
+{refs}
+
+Happy to share more if that helps. Whenever you're ready, just let me know your rate and we'll put together a tailored offer :)
+
+- {managerName}`;
+
+function referencesReply(vars) {
+  const v = withDefaults(vars);
+  return { subject: fill(REPLY1_SUBJECT, v), body: fill(REFERENCES_REPLY_BODY, v) };
+}
+
 // ── Reply 2 — canonical two-option proposal (used as Claude context) ───────
 const REPLY2_BODY = `Hi {salutation},
 
@@ -327,6 +349,7 @@ module.exports = {
   fill,
   approxDeadline,
   reply1,
+  referencesReply,
   offerEmail,
   describeOffer,
   followup1,

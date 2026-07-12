@@ -92,6 +92,10 @@ test('askedForReferences is true only on an explicit portfolio/examples ask', ()
     'do you have any case studies?',
     'brands you\'ve worked with?',
     'have you partnered with other creators before?',
+    // Loose verb tense: no "'ve"/"have", present tense "collaborated" — a
+    // creator asking to see who we've worked with, phrased as a question.
+    'what are the previous creators you collaborated with?',
+    'can I get some reference videos for content creativity and ideas?',
   ];
   const no = [
     'sounds great, tell me more',
@@ -142,6 +146,26 @@ test('reply1 includes the references section (with links) when asked', () => {
     body.includes('[@danyel.design](https://instagram.com/danyel.design)'),
     'reference handles are markdown links',
   );
+});
+
+// ── References-only reply (shared directly, no full details re-send) ───────
+
+test('referencesReply shares the reference accounts with clickable links', () => {
+  const { body } = templates.referencesReply({ firstName: 'Dua', managerName: 'Jennifer' });
+  assert.ok(body.includes('**Past content references**'), 'references block present');
+  assert.ok(
+    body.includes('[@danyel.design](https://instagram.com/danyel.design)'),
+    'reference handles are markdown links',
+  );
+  assert.ok(body.includes('- Jennifer'), 'signed by the manager');
+});
+
+test('referencesReply does NOT re-send the REPLY 1 details pitch', () => {
+  const { body } = templates.referencesReply({ firstName: 'Dua', brandName: 'Acme' });
+  // The whole point: answer the reference ask WITHOUT dumping the details again.
+  assert.ok(!body.includes('**Deliverables & Rates**'), 'no deliverables pitch');
+  assert.ok(!body.includes('**Platforms**'), 'no platforms section');
+  assert.ok(!body.includes('**Timelines**'), 'no timelines section');
 });
 
 // ── Usage Rights section (campaign usage_rights_policy) ────────────────────
