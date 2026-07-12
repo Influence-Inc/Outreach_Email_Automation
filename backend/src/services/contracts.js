@@ -569,6 +569,48 @@ async function removeUsageRightsFromContract(creatorId) {
   return row;
 }
 
+// One-off repair for a single contract by token: re-pin ONLY its usage-rights
+// fields to the policy-correct values (the same resolveUsageRights() the
+// extraction now uses), leaving every other term untouched. This exists for
+// contracts generated BEFORE the usage-rights pinning fix, whose paid ad rights
+// the free-form extraction may have wrongly dropped on a free_only campaign.
+// Unlike updateContractTermsFromThread it deliberately does NOT re-run the full
+// extraction, so it can't shift the deadline, platforms, or any other field —
+// it's the smallest safe correction. Only touches a PENDING contract; a signed
+// one is executed and needs a human. Returns one of:
+//   {updated:true, before, after, changed} — data re-pinned (changed=false when
+//                                             it was already correct, a no-op)
+//   {signed:true}   — contract exists but is signed (left untouched)
+//   {missing:true}  — no contract / creator for that token
+async function syncUsageRightsForContract(token) {
+  const existing = await getByToken(token);
+  if (!existing) return { missing: true };
+  if (existing.status !== 'pending') return { signed: true, row: existing };
+  const creator = await loadCreatorForContract(existing.creator_id);
+  if (!creator) return { missing: true };
+
+  const messages = await thread.loadThread(existing.creator_id);
+  const transcript = thread.renderTranscript(messages);
+  const after = await resolveUsageRights(creator, transcript);
+  const before = {
+    usageRights: existing.data ? existing.data.usageRights : undefined,
+    paidAdsIncluded: existing.data ? existing.data.paidAdsIncluded : undefined,
+  };
+  const changed =
+    before.usageRights !== after.usageRights || before.paidAdsIncluded !== after.paidAdsIncluded;
+
+  const data = { ...existing.data, ...after };
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_usage_rights_repaired', $2)`,
+    [existing.creator_id, { token, before, after, changed }],
+  );
+  return { updated: true, changed, before, after, row };
+}
+
 // ── Post-acceptance term changes ──────────────────────────────────────────
 // A contract is a point-in-time snapshot taken when the creator accepts, but
 // the creator can still change a deal term afterwards ("let's make it 2 videos",
@@ -711,6 +753,7 @@ module.exports = {
   attachContracts,
   disputesUsageRights,
   removeUsageRightsFromContract,
+  syncUsageRightsForContract,
   changesContractTerms,
   updateContractTermsFromThread,
   // exposed for tests / reuse
