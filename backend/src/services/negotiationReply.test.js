@@ -286,6 +286,31 @@ test('parseRateOptionsFromText caps very long labels so the dropdown stays compa
   assert.ok(options[0].label.length <= 120, `label capped at 120 chars, got ${options[0].label.length}`);
 });
 
+test('parseRateOptionsFromText ignores rates buried in the quoted reply history', () => {
+  // A single-rate reply from the creator with our earlier offers quoted below
+  // in the mail client's history block. Only the creator's own $3,500 should be
+  // extracted — the two quoted $3,000 lines are ours, not a rate menu.
+  const inbound = [
+    'Would you be open to meeting at $3,500 for 500,000 combined Instagram views?',
+    '',
+    'Best,',
+    'Joe',
+    '',
+    'On Wed, Jul 8, 2026 at 10:40 AM Jennifer wrote:',
+    '> *View-Based Offer ($3,000)*',
+    '> - $3,000 for a minimum of 500,000 combined total views on Instagram.',
+  ].join('\n');
+  const options = negotiation.parseRateOptionsFromText(inbound);
+  assert.deepStrictEqual(
+    options.map((o) => o.amount),
+    [3500],
+    'only the creator-stated rate is captured, not the quoted offers',
+  );
+  assert.ok(!options.some((o) => o.label.includes('>')), 'no quoted-line markers leak into labels');
+  // The single-rate parser must also skip the quoted amounts.
+  assert.strictEqual(negotiation.parseRateFromText(inbound), 3500);
+});
+
 // ── 4. Delegate reply offer detection ───────────────────────────────────────
 
 test('extractOfferAmount picks up "$10k" shorthand from a delegate reply', () => {

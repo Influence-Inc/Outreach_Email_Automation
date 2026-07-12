@@ -353,7 +353,11 @@ async function handleCreatorReply(creator, replyText, ctx) {
 
 function parseRateFromText(text) {
   if (!text) return null;
-  const s = String(text);
+  // Only mine the creator's OWN words — never rates buried in the quoted
+  // reply history (our earlier offers, prior thread turns), which the mail
+  // client appends below the new message.
+  const s = replyLearning.stripQuotedHistory(String(text));
+  if (!s) return null;
   let m;
   const dollar = /\$\s*([\d,]+(?:\.\d+)?)\s*([kKmM])?/g;
   while ((m = dollar.exec(s))) {
@@ -383,7 +387,13 @@ function parseRateFromText(text) {
 // doesn't appear twice.
 function parseRateOptionsFromText(text) {
   if (!text) return [];
-  const s = String(text).replace(/\r/g, '');
+  // Strip the quoted reply history first: without this, our own earlier
+  // offers echoed in the "> On … wrote:" block get scraped as if the creator
+  // had quoted them, and a single-rate reply wrongly shows a multi-rate menu
+  // on the timeline (e.g. the real "$3,500 for 500k views" plus two stale
+  // "$3,000" lines lifted from the thread).
+  const s = replyLearning.stripQuotedHistory(String(text)).replace(/\r/g, '');
+  if (!s) return [];
   const results = [];
   const seen = new Set();
 
@@ -1499,6 +1509,7 @@ module.exports = {
   askedForReferences,
   extractOfferAmount,
   parseRateOptionsFromText,
+  parseRateFromText,
   asksUsToQuoteFirst,
   // Test-only.
   _setClient,
