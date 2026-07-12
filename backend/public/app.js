@@ -435,9 +435,122 @@ function dealSummaryItems(data) {
   return items;
 }
 
+// Parse a human "min views" input ("100k", "1.2M", "250,000") into a number.
+function parseViewsInput(s) {
+  const str = String(s == null ? '' : s).trim().toLowerCase().replace(/,/g, '');
+  if (!str) return null;
+  const m = str.match(/^([\d.]+)\s*([km])?$/);
+  if (!m) {
+    const n = Number(str.replace(/[^\d.]/g, ''));
+    return Number.isFinite(n) ? Math.round(n) : null;
+  }
+  let n = Number(m[1]);
+  if (m[2] === 'k') n *= 1e3;
+  else if (m[2] === 'm') n *= 1e6;
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+// PATCH a single contract deal field. Used by the editable Deals column.
+function saveContractField(r, patch) {
+  return api(`/api/creators/${r.id}/contract`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+// Render one editable "TAG · value" deal line whose value is a click-to-edit
+// text field (reuses the same makeEditable helper as the rate cell).
+function appendEditableDealLine(cell, r, { label, value, placeholder, onSave }) {
+  const lineDiv = document.createElement('div');
+  lineDiv.className = 'deal-line';
+  const tag = document.createElement('span');
+  tag.className = 'deal-tag';
+  tag.textContent = label;
+  const val = document.createElement('span');
+  val.className = 'deal-val';
+  val.textContent = value == null || value === '' ? '—' : value;
+  lineDiv.appendChild(tag);
+  lineDiv.appendChild(val);
+  cell.appendChild(lineDiv);
+  makeEditable(val, { value: value == null ? '' : String(value), placeholder, allowEmpty: true, onSave });
+}
+
+// The editable deal terms shown under the rate once a contract exists and is
+// still PENDING (unsigned) — the admin can correct anything the extraction got
+// wrong straight from the Deals column. A signed contract is read-only.
+function renderEditableDeal(cell, r, data) {
+  const hint = document.createElement('div');
+  hint.className = 'deal-edit-hint';
+  hint.textContent = 'Deal terms · click to edit';
+  cell.appendChild(hint);
+
+  const isViewBased = data.offerType === 'view_based';
+  if (!isViewBased) {
+    appendEditableDealLine(cell, r, {
+      label: 'VIDEOS',
+      value: data.numberOfVideos != null ? Number(data.numberOfVideos) : '',
+      placeholder: '# videos',
+      onSave: (v) => saveContractField(r, { numberOfVideos: v === '' ? null : Number(v) }),
+    });
+  }
+  appendEditableDealLine(cell, r, {
+    label: 'MIN VIEWS',
+    value: data.minTotalViews > 0 ? fmtViews(data.minTotalViews) : '',
+    placeholder: 'e.g. 100k',
+    onSave: (v) => saveContractField(r, { minTotalViews: parseViewsInput(v) }),
+  });
+  appendEditableDealLine(cell, r, {
+    label: 'PLATFORMS',
+    value: Array.isArray(data.platforms) ? data.platforms.join(', ') : '',
+    placeholder: 'Instagram, TikTok…',
+    onSave: (v) => saveContractField(r, { platforms: v }),
+  });
+  appendEditableDealLine(cell, r, {
+    label: 'DUE',
+    value: (data.postingDeadline || data.deadline || '').replace(/^[A-Za-z]+day,\s*/, ''),
+    placeholder: 'e.g. April 20, 2026',
+    onSave: (v) => saveContractField(r, { postingDeadline: v }),
+  });
+
+  // Paid ads is a boolean, so it's a click-to-toggle chip rather than a text
+  // field — this is the control that fixes the reported "usage rights missing".
+  const paidLine = document.createElement('div');
+  paidLine.className = 'deal-line';
+  const paidTag = document.createElement('span');
+  paidTag.className = 'deal-tag';
+  paidTag.textContent = 'PAID ADS';
+  const paidVal = document.createElement('span');
+  paidVal.className = 'deal-val deal-toggle';
+  const included = data.paidAdsIncluded === true;
+  paidVal.textContent = data.paidAdsIncluded == null ? '—' : included ? 'Included ✓' : 'Not included';
+  paidVal.classList.toggle('on', included);
+  paidVal.title = 'Click to toggle paid ad rights';
+  paidVal.onclick = async () => {
+    try {
+      await saveContractField(r, { paidAdsIncluded: !included });
+    } catch (err) {
+      alert(err.message);
+    }
+    await refreshCreators();
+    await refreshCampaigns();
+  };
+  paidLine.appendChild(paidTag);
+  paidLine.appendChild(paidVal);
+  cell.appendChild(paidLine);
+
+  appendEditableDealLine(cell, r, {
+    label: 'EXCLUSIVITY',
+    value: data.exclusivity && !/^none$/i.test(String(data.exclusivity).trim()) ? data.exclusivity : '',
+    placeholder: 'None',
+    onSave: (v) => saveContractField(r, { exclusivity: v }),
+  });
+}
+
 // Rate column ("Deals"): the editable agreed/quoted rate, plus — once the
 // creator has accepted — the deliverables they agreed to (videos, min views,
-// deadline, platforms, usage rights), read from their contract.
+// deadline, platforms, usage rights), read from their contract. While the
+// contract is still pending those deal terms are editable in place; once it's
+// signed they're shown read-only.
 function renderRateCell(r, cell) {
   const rate = effectiveRate(r);
   const valueDiv = document.createElement('div');
@@ -455,14 +568,20 @@ function renderRateCell(r, cell) {
   });
 
   if (r.negotiation_status === 'ACCEPTED' && r.contract && r.contract.data) {
-    for (const item of dealSummaryItems(r.contract.data)) {
-      if (item.kind === 'badge') {
-        const badge = document.createElement('span');
-        badge.className = 'deal-badge';
-        badge.textContent = item.text;
-        cell.appendChild(badge);
-        continue;
-      }
+    const data = r.contract.data;
+    if (data.offerLabel) {
+      const badge = document.createElement('span');
+      badge.className = 'deal-badge';
+      badge.textContent = data.offerLabel;
+      cell.appendChild(badge);
+    }
+    // Pending -> editable deal terms; signed/completed -> read-only summary.
+    if (r.contract.status === 'pending') {
+      renderEditableDeal(cell, r, data);
+      return;
+    }
+    for (const item of dealSummaryItems(data)) {
+      if (item.kind === 'badge') continue; // already rendered above
       const lineDiv = document.createElement('div');
       lineDiv.className = 'deal-line';
       const tag = document.createElement('span');

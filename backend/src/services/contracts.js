@@ -405,7 +405,59 @@ async function extractContractData(creator) {
   if (Number(merged.numberOfDeliverables || merged.numberOfVideos) <= 1) {
     merged.timeline = null;
   }
+  // Paid-ad-rights inclusion is a high-stakes, policy-governed term and must NOT
+  // be left to the free-form extraction, which can misfire and silently drop
+  // rights the campaign is entitled to (the reported free_only bug: the creator
+  // never mentioned ad rights, yet the extraction flipped them off). Re-pin it
+  // deterministically from the campaign policy — see resolveUsageRights().
+  Object.assign(merged, await resolveUsageRights(creator, transcript));
   return merged;
+}
+
+// Authoritative usage-rights inclusion, decided by the campaign policy rather
+// than the contract extraction:
+//   no_rights / required — fixed by policy; never negotiable in-thread.
+//   free_only            — INCLUDED by default; only flipped off when the
+//                          creator explicitly negotiated SEPARATE/ADDITIONAL
+//                          payment for ad/usage rights in the thread, decided by
+//                          the focused, conservative check below (not the big
+//                          extraction). "Not mentioned" always keeps rights in.
+async function resolveUsageRights(creator, transcript) {
+  const policy = creator.usage_rights_policy;
+  if (policy !== 'free_only') return usageRightsFor(policy);
+  const negotiatedAway = await negotiatedSeparateUsageRightsPayment(transcript);
+  return usageRightsFor(negotiatedAway ? 'no_rights' : 'free_only');
+}
+
+// Focused yes/no: did the CREATOR ask for separate/additional payment
+// specifically in exchange for ad/usage rights during the thread? Mirrors
+// disputesUsageRights below — a narrow decision with a conservative
+// deterministic fallback, kept out of the broad contract extraction so a
+// single misfire there can never drop rights the campaign is owed.
+const USAGE_RIGHTS_NEGOTIATED_SYSTEM = `You read an influencer-marketing email negotiation between a brand's manager and a creator. Decide whether the CREATOR explicitly asked for SEPARATE or ADDITIONAL payment specifically in exchange for granting paid-ad / usage / whitelisting rights (e.g. "ad rights are extra", "usage rights cost more on top", "I charge separately for whitelisting", "that would be an additional fee for paid ads").
+
+Return ONLY a JSON object: {"negotiatedSeparatePayment": boolean}
+- true ONLY when the CREATOR clearly tied an extra or separate charge to granting ad/usage rights.
+- false for everything else — the creator never mentioned it, mentioned it without asking for more money, or agreed to include it. A brand-side statement that rights are included at no cost is NOT the creator asking for extra.`;
+
+async function negotiatedSeparateUsageRightsPayment(transcript) {
+  if (!transcript || !String(transcript).trim()) return false;
+  const out = claude.parseJsonLoose(
+    await claude.callClaudeText(USAGE_RIGHTS_NEGOTIATED_SYSTEM, String(transcript), 200),
+  );
+  if (out && typeof out.negotiatedSeparatePayment === 'boolean') return out.negotiatedSeparatePayment;
+  // Deterministic fallback when Claude is unavailable: both an ad/usage-rights
+  // noun AND an extra-charge marker must appear. Conservative on purpose —
+  // default false keeps rights INCLUDED, matching the free_only policy default,
+  // so a missed negotiation just waits for a human to catch it (the reply is
+  // delegated regardless).
+  const s = String(transcript).toLowerCase();
+  const mentionsRights = /\b(ad rights?|usage rights?|paid ads?|advertising rights?|whitelisting)\b/.test(s);
+  const extraCharge =
+    /\b(extra|additional|separate(?:ly)?|on top|surcharge|cost[s]? more|charge (?:extra|more|separately)|more for (?:the )?(?:ad|usage|paid))\b/.test(
+      s,
+    );
+  return mentionsRights && extraCharge;
 }
 
 function isMeaningful(v) {
@@ -515,6 +567,132 @@ async function removeUsageRightsFromContract(creatorId) {
     [creatorId, { token: existing.token }],
   );
   return row;
+}
+
+// One-off repair for a single contract by token: re-pin ONLY its usage-rights
+// fields to the policy-correct values (the same resolveUsageRights() the
+// extraction now uses), leaving every other term untouched. This exists for
+// contracts generated BEFORE the usage-rights pinning fix, whose paid ad rights
+// the free-form extraction may have wrongly dropped on a free_only campaign.
+// Unlike updateContractTermsFromThread it deliberately does NOT re-run the full
+// extraction, so it can't shift the deadline, platforms, or any other field —
+// it's the smallest safe correction. Only touches a PENDING contract; a signed
+// one is executed and needs a human. Returns one of:
+//   {updated:true, before, after, changed} — data re-pinned (changed=false when
+//                                             it was already correct, a no-op)
+//   {signed:true}   — contract exists but is signed (left untouched)
+//   {missing:true}  — no contract / creator for that token
+async function syncUsageRightsForContract(token) {
+  const existing = await getByToken(token);
+  if (!existing) return { missing: true };
+  if (existing.status !== 'pending') return { signed: true, row: existing };
+  const creator = await loadCreatorForContract(existing.creator_id);
+  if (!creator) return { missing: true };
+
+  const messages = await thread.loadThread(existing.creator_id);
+  const transcript = thread.renderTranscript(messages);
+  const after = await resolveUsageRights(creator, transcript);
+  const before = {
+    usageRights: existing.data ? existing.data.usageRights : undefined,
+    paidAdsIncluded: existing.data ? existing.data.paidAdsIncluded : undefined,
+  };
+  const changed =
+    before.usageRights !== after.usageRights || before.paidAdsIncluded !== after.paidAdsIncluded;
+
+  const data = { ...existing.data, ...after };
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_usage_rights_repaired', $2)`,
+    [existing.creator_id, { token, before, after, changed }],
+  );
+  return { updated: true, changed, before, after, row };
+}
+
+// ── Manual deal-term edits from the dashboard ──────────────────────────────
+// The Deals column lets an admin correct a pending contract's terms by hand
+// (videos, min views, platforms, deadline, paid-ad rights, exclusivity) when
+// the automatic extraction got something wrong — e.g. the reported case where
+// paid ad rights were dropped. Only the small, safe set of display fields is
+// editable; everything else (fee, company details, payment terms) is left to
+// the existing flows. Coerce each field to its stored shape and keep the
+// paired fields consistent (paid ads ↔ usage-rights wording, deadline aliases).
+const EDITABLE_CONTRACT_FIELDS = [
+  'numberOfVideos',
+  'minTotalViews',
+  'platforms',
+  'postingDeadline',
+  'paidAdsIncluded',
+  'exclusivity',
+];
+
+function coerceContractPatch(patch) {
+  const out = {};
+  const has = (k) => Object.prototype.hasOwnProperty.call(patch, k);
+  if (has('numberOfVideos')) {
+    const raw = patch.numberOfVideos;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    const val = Number.isFinite(n) && n >= 0 ? n : null;
+    out.numberOfVideos = val;
+    out.numberOfDeliverables = val;
+  }
+  if (has('minTotalViews')) {
+    const raw = patch.minTotalViews;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    out.minTotalViews = Number.isFinite(n) && n >= 0 ? n : null;
+    out.guaranteedViews = out.minTotalViews;
+  }
+  if (has('platforms')) {
+    const arr = Array.isArray(patch.platforms)
+      ? patch.platforms
+      : String(patch.platforms || '').split(',');
+    out.platforms = arr.map((s) => String(s).trim()).filter(Boolean);
+  }
+  if (has('postingDeadline')) {
+    const s = String(patch.postingDeadline || '').trim();
+    out.postingDeadline = s || null;
+    out.deadline = s || null;
+  }
+  if (has('paidAdsIncluded')) {
+    // usageRightsFor keeps the "Usage rights" wording and the "Paid ads" chip in
+    // lockstep: included -> the free_only "included at no cost" phrasing;
+    // excluded -> the no_rights "organic only" phrasing.
+    Object.assign(out, usageRightsFor(patch.paidAdsIncluded ? 'free_only' : 'no_rights'));
+  }
+  if (has('exclusivity')) {
+    const s = String(patch.exclusivity || '').trim();
+    out.exclusivity = s || 'None';
+  }
+  return out;
+}
+
+// Apply an admin's deal-term edits to a creator's contract. Only touches a
+// PENDING contract — a signed one is executed and must not be silently altered
+// (returns {signed:true} so the caller can 409). Returns {missing:true} when
+// there's no contract yet, {updated:false, noop:true} when nothing changed.
+async function updateContractFields(creatorId, patch) {
+  const existing = await db.one(
+    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+  if (!existing) return { missing: true };
+  if (existing.status !== 'pending') return { signed: true, row: existing };
+
+  const changes = coerceContractPatch(patch || {});
+  if (!Object.keys(changes).length) return { updated: false, noop: true, row: existing };
+
+  const data = { ...existing.data, ...changes };
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_edited', $2)`,
+    [creatorId, { token: existing.token, fields: Object.keys(changes) }],
+  );
+  return { updated: true, row };
 }
 
 // ── Post-acceptance term changes ──────────────────────────────────────────
@@ -659,6 +837,9 @@ module.exports = {
   attachContracts,
   disputesUsageRights,
   removeUsageRightsFromContract,
+  syncUsageRightsForContract,
+  updateContractFields,
+  coerceContractPatch,
   changesContractTerms,
   updateContractTermsFromThread,
   // exposed for tests / reuse
@@ -666,4 +847,5 @@ module.exports = {
   agreedFeeFor,
   mergeContractData,
   usageRightsFor,
+  negotiatedSeparateUsageRightsPayment,
 };

@@ -392,6 +392,27 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .cr-rate .deal-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
+/* Editable Deals column (pending contracts). A faint header tells the admin the
+   terms below are editable; the paid-ads value is a click-to-toggle chip. */
+.cr-rate .deal-edit-hint {
+  margin-top: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint-2);
+}
+.cr-rate .deal-toggle {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0 5px;
+  font-weight: 600;
+  color: var(--faint);
+  box-shadow: inset 0 0 0 1px var(--surface-3);
+}
+.cr-rate .deal-toggle:hover { background: var(--surface-3); }
+.cr-rate .deal-toggle.on { color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+
 /* Status cell — pill, copy-link and delete-icon share a single left-aligned
    row so they read as one group. Previously the delete icon was pushed to the
    far right via space-between, which created a large empty gap on wide

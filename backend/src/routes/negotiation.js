@@ -4,6 +4,7 @@
 const express = require('express');
 const db = require('../db');
 const negotiation = require('../services/negotiation');
+const contracts = require('../services/contracts');
 const { computeOffers } = require('../services/pricing');
 
 const router = express.Router();
@@ -143,6 +144,32 @@ router.post('/:id/contract', async (req, res, next) => {
     const result = await negotiation.ensureContractSent(req.params.id);
     const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
     res.json({ ...fresh, contract_result: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Edit a pending contract's deal terms straight from the dashboard Deals
+// column (videos, min views, platforms, deadline, paid-ad rights, exclusivity).
+// A signed contract is executed and can't be edited here (409) — that needs a
+// human amendment. Returns the refreshed contract so the row re-renders.
+router.patch('/:id/contract', async (req, res, next) => {
+  try {
+    const exists = await db.one(`SELECT id FROM creators WHERE id = $1`, [req.params.id]);
+    if (!exists) return res.status(404).json({ error: 'not found' });
+    const result = await contracts.updateContractFields(req.params.id, req.body || {});
+    if (result.missing) {
+      return res.status(404).json({ error: 'No contract for this creator yet.' });
+    }
+    if (result.signed) {
+      return res
+        .status(409)
+        .json({ error: 'This contract is already signed — its terms can no longer be edited here.' });
+    }
+    res.json({
+      ok: true,
+      contract: { token: result.row.token, status: result.row.status, data: result.row.data },
+    });
   } catch (err) {
     next(err);
   }

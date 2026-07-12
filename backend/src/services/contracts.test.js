@@ -304,6 +304,108 @@ test('disputesUsageRights: unrelated messages are not disputes', async () => {
   }
 });
 
+// ── free_only usage-rights: negotiated-away detection (contract creation) ───
+// The high-stakes "are paid ad rights included?" term is pinned by policy, not
+// by the free-form contract extraction. On a free_only campaign it stays
+// INCLUDED unless the creator explicitly negotiated separate payment for ad
+// rights in the thread. No ANTHROPIC_API_KEY here, so the deterministic
+// fallback runs — the same path production falls back to on any Claude error.
+
+test('negotiatedSeparateUsageRightsPayment: empty/blank thread -> rights stay included', async () => {
+  assert.strictEqual(await contracts.negotiatedSeparateUsageRightsPayment(''), false);
+  assert.strictEqual(await contracts.negotiatedSeparateUsageRightsPayment(null), false);
+  assert.strictEqual(await contracts.negotiatedSeparateUsageRightsPayment('   '), false);
+});
+
+test('negotiatedSeparateUsageRightsPayment: creator quoting extra for ad rights is detected', async () => {
+  const cases = [
+    'Happy to work together! Ad rights would be an additional $500 on top.',
+    'My rate is $1000, and usage rights cost more if you want to run paid ads.',
+    'I charge separately for whitelisting / paid advertising rights.',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(
+      await contracts.negotiatedSeparateUsageRightsPayment(text),
+      true,
+      `should detect negotiated ad-rights payment: "${text}"`,
+    );
+  }
+});
+
+test('negotiatedSeparateUsageRightsPayment: silence / no ad-rights ask keeps rights included', async () => {
+  const cases = [
+    // The reported bug: creator never mentioned usage rights at all.
+    'Sounds great, my rate for 2 videos is $800. Looking forward to it!',
+    'Thanks for reaching out — I can do Instagram and TikTok.',
+    // A brand-side "no ad rights required" line must not read as a creator ask.
+    'Manager: No ad rights or exclusivity required. Creator: Perfect, sounds good!',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(
+      await contracts.negotiatedSeparateUsageRightsPayment(text),
+      false,
+      `should NOT flip rights off: "${text}"`,
+    );
+  }
+});
+
+// ── Editable Deals column: contract-field coercion ──────────────────────────
+// coerceContractPatch is the pure normaliser behind the dashboard PATCH
+// /api/creators/:id/contract endpoint. It whitelists a small set of deal fields
+// and keeps their paired fields consistent.
+
+test('coerceContractPatch: paid ads toggle syncs the usage-rights wording', () => {
+  const on = contracts.coerceContractPatch({ paidAdsIncluded: true });
+  assert.strictEqual(on.paidAdsIncluded, true);
+  assert.match(on.usageRights, /included/i);
+
+  const off = contracts.coerceContractPatch({ paidAdsIncluded: false });
+  assert.strictEqual(off.paidAdsIncluded, false);
+  assert.match(off.usageRights, /organic only/i);
+});
+
+test('coerceContractPatch: videos sets both numberOfVideos and numberOfDeliverables', () => {
+  const out = contracts.coerceContractPatch({ numberOfVideos: '3' });
+  assert.strictEqual(out.numberOfVideos, 3);
+  assert.strictEqual(out.numberOfDeliverables, 3);
+  const cleared = contracts.coerceContractPatch({ numberOfVideos: '' });
+  assert.strictEqual(cleared.numberOfVideos, null);
+  assert.strictEqual(cleared.numberOfDeliverables, null);
+});
+
+test('coerceContractPatch: min views mirrors into guaranteedViews', () => {
+  const out = contracts.coerceContractPatch({ minTotalViews: 100000 });
+  assert.strictEqual(out.minTotalViews, 100000);
+  assert.strictEqual(out.guaranteedViews, 100000);
+});
+
+test('coerceContractPatch: platforms accept a comma string or an array', () => {
+  assert.deepStrictEqual(
+    contracts.coerceContractPatch({ platforms: 'Instagram, TikTok , ' }).platforms,
+    ['Instagram', 'TikTok'],
+  );
+  assert.deepStrictEqual(
+    contracts.coerceContractPatch({ platforms: ['Instagram', ' YouTube Shorts'] }).platforms,
+    ['Instagram', 'YouTube Shorts'],
+  );
+});
+
+test('coerceContractPatch: deadline aliases, exclusivity defaults, and unknown keys are dropped', () => {
+  const out = contracts.coerceContractPatch({
+    postingDeadline: 'April 20, 2026',
+    exclusivity: '  ',
+    compensation: 999, // not whitelisted — must be ignored
+  });
+  assert.strictEqual(out.postingDeadline, 'April 20, 2026');
+  assert.strictEqual(out.deadline, 'April 20, 2026');
+  assert.strictEqual(out.exclusivity, 'None');
+  assert.ok(!('compensation' in out), 'non-whitelisted fields are ignored');
+});
+
+test('coerceContractPatch: empty patch yields no changes', () => {
+  assert.deepStrictEqual(contracts.coerceContractPatch({}), {});
+});
+
 // ── Post-acceptance term-change detection ───────────────────────────────────
 // No ANTHROPIC_API_KEY in the test env, so changesContractTerms exercises its
 // deterministic keyword fallback here — the same path production falls back to.
