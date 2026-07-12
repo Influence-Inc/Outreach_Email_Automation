@@ -55,6 +55,45 @@
     return email;
   }
 
+  // Normalize a raw Instagram display name into the way a person would write a
+  // first name: plain letters, one capital per word ("PEAR" → "Pear",
+  // "taoagou" → "Taoagou", "ᴠᴇʀᴍᴏꜱᴀ" → "Vermosa", "🤍 Gayatri" → "Gayatri"),
+  // preserving accents ("José") and multi-word names / trailing initials
+  // ("Anvith K"). Returns '' when nothing name-like survives.
+  // Mirrors backend/src/services/nameFormat.js (the server re-applies it at
+  // send time; this keeps the value clean when the extension patches it).
+  const SMALL_CAPS = {
+    'ᴀ':'A','ʙ':'B','ᴄ':'C','ᴅ':'D','ᴇ':'E','ꜰ':'F','ɢ':'G','ʜ':'H','ɪ':'I',
+    'ᴊ':'J','ᴋ':'K','ʟ':'L','ᴍ':'M','ɴ':'N','ᴏ':'O','ᴘ':'P','ꞯ':'Q','ʀ':'R',
+    'ꜱ':'S','ᴛ':'T','ᴜ':'U','ᴠ':'V','ᴡ':'W','ʏ':'Y','ᴢ':'Z',
+  };
+  // Uniform parts (ALL CAPS / all-lowercase) get title-cased; already-mixed
+  // parts ("McKenzie") are intentionally styled, so keep their internal caps
+  // and only ensure the first letter is capital.
+  function titleCasePart(part) {
+    const chars = [...part];
+    if (chars.length === 0) return part;
+    const mixed = /\p{Lu}/u.test(part) && /\p{Ll}/u.test(part);
+    const rest = mixed ? chars.slice(1).join('') : chars.slice(1).join('').toLocaleLowerCase();
+    return chars[0].toLocaleUpperCase() + rest;
+  }
+  function titleCaseWord(w) {
+    return w.split(/([-'])/).map((seg) => (seg === '-' || seg === "'" ? seg : titleCasePart(seg))).join('');
+  }
+  function formatFirstName(raw) {
+    if (raw == null) return '';
+    let s = String(raw).replace(/[︀-️​-‍⁠﻿]/g, '');
+    let mapped = '';
+    for (const ch of s) mapped += SMALL_CAPS[ch] || ch;
+    s = mapped.normalize('NFKC').replace(/[^\p{L}\p{M}\s'-]/gu, ' ');
+    return s
+      .split(/\s+/)
+      .map((w) => w.replace(/^['-]+|['-]+$/g, ''))
+      .filter((w) => /\p{L}/u.test(w))
+      .map(titleCaseWord)
+      .join(' ');
+  }
+
   // Listen for requests from popup / background queue. extractProfileData is
   // async (it scrolls to lazy-load the reels grid before reading view counts),
   // so we keep the message channel open by returning true and replying from the
@@ -398,6 +437,16 @@
         console.log('Reel views extracted:', result.reelViews);
       } catch (e) {
         console.warn('Reel view extraction failed:', e);
+      }
+
+      // Derive the greeting first name from the cleaned full name so it never
+      // reads like a bot ("Hi PEAR," / "Hi ᴠᴇʀᴍᴏꜱᴀ,"). Normalizing the FULL
+      // name before taking the leading word is what lets an emoji/symbol prefix
+      // ("🤍 Gayatri") be stripped instead of captured as the name. Falls back
+      // to the raw first name if normalization strips everything.
+      const cleanedName = formatFirstName(result.fullName || result.firstName);
+      if (cleanedName) {
+        result.firstName = cleanedName.split(' ')[0];
       }
 
       console.log('Instagram profile data extracted:', result);
