@@ -137,12 +137,12 @@
         : '')
     ));
 
-    // Scope ("non exclusive, royalty free, and worldwide") is an organic-usage
-    // concept — only include it when the contract actually grants organic use.
-    var includesOrganic = /organic/i.test(String(d.usageRights || ''));
+    // Usage rights reads straight off the paid-ads grant — a concise
+    // "Included / Not included" rather than a long sentence. Derived from
+    // paidAdsIncluded (not the stored prose) so it stays correct for every
+    // contract, old or new. No separate Scope row.
     html += section('Usage Rights & Exclusivity', rowsWrap(
-      row('Usage rights', d.usageRights) +
-      (includesOrganic ? row('Scope', d.usageScope) : '') +
+      row('Usage rights', d.paidAdsIncluded ? 'Included' : 'Not included') +
       row('Paid ads', d.paidAdsIncluded ? 'Included' : 'Not included') +
       row('Exclusivity', d.exclusivity) +
       // Standard on every contract — defaults to 6 months, never conditional,
