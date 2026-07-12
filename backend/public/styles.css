@@ -655,6 +655,13 @@ button:disabled { opacity: 0.5; cursor: default; }
    still reads as the primary CTA — but tall enough to be an equal click
    target. */
 .oc-dismiss { padding: 12px 20px; font-size: 14px; border-radius: 12px; }
+/* Accept-the-creator's-rate: an alternative to sending a counter. Green so it
+   reads as the "agree & close" path, distinct from the near-black counter CTA. */
+.btn-accept {
+  padding: 13px 22px; font-size: 14px; font-weight: 600; border-radius: 12px;
+  color: #fff; background: var(--green); border: 1px solid var(--green);
+}
+.btn-accept:hover { background: #0f5f40; border-color: #0f5f40; }
 .oc-send-status { font-size: 13px; }
 
 /* --- Responsive ---------------------------------------------------------- */

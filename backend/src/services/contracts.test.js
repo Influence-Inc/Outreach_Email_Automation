@@ -106,6 +106,45 @@ test('baseContractData surfaces video_bonus offer terms in the contract', () => 
   assert.strictEqual(d.bonusWindowDays, 30);
 });
 
+test('agreedFeeFor: an admin-accepted creator rate wins over the last offer we sent', async () => {
+  // Scenario: we countered at $3,000 (logged rate_offer_sent), then the admin
+  // clicked "Accept creator's rate" and we agreed to the creator's own $3,500
+  // (logged rate_accepted / source=creator_rate). The contract must bill the
+  // number we actually agreed to, not our earlier lower counter.
+  const db = require('../db');
+  const origOne = db.one;
+  db.one = async (sql) => {
+    if (/type = 'rate_accepted'/i.test(sql)) return { detail: { fee: 3500, by: 'admin', source: 'creator_rate' } };
+    if (/type = 'rate_offer_sent'/i.test(sql)) return { detail: { fee: 3000, cpm: 6 } };
+    return null;
+  };
+  try {
+    const fee = await contracts.agreedFeeFor({ id: 42, quoted_rate: 3500 });
+    assert.strictEqual(fee, 3500, 'the accepted creator rate is the agreed fee');
+  } finally {
+    db.one = origOne;
+  }
+});
+
+test('agreedFeeFor: without an accepted-creator-rate event, the last offer we sent still wins', async () => {
+  // Regression guard: the normal creator-accepts-our-offer path must be
+  // unchanged — no rate_accepted/creator_rate event, so the last priced offer
+  // ($3,000) is the agreed fee.
+  const db = require('../db');
+  const origOne = db.one;
+  db.one = async (sql) => {
+    if (/type = 'rate_accepted'/i.test(sql)) return null;
+    if (/type = 'rate_offer_sent'/i.test(sql)) return { detail: { fee: 3000, cpm: 6 } };
+    return null;
+  };
+  try {
+    const fee = await contracts.agreedFeeFor({ id: 42, quoted_rate: 5000 });
+    assert.strictEqual(fee, 3000, 'falls back to the last offer we sent, not the stale quoted_rate');
+  } finally {
+    db.one = origOne;
+  }
+});
+
 test('mergeContractData: Claude overrides base, but never wipes known values', () => {
   const base = contracts.baseContractData(
     { full_name: 'Alex Lee', email: 'a@b.com' },

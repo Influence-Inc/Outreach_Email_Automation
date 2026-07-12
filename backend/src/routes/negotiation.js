@@ -148,6 +148,21 @@ router.post('/:id/contract', async (req, res, next) => {
   }
 });
 
+// Admin accepts the creator's quoted rate as-is (instead of shaping a counter
+// offer). We agree to their number: the deal moves to ACCEPTED at that fee and
+// the contract is generated + emailed. Mirrors the offer-approval flow but for
+// the "yes, take their price" decision.
+router.post('/:id/accept-rate', async (req, res, next) => {
+  try {
+    const result = await negotiation.acceptQuotedRate(req.params.id);
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, accept_result: result });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
 // Dismiss an awaiting-approval offer without sending it. Clears the pending
 // offer state (offer_approved flag, custom_offer draft) and moves the creator
 // to CLOSED so they drop out of the Delegate window. Distinct from

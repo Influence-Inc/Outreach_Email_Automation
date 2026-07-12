@@ -58,9 +58,22 @@ function resolveOffer(creator) {
   return offers[0] || null;
 }
 
-// The final agreed fee: prefer the most recent priced offer we logged as sent,
-// then the creator's stored quoted_rate, then the resolved offer's flat_fee.
+// The final agreed fee. When we accepted the creator's OWN rate (an admin
+// clicked "Accept creator's rate"), that acceptance is the terminal fact and
+// its fee wins over any earlier offer we sent — otherwise the last
+// 'rate_offer_sent' (our lower counter) would override the number we actually
+// agreed to. Failing that, prefer the most recent priced offer we sent, then
+// the creator's stored quoted_rate, then the resolved offer's flat_fee.
 async function agreedFeeFor(creator) {
+  const accepted = await db.one(
+    `SELECT detail FROM email_events
+     WHERE creator_id = $1 AND type = 'rate_accepted' AND detail->>'source' = 'creator_rate'
+     ORDER BY created_at DESC LIMIT 1`,
+    [creator.id],
+  );
+  if (accepted && accepted.detail && accepted.detail.fee != null && Number.isFinite(Number(accepted.detail.fee))) {
+    return Math.round(Number(accepted.detail.fee));
+  }
   const ev = await db.one(
     `SELECT detail FROM email_events
      WHERE creator_id = $1 AND type = 'rate_offer_sent'
