@@ -304,6 +304,51 @@ test('disputesUsageRights: unrelated messages are not disputes', async () => {
   }
 });
 
+// ── free_only usage-rights: negotiated-away detection (contract creation) ───
+// The high-stakes "are paid ad rights included?" term is pinned by policy, not
+// by the free-form contract extraction. On a free_only campaign it stays
+// INCLUDED unless the creator explicitly negotiated separate payment for ad
+// rights in the thread. No ANTHROPIC_API_KEY here, so the deterministic
+// fallback runs — the same path production falls back to on any Claude error.
+
+test('negotiatedSeparateUsageRightsPayment: empty/blank thread -> rights stay included', async () => {
+  assert.strictEqual(await contracts.negotiatedSeparateUsageRightsPayment(''), false);
+  assert.strictEqual(await contracts.negotiatedSeparateUsageRightsPayment(null), false);
+  assert.strictEqual(await contracts.negotiatedSeparateUsageRightsPayment('   '), false);
+});
+
+test('negotiatedSeparateUsageRightsPayment: creator quoting extra for ad rights is detected', async () => {
+  const cases = [
+    'Happy to work together! Ad rights would be an additional $500 on top.',
+    'My rate is $1000, and usage rights cost more if you want to run paid ads.',
+    'I charge separately for whitelisting / paid advertising rights.',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(
+      await contracts.negotiatedSeparateUsageRightsPayment(text),
+      true,
+      `should detect negotiated ad-rights payment: "${text}"`,
+    );
+  }
+});
+
+test('negotiatedSeparateUsageRightsPayment: silence / no ad-rights ask keeps rights included', async () => {
+  const cases = [
+    // The reported bug: creator never mentioned usage rights at all.
+    'Sounds great, my rate for 2 videos is $800. Looking forward to it!',
+    'Thanks for reaching out — I can do Instagram and TikTok.',
+    // A brand-side "no ad rights required" line must not read as a creator ask.
+    'Manager: No ad rights or exclusivity required. Creator: Perfect, sounds good!',
+  ];
+  for (const text of cases) {
+    assert.strictEqual(
+      await contracts.negotiatedSeparateUsageRightsPayment(text),
+      false,
+      `should NOT flip rights off: "${text}"`,
+    );
+  }
+});
+
 // ── Post-acceptance term-change detection ───────────────────────────────────
 // No ANTHROPIC_API_KEY in the test env, so changesContractTerms exercises its
 // deterministic keyword fallback here — the same path production falls back to.

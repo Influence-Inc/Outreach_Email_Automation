@@ -405,7 +405,59 @@ async function extractContractData(creator) {
   if (Number(merged.numberOfDeliverables || merged.numberOfVideos) <= 1) {
     merged.timeline = null;
   }
+  // Paid-ad-rights inclusion is a high-stakes, policy-governed term and must NOT
+  // be left to the free-form extraction, which can misfire and silently drop
+  // rights the campaign is entitled to (the reported free_only bug: the creator
+  // never mentioned ad rights, yet the extraction flipped them off). Re-pin it
+  // deterministically from the campaign policy — see resolveUsageRights().
+  Object.assign(merged, await resolveUsageRights(creator, transcript));
   return merged;
+}
+
+// Authoritative usage-rights inclusion, decided by the campaign policy rather
+// than the contract extraction:
+//   no_rights / required — fixed by policy; never negotiable in-thread.
+//   free_only            — INCLUDED by default; only flipped off when the
+//                          creator explicitly negotiated SEPARATE/ADDITIONAL
+//                          payment for ad/usage rights in the thread, decided by
+//                          the focused, conservative check below (not the big
+//                          extraction). "Not mentioned" always keeps rights in.
+async function resolveUsageRights(creator, transcript) {
+  const policy = creator.usage_rights_policy;
+  if (policy !== 'free_only') return usageRightsFor(policy);
+  const negotiatedAway = await negotiatedSeparateUsageRightsPayment(transcript);
+  return usageRightsFor(negotiatedAway ? 'no_rights' : 'free_only');
+}
+
+// Focused yes/no: did the CREATOR ask for separate/additional payment
+// specifically in exchange for ad/usage rights during the thread? Mirrors
+// disputesUsageRights below — a narrow decision with a conservative
+// deterministic fallback, kept out of the broad contract extraction so a
+// single misfire there can never drop rights the campaign is owed.
+const USAGE_RIGHTS_NEGOTIATED_SYSTEM = `You read an influencer-marketing email negotiation between a brand's manager and a creator. Decide whether the CREATOR explicitly asked for SEPARATE or ADDITIONAL payment specifically in exchange for granting paid-ad / usage / whitelisting rights (e.g. "ad rights are extra", "usage rights cost more on top", "I charge separately for whitelisting", "that would be an additional fee for paid ads").
+
+Return ONLY a JSON object: {"negotiatedSeparatePayment": boolean}
+- true ONLY when the CREATOR clearly tied an extra or separate charge to granting ad/usage rights.
+- false for everything else — the creator never mentioned it, mentioned it without asking for more money, or agreed to include it. A brand-side statement that rights are included at no cost is NOT the creator asking for extra.`;
+
+async function negotiatedSeparateUsageRightsPayment(transcript) {
+  if (!transcript || !String(transcript).trim()) return false;
+  const out = claude.parseJsonLoose(
+    await claude.callClaudeText(USAGE_RIGHTS_NEGOTIATED_SYSTEM, String(transcript), 200),
+  );
+  if (out && typeof out.negotiatedSeparatePayment === 'boolean') return out.negotiatedSeparatePayment;
+  // Deterministic fallback when Claude is unavailable: both an ad/usage-rights
+  // noun AND an extra-charge marker must appear. Conservative on purpose —
+  // default false keeps rights INCLUDED, matching the free_only policy default,
+  // so a missed negotiation just waits for a human to catch it (the reply is
+  // delegated regardless).
+  const s = String(transcript).toLowerCase();
+  const mentionsRights = /\b(ad rights?|usage rights?|paid ads?|advertising rights?|whitelisting)\b/.test(s);
+  const extraCharge =
+    /\b(extra|additional|separate(?:ly)?|on top|surcharge|cost[s]? more|charge (?:extra|more|separately)|more for (?:the )?(?:ad|usage|paid))\b/.test(
+      s,
+    );
+  return mentionsRights && extraCharge;
 }
 
 function isMeaningful(v) {
@@ -666,4 +718,5 @@ module.exports = {
   agreedFeeFor,
   mergeContractData,
   usageRightsFor,
+  negotiatedSeparateUsageRightsPayment,
 };
