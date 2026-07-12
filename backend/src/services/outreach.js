@@ -190,6 +190,73 @@ async function sendOutreach(creatorId) {
   }
 }
 
+// Types of outbound sends the app has ALREADY logged for a creator. When an
+// Instantly email_sent webhook fires as the echo of one of these (a delegate
+// reply, a priced offer, a negotiation reply, a contract send — all routed
+// through /emails/reply), we must not also log it as a manual reply or the
+// timeline shows the same send twice.
+const APP_OUTBOUND_TYPES = [
+  'sent_delegate_reply',
+  'sent_negotiation',
+  'rate_offer_sent',
+  'contract_sent',
+];
+
+// Record a manual reply sent by a human — either from Instantly's unibox or
+// directly from the connected mailbox. Idempotent on messageId: a re-delivered
+// webhook logs the event exactly once, so the timeline never doubles up.
+// Also skipped when an app-initiated send (delegate reply, priced offer,
+// negotiation reply, contract) was just logged for this creator — that
+// webhook fire is the echo of a send we already recorded, not a new manual
+// send. Returns true when a fresh row was inserted. Does NOT change the
+// creator's funnel status — a manual reply is a response, not a transition.
+async function markManualReplySent(creatorId, { messageId = null, subject = null, body = null, source = null } = {}) {
+  if (messageId) {
+    const existing = await db.one(
+      `SELECT id FROM email_events
+       WHERE creator_id = $1 AND type = 'sent_manual_reply' AND message_id = $2
+       LIMIT 1`,
+      [creatorId, messageId],
+    );
+    if (existing) return false;
+  }
+  // A send the app itself just made through Instantly (delegate reply, offer,
+  // negotiation reply, contract) fires an email_sent webhook too — those are
+  // NOT a distinct manual reply, they're the echo of an event we already
+  // logged. Suppress the manual-reply row when one of them was logged in the
+  // last few minutes.
+  const recent = await db.one(
+    `SELECT 1 AS hit FROM email_events
+     WHERE creator_id = $1
+       AND type = ANY($2::text[])
+       AND created_at > NOW() - INTERVAL '5 minutes'
+     LIMIT 1`,
+    [creatorId, APP_OUTBOUND_TYPES],
+  );
+  if (recent) return false;
+  const detail = { source: source || 'manual' };
+  if (subject) detail.subject = String(subject).slice(0, 500);
+  if (body) detail.snippet = String(body).slice(0, 500);
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, message_id, detail)
+     VALUES ($1, 'sent_manual_reply', $2, $3)`,
+    [creatorId, messageId, detail],
+  );
+  // A human just answered — clear the delegate flags so the next inbound is
+  // processed by the automated flow instead of sitting in the Delegate queue.
+  // Idempotent: no-op if the flags were already clear.
+  await db.query(
+    `UPDATE creators
+       SET needs_human = FALSE,
+           delegate_reason = NULL,
+           delegate_question = NULL,
+           updated_at = NOW()
+     WHERE id = $1`,
+    [creatorId],
+  );
+  return true;
+}
+
 async function markReplied(creatorId) {
   await db.query(
     `UPDATE creators
@@ -278,6 +345,7 @@ module.exports = {
   sendOutreach,
   markReplied,
   markFollowupSent,
+  markManualReplySent,
   markOpened,
   prepareOutreach,
   // Exposed for tests.

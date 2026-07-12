@@ -60,3 +60,55 @@ test('OPEN_EVENTS is disjoint from send + reply event sets', () => {
     assert.strictEqual(webhook.REPLY_EVENTS.has(t), false, `${t} must not be a reply event`);
   }
 });
+
+// isCreatorPastInitialOutreach flips the email_sent handler between "this is a
+// campaign follow-up" and "this is a manual reply someone just typed" — the
+// distinction that turns an otherwise-silent send into a timeline entry.
+test('isCreatorPastInitialOutreach: outreach_sent with no negotiation is still the initial send', () => {
+  assert.strictEqual(
+    webhook.isCreatorPastInitialOutreach({ status: 'outreach_sent', negotiation_status: null }),
+    false,
+  );
+});
+
+test('isCreatorPastInitialOutreach: creator has replied → manual reply territory', () => {
+  assert.strictEqual(
+    webhook.isCreatorPastInitialOutreach({ status: 'replied', negotiation_status: null }),
+    true,
+  );
+});
+
+test('isCreatorPastInitialOutreach: follow-up already sent → manual reply territory', () => {
+  assert.strictEqual(
+    webhook.isCreatorPastInitialOutreach({ status: 'followup_sent', negotiation_status: null }),
+    true,
+  );
+});
+
+test('isCreatorPastInitialOutreach: any negotiation stage past outreach counts', () => {
+  for (const stage of ['AWAITING_RATE', 'AWAITING_APPROVAL', 'AWAITING_DECISION', 'ACCEPTED']) {
+    assert.strictEqual(
+      webhook.isCreatorPastInitialOutreach({ status: 'outreach_sent', negotiation_status: stage }),
+      true,
+      stage,
+    );
+  }
+});
+
+// pickSentBody is the defensive alias reader for a manual reply's plain-text
+// body — same posture as pickReplyText for inbound replies.
+test('pickSentBody reads the sent body from the common Instantly aliases', () => {
+  assert.strictEqual(webhook.pickSentBody({ body_text: 'hi' }), 'hi');
+  assert.strictEqual(webhook.pickSentBody({ body: 'hi' }), 'hi');
+  assert.strictEqual(webhook.pickSentBody({ text: 'hi' }), 'hi');
+  assert.strictEqual(webhook.pickSentBody({ email: { text: 'hi' } }), 'hi');
+  assert.strictEqual(webhook.pickSentBody({ email: { body: 'hi' } }), 'hi');
+  assert.strictEqual(webhook.pickSentBody({}), null);
+});
+
+test('pickSentSubject reads the subject from the common Instantly aliases', () => {
+  assert.strictEqual(webhook.pickSentSubject({ subject: 'Re: X' }), 'Re: X');
+  assert.strictEqual(webhook.pickSentSubject({ email_subject: 'Re: X' }), 'Re: X');
+  assert.strictEqual(webhook.pickSentSubject({ email: { subject: 'Re: X' } }), 'Re: X');
+  assert.strictEqual(webhook.pickSentSubject({}), null);
+});

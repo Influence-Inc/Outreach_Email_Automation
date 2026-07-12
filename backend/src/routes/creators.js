@@ -20,6 +20,7 @@ const RATE_LOG_TYPES = [
   'rate_accepted',
   'rate_declined',
   'sent_delegate_reply',
+  'sent_manual_reply',
   'contract_sent',
   'contract_signed',
   'contract_synced',
@@ -86,6 +87,8 @@ function rateLogEntry(type, detail) {
       return { text: 'Creator declined', tone: 'muted' };
     case 'sent_delegate_reply':
       return { text: 'Reply sent (from delegate)', tone: 'done' };
+    case 'sent_manual_reply':
+      return { text: 'Manual reply sent', tone: 'done' };
     case 'contract_sent':
       return { text: 'Contract sent', tone: 'active' };
     case 'contract_signed':
