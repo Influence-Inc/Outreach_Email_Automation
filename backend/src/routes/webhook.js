@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { markReplied, markFollowupSent, markOpened } = require('../services/outreach');
+const { markReplied, markFollowupSent, markOpened, markManualReplySent } = require('../services/outreach');
 const thread = require('../services/thread');
 
 const router = express.Router();
@@ -100,6 +100,25 @@ function pickReplyText(body) {
     null
   );
 }
+// The plain-text body of an outbound send (email_sent event). Instantly's
+// payload names vary by version — a manual reply typed from the unibox may
+// arrive under any of these aliases. Used to record the manual reply on the
+// creator's thread so subsequent auto-replies see what the human already said.
+function pickSentBody(body) {
+  const email = body.email || {};
+  return (
+    body.body_text ||
+    body.body ||
+    body.text ||
+    body.email_body ||
+    body.sent_text ||
+    (email && (email.body_text || email.text || email.body)) ||
+    null
+  );
+}
+function pickSentSubject(body) {
+  return body.subject || body.email_subject || (body.email && body.email.subject) || null;
+}
 function pickReplyUuid(body) {
   return (
     body.reply_to_uuid ||
@@ -128,6 +147,22 @@ function pickReplySubject(body) {
   return body.reply_subject || body.subject || null;
 }
 
+// Has this creator moved beyond the initial outreach step? True once they've
+// replied, once a follow-up has gone out, or once negotiation has advanced to
+// any stage. Used to distinguish a real follow-up send from a manual reply
+// typed by a human — after the creator engages, further outbound sends that
+// aren't a numbered sequence step are manual, not automated follow-ups.
+function isCreatorPastInitialOutreach(creator) {
+  if (!creator) return false;
+  if (creator.status && creator.status !== 'outreach_sent') {
+    // 'replied', 'followup_sent', 'suppressed', 'invalid_email', 'failed' — any
+    // status other than the initial outreach means the initial send is done.
+    if (['replied', 'followup_sent'].includes(creator.status)) return true;
+  }
+  if (creator.negotiation_status) return true;
+  return false;
+}
+
 // Resolve the creator row an Instantly event belongs to. The same address can
 // be a lead in multiple campaigns, so prefer the row in the campaign the event
 // names; fall back to email-only (most recently emailed) when the campaign is
@@ -137,7 +172,7 @@ async function resolveCreator(email, campaignId) {
   let creator = null;
   if (campaignId) {
     creator = await db.one(
-      `SELECT c.id, c.status FROM creators c
+      `SELECT c.id, c.status, c.negotiation_status FROM creators c
        JOIN campaigns ca ON ca.id = c.campaign_id
        WHERE LOWER(c.email) = LOWER($1)
          AND COALESCE(ca.instantly_campaign_id, $3) = $2
@@ -148,7 +183,7 @@ async function resolveCreator(email, campaignId) {
   }
   if (!creator) {
     creator = await db.one(
-      `SELECT id, status FROM creators
+      `SELECT id, status, negotiation_status FROM creators
        WHERE LOWER(email) = LOWER($1)
        ORDER BY outreach_sent_at DESC NULLS LAST
        LIMIT 1`,
@@ -204,8 +239,15 @@ router.post('/instantly', async (req, res) => {
       return;
     }
 
-    // email_sent events advance outreach_sent → followup_sent when Instantly
-    // sends a follow-up step. Handle them before the reply-only guard below.
+    // email_sent events cover both Instantly's automated sequence steps AND
+    // manual sends typed from Instantly's unibox / a connected mailbox.
+    //   • Sequence follow-up (Step 2+) → advance outreach_sent → followup_sent.
+    //   • Manual reply sent after the creator has already engaged
+    //     (status='replied' or a negotiation stage is in flight) → log a
+    //     'sent_manual_reply' event so the timeline shows we responded, and
+    //     record the outbound body on the thread so the automated flow keeps
+    //     the manual reply as context on the next inbound.
+    // Handled before the reply-only guard below.
     if (SENT_EVENTS.has(eventType)) {
       const email = pickEmail(body);
       const campaignId = pickCampaignId(body);
@@ -221,13 +263,52 @@ router.post('/instantly', async (req, res) => {
         return;
       }
       const step = pickStep(body);
-      const advanced = await markFollowupSent(creator.id, {
-        step,
-        messageId: pickSentMessageId(body),
-      });
+      const messageId = pickSentMessageId(body);
+      const advanced = await markFollowupSent(creator.id, { step, messageId });
+      if (advanced) {
+        console.log(
+          `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} ` +
+            `(instantly campaign ${campaignId || 'n/a'}) → followup_sent`,
+        );
+        return;
+      }
+      // Not a follow-up advance. If the creator is already past the initial
+      // outreach (replied / negotiating / accepted), this send is a manual
+      // reply — log it on the timeline and add it to the thread so the next
+      // auto-reply has the human's answer as context.
+      const isManualReply = isCreatorPastInitialOutreach(creator);
+      if (isManualReply) {
+        const sentBody = pickSentBody(body);
+        const sentSubject = pickSentSubject(body);
+        const logged = await markManualReplySent(creator.id, {
+          messageId,
+          subject: sentSubject,
+          body: sentBody,
+          source: 'instantly_unibox',
+        });
+        if (logged && sentBody) {
+          try {
+            await thread.recordMessage(creator.id, {
+              direction: 'outbound',
+              kind: 'manual_reply',
+              subject: sentSubject || null,
+              body: sentBody,
+            });
+          } catch (e) {
+            console.warn(
+              `[webhook/instantly] thread record (manual reply) failed for creator ${creator.id}: ${e.message}`,
+            );
+          }
+        }
+        console.log(
+          `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} ` +
+            `(instantly campaign ${campaignId || 'n/a'}) → ${logged ? 'manual reply logged' : 'manual reply already logged'}`,
+        );
+        return;
+      }
       console.log(
         `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} ` +
-          `(instantly campaign ${campaignId || 'n/a'}) → ${advanced ? 'followup_sent' : 'no status change'}`,
+          `(instantly campaign ${campaignId || 'n/a'}) → no status change`,
       );
       return;
     }
@@ -300,6 +381,9 @@ router.post('/instantly', async (req, res) => {
 router.pickEventType = pickEventType;
 router.pickStep = pickStep;
 router.pickSentMessageId = pickSentMessageId;
+router.pickSentBody = pickSentBody;
+router.pickSentSubject = pickSentSubject;
+router.isCreatorPastInitialOutreach = isCreatorPastInitialOutreach;
 router.SENT_EVENTS = SENT_EVENTS;
 router.OPEN_EVENTS = OPEN_EVENTS;
 router.REPLY_EVENTS = REPLY_EVENTS;
