@@ -600,6 +600,54 @@ function renderRateCell(r, cell) {
 const TRASH_SVG =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
 
+// "Decide offer": open this creator's Instagram profile in a new tab with the
+// Chrome extension's offer panel latched to the right. The extension handles the
+// hand-off (see dashboard-bridge.js → background.js openDecideOffer); here we
+// just post the message the bridge forwards, carrying this dashboard's origin as
+// the API base so the panel can reach the same endpoints. extensionBridge.ready
+// (set when the bridge announces on load) tells us whether the extension is
+// installed.
+function launchDecideOffer(r, btn) {
+  if (!r.instagram_username) {
+    alert('This creator has no Instagram username to open.');
+    return;
+  }
+  window.postMessage({ type: 'OEA_PING' }, window.location.origin);
+  window.postMessage(
+    {
+      type: 'OEA_OPEN_DECIDE_OFFER',
+      payload: {
+        creatorId: r.id,
+        username: r.instagram_username,
+        campaignId: r.campaign_id,
+        apiBase: window.location.origin,
+      },
+    },
+    window.location.origin,
+  );
+  if (!btn) return;
+  const prev = btn.textContent;
+  btn.textContent = 'Opening Instagram…';
+  setTimeout(() => {
+    btn.textContent = prev;
+    if (!extensionBridge.ready) {
+      alert(
+        'Chrome extension not detected. Load the unpacked extension at chrome://extensions, then reload this page.',
+      );
+    }
+  }, 1500);
+}
+
+function makeDecideOfferButton(r, { label = 'Decide offer' } = {}) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small cr-decide-btn';
+  btn.textContent = `${label} ▸`;
+  btn.title = 'Open this creator’s Instagram profile with the offer panel';
+  btn.onclick = () => launchDecideOffer(r, btn);
+  return btn;
+}
+
 // Status column: pill + delete + (send-outreach when pending) + timeline.
 function renderStatusCell(r, cell) {
   const top = document.createElement('div');
@@ -673,6 +721,13 @@ function renderStatusCell(r, cell) {
       }
     };
     cell.appendChild(send);
+  }
+
+  // On a creator awaiting our offer, surface "Decide offer" right by the
+  // timeline — one click opens their Instagram profile with the offer panel
+  // (rate, counters, safe floor, accept/counter) latched to the side.
+  if (isOfferActionable(r)) {
+    cell.appendChild(makeDecideOfferButton(r));
   }
 
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
@@ -1315,6 +1370,13 @@ function buildOfferConfigurator(r, onRefresh) {
       dismissBtn.disabled = false;
     }
   };
+
+  // Let the admin jump to the creator's Instagram profile with this same offer
+  // panel latched to the side, straight from the Delegate card.
+  const sendbarActions = root.querySelector('.oc-sendbar-actions');
+  if (sendbarActions && r.instagram_username) {
+    sendbarActions.insertBefore(makeDecideOfferButton(r, { label: 'Open on IG' }), sendbarActions.firstChild);
+  }
 
   recompute();
   return root;

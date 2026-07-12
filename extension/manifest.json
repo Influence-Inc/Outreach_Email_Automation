@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Influence Outreach Automator",
-  "version": "1.0.9",
-  "description": "Influence Outreach: scrape Instagram profiles into the Outreach dashboard.",
+  "version": "1.1.0",
+  "description": "Influence Outreach: scrape Instagram profiles into the dashboard, and decide creator offers from a panel on their Instagram profile.",
   "permissions": [
-    "tabs"
+    "tabs",
+    "storage"
   ],
   "host_permissions": [
     "https://*/*",
@@ -16,13 +17,19 @@
   "content_scripts": [
     {
       "matches": ["https://www.instagram.com/*"],
-      "js": ["instagram-content.js"],
+      "js": ["instagram-content.js", "instagram-panel.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://*/*", "http://*/*"],
       "js": ["dashboard-bridge.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["panel.html", "panel.js", "panel.css"],
+      "matches": ["https://www.instagram.com/*"]
     }
   ],
   "action": {

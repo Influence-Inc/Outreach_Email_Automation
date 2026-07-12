@@ -20,7 +20,17 @@
   const PAGE_TO_BG = {
     OEA_RUN_SCRAPE_QUEUE: 'runScrapeQueue',
     OEA_ABORT_SCRAPE_QUEUE: 'abortScrapeQueue',
+    OEA_OPEN_DECIDE_OFFER: 'openDecideOffer',
   };
+
+  // Remember this dashboard's origin as the API base so the Instagram side
+  // panel can reach the API even when opened standalone (before any "Decide
+  // offer" hand-off has run). Best-effort — storage may be unavailable.
+  try {
+    chrome.storage.local.set({ infDashboardApiBase: window.location.origin });
+  } catch (e) {
+    /* ignore */
+  }
 
   // Announce extension presence so the page can tell whether it's installed.
   function announce() {

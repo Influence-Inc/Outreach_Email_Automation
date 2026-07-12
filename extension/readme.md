@@ -1,4 +1,37 @@
-# Gmail Follow-up Automator
+# Influence Outreach Automator
+
+A Chrome extension for the Influence Deal Studio. It has two jobs:
+
+1. **Scrape** Instagram profiles into the dashboard (email, name, recent reel views) — driven from the dashboard's "Scrape Via Extension" button.
+2. **Decide offers on Instagram** — a vertical offer panel that latches to the right of a creator's Instagram profile so you can settle their rate without tab-hopping to the dashboard.
+
+## Decide-offer panel
+
+The pain this removes: previously you had to remember the rate the creator sent (from the dashboard activity timeline) and open their profile in a separate tab before pricing an offer in Delegate. Now:
+
+1. On the dashboard, a creator awaiting your offer shows a **"Decide offer ▸"** button next to their activity timeline (and an **"Open on IG"** button on their Delegate card).
+2. Clicking it opens the creator's **Instagram profile** in a new tab with the **offer panel** docked on the right.
+3. The panel shows the **rate the creator sent plus every counter** (the same rate timeline as the dashboard), the **safe floor / least views**, and controls to **accept their rate** or **send a counter offer** — all hitting the same backend endpoints as the dashboard.
+
+You can also open the panel manually on any creator's profile via the slim **"Deal ▸"** tab on the right edge — it resolves the creator by their @username.
+
+### How it's wired
+
+| File | Role |
+| --- | --- |
+| `instagram-panel.js` | Content script that latches the panel (an extension-origin iframe) to the right of Instagram, handles SPA navigation, and picks up decide-offer hand-offs. |
+| `panel.html` / `panel.css` / `panel.js` | The panel itself: rate timeline, safe floor, and the offer configurator (ported from the dashboard). Fetches + posts to the dashboard API. |
+| `background.js` | `openDecideOffer`: stores the one-shot target (creator id + dashboard URL) and opens the profile tab. |
+| `dashboard-bridge.js` | Forwards the dashboard's `OEA_OPEN_DECIDE_OFFER` message and remembers the dashboard URL. |
+| `popup.html` / `popup.js` | Lets you set the Dashboard URL used by the panel when opened standalone. |
+
+The panel is an **extension-origin** iframe (listed in `web_accessible_resources`) rather than a dashboard-origin frame: extension frames are CSS-isolated from Instagram and aren't blocked by Instagram's page CSP. It reaches the API using the dashboard URL captured when you open the dashboard (or set in the popup); no offers are ever sent by the extension itself — it calls the same server endpoints the dashboard does, which remain the single source of truth for pricing and sending.
+
+---
+
+## Legacy notes (Gmail compose / follow-ups)
+
+The sections below describe an earlier Gmail-based sending flow. Sending is now handled server-side via Instantly.ai; kept for reference.
 
 A Chrome extension that automatically sends follow-up emails directly within Gmail's web interface, and allows you to compose new emails from any website.
 

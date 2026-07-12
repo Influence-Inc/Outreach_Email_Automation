@@ -16,7 +16,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (request.action === 'openDecideOffer') {
+    openDecideOffer(request.payload || {})
+      .then((res) => sendResponse({ ok: true, ...res }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 });
+
+// ---------------------------------------------------------------------------
+// "Decide offer" launcher. The dashboard hands off a creator (id + username +
+// its own origin as apiBase); we remember it as a one-shot target keyed by
+// username, persist the dashboard URL so the Instagram side panel can reach the
+// API, then open the creator's profile. The panel content script picks up the
+// stored target and opens itself against the right creator.
+// ---------------------------------------------------------------------------
+async function openDecideOffer(payload) {
+  const { creatorId, username, campaignId, apiBase } = payload;
+  if (!username) throw new Error('username required');
+  const uname = String(username).replace(/^@/, '').trim();
+  const base = apiBase ? String(apiBase).replace(/\/+$/, '') : null;
+
+  const store = await chrome.storage.local.get(['infPendingOffers', 'infDashboardApiBase']);
+  const pending = { ...(store.infPendingOffers || {}) };
+  pending[uname.toLowerCase()] = {
+    creatorId: creatorId != null ? String(creatorId) : null,
+    campaignId: campaignId != null ? String(campaignId) : null,
+    apiBase: base || store.infDashboardApiBase || null,
+    ts: Date.now(),
+  };
+  const set = { infPendingOffers: pending };
+  if (base) set.infDashboardApiBase = base;
+  await chrome.storage.local.set(set);
+
+  const url = `https://www.instagram.com/${encodeURIComponent(uname)}/`;
+  const tab = await chrome.tabs.create({ url, active: true });
+  return { tabId: tab.id };
+}
 
 // ---------------------------------------------------------------------------
 // Scrape queue runner: drives one IG profile tab at a time and PATCHes the
