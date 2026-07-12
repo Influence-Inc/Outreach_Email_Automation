@@ -191,6 +191,50 @@ test('processReply does NOT re-send REPLY 1 when asking_details comes back at AW
   }
 });
 
+// Exception to the guard above: a request to SEE our references / past work /
+// previous creators, arriving AFTER REPLY 1, must be answered directly (share
+// the reference accounts) — never delegated and never a REPLY 1 re-send. The
+// heuristic classifies "interested, no rate" as asking_details, but because the
+// creator explicitly asked for references we share them instead of handing off.
+test('processReply shares references directly (no delegate) when the creator asks for past work after REPLY 1', async () => {
+  const prevDryRun = process.env.DRY_RUN;
+  process.env.DRY_RUN = '1';
+  negotiation._setClient(null); // heuristic -> asking_details (interested, no rate)
+  const writes = [];
+  const creator = {
+    ...baseCreator,
+    negotiation_status: 'AWAITING_RATE', // REPLY 1 already sent
+    latest_inbound_text: 'What are the previous creators you collaborated with?',
+  };
+  db.one = async (sql) => {
+    if (/FROM creators c JOIN campaigns/i.test(sql)) return { ...creator };
+    return null;
+  };
+  db.query = async (sql, params) => {
+    writes.push({ sql, params });
+    return { rows: [] };
+  };
+  db.many = async () => [];
+  try {
+    const res = await negotiation.processReply(creator.id);
+    assert.strictEqual(res.action, 'answer_question');
+    assert.strictEqual(res.reason, 'shared_references');
+    assert.ok(has(writes, /'sent_negotiation'/i), 'a references reply is sent');
+    assert.ok(!has(writes, /needs_human\s*=\s*TRUE/i), 'the reference ask is NOT delegated');
+    assert.ok(has(writes, /latest_inbound_text\s*=\s*NULL/i), 'the inbound is consumed');
+    // Stage is preserved — sharing references must not regress the negotiation.
+    assert.ok(
+      !writes.some(
+        (w) => /negotiation_status\s*=\s*'AWAITING_RATE'/i.test(w.sql) || (Array.isArray(w.params) && w.params.includes('AWAITING_DECISION')),
+      ),
+      'the negotiation stage is not rewritten',
+    );
+  } finally {
+    process.env.DRY_RUN = prevDryRun;
+    restore();
+  }
+});
+
 test('processReply still sends REPLY 1 on the FIRST reply (negotiation_status IS NULL)', async () => {
   const prevDryRun = process.env.DRY_RUN;
   process.env.DRY_RUN = '1';
