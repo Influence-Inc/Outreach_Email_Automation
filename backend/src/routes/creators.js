@@ -75,6 +75,11 @@ function rateLogEntry(type, detail) {
       return { text: 'Asked creator for their counter rate', tone: 'active' };
     case 'rate_accepted': {
       const fee = d.fee != null ? fmtMoney(d.fee) : null;
+      // by:'admin' means WE accepted the creator's own quoted rate (via the
+      // "Accept creator's rate" button), not the creator accepting our offer.
+      if (d.by === 'admin') {
+        return { text: fee ? `Accepted creator's rate ✓ — ${fee}` : "Accepted creator's rate ✓", tone: 'success' };
+      }
       return { text: fee ? `Creator accepted ✓ — ${fee}` : 'Creator accepted ✓', tone: 'success' };
     }
     case 'rate_declined':

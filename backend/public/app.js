@@ -962,6 +962,11 @@ function buildOfferConfigurator(r, onRefresh) {
       </div>
       <div class="oc-sendbar-actions">
         <span class="oc-send-status hint"></span>
+        ${
+          r.quoted_rate != null
+            ? `<button class="oc-accept-rate btn-accept" type="button">Accept creator's rate — $${fmtNum(r.quoted_rate)} ✓</button>`
+            : ''
+        }
         <button class="oc-dismiss ghost small" type="button">Dismiss</button>
         <button class="oc-approve btn-primary" type="button">${approveLabel} →</button>
       </div>
@@ -1142,6 +1147,39 @@ function buildOfferConfigurator(r, onRefresh) {
       approveBtn.dataset.busy = '';
     }
   };
+
+  const acceptRateBtn = root.querySelector('.oc-accept-rate');
+  if (acceptRateBtn) {
+    acceptRateBtn.onclick = async () => {
+      // Guard the same way as approve: a queued double-tap must not fire two
+      // acceptances (the server also claims atomically).
+      if (acceptRateBtn.dataset.busy === '1') return;
+      const rateStr = `$${fmtNum(r.quoted_rate)}`;
+      const who = r.first_name || `@${r.instagram_username || 'this creator'}`;
+      if (
+        !confirm(
+          `Accept ${who}'s rate of ${rateStr}? We'll agree to their number and send the contract for signing.`,
+        )
+      )
+        return;
+      acceptRateBtn.dataset.busy = '1';
+      acceptRateBtn.disabled = true;
+      approveBtn.disabled = true;
+      dismissBtn.disabled = true;
+      statusEl.textContent = 'Accepting…';
+      try {
+        await api(`/api/creators/${r.id}/accept-rate`, { method: 'POST' });
+        statusEl.textContent = `✓ Accepted ${rateStr} — contract sent.`;
+        setTimeout(onRefresh, 1400);
+      } catch (err) {
+        statusEl.textContent = `Couldn't accept: ${err.message}`;
+        acceptRateBtn.disabled = false;
+        approveBtn.disabled = false;
+        dismissBtn.disabled = false;
+        acceptRateBtn.dataset.busy = '';
+      }
+    };
+  }
 
   dismissBtn.onclick = async () => {
     if (!confirm('Dismiss this offer without sending? The creator will be removed from Delegate.')) return;

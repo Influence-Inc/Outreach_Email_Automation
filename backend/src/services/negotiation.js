@@ -1015,6 +1015,65 @@ async function ensureContractSent(creatorId) {
   return { ok: true };
 }
 
+// Admin accepts the creator's most recent quoted rate as-is instead of
+// countering it. This is the mirror image of the creator accepting OUR offer:
+// here WE agree to THEIR number. Lock the agreed fee to quoted_rate, move to
+// ACCEPTED, log it (by: 'admin' so the timeline reads "Accepted creator's
+// rate"), and kick off the contract at that fee. Works for any creator with a
+// live quoted rate, including ones already sitting in AWAITING_APPROVAL from a
+// past counter — no migration needed.
+async function acceptQuotedRate(creatorId) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) {
+    const err = new Error('not found');
+    err.status = 404;
+    throw err;
+  }
+  const rate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
+  if (rate == null || !Number.isFinite(rate)) {
+    const err = new Error('Creator has not shared a rate to accept.');
+    err.status = 400;
+    throw err;
+  }
+  // Only accept from stages where a creator rate is genuinely on the table.
+  const acceptable = ['AWAITING_APPROVAL', 'AWAITING_RATE', 'AWAITING_DECISION'];
+  // Atomic claim: the first accept wins and an already-ACCEPTED creator can't
+  // be re-accepted, so a double-click can't kick off two contracts.
+  const claim = await db.one(
+    `UPDATE creators
+       SET negotiation_status = 'ACCEPTED',
+           quoted_rate = $2,
+           offer_approved = FALSE,
+           needs_human = FALSE,
+           delegate_reason = NULL,
+           delegate_question = NULL,
+           updated_at = NOW()
+     WHERE id = $1 AND negotiation_status = ANY($3::text[])
+     RETURNING *`,
+    [creator.id, rate, acceptable],
+  );
+  if (!claim) {
+    const err = new Error(
+      `Cannot accept — creator is not awaiting an offer (stage: ${
+        creator.negotiation_status
+          ? creator.negotiation_status.replace(/_/g, ' ').toLowerCase()
+          : 'no reply yet'
+      }).`,
+    );
+    err.status = 409;
+    throw err;
+  }
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
+    [creator.id, { fee: rate, by: 'admin', source: 'creator_rate' }],
+  );
+  // Merge the fresh row over the loaded creator so ctx/contract see the ACCEPTED
+  // stage and locked rate.
+  const accepted = { ...creator, ...claim };
+  await sendContractOnAcceptance(accepted, ctxFor(accepted), { send_now: true });
+  return { action: 'accepted', fee: rate };
+}
+
 // Post-acceptance reply handler (scheduler-callable). A creator who already
 // ACCEPTED — the offer is agreed, the contract has been sent, and may already
 // be signed — can still reply: a payment question, a scheduling detail, a
@@ -1497,6 +1556,7 @@ module.exports = {
   sendApprovedOffer,
   sendDelegateReply,
   ensureContractSent,
+  acceptQuotedRate,
   handleAcceptedReply,
   surfaceApprovalReply,
   runNegotiationFollowup,
