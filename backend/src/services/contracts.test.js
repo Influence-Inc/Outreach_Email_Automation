@@ -349,6 +349,63 @@ test('negotiatedSeparateUsageRightsPayment: silence / no ad-rights ask keeps rig
   }
 });
 
+// ── Editable Deals column: contract-field coercion ──────────────────────────
+// coerceContractPatch is the pure normaliser behind the dashboard PATCH
+// /api/creators/:id/contract endpoint. It whitelists a small set of deal fields
+// and keeps their paired fields consistent.
+
+test('coerceContractPatch: paid ads toggle syncs the usage-rights wording', () => {
+  const on = contracts.coerceContractPatch({ paidAdsIncluded: true });
+  assert.strictEqual(on.paidAdsIncluded, true);
+  assert.match(on.usageRights, /included/i);
+
+  const off = contracts.coerceContractPatch({ paidAdsIncluded: false });
+  assert.strictEqual(off.paidAdsIncluded, false);
+  assert.match(off.usageRights, /organic only/i);
+});
+
+test('coerceContractPatch: videos sets both numberOfVideos and numberOfDeliverables', () => {
+  const out = contracts.coerceContractPatch({ numberOfVideos: '3' });
+  assert.strictEqual(out.numberOfVideos, 3);
+  assert.strictEqual(out.numberOfDeliverables, 3);
+  const cleared = contracts.coerceContractPatch({ numberOfVideos: '' });
+  assert.strictEqual(cleared.numberOfVideos, null);
+  assert.strictEqual(cleared.numberOfDeliverables, null);
+});
+
+test('coerceContractPatch: min views mirrors into guaranteedViews', () => {
+  const out = contracts.coerceContractPatch({ minTotalViews: 100000 });
+  assert.strictEqual(out.minTotalViews, 100000);
+  assert.strictEqual(out.guaranteedViews, 100000);
+});
+
+test('coerceContractPatch: platforms accept a comma string or an array', () => {
+  assert.deepStrictEqual(
+    contracts.coerceContractPatch({ platforms: 'Instagram, TikTok , ' }).platforms,
+    ['Instagram', 'TikTok'],
+  );
+  assert.deepStrictEqual(
+    contracts.coerceContractPatch({ platforms: ['Instagram', ' YouTube Shorts'] }).platforms,
+    ['Instagram', 'YouTube Shorts'],
+  );
+});
+
+test('coerceContractPatch: deadline aliases, exclusivity defaults, and unknown keys are dropped', () => {
+  const out = contracts.coerceContractPatch({
+    postingDeadline: 'April 20, 2026',
+    exclusivity: '  ',
+    compensation: 999, // not whitelisted — must be ignored
+  });
+  assert.strictEqual(out.postingDeadline, 'April 20, 2026');
+  assert.strictEqual(out.deadline, 'April 20, 2026');
+  assert.strictEqual(out.exclusivity, 'None');
+  assert.ok(!('compensation' in out), 'non-whitelisted fields are ignored');
+});
+
+test('coerceContractPatch: empty patch yields no changes', () => {
+  assert.deepStrictEqual(contracts.coerceContractPatch({}), {});
+});
+
 // ── Post-acceptance term-change detection ───────────────────────────────────
 // No ANTHROPIC_API_KEY in the test env, so changesContractTerms exercises its
 // deterministic keyword fallback here — the same path production falls back to.

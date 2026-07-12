@@ -611,6 +611,90 @@ async function syncUsageRightsForContract(token) {
   return { updated: true, changed, before, after, row };
 }
 
+// ── Manual deal-term edits from the dashboard ──────────────────────────────
+// The Deals column lets an admin correct a pending contract's terms by hand
+// (videos, min views, platforms, deadline, paid-ad rights, exclusivity) when
+// the automatic extraction got something wrong — e.g. the reported case where
+// paid ad rights were dropped. Only the small, safe set of display fields is
+// editable; everything else (fee, company details, payment terms) is left to
+// the existing flows. Coerce each field to its stored shape and keep the
+// paired fields consistent (paid ads ↔ usage-rights wording, deadline aliases).
+const EDITABLE_CONTRACT_FIELDS = [
+  'numberOfVideos',
+  'minTotalViews',
+  'platforms',
+  'postingDeadline',
+  'paidAdsIncluded',
+  'exclusivity',
+];
+
+function coerceContractPatch(patch) {
+  const out = {};
+  const has = (k) => Object.prototype.hasOwnProperty.call(patch, k);
+  if (has('numberOfVideos')) {
+    const raw = patch.numberOfVideos;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    const val = Number.isFinite(n) && n >= 0 ? n : null;
+    out.numberOfVideos = val;
+    out.numberOfDeliverables = val;
+  }
+  if (has('minTotalViews')) {
+    const raw = patch.minTotalViews;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    out.minTotalViews = Number.isFinite(n) && n >= 0 ? n : null;
+    out.guaranteedViews = out.minTotalViews;
+  }
+  if (has('platforms')) {
+    const arr = Array.isArray(patch.platforms)
+      ? patch.platforms
+      : String(patch.platforms || '').split(',');
+    out.platforms = arr.map((s) => String(s).trim()).filter(Boolean);
+  }
+  if (has('postingDeadline')) {
+    const s = String(patch.postingDeadline || '').trim();
+    out.postingDeadline = s || null;
+    out.deadline = s || null;
+  }
+  if (has('paidAdsIncluded')) {
+    // usageRightsFor keeps the "Usage rights" wording and the "Paid ads" chip in
+    // lockstep: included -> the free_only "included at no cost" phrasing;
+    // excluded -> the no_rights "organic only" phrasing.
+    Object.assign(out, usageRightsFor(patch.paidAdsIncluded ? 'free_only' : 'no_rights'));
+  }
+  if (has('exclusivity')) {
+    const s = String(patch.exclusivity || '').trim();
+    out.exclusivity = s || 'None';
+  }
+  return out;
+}
+
+// Apply an admin's deal-term edits to a creator's contract. Only touches a
+// PENDING contract — a signed one is executed and must not be silently altered
+// (returns {signed:true} so the caller can 409). Returns {missing:true} when
+// there's no contract yet, {updated:false, noop:true} when nothing changed.
+async function updateContractFields(creatorId, patch) {
+  const existing = await db.one(
+    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+  if (!existing) return { missing: true };
+  if (existing.status !== 'pending') return { signed: true, row: existing };
+
+  const changes = coerceContractPatch(patch || {});
+  if (!Object.keys(changes).length) return { updated: false, noop: true, row: existing };
+
+  const data = { ...existing.data, ...changes };
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_edited', $2)`,
+    [creatorId, { token: existing.token, fields: Object.keys(changes) }],
+  );
+  return { updated: true, row };
+}
+
 // ── Post-acceptance term changes ──────────────────────────────────────────
 // A contract is a point-in-time snapshot taken when the creator accepts, but
 // the creator can still change a deal term afterwards ("let's make it 2 videos",
@@ -754,6 +838,8 @@ module.exports = {
   disputesUsageRights,
   removeUsageRightsFromContract,
   syncUsageRightsForContract,
+  updateContractFields,
+  coerceContractPatch,
   changesContractTerms,
   updateContractTermsFromThread,
   // exposed for tests / reuse
