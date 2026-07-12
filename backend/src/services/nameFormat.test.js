@@ -37,6 +37,23 @@ test('preserves multi-word names and trailing initials', () => {
   assert.strictEqual(formatFirstName('anvith k'), 'Anvith K');
 });
 
+test('keeps intentional internal capitals (McKenzie, DeShawn, O\'Brien)', () => {
+  assert.strictEqual(formatFirstName('McKenzie'), 'McKenzie');
+  assert.strictEqual(formatFirstName('mcKenzie'), 'McKenzie'); // just fix the first letter
+  assert.strictEqual(formatFirstName('DeShawn'), 'DeShawn');
+  assert.strictEqual(formatFirstName('MacDonald'), 'MacDonald');
+  assert.strictEqual(formatFirstName("O'Brien"), "O'Brien");
+  assert.strictEqual(formatFirstName("o'brien"), "O'Brien");
+  assert.strictEqual(formatFirstName('mary-jane'), 'Mary-Jane');
+});
+
+test('still title-cases uniform ALL CAPS / all-lowercase (no casing intent)', () => {
+  // MCKENZIE in all caps carries no signal that the K is intentional — it just
+  // reads as shouting, so it normalizes like any other all-caps name.
+  assert.strictEqual(formatFirstName('MCKENZIE'), 'Mckenzie');
+  assert.strictEqual(formatFirstName('PEAR'), 'Pear');
+});
+
 test('preserves legitimate accents', () => {
   assert.strictEqual(formatFirstName('José'), 'José');
   assert.strictEqual(formatFirstName('JOSÉ'), 'José');

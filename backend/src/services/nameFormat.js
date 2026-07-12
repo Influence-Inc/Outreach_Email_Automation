@@ -31,12 +31,33 @@ function mapStylizedLetters(s) {
   return out;
 }
 
-// First letter uppercased, the rest lowercased: "PEAR" → "Pear",
-// "taoagou" → "Taoagou". Spread into code points so a leading accented or
-// astral character is treated as a single character.
+// Case a single un-delimited part of a name. A part that is UNIFORM — all
+// caps ("PEAR") or all lowercase ("taoagou") — carries no casing intent, so we
+// title-case it (first letter up, rest down). A part that is already MIXED
+// case ("McKenzie", "DeShawn", "iZzy") was deliberately styled by a human, so
+// we keep its internal capitals and only guarantee the first letter is capital.
+// Spread into code points so a leading accented/astral char counts as one.
+function titleCasePart(part) {
+  const chars = [...part];
+  if (chars.length === 0) return part;
+  const hasUpper = /\p{Lu}/u.test(part);
+  const hasLower = /\p{Ll}/u.test(part);
+  const rest =
+    hasUpper && hasLower
+      ? chars.slice(1).join('') // intentional mixed case — preserve as typed
+      : chars.slice(1).join('').toLocaleLowerCase();
+  return chars[0].toLocaleUpperCase() + rest;
+}
+
+// Case a whole word. Split on hyphen/apostrophe boundaries (keeping the
+// delimiters) so each part is cased on its own: "mary-jane" → "Mary-Jane",
+// "o'brien" → "O'Brien". A name with no such delimiter ("McKenzie") is a
+// single part and keeps its internal capital via titleCasePart.
 function titleCaseWord(w) {
-  const chars = [...w];
-  return chars[0].toLocaleUpperCase() + chars.slice(1).join('').toLocaleLowerCase();
+  return w
+    .split(/([-'])/)
+    .map((seg) => (seg === '-' || seg === "'" ? seg : titleCasePart(seg)))
+    .join('');
 }
 
 function formatFirstName(raw) {

@@ -67,6 +67,19 @@
     'ᴊ':'J','ᴋ':'K','ʟ':'L','ᴍ':'M','ɴ':'N','ᴏ':'O','ᴘ':'P','ꞯ':'Q','ʀ':'R',
     'ꜱ':'S','ᴛ':'T','ᴜ':'U','ᴠ':'V','ᴡ':'W','ʏ':'Y','ᴢ':'Z',
   };
+  // Uniform parts (ALL CAPS / all-lowercase) get title-cased; already-mixed
+  // parts ("McKenzie") are intentionally styled, so keep their internal caps
+  // and only ensure the first letter is capital.
+  function titleCasePart(part) {
+    const chars = [...part];
+    if (chars.length === 0) return part;
+    const mixed = /\p{Lu}/u.test(part) && /\p{Ll}/u.test(part);
+    const rest = mixed ? chars.slice(1).join('') : chars.slice(1).join('').toLocaleLowerCase();
+    return chars[0].toLocaleUpperCase() + rest;
+  }
+  function titleCaseWord(w) {
+    return w.split(/([-'])/).map((seg) => (seg === '-' || seg === "'" ? seg : titleCasePart(seg))).join('');
+  }
   function formatFirstName(raw) {
     if (raw == null) return '';
     let s = String(raw).replace(/[︀-️​-‍⁠﻿]/g, '');
@@ -77,10 +90,7 @@
       .split(/\s+/)
       .map((w) => w.replace(/^['-]+|['-]+$/g, ''))
       .filter((w) => /\p{L}/u.test(w))
-      .map((w) => {
-        const chars = [...w];
-        return chars[0].toLocaleUpperCase() + chars.slice(1).join('').toLocaleLowerCase();
-      })
+      .map(titleCaseWord)
       .join(' ');
   }
 
