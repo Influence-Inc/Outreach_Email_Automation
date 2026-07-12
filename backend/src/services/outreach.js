@@ -1,15 +1,20 @@
 const crypto = require('crypto');
 const db = require('../db');
 const { verifyEmail } = require('./emailVerify');
+const { formatFirstName } = require('./nameFormat');
 const instantly = require('./instantly');
 
 // The name that flows into Instantly's {{firstName}} merge tag for the
-// outreach email. Some Instagram profiles have no scraped display name at
-// send time (bio hides it, private account, extraction miss). In that case
-// we fall back to the creator's @handle so the greeting reads "Hi @rabin,"
-// instead of a jarring "Hi ,". The @ is included verbatim per the ask.
+// outreach email. The stored first_name is run through formatFirstName so the
+// greeting always reads the way a person would write it ("Hi Pear,", not "Hi
+// PEAR,"; "Hi Vermosa,", not "Hi ᴠᴇʀᴍᴏꜱᴀ,") — decorative casing, stylized
+// fonts, and emoji get normalized out. Some Instagram profiles have no scraped
+// display name at send time (bio hides it, private account, extraction miss);
+// in that case we fall back to the creator's @handle so the greeting reads
+// "Hi @rabin," instead of a jarring "Hi ,". The @ is included verbatim per the
+// ask.
 function outreachFirstName(creator) {
-  const first = String(creator.first_name || '').trim();
+  const first = formatFirstName(creator.first_name);
   if (first) return first;
   const handle = String(creator.instagram_username || '').trim().replace(/^@+/, '');
   return handle ? `@${handle}` : '';

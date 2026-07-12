@@ -11,6 +11,8 @@
 //
 // Returns { email, firstName, fullName, username, source, isBusiness }.
 
+const { formatFirstName } = require('./nameFormat');
+
 const IG_APP_ID = '936619743392459';
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
@@ -304,11 +306,17 @@ async function scrapeProfile({ instagramUrl, instagramUsername }) {
     }
   }
 
-  if (result.fullName) {
-    result.firstName = result.fullName.split(/\s+/)[0];
-  } else {
-    result.firstName = username.charAt(0).toUpperCase() + username.slice(1);
-  }
+  // Derive the greeting first name from the scraped display name: normalize it
+  // into human-written form ("PEAR" → "Pear", "ᴠᴇʀᴍᴏꜱᴀ" → "Vermosa",
+  // "🤍 Gayatri" → "Gayatri") THEN take the leading word — cleaning first is
+  // what lets an emoji/symbol prefix ("🤍 Gayatri", "★ 🖇️ Najwa …") be stripped
+  // before the split instead of being mistaken for the name. Falls back to the
+  // @handle, title-cased, when there's no usable display name.
+  const cleanedName = formatFirstName(result.fullName);
+  result.firstName =
+    cleanedName.split(' ')[0] ||
+    formatFirstName(username) ||
+    (username.charAt(0).toUpperCase() + username.slice(1));
 
   return result;
 }

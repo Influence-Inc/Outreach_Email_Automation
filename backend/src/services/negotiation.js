@@ -18,6 +18,7 @@ const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const contracts = require('./contracts');
 const thread = require('./thread');
+const { formatFirstName } = require('./nameFormat');
 
 // ── Claude client (shared) ────────────────────────────────────────────────
 // The lazy Anthropic client + JSON helpers live in ./claudeClient so the
@@ -92,22 +93,24 @@ function detectSenderName(text) {
 }
 
 // The greeting name for our reply: the sender's name when someone clearly
-// replied on the creator's behalf, otherwise the creator's own first name —
-// used VERBATIM, exactly as stored in the first_name field (including any
-// internal spaces, e.g. "Anvith K" greets "Hi Anvith K,"). Guards: the
-// detected sender name must differ from the creator's, be a single plausible
-// token, and not be a role/brand word.
+// replied on the creator's behalf, otherwise the creator's own first name.
+// The creator name is run through formatFirstName so the greeting reads the
+// way a person would write it — decorative casing, stylized fonts, and emoji
+// are normalized out ("ᴠᴇʀᴍᴏꜱᴀ" → "Vermosa") — while internal spaces are kept
+// (e.g. "Anvith K" greets "Hi Anvith K,"). Guards: the detected sender name
+// must differ from the creator's, be a single plausible token, and not be a
+// role/brand word.
 //
 // `firstToken()` is used ONLY to compare the detected sender against the
 // creator's own name (a creator signing "- Anvith" should match a first_name
 // of "Anvith K", not be mistaken for someone else) — the returned greeting
-// name is always the full, untruncated first_name.
+// name is always the full, normalized first_name.
 const NOT_A_PERSON = new Set([
   'the', 'team', 'hi', 'hello', 'hey', 'manager', 'agent', 'influence', 'thanks',
 ]);
 function salutationFor(creatorFirstName, inboundText) {
-  const fullCreatorName = String(creatorFirstName || '').trim() || null;
-  const creatorToken = firstToken(creatorFirstName);
+  const fullCreatorName = formatFirstName(creatorFirstName) || null;
+  const creatorToken = firstToken(fullCreatorName);
   const sender = detectSenderName(inboundText);
   if (!sender) return fullCreatorName || 'there';
   if (NOT_A_PERSON.has(sender.toLowerCase())) return fullCreatorName || 'there';
@@ -165,7 +168,7 @@ async function loadCreator(creatorId) {
 
 function ctxFor(creator, extra = {}) {
   return {
-    firstName: creator.first_name || 'there',
+    firstName: formatFirstName(creator.first_name) || 'there',
     brandName: creator.brand_name || process.env.BRAND_NAME || 'the brand',
     campaignName: creator.campaign_name || null,
     cadence: process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week',
