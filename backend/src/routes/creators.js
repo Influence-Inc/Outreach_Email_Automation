@@ -191,6 +191,52 @@ router.post('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Single enriched creator for the Chrome extension's Instagram side panel.
+// Resolvable two ways so the panel works both from the dashboard "Decide offer"
+// launcher (which knows the creator id) and when opened standalone on an IG
+// profile (which only knows the username):
+//   GET /api/creators/panel?creator_id=123
+//   GET /api/creators/panel?username=foo[&campaign_id=...]
+// By username we return the most relevant row: prefer one that still needs a
+// human (an offer awaiting approval, or an AI hand-off), else the most recently
+// updated match. The response carries the same rate_log + contract the dashboard
+// uses, so the panel renders the identical timeline / offer state.
+// Registered before '/:id' so the literal "panel" segment isn't read as an id.
+router.get('/panel', async (req, res, next) => {
+  try {
+    const { creator_id, username, campaign_id } = req.query;
+    let row;
+    if (creator_id) {
+      row = await db.one(`SELECT * FROM creators WHERE id = $1`, [creator_id]);
+    } else if (username) {
+      const uname = String(username).trim().replace(/^@/, '');
+      const params = [uname];
+      let where = 'WHERE LOWER(instagram_username) = LOWER($1)';
+      if (campaign_id) {
+        params.push(campaign_id);
+        where += ` AND campaign_id = $${params.length}`;
+      }
+      // Rank actionable rows first (offer awaiting approval / AI hand-off),
+      // then most recently touched, so the panel opens on the row that needs us.
+      row = await db.one(
+        `SELECT * FROM creators ${where}
+         ORDER BY
+           (negotiation_status IN ('AWAITING_APPROVAL','AWAITING_RATE')) DESC,
+           needs_human DESC,
+           updated_at DESC
+         LIMIT 1`,
+        params,
+      );
+    } else {
+      return res.status(400).json({ error: 'creator_id or username is required' });
+    }
+    if (!row) return res.status(404).json({ error: 'not found' });
+    await attachRateLog([row]);
+    await contracts.attachContracts([row]);
+    res.json(row);
+  } catch (err) { next(err); }
+});
+
 router.get('/:id', async (req, res, next) => {
   try {
     const row = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
