@@ -168,6 +168,35 @@ test('referencesReply does NOT re-send the REPLY 1 details pitch', () => {
   assert.ok(!body.includes('**Timelines**'), 'no timelines section');
 });
 
+// ── Contract email personalization (optional ackLine) ──────────────────────
+
+test('contractEmail is the plain fixed copy when no ackLine is given', () => {
+  const { body } = templates.contractEmail({ firstName: 'Dua', managerName: 'Jennifer', url: 'https://x/c/1' });
+  assert.ok(body.startsWith('Hi Dua,\n\nHere\'s the contract'), 'greeting flows straight into the contract line');
+  assert.ok(body.includes('https://x/c/1'), 'the signing link is present');
+});
+
+test('contractEmail inserts the acknowledgment line after the greeting, keeping the link/terms', () => {
+  const { body } = templates.contractEmail({
+    firstName: 'Dua',
+    managerName: 'Jennifer',
+    url: 'https://x/c/1',
+    ackLine: 'So glad the timeline works for you!',
+  });
+  assert.ok(
+    body.startsWith('Hi Dua,\n\nSo glad the timeline works for you!\n\nHere\'s the contract'),
+    'the ack line sits between the greeting and the contract line',
+  );
+  assert.ok(body.includes('https://x/c/1'), 'the signing link is unchanged');
+  assert.ok(body.includes('- Jennifer'), 'the sign-off is unchanged');
+});
+
+test('contractEmail ignores a blank ackLine (no stray blank lines)', () => {
+  const plain = templates.contractEmail({ firstName: 'Dua', url: 'u' }).body;
+  const blanked = templates.contractEmail({ firstName: 'Dua', url: 'u', ackLine: '   ' }).body;
+  assert.strictEqual(blanked, plain, 'a whitespace-only ackLine leaves the email identical');
+});
+
 // ── Usage Rights section (campaign usage_rights_policy) ────────────────────
 
 test('reply1 includes the Usage Rights section by default (no_rights policy)', () => {
