@@ -326,13 +326,18 @@ function declineDelay(vars) {
 // turns the bare URL into a clickable <a> in the HTML body while keeping it
 // usable as plain text. Subject is ignored by sendNegotiationEmail (it forces
 // the thread subject), but set for parity with the other templates.
+// vars.ackLine (optional): one short, pre-written sentence acknowledging the
+// creator's acceptance message, inserted right after the greeting. When absent
+// the email is the original fixed copy, verbatim — the contract link and terms
+// never depend on it.
 function contractEmail(vars) {
   const v = withDefaults(vars);
+  const ack = v.ackLine && String(v.ackLine).trim() ? `${String(v.ackLine).trim()}\n\n` : '';
   return {
     subject: fill(REPLY1_SUBJECT, v),
     body: `Hi ${v.salutation},
 
-Here's the contract for your review and signing:
+${ack}Here's the contract for your review and signing:
 
 ${v.url}
 

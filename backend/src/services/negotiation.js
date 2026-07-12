@@ -298,6 +298,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     `- "declined": they are GENUINELY not interested or not available — explicit "no thanks", "passing on this one", "not the right fit", "too busy right now", "please stop reaching out". Do NOT use "declined" for "this rate is too low" or "can you do better" — those are "request_counter_rate" (if no number given) or "counter" (if a number is given). Write a brief gracious email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "escalate": use this when (a) the creator asks about contractual terms outside what is already in the templates / approved offer (a different payment structure, a usage-rights ask, an NDA, a legal question, a dispute, a complaint); OR (b) the creator's question references specifics not present in the campaign context, templates, past example exchanges, or already-quoted offer (a different brand, a different campaign, a custom timeline, a special exception); OR (c) the message is unusual, emotionally heated, or otherwise needs a human decision. email=null, send_now=false; a human will take over. When in doubt about whether you have enough information to answer correctly, escalate — but prefer "answer_question" for benign factual questions the templates or past example exchanges DO cover, and prefer "request_our_offer" when the creator simply wants US to name/propose a first rate (that is handled by the admin pricing an offer, not a human reply).`,
     `- "other": only a trivial acknowledgement that needs no action (e.g. "got it, thanks"). email=null, send_now=false.`,
+    `- ACKNOWLEDGE the creator's actual message. Whenever you write an email (asking_details, answer_question, request_counter_rate, declined, accepted), OPEN by briefly and specifically reacting to what THIS reply said — a compliment they paid, a preference or constraint they mentioned (a timeline, a platform, a video count, their availability), a piece of context they shared, or the question they asked — in one warm, natural sentence before you move into the template content. Never send the canonical template as a generic form letter that ignores what they wrote. Do NOT invent facts or answer things outside your source material just to seem responsive: if they raised something you cannot address from the templates / campaign context / past examples / approved offer, acknowledge it warmly and handle it per the action rules above (fold it in where you can, otherwise "escalate").`,
     '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
     '- Some (user → assistant) turn pairs may precede the real message below: those are REAL exchanges from our past negotiations, showing the correct output for a similar inbound. Treat the facts, decisions, and phrasing in their replies as team-approved knowledge. When the new message closely matches an example where our team answered directly, answer the same way instead of escalating — but never copy a dollar amount from an example, and never reuse another creator\'s name or deal specifics.',
     `- Salutation name — the reply may not be from the creator themselves. It may be from a manager, agent, assistant, MCN, agency, or brand-partnerships rep writing on the creator's behalf. Detect the sender's first name from the reply's opening ("Hi, this is Alex, ${v.firstName}'s manager"), signature block ("- Alex", "Best, Alex Chen"), or self-introduction ("I'm Alex from XYZ Talent"). If the sender's name is clearly different from "${v.firstName}", address that person by THEIR first name in the salutation ("Hi Alex,"). Still refer to the creator as "${v.firstName}" when discussing the collaboration itself — the deal is with the creator, not the sender. If the sender's identity is ambiguous, address "${v.firstName}" or fall back to "Hi there,"; never guess a name.`,
@@ -549,10 +550,71 @@ function heuristicReply(text, ctx) {
   };
 }
 
+// The creator's most recent message to us, in plain text with any quoted reply
+// history stripped. Used to ground a short, specific acknowledgment in the later
+// template emails (offer, contract) so they don't read as generic form letters.
+// Prefers the still-pending inbound; falls back to the last inbound turn in the
+// stored conversation thread (the pending text is consumed once a reply is
+// handled, so by offer/contract time it's usually only in the thread). Returns
+// '' when we have nothing on file. Best-effort — never throws.
+async function latestCreatorMessage(creator) {
+  const clean = (t) => {
+    const s = replyLearning.stripQuotedHistory(String(t || '')) || String(t || '');
+    return s.trim();
+  };
+  if (creator && creator.latest_inbound_text && String(creator.latest_inbound_text).trim()) {
+    return clean(creator.latest_inbound_text);
+  }
+  try {
+    const msgs = await thread.loadThread(creator.id);
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].direction === 'inbound' && String(msgs[i].body || '').trim()) {
+        return clean(msgs[i].body);
+      }
+    }
+  } catch (e) {
+    console.warn(`[negotiation] latestCreatorMessage thread read failed for creator ${creator.id}: ${e.message}`);
+  }
+  return '';
+}
+
+// Draft ONE short, warm, specific sentence acknowledging what the creator said
+// in their latest message — used to personalize an otherwise-fixed template
+// email (the contract email) WITHOUT touching its terms, numbers, or links.
+// Best-effort: returns '' when Claude is unavailable, we have no message on
+// file, or anything looks off (a price crept in, it ran long), so the caller
+// falls back to the plain template unchanged.
+async function draftAcknowledgmentLine(creator, ctx, { situation }) {
+  const msg = await latestCreatorMessage(creator);
+  if (!msg) return '';
+  const v = templateVars(ctx);
+  const system = [
+    `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE, corresponding with the creator ${v.firstName} for "${v.brandName}".`,
+    situation,
+    'Write ONE short, warm, specific sentence (max ~30 words) that acknowledges what the creator said in the message below — react to their enthusiasm, thank them for confirming, or note a preference/constraint/question they raised. Do NOT answer any question, quote or imply any price/number, promise anything, or introduce new terms. Plain text only: no greeting, no sign-off, no markdown, no quotes. If there is nothing meaningful to acknowledge, reply with an empty string.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  try {
+    const out = (await callClaudeText(system, `Creator's message:\n"""${msg}"""`, 120)) || '';
+    const line = out.trim().replace(/^["']+|["']+$/g, '').trim();
+    // Guardrails: single short line, and never anything that looks like it tried
+    // to quote a number or answer a question at length.
+    if (!line || /\$\s*\d/.test(line) || line.length > 240 || /\n/.test(line)) return '';
+    return line;
+  } catch (e) {
+    console.warn(`[negotiation] draftAcknowledgmentLine failed for creator ${creator.id}: ${e.message}`);
+    return '';
+  }
+}
+
 // ── (b) Write the offer email — Claude adapts REPLY 2 ─────────────────────
 async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
   const v = templateVars(ctx);
   const fallback = templates.offerEmail(offer, v, { combine });
+  // The creator's own words, so the offer opens by acknowledging what they said
+  // (their rate, a preference) instead of a cold "Thanks for sharing your rates".
+  const lastCreatorMsg = await latestCreatorMessage(creator);
 
   const isViewBased = offer.offer_type === 'view_based';
   const offerDesc = isViewBased
@@ -577,6 +639,14 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false } = {}) {
     `Today's date is ${todayStr()}. Desired posting cadence: "${v.cadence}". If you mention timelines, give an approximate posted-by date computed from today for this ${
       isViewBased ? 'view-based' : `${offer.num_videos}-video`
     } deal at that cadence; never print the cadence text where a date belongs.`,
+    '',
+    // Open the offer by reacting to what the creator actually wrote (their rate,
+    // a preference, a question) rather than a generic lead — but the deal terms
+    // are fixed by the approved offer, so acknowledgment must never bleed into
+    // renegotiating or answering out-of-scope asks.
+    lastCreatorMsg
+      ? `The creator's most recent message to us is below. OPEN the email with ONE short, specific sentence acknowledging what they actually said (e.g. thank them for sharing their rate, note a timeline/platform/preference they raised) BEFORE you present the offer. Then continue with the template as instructed. HARD RULES for the acknowledgment: do NOT change, restate, or negotiate any offer number; do NOT answer questions or add terms the approved offer doesn't cover — if they asked something outside this offer, you may briefly say we'll follow up on it separately, and nothing more.\nCreator's message:\n"""${lastCreatorMsg}"""`
+      : '',
     '',
     guidelinesBlock(ctx),
     'Write ONE email by adapting this canonical offer template — keep its warm tone, the "**Payment details**" section, and the "- ' + v.managerName + '" sign-off:',
@@ -1015,7 +1085,13 @@ async function sendContractOnAcceptance(creator, ctx, result) {
   try {
     const { url } = await contracts.createContractForCreator(creator.id);
     const v = templateVars(ctx);
-    const email = templates.contractEmail({ ...v, url });
+    // Personalize the (otherwise fixed) contract email with one short line that
+    // acknowledges the creator's acceptance message — the contract link and all
+    // terms stay exactly as the template. Empty on any failure -> plain template.
+    const ackLine = await draftAcknowledgmentLine(creator, ctx, {
+      situation: 'The creator has just accepted the offer; you are sending them the contract to review and sign.',
+    });
+    const email = templates.contractEmail({ ...v, url, ackLine });
     if (result.send_now !== false) {
       await sendNegotiationEmail(creator, email, 'contract');
     }
@@ -1594,6 +1670,8 @@ module.exports = {
   parseRateOptionsFromText,
   parseRateFromText,
   asksUsToQuoteFirst,
+  latestCreatorMessage,
+  draftAcknowledgmentLine,
   // Test-only.
   _setClient,
 };
