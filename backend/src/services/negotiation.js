@@ -283,7 +283,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"request_our_offer"|"request_counter_rate"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "quoted_rate_options": [{"amount": number, "label": string}] | null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
     '',
     'Rules:',
-    `- Judge the creator's intent from the MEANING and tone of the whole reply, NEVER from specific keywords. Any enthusiasm, curiosity, or request to hear more — e.g. "sounds great", "amazing", "interesting", "cool", "tell me more", "share the details", "what did you have in mind", "I'd love to know more", "I'm in", "sure", a simple "yes", or even just a positive emoji — all mean the creator wants to proceed. Treat those as interest: classify as "asking_details" when REPLY 1 has not been sent yet, otherwise "answer_question". A creator does NOT have to say the word "yes" or "interested" to be interested. Reserve "declined" strictly for replies whose overall meaning is that they do NOT want to proceed.`,
+    `- Judge the creator's intent from the MEANING and tone of the whole reply, NEVER from specific keywords. Any enthusiasm, curiosity, or request to hear more — e.g. "sounds great", "amazing", "interesting", "cool", "tell me more", "share the details", "what did you have in mind", "I'd love to know more", "I'm in", "sure", a simple "yes", or even just a positive emoji — all mean the creator wants to proceed. Treat those as interest. How to classify that interest depends on the stage: when REPLY 1 has NOT been sent yet, use "asking_details". Once we have already sent a PRICED OFFER (current stage AWAITING_DECISION) and the reply's overall meaning is that they AGREE to that offer or are ready to move ahead with it — "sounds good, let's do it", "perfect, what are the next steps?", "I'm in", "yes let's go", "happy with that", "great, how do we start?" — classify it as "accepted" (they are saying yes to the offer on the table), NOT "answer_question". At AWAITING_DECISION, reserve "answer_question" for replies that actually ASK a specific question instead of agreeing, and "request_counter_rate"/"counter" for replies that push back on the price. If a positive reply at AWAITING_DECISION is genuinely AMBIGUOUS about whether they accept (e.g. "sounds interesting, but I have a few questions first"), prefer "answer_question" — do NOT accept on a soft or conditional signal. At any stage other than AWAITING_DECISION, a generic positive with no question is "asking_details" (pre-REPLY 1) or "answer_question". A creator does NOT have to say the word "yes" or "interested" to be interested. Reserve "declined" strictly for replies whose overall meaning is that they do NOT want to proceed.`,
     '- "shared_rate": the creator stated a rate/budget/price. Put the primary numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
     '- quoted_rate_options: whenever the creator lists MORE THAN ONE rate — a tiered / performance ladder ("$3,500 for 300k views, $5,000 for 600k views, $7,500 for 1M views"), a per-item + package pair ("$900 per reel, $2,500 for 3 reels"), or any menu of alternatives — return EVERY rate as an ordered array of {"amount": number, "label": string}. `label` is a short human-readable description of what THAT specific rate covers (e.g. "$3,500 for 300k views", "package of 3 reels — $2,500 total"), taken from the surrounding text — don\'t paraphrase, but drop bullet markers and trailing punctuation. Use quoted_rate for the primary/reference amount (usually the lowest tier or the per-item price). If the creator gave exactly ONE rate, set quoted_rate_options to null. Also set this on "counter" when the creator lists multiple counter-numbers.',
     `- "request_our_offer": the creator is interested but turns the rate question back on us — they ask US to name/quote/propose a rate, state a budget, or make the FIRST offer instead of giving their own number ("can you quote a fair rate first?", "what's your budget?", "what are you offering?", "make me an offer", "what do you usually pay for this?", "you tell me a number"). This is NOT a rate from them and NOT a complaint about an existing offer — it's a request for us to price it. email=null, send_now=false — an admin will set the price and send an offer from the dashboard. quoted_rate=null.`,
@@ -291,7 +291,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     `- "request_counter_rate": the creator pushed back on the offer we already sent ("this rate is too low", "can you do better?", "I usually charge more", "not quite what I had in mind") but did NOT name a specific number. Use this ONLY when an offer is already on the table (the current stage is AWAITING_DECISION) — otherwise prefer "asking_details" or "answer_question". Write a SHORT plain-text reply that (1) warmly acknowledges their hesitation without committing to anything specific, (2) asks them directly what rate would work for them, (3) signals openness to working it out together. Do NOT propose a number, do NOT promise to match, do NOT mention any offer specifics — those come from admin approval. Sign "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "asking_details": the creator is interested but has not yet seen the standard collab pitch. Use this for the FIRST substantive reply when we have not yet sent REPLY 1. Write the email by ADAPTING REPLY 1 (brand "${v.brandName}", sign "- ${v.managerName}"). In Timelines, propose the cadence "${v.cadence}" and an approximate posted-by date you compute from today's date for a 2-video package. Include the "Past content references" section ONLY if the sender explicitly asked to see examples of past work / a portfolio / other creators we've worked with — otherwise drop that whole section from your adaptation. send_now=true. quoted_rate=null.`,
     `- "answer_question": the creator asked a specific factual question about an already-discussed deal. Common topics that ARE safe to answer from the REPLY 1 / REPLY 2 templates and the campaign context above: posting platform (Instagram only, no TikTok/YouTube cross-posting in this deal), content format (Reels), posting cadence ("${v.cadence}"), approximate timeline / posted-by date, creative freedom (yes, no script approval required), exclusivity (none), what we need from them (their rate, then we share a tailored offer; once accepted, posting can begin), who Influence is (a brand-partnerships team — share reference accounts (${v.refs}) ONLY when the sender asked to see examples of past work / a portfolio / other creators we've worked with), payment timing (per the "Payment details" block in REPLY 2: after the post is up and verified). Write a SHORT reply that (1) directly answers their question in 1-3 sentences using ONLY facts from the templates / campaign context above or facts our team already stated in the example exchanges shown before this message, then (2) one short follow-up line keeping the negotiation moving — if they have not shared a rate yet, ask for it; if an offer is on the table awaiting their decision, gently nudge for it; otherwise leave the door open. Sign "- ${v.managerName}". send_now=true. quoted_rate=null. NEVER invent specifics that are not in the campaign context, templates, past example exchanges, or already-quoted offer — if you would have to guess a number, a date beyond what cadence-math gives you, or any term not covered by those sources, use "escalate" instead.`,
-    `- "accepted": they accepted the offer. Write a short warm acceptance email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
+    `- "accepted": the creator agreed to the priced offer we already sent, or clearly signalled they are ready to proceed with it ("sounds good, let's do it", "perfect, next steps?", "I'm in", "let's go", "yes, happy with that"). ONLY valid once an offer is on the table (current stage AWAITING_DECISION) — never accept when no offer has been sent. Write a short warm acceptance email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "declined": they are GENUINELY not interested or not available — explicit "no thanks", "passing on this one", "not the right fit", "too busy right now", "please stop reaching out". Do NOT use "declined" for "this rate is too low" or "can you do better" — those are "request_counter_rate" (if no number given) or "counter" (if a number is given). Write a brief gracious email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "escalate": use this when (a) the creator asks about contractual terms outside what is already in the templates / approved offer (a different payment structure, a usage-rights ask, an NDA, a legal question, a dispute, a complaint); OR (b) the creator's question references specifics not present in the campaign context, templates, past example exchanges, or already-quoted offer (a different brand, a different campaign, a custom timeline, a special exception); OR (c) the message is unusual, emotionally heated, or otherwise needs a human decision. email=null, send_now=false; a human will take over. When in doubt about whether you have enough information to answer correctly, escalate — but prefer "answer_question" for benign factual questions the templates or past example exchanges DO cover, and prefer "request_our_offer" when the creator simply wants US to name/propose a first rate (that is handled by the admin pricing an offer, not a human reply).`,
     `- "other": only a trivial acknowledgement that needs no action (e.g. "got it, thanks"). email=null, send_now=false.`,
@@ -485,6 +485,39 @@ function heuristicReply(text, ctx) {
     /\b(not interested|no thanks?|no longer|we'?ll pass|i'?ll pass|too busy|not available|maybe later|another time|please stop|not the right fit|not a good fit)\b/i.test(
       text,
     );
+  // Once a priced offer is on the table (AWAITING_DECISION), a clear affirmative
+  // with no price pushback means the creator is saying YES to that offer — fire
+  // the acceptance (which kicks off the contract at the already-agreed price via
+  // agreedOfferFee). Deliberately narrow: only explicit agree / ready-to-proceed
+  // phrasing, never when the reply questions or pushes back on the price. The
+  // processReply guard also restricts "accepted" to AWAITING_DECISION.
+  if (ctx.stage === 'AWAITING_DECISION' && !declined) {
+    const pushback =
+      /\b(too\s+low|too\s+little|do\s+better|not\s+enough|higher|more\s+than|can\s+you\s+(do|go|match)|lowball|counter)\b/i.test(
+        text,
+      );
+    // "tell me more" / "a few questions first" mean they want info before
+    // committing — NOT a clear acceptance. Excluded so we never fire a contract
+    // on a request for details (these fall through to the delegate path).
+    const wantsMoreInfo =
+      /\b(tell me more|more (details?|info(?:rmation)?)|learn more|(?:know|hear) more|a few questions|some questions|before (i|we)\b)\b/i.test(
+        text,
+      );
+    const accepts =
+      /\b(let'?s\s+(do\s+it|go|proceed|start|make\s+it\s+happen)|i'?m\s+in|count\s+me\s+in|sign\s+me\s+up|i\s+accept|we\s+accept|happy\s+(with|to\s+(proceed|go))|works\s+for\s+me|sounds?\s+(good|perfect|great)|looks?\s+good|perfect|deal|next\s+steps?|how\s+do\s+we\s+(start|proceed)|ready\s+to\s+(go|start|proceed))\b/i.test(
+        text,
+      );
+    if (accepts && !pushback && !wantsMoreInfo) {
+      return {
+        understanding: '(heuristic) creator accepted the offer',
+        action: 'accepted',
+        quoted_rate: null,
+        quoted_rate_options: null,
+        email: null,
+        send_now: true,
+      };
+    }
+  }
   if (declined && !interested) {
     return {
       understanding: '(heuristic) creator declined',
@@ -853,6 +886,25 @@ async function processReply(creatorId) {
     );
     await markHandled();
     return { action: 'delegated', reason: 'reply1_after_start' };
+  }
+
+  // Accepting an offer fires the contract workflow (generate + email the signing
+  // link) and can't be quietly undone. It is only meaningful once a priced offer
+  // is actually on the table — i.e. at AWAITING_DECISION. If "accepted" comes back
+  // at any other stage it's a misread (there is nothing to accept yet, and
+  // agreedOfferFee would resolve to null), so hand it to a human instead of
+  // firing a contract with no agreed rate.
+  if (result.action === 'accepted' && creator.negotiation_status !== 'AWAITING_DECISION') {
+    console.log(
+      `[negotiation] creator ${creator.id}: accepted returned at stage ${creator.negotiation_status || 'NULL'} — no offer on the table, delegating instead of firing a contract`,
+    );
+    await delegate(
+      creator,
+      inbound,
+      'A reply looked like an acceptance, but no priced offer has been sent yet — a human should confirm what the creator is agreeing to before any contract goes out.',
+    );
+    await markHandled();
+    return { action: 'delegated', reason: 'accepted_without_offer' };
   }
 
   await applyReply(creator, ctx, result);
@@ -1384,6 +1436,25 @@ async function runNegotiationFollowup(creatorId) {
   if (!['AWAITING_RATE', 'AWAITING_DECISION'].includes(creator.negotiation_status)) {
     return { skipped: 'stage' };
   }
+  // A follow-up is a nudge for a SILENT creator — "did you get a chance to check
+  // my last email?". It must NEVER go out to a creator who has already replied.
+  // Two ways that can be true:
+  //   1. A reply is sitting unprocessed in latest_inbound_text (the scheduler
+  //      hasn't classified it yet), or
+  //   2. The creator's most recent reply is newer than our last outbound
+  //      negotiation email — i.e. the ball is in OUR court, not theirs.
+  // Either way, bail WITHOUT sending or bumping the counter (which would also
+  // eventually close the conversation out on a creator who is actually engaged).
+  // This is the exact mistake we're guarding against: a nudge firing — and
+  // re-firing — after the rate had already been agreed in a prior reply.
+  if (creator.latest_inbound_text) return { skipped: 'pending_reply' };
+  const repliedAt = creator.replied_at ? new Date(creator.replied_at).getTime() : null;
+  const lastEmailAt = creator.last_negotiation_email_at
+    ? new Date(creator.last_negotiation_email_at).getTime()
+    : null;
+  if (repliedAt != null && (lastEmailAt == null || repliedAt > lastEmailAt)) {
+    return { skipped: 'creator_replied' };
+  }
   const max = Number(process.env.NEGOTIATION_MAX_FOLLOWUPS || 2);
   const count = creator.negotiation_followup_count || 0;
   if (count >= max) {
@@ -1403,7 +1474,7 @@ async function runNegotiationFollowup(creatorId) {
   const email = awaitingRate ? templates.followup1(v) : templates.followup2(v);
   await sendNegotiationEmail(creator, email, awaitingRate ? 'followup1' : 'followup2');
   await db.query(
-    `UPDATE creators SET negotiation_followup_count = negotiation_followup_count + 1, updated_at = NOW() WHERE id = $1`,
+    `UPDATE creators SET negotiation_followup_count = COALESCE(negotiation_followup_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
     [creatorId],
   );
   return { sent: true, step: count + 1 };
