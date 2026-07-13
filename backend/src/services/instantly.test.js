@@ -3,7 +3,7 @@
 // Run with: npm test  (node --test)
 const test = require('node:test');
 const assert = require('node:assert');
-const { renderMarkdown, stripMarkdown, replyToEmail, blocklistEmail } = require('./instantly');
+const { renderMarkdown, stripMarkdown, replyToEmail, removeLeadFromCampaign } = require('./instantly');
 
 // ── renderMarkdown ─────────────────────────────────────────────────────────
 
@@ -148,39 +148,60 @@ test('replyToEmail does NOT retry on TypeError (network drop) — one attempt on
   assert.strictEqual(calls, 1, 'network-error send must NOT retry — ambiguous outcome');
 });
 
-// ── blocklistEmail ─────────────────────────────────────────────────────────
-// Halting outreach means blocking the address on Instantly (it owns the
-// follow-up sequence). blocklistEmail POSTs the lower-cased address to the
-// block-list-entries endpoint as bl_value.
+// ── removeLeadFromCampaign ─────────────────────────────────────────────────
+// Stopping outreach is CAMPAIGN-SCOPED: we remove the creator's lead from one
+// campaign (find the lead id via POST /leads/list, then DELETE /leads with the
+// campaign_id + ids), never the workspace block list — so the same address is
+// left free to be enrolled in a different campaign later.
 
-test('blocklistEmail POSTs the lower-cased email as bl_value to block-lists-entries', async () => {
-  let captured;
+test('removeLeadFromCampaign finds the exact-email lead in the campaign and deletes it by id', async () => {
+  const calls = [];
   await withStubbedFetch(
     async () => {
-      const res = await blocklistEmail('  Creator@Example.COM ');
-      assert.deepStrictEqual(res, { ok: true });
+      const n = await removeLeadFromCampaign({ email: 'Creator@Example.com', campaignId: 'camp-9' });
+      assert.strictEqual(n, 1);
     },
     async (url, opts) => {
-      captured = { url, body: JSON.parse(opts.body) };
-      return { status: 200, ok: true, text: async () => '', json: async () => ({ ok: true }) };
+      calls.push({ url, method: opts.method, body: JSON.parse(opts.body) });
+      if (url.endsWith('/leads/list')) {
+        return {
+          status: 200, ok: true, text: async () => '',
+          // A non-matching address is returned too — the broad `search` filter
+          // must be narrowed to exact matches on our side.
+          json: async () => ({ items: [
+            { id: 'lead-1', email: 'creator@example.com' },
+            { id: 'lead-2', email: 'someoneelse@example.com' },
+          ] }),
+        };
+      }
+      return { status: 200, ok: true, text: async () => '', json: async () => ({ deleted: 1 }) };
     },
   );
-  assert.match(captured.url, /\/block-lists-entries$/);
-  assert.deepStrictEqual(captured.body, { bl_value: 'creator@example.com' });
+  const list = calls.find((c) => c.url.endsWith('/leads/list'));
+  const del = calls.find((c) => c.url.endsWith('/leads') && c.method === 'DELETE');
+  assert.ok(list, 'lists leads scoped to the campaign');
+  assert.strictEqual(list.body.campaign_id, 'camp-9');
+  assert.ok(del, 'deletes via DELETE /leads');
+  assert.strictEqual(del.body.campaign_id, 'camp-9');
+  assert.deepStrictEqual(del.body.ids, ['lead-1'], 'only the exact-email lead is deleted');
 });
 
-test('blocklistEmail rejects an empty address without calling the API', async () => {
-  let calls = 0;
+test('removeLeadFromCampaign returns 0 and does NOT delete when the creator is not enrolled', async () => {
+  let deleteCalled = false;
   await withStubbedFetch(
     async () => {
-      await assert.rejects(blocklistEmail('   '), /email is required/i);
+      const n = await removeLeadFromCampaign({ email: 'nobody@example.com', campaignId: 'camp-9' });
+      assert.strictEqual(n, 0);
     },
-    async () => {
-      calls += 1;
-      return { status: 200, ok: true, text: async () => '', json: async () => ({}) };
+    async (url, opts) => {
+      if (url.endsWith('/leads/list')) {
+        return { status: 200, ok: true, text: async () => '', json: async () => ({ items: [] }) };
+      }
+      if (opts.method === 'DELETE') deleteCalled = true;
+      return { status: 200, ok: true, text: async () => '', json: async () => ({ deleted: 0 }) };
     },
   );
-  assert.strictEqual(calls, 0, 'no request is issued for a blank email');
+  assert.strictEqual(deleteCalled, false, 'no delete is issued when nothing matches');
 });
 
 test('replyToEmail DOES retry on explicit 5xx — server confirmed no-op, safe to resend', async () => {
