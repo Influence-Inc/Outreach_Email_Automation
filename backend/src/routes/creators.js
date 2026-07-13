@@ -359,7 +359,7 @@ router.post('/bulk/fetch-email', async (req, res) => {
     if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
     const pending = await db.many(
       `SELECT id FROM creators
-       WHERE campaign_id = $1 AND status IN ('pending_extraction','no_email')
+       WHERE campaign_id = $1 AND status = 'pending_extraction'
        ORDER BY created_at ASC`,
       [campaign_id],
     );
@@ -463,6 +463,16 @@ router.post('/:id/fetch-email', async (req, res) => {
     const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
     if (!creator) return res.status(404).json({ error: 'not found' });
 
+    // Scraping only runs while a creator is still awaiting extraction. Once we
+    // have an email (or the creator has moved into outreach / negotiation, or is
+    // a rejected duplicate), re-scraping would waste an IG request and risk
+    // overwriting good data, so we refuse it.
+    if (creator.status !== 'pending_extraction') {
+      return res.status(409).json({
+        error: `Scraping only runs for creators pending extraction (creator ${creator.id} is '${creator.status}')`,
+      });
+    }
+
     const scraped = await scrapeProfile({
       instagramUrl: creator.instagram_url,
       instagramUsername: creator.instagram_username,
@@ -476,13 +486,13 @@ router.post('/:id/fetch-email', async (req, res) => {
     ];
     const params = [creator.id, scraped.username, scraped.fullName, scraped.firstName];
 
+    // status is guaranteed 'pending_extraction' here (guarded above), so the
+    // transition is unconditional: found → email_found, nothing → no_email.
     if (scraped.email) {
       params.push(scraped.email);
       updates.push(`email = $${params.length}`);
-      updates.push(
-        `status = CASE WHEN status IN ('pending_extraction','no_email') THEN 'email_found' ELSE status END`,
-      );
-    } else if (creator.status === 'pending_extraction') {
+      updates.push(`status = 'email_found'`);
+    } else {
       updates.push(`status = 'no_email'`);
     }
 
