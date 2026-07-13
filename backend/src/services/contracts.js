@@ -143,6 +143,33 @@ function usageRightsFor(policy) {
   };
 }
 
+// Payment schedule fields for the contract. The upfront/remainder split is
+// conditional — see resolvePaymentSchedule / requestedUpfrontPayment — so this
+// returns the split ONLY when `upfront` is true, and an all-null "no schedule"
+// shape otherwise (the contract page and Deals column both hide the schedule
+// row when the percentages are absent, leaving "paid in full on completion").
+// When a split applies, `pct` is the upfront percentage (default 30); the
+// remainder is the balance.
+function paymentScheduleFor(upfront, pct) {
+  if (!upfront) {
+    return {
+      upfrontPercent: null,
+      upfrontTrigger: null,
+      remainderPercent: null,
+      remainderTrigger: null,
+    };
+  }
+  const n = Number(pct);
+  const up = Number.isFinite(n) && n >= 1 && n <= 99 ? Math.round(n) : 30;
+  return {
+    upfrontPercent: up,
+    upfrontTrigger: 'upon sharing the first video draft',
+    remainderPercent: 100 - up,
+    remainderTrigger:
+      'after deliverables outlined in this agreement are completed, posted and confirmed live',
+  };
+}
+
 // Suggested per-video posting windows derived from the total window and video
 // count. The example contract lists windows like:
 //   - Video 1: December 11 - 14
@@ -252,11 +279,13 @@ function baseContractData(creator, fee, offer) {
     paymentTermsDays: 7,
     paymentTerms:
       'Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables',
-    upfrontPercent: 30,
-    upfrontTrigger: 'upon sharing the first video draft',
-    remainderPercent: 70,
-    remainderTrigger:
-      'after deliverables outlined in this agreement are completed, posted and confirmed live',
+    // Payment schedule: paid in full on completion by DEFAULT. The upfront /
+    // remainder split ("30% upfront, 70% on completion") is NOT a standard
+    // clause — it is only added when the creator explicitly demanded an
+    // upfront/advance payment, decided deterministically from the thread by
+    // resolvePaymentSchedule() (not the free-form extraction). See
+    // paymentScheduleFor().
+    ...paymentScheduleFor(false),
 
     // Bonus (present for video_bonus offer types).
     bonusAmount: bonus.amount,
@@ -331,7 +360,7 @@ Rules:
   - "no_rights" — paidAdsIncluded is ALWAYS false. usageRights: "Organic only — no paid ad rights required".
   - "required" — paidAdsIncluded is ALWAYS true. usageRights should state paid ad rights ARE included.
   - "free_only" — paidAdsIncluded is true UNLESS the negotiation timeline shows the creator explicitly asked for SEPARATE or ADDITIONAL payment specifically in exchange for granting paid-ad/usage rights (e.g. "I'd need extra for ad rights", "that's a separate fee", "usage rights cost more on top"). Only in that specific case, set it to false and write usageRights as "Organic only — no paid ad rights required". Otherwise (not mentioned, or the creator agreed to include them), paidAdsIncluded is true and usageRights should state paid ad rights are included.
-- "upfrontPercent" + "remainderPercent" should sum to 100 when split payment applies.
+- "upfrontPercent" / "remainderPercent": leave BOTH null unless the CREATOR explicitly demanded an upfront / advance / deposit payment in the thread. Payment is made in full on completion by default — do NOT invent an upfront split. When the creator did demand it, "upfrontPercent" is the portion up front and "remainderPercent" is the balance, and the two sum to 100. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
 - If a field is genuinely unknown, use null (or [] for array fields).
 - Put any extra negotiated terms (whitelisting, exclusivity windows, special timelines) into "additionalTerms" as short strings.`;
 
@@ -411,6 +440,13 @@ async function extractContractData(creator) {
   // never mentioned ad rights, yet the extraction flipped them off). Re-pin it
   // deterministically from the campaign policy — see resolveUsageRights().
   Object.assign(merged, await resolveUsageRights(creator, transcript));
+  // The upfront/remainder payment split is likewise a high-stakes term that
+  // must NOT ride on the free-form extraction (the reported bug: every contract
+  // carried "30% upfront, 70% on completion" even when the creator never asked
+  // to be prepaid). Re-pin it deterministically from the thread — present only
+  // when the creator demanded upfront payment; otherwise paid in full on
+  // completion. See resolvePaymentSchedule().
+  Object.assign(merged, await resolvePaymentSchedule(transcript));
   return merged;
 }
 
@@ -458,6 +494,57 @@ async function negotiatedSeparateUsageRightsPayment(transcript) {
       s,
     );
   return mentionsRights && extraCharge;
+}
+
+// Authoritative payment-schedule decision, decided by the thread rather than
+// the free-form contract extraction: the upfront/remainder split is present
+// ONLY when the creator explicitly demanded upfront payment. Otherwise the
+// contract is paid in full on completion (no schedule row). Mirrors
+// resolveUsageRights — a narrow, deterministic pin over a term the broad
+// extraction used to get wrong.
+async function resolvePaymentSchedule(transcript) {
+  const { upfront, pct } = await requestedUpfrontPayment(transcript);
+  return paymentScheduleFor(upfront, pct);
+}
+
+// Focused decision: did the CREATOR explicitly ask to be paid some or all of
+// the fee UP FRONT / in advance (a deposit, a retainer, "half now", "X% before
+// I start")? Mirrors negotiatedSeparateUsageRightsPayment — a narrow yes/no
+// with a conservative deterministic fallback, kept OUT of the broad contract
+// extraction so it can never bolt an upfront split onto a contract the creator
+// never asked to be prepaid on.
+const UPFRONT_PAYMENT_SYSTEM = `You read an influencer-marketing email negotiation between a brand's manager and a creator. Decide whether the CREATOR explicitly asked to be paid some or all of the fee UP FRONT / IN ADVANCE — before completing and posting the deliverables (e.g. "I need a deposit", "50% upfront", "half now, half on delivery", "I require an advance", "payment before I start", "I work on a retainer up front").
+
+Return ONLY a JSON object: {"requestedUpfront": boolean, "upfrontPercent": number|null}
+- requestedUpfront is true ONLY when the CREATOR clearly asked for an advance / deposit / upfront portion of the fee.
+- false for everything else — the creator never raised it, only asked WHEN they would be paid after posting, or agreed to be paid on completion. A brand-side OFFER of upfront money is NOT the creator demanding it.
+- upfrontPercent: the percentage the creator asked for up front if they named one (e.g. 50 for "50% upfront"), otherwise null.`;
+
+async function requestedUpfrontPayment(transcript) {
+  if (!transcript || !String(transcript).trim()) return { upfront: false, pct: null };
+  const out = claude.parseJsonLoose(
+    await claude.callClaudeText(UPFRONT_PAYMENT_SYSTEM, String(transcript), 200),
+  );
+  if (out && typeof out.requestedUpfront === 'boolean') {
+    const n = Number(out.upfrontPercent);
+    return { upfront: out.requestedUpfront, pct: Number.isFinite(n) ? n : null };
+  }
+  // Deterministic fallback when Claude is unavailable: an upfront/advance marker
+  // must appear. Conservative on purpose — default false keeps the schedule OFF
+  // (paid in full on completion), matching the no-split default, so a missed
+  // demand just waits for a human (or the Deals-column toggle) to add it.
+  const s = String(transcript).toLowerCase();
+  const upfront =
+    /\b(up ?front|in advance|advance payment|deposit|retainer|paid before|pay(?:ment)? before (?:i|we) (?:start|begin|post|create|film)|half (?:now|up ?front)|\d{1,3}\s*%?\s*(?:up ?front|in advance|deposit))\b/.test(
+      s,
+    );
+  let pct = null;
+  const m = s.match(/(\d{1,3})\s*%\s*(?:up ?front|in advance|deposit)/);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= 99) pct = n;
+  }
+  return { upfront, pct };
 }
 
 function isMeaningful(v) {
@@ -611,6 +698,48 @@ async function syncUsageRightsForContract(token) {
   return { updated: true, changed, before, after, row };
 }
 
+// One-off repair for a single contract by token: re-pin ONLY its payment-
+// schedule fields to the thread-correct values (the same resolvePaymentSchedule
+// the extraction now uses), leaving every other term untouched. This exists for
+// contracts generated BEFORE the payment-schedule fix, which all carried the
+// "30% upfront, 70% on completion" split whether or not the creator asked to be
+// prepaid. Like syncUsageRightsForContract it deliberately does NOT re-run the
+// full extraction, so it can't shift the deadline, platforms, or any other
+// field. Only touches a PENDING contract; a signed one is executed and needs a
+// human. Returns one of:
+//   {updated:true, before, after, changed} — data re-pinned (changed=false when
+//                                             it was already correct, a no-op)
+//   {signed:true}   — contract exists but is signed (left untouched)
+//   {missing:true}  — no contract / creator for that token
+async function syncPaymentScheduleForContract(token) {
+  const existing = await getByToken(token);
+  if (!existing) return { missing: true };
+  if (existing.status !== 'pending') return { signed: true, row: existing };
+
+  const messages = await thread.loadThread(existing.creator_id);
+  const transcript = thread.renderTranscript(messages);
+  const after = await resolvePaymentSchedule(transcript);
+  const before = {
+    upfrontPercent: existing.data ? existing.data.upfrontPercent : undefined,
+    remainderPercent: existing.data ? existing.data.remainderPercent : undefined,
+  };
+  const norm = (v) => (v == null ? null : v);
+  const changed =
+    norm(before.upfrontPercent) !== norm(after.upfrontPercent) ||
+    norm(before.remainderPercent) !== norm(after.remainderPercent);
+
+  const data = { ...existing.data, ...after };
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_payment_schedule_repaired', $2)`,
+    [existing.creator_id, { token, before, after, changed }],
+  );
+  return { updated: true, changed, before, after, row };
+}
+
 // ── Manual deal-term edits from the dashboard ──────────────────────────────
 // The Deals column lets an admin correct a pending contract's terms by hand
 // (videos, min views, platforms, deadline, paid-ad rights, exclusivity) when
@@ -626,6 +755,7 @@ const EDITABLE_CONTRACT_FIELDS = [
   'postingDeadline',
   'paidAdsIncluded',
   'exclusivity',
+  'upfrontPayment',
 ];
 
 function coerceContractPatch(patch) {
@@ -664,6 +794,19 @@ function coerceContractPatch(patch) {
   if (has('exclusivity')) {
     const s = String(patch.exclusivity || '').trim();
     out.exclusivity = s || 'None';
+  }
+  if (has('upfrontPayment')) {
+    // Toggle the whole payment schedule on/off from the Deals column: on -> the
+    // default 30/70 split, off -> paid in full on completion (no schedule row).
+    // An admin adding it here is the manual counterpart to the automatic
+    // upfront-demand detection at contract creation. If an explicit percentage
+    // is supplied alongside the toggle, honour it (else default 30).
+    const wantSplit =
+      patch.upfrontPayment === true ||
+      patch.upfrontPayment === 'true' ||
+      (Number.isFinite(Number(patch.upfrontPayment)) && Number(patch.upfrontPayment) > 0);
+    const pct = Number.isFinite(Number(patch.upfrontPercent)) ? Number(patch.upfrontPercent) : undefined;
+    Object.assign(out, paymentScheduleFor(wantSplit, pct));
   }
   return out;
 }
@@ -838,6 +981,7 @@ module.exports = {
   disputesUsageRights,
   removeUsageRightsFromContract,
   syncUsageRightsForContract,
+  syncPaymentScheduleForContract,
   updateContractFields,
   coerceContractPatch,
   changesContractTerms,
@@ -847,5 +991,8 @@ module.exports = {
   agreedFeeFor,
   mergeContractData,
   usageRightsFor,
+  paymentScheduleFor,
   negotiatedSeparateUsageRightsPayment,
+  requestedUpfrontPayment,
+  resolvePaymentSchedule,
 };
