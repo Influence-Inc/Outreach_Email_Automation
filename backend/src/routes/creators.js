@@ -6,6 +6,7 @@ const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const contracts = require('../services/contracts');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
+const { summarizeMessage, deliverableForAmount } = require('../services/timelineSummary');
 
 // Event types that make up the per-creator "Rate" timeline (delivery-tracking
 // style). A curated subset of email_events — the offer email's own
@@ -33,7 +34,14 @@ const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
 
 // Map one email_event to a human "delivery update" line for the Rate column.
 // Returns { text, tone } or null to skip.
-function rateLogEntry(type, detail) {
+//
+// `msg` is the body of the email this event is about — the creator's inbound
+// reply for 'replied'/'rate_quoted', or the reply we sent for the delegate /
+// manual reply events — paired from the stored thread in attachRateLog. It lets
+// each line summarize what was actually said instead of a content-free label
+// like "Creator replied". Always optional: when the thread has nothing on file
+// (e.g. very old creators) the entry degrades to its plain label.
+function rateLogEntry(type, detail, msg) {
   const d = detail || {};
   switch (type) {
     case 'sent_outreach':
@@ -42,8 +50,12 @@ function rateLogEntry(type, detail) {
       // The step number is still recorded on the event's detail for auditing,
       // but the timeline label stays clean — just "Follow-up sent".
       return { text: 'Follow-up sent', tone: 'done' };
-    case 'replied':
-      return { text: 'Creator replied', tone: 'done' };
+    case 'replied': {
+      // Never a bare "Creator replied" — surface a super-short gist of what the
+      // creator actually wrote (quoted in their own words).
+      const gist = summarizeMessage(msg);
+      return { text: gist ? `Replied: “${gist}”` : 'Creator replied', tone: 'done' };
+    }
     case 'rate_quoted': {
       const to = d.to != null ? fmtMoney(d.to) : null;
       // If the creator quoted MULTIPLE rates in one reply, attach them to the
@@ -59,9 +71,21 @@ function rateLogEntry(type, detail) {
             }))
         : null;
       if (d.by === 'creator') {
-        const text = options
-          ? 'Creator quoted rates'
-          : (to ? `Creator quoted ${to}` : 'Creator shared a rate');
+        // Single quote: spell out the deliverable the money is for ("Creator
+        // quoted $3,500 for 300,000 combined views") by mining the reply that
+        // named it — a single stored option only ever carries "$X" as its
+        // label, so the deliverable has to come from the reply text. Multiple
+        // quotes stay collapsed; each option already carries its own
+        // deliverable label as a substep.
+        let text;
+        if (options) {
+          text = 'Creator quoted rates';
+        } else if (to) {
+          const deliverable = d.to != null ? deliverableForAmount(msg, Number(d.to)) : '';
+          text = deliverable ? `Creator quoted ${to} ${deliverable}` : `Creator quoted ${to}`;
+        } else {
+          text = 'Creator shared a rate';
+        }
         return { text, tone: 'active', ...(options ? { options } : {}) };
       }
       if (d.from != null && d.to != null) {
@@ -88,10 +112,14 @@ function rateLogEntry(type, detail) {
     }
     case 'rate_declined':
       return { text: 'Creator declined', tone: 'muted' };
-    case 'sent_delegate_reply':
-      return { text: 'Reply sent (from delegate)', tone: 'done' };
-    case 'sent_manual_reply':
-      return { text: 'Manual reply sent', tone: 'done' };
+    case 'sent_delegate_reply': {
+      const gist = summarizeMessage(msg);
+      return { text: gist ? `Sent: “${gist}”` : 'Reply sent (from delegate)', tone: 'done' };
+    }
+    case 'sent_manual_reply': {
+      const gist = summarizeMessage(msg);
+      return { text: gist ? `Sent: “${gist}”` : 'Manual reply sent', tone: 'done' };
+    }
     case 'outreach_stopped':
       return { text: d.removed ? 'Outreach stopped (removed from campaign)' : 'Outreach stopped', tone: 'muted' };
     case 'contract_sent':
@@ -107,21 +135,75 @@ function rateLogEntry(type, detail) {
   }
 }
 
+// The events whose timeline label summarizes an inbound creator reply vs. an
+// outbound reply we sent. Each is paired with the nearest matching message from
+// the stored thread so the label can quote what was actually said.
+const INBOUND_MSG_EVENTS = new Set(['replied', 'rate_quoted']);
+const OUTBOUND_MSG_EVENTS = new Set(['sent_delegate_reply', 'sent_manual_reply']);
+
 // Attach a `rate_log` array (oldest→newest) to each creator row, in place. One
 // grouped query over the curated event types for all returned creators.
 async function attachRateLog(rows) {
   if (!rows.length) return;
   const ids = rows.map((r) => r.id);
-  const events = await db.many(
-    `SELECT creator_id, type, detail, created_at
-     FROM email_events
-     WHERE creator_id = ANY($1::int[]) AND type = ANY($2::text[])
-     ORDER BY creator_id, created_at ASC`,
-    [ids, RATE_LOG_TYPES],
-  );
+  const [events, messages] = await Promise.all([
+    db.many(
+      `SELECT creator_id, type, detail, created_at
+       FROM email_events
+       WHERE creator_id = ANY($1::int[]) AND type = ANY($2::text[])
+       ORDER BY creator_id, created_at ASC`,
+      [ids, RATE_LOG_TYPES],
+    ),
+    // The conversation turns a timeline label can quote: every inbound reply,
+    // plus the outbound replies we log a step for (delegate / manual). The
+    // templated outbound sends (outreach, follow-up, offer emails) get their own
+    // descriptive labels, so their bodies aren't needed here.
+    db.many(
+      `SELECT creator_id, direction, body, created_at
+       FROM email_messages
+       WHERE creator_id = ANY($1::int[])
+         AND (direction = 'inbound' OR kind IN ('delegate_reply', 'manual_reply'))
+       ORDER BY creator_id, created_at ASC`,
+      [ids],
+    ),
+  ]);
+
+  // Per-creator, per-direction message lists (already time-sorted), used to find
+  // the message that triggered an event. The webhook / negotiation code records
+  // the message within the same request that writes the event, so the message's
+  // timestamp lands within a second or two of the event's.
+  const inboundByCreator = new Map();
+  const outboundByCreator = new Map();
+  for (const m of messages) {
+    const map = m.direction === 'inbound' ? inboundByCreator : outboundByCreator;
+    if (!map.has(m.creator_id)) map.set(m.creator_id, []);
+    map.get(m.creator_id).push(m);
+  }
+  // The message an event describes: the latest one of the right direction at or
+  // just before the event's time. A small forward slack absorbs the sub-second
+  // gap when the message row is written just after the event row.
+  const msgForEvent = (creatorId, type, at) => {
+    const map = INBOUND_MSG_EVENTS.has(type)
+      ? inboundByCreator
+      : OUTBOUND_MSG_EVENTS.has(type)
+        ? outboundByCreator
+        : null;
+    if (!map) return null;
+    const list = map.get(creatorId);
+    if (!list || !list.length) return null;
+    const cutoff = new Date(at).getTime() + 2000;
+    let found = null;
+    for (const m of list) {
+      if (new Date(m.created_at).getTime() <= cutoff) found = m;
+      else break;
+    }
+    return found ? found.body : null;
+  };
+
   const byCreator = new Map();
   for (const e of events) {
-    const entry = rateLogEntry(e.type, e.detail);
+    const msg = msgForEvent(e.creator_id, e.type, e.created_at);
+    const entry = rateLogEntry(e.type, e.detail, msg);
     if (!entry) continue;
     entry.at = e.created_at;
     entry.type = e.type;
@@ -611,5 +693,9 @@ router.delete('/:id', async (req, res, next) => {
     res.status(204).end();
   } catch (err) { next(err); }
 });
+
+// Exposed for unit tests (same pattern as routes/webhook.js): rateLogEntry is a
+// pure label builder, so it can be asserted without a DB.
+router.rateLogEntry = rateLogEntry;
 
 module.exports = router;
