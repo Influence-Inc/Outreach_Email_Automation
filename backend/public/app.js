@@ -726,6 +726,31 @@ function renderStatusCell(r, cell) {
     cell.appendChild(send);
   }
 
+  // While the outreach sequence is in flight (outreach sent, follow-ups still
+  // firing from Instantly), offer a "Stop outreach" action. It blocklists the
+  // address on Instantly so the queued follow-ups actually halt — pausing our
+  // row alone wouldn't stop them.
+  if (r.status === 'outreach_sent' || r.status === 'followup_sent') {
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'ghost small cr-send-btn';
+    stop.textContent = 'Stop outreach';
+    stop.onclick = async () => {
+      if (!confirm('Stop outreach? This blocklists the email on Instantly so no further follow-ups are sent.')) return;
+      stop.disabled = true;
+      try {
+        const res = await api(`/api/creators/${r.id}/stop-outreach`, { method: 'POST' });
+        if (res && res.warning) alert(res.warning);
+        await refreshCreators();
+        await refreshCampaigns();
+      } catch (err) {
+        alert(err.message);
+        stop.disabled = false;
+      }
+    };
+    cell.appendChild(stop);
+  }
+
   // On a creator awaiting our offer, surface "Decide offer" right by the
   // timeline — one click opens their Instagram profile with the offer panel
   // (rate, counters, safe floor, accept/counter) latched to the side.

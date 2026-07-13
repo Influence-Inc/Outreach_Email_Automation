@@ -149,6 +149,19 @@ async function replyToEmail({ replyToUuid, eaccount, subject, body }) {
   }, { sendOnce: true });
 }
 
+// Add an address to the workspace block list so Instantly stops emailing it —
+// including follow-up steps ALREADY queued for a lead. This is how outreach is
+// actually HALTED: Instantly owns the sequence scheduling, so pausing/removing
+// our local creator row does nothing to the follow-ups; the address has to be
+// blocked on Instantly's side. Idempotent enough for our use — re-blocking an
+// address that's already listed returns a 4xx we treat as already-blocked at
+// the call site. `bl_value` accepts a full email or a domain.
+async function blocklistEmail(email) {
+  const value = String(email || '').trim().toLowerCase();
+  if (!value) throw new Error('email is required to blocklist');
+  return request('POST', '/block-lists-entries', { bl_value: value });
+}
+
 // One page of mailbox emails (sent + received) from the Instantly unibox —
 // the read side of the connected mailbox (e.g. jennifer@useinfluence.xyz).
 // Used by the reply-learning harvest to reconstruct past (creator inbound →
@@ -165,6 +178,7 @@ async function listEmails({ limit = 100, startingAfter = null, eaccount = null }
 module.exports = {
   addLeadToCampaign,
   replyToEmail,
+  blocklistEmail,
   listEmails,
   // Exported for tests and any other caller that needs the same rendering
   // logic outside the reply path.

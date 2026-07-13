@@ -3,7 +3,7 @@
 // Run with: npm test  (node --test)
 const test = require('node:test');
 const assert = require('node:assert');
-const { renderMarkdown, stripMarkdown, replyToEmail } = require('./instantly');
+const { renderMarkdown, stripMarkdown, replyToEmail, blocklistEmail } = require('./instantly');
 
 // ── renderMarkdown ─────────────────────────────────────────────────────────
 
@@ -146,6 +146,41 @@ test('replyToEmail does NOT retry on TypeError (network drop) — one attempt on
     },
   );
   assert.strictEqual(calls, 1, 'network-error send must NOT retry — ambiguous outcome');
+});
+
+// ── blocklistEmail ─────────────────────────────────────────────────────────
+// Halting outreach means blocking the address on Instantly (it owns the
+// follow-up sequence). blocklistEmail POSTs the lower-cased address to the
+// block-list-entries endpoint as bl_value.
+
+test('blocklistEmail POSTs the lower-cased email as bl_value to block-lists-entries', async () => {
+  let captured;
+  await withStubbedFetch(
+    async () => {
+      const res = await blocklistEmail('  Creator@Example.COM ');
+      assert.deepStrictEqual(res, { ok: true });
+    },
+    async (url, opts) => {
+      captured = { url, body: JSON.parse(opts.body) };
+      return { status: 200, ok: true, text: async () => '', json: async () => ({ ok: true }) };
+    },
+  );
+  assert.match(captured.url, /\/block-lists-entries$/);
+  assert.deepStrictEqual(captured.body, { bl_value: 'creator@example.com' });
+});
+
+test('blocklistEmail rejects an empty address without calling the API', async () => {
+  let calls = 0;
+  await withStubbedFetch(
+    async () => {
+      await assert.rejects(blocklistEmail('   '), /email is required/i);
+    },
+    async () => {
+      calls += 1;
+      return { status: 200, ok: true, text: async () => '', json: async () => ({}) };
+    },
+  );
+  assert.strictEqual(calls, 0, 'no request is issued for a blank email');
 });
 
 test('replyToEmail DOES retry on explicit 5xx — server confirmed no-op, safe to resend', async () => {

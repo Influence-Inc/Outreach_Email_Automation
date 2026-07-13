@@ -78,6 +78,12 @@ async function prepareOutreach(creatorId) {
   if (creator.status === 'duplicate') {
     return { ok: false, skipReason: 'duplicate', message: `Creator ${creatorId} is a duplicate — outreach skipped so it isn't sent twice` };
   }
+  // Outreach was explicitly stopped for this creator (see the stop-outreach
+  // route). The email is blocklisted on Instantly and suppressed locally; never
+  // re-enroll them.
+  if (creator.status === 'stopped') {
+    return { ok: false, skipReason: 'stopped', message: `Outreach was stopped for creator ${creatorId}` };
+  }
 
   const suppressed = await lookupSuppression(creator.email);
   if (suppressed) {

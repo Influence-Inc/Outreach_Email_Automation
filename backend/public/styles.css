@@ -437,6 +437,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status-pill.failed             { background: #fbe6e3; color: #c53127; }
 .status-pill.invalid_email      { background: #fbe6e3; color: #b4471f; }
 .status-pill.duplicate          { background: #ece9f5; color: #6b5aa8; }
+.status-pill.stopped            { background: #eceff3; color: #5b6472; }
 
 .icon-btn-sq {
   display: inline-flex; align-items: center; justify-content: center;
