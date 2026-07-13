@@ -662,6 +662,9 @@ function renderStatusCell(r, cell) {
   const pillEl = document.createElement('span');
   pillEl.className = `status-pill ${pill.cls}`;
   pillEl.textContent = pill.text;
+  // Duplicates carry the "why" in notes — surface it on hover so the reject is
+  // explainable at a glance.
+  if (r.status === 'duplicate' && r.notes) pillEl.title = r.notes;
   left.appendChild(pillEl);
 
   // Contract link — shown once a contract exists, next to the status pill so
