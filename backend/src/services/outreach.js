@@ -311,14 +311,19 @@ function isExplicitFollowupStep(step) {
   return Number.isFinite(n) && n >= 2;
 }
 
-// Fallback ONLY for sends where Instantly omits the step: a genuine follow-up
-// lands hours/days later, so a large gap since outreach_sent_at is our only
-// remaining clue. It is NOT reliable on its own — outreach_sent_at marks when we
-// ENROLLED the lead, not when Instantly actually sent. Instantly batches/schedules
-// the initial send on its own cadence, so the Step 1 outreach's own email_sent
-// webhook can land well past this gap. That is why an explicit step always wins
-// over this heuristic (see markFollowupSent).
-const FOLLOWUP_MIN_GAP_MINUTES = 10;
+// Trusting Instantly's `step` field outright (Step 2+ advances "no matter how
+// long after enrollment its webhook arrives") turned out NOT to be safe: in
+// production the initial outreach send kept getting mislabeled a follow-up
+// even after that change shipped, which means `step` is not the unimpeachable
+// signal it was assumed to be for every campaign. So this is now defense in
+// depth rather than a single trusted source:
+//   • An explicit step is still required to be >= 2, AND must ALSO clear this
+//     floor since outreach_sent_at — i.e. the two signals have to agree.
+//   • When the step is entirely absent, this floor is the only signal.
+// 180 minutes is comfortably above any observed Instantly send-batching delay
+// for the initial email, and comfortably below the hours/days delay of a real
+// configured follow-up step (follow_up_sequences defaults to 48h).
+const FOLLOWUP_MIN_GAP_MINUTES = 180;
 
 // Advance a creator from 'outreach_sent' → 'followup_sent' when Instantly sends
 // a later sequence step (the follow-up). Instantly owns the sending; this just
@@ -328,17 +333,15 @@ const FOLLOWUP_MIN_GAP_MINUTES = 10;
 // Guards that keep the INITIAL outreach send — which ALSO fires an email_sent
 // webhook — from being mislabeled as a follow-up:
 //   1. status must still be 'outreach_sent' (so we never regress a creator who
-//      has already replied / is negotiating / accepted), and
-//   2. the send must actually be a follow-up:
-//        • If Instantly gives us the step, trust it OUTRIGHT — Step 2+ advances,
-//          Step 1 (the initial outreach) never does, no matter how long after
-//          enrollment its webhook arrives. Instantly delays/batches the first
-//          send, so a Step 1 webhook landing >10 min after outreach_sent_at is
-//          normal and must NOT be read as a follow-up.
-//        • Only when the step is entirely absent do we fall back to the elapsed-
-//          time heuristic to tell the initial send from a real follow-up.
+//      has already replied / is negotiating / accepted),
+//   2. `is_first` (when Instantly sends it) hard-blocks unconditionally — it is
+//      an unambiguous "this is the very first send for this lead" signal, unlike
+//      `step`, and
+//   3. the send must actually be a follow-up: a known Step 1 hard-blocks
+//      regardless of timing; a known Step 2+ or an entirely unknown step must
+//      ALSO clear FOLLOWUP_MIN_GAP_MINUTES since outreach_sent_at.
 // Returns true when the row actually advanced.
-async function markFollowupSent(creatorId, { step = null, messageId = null } = {}) {
+async function markFollowupSent(creatorId, { step = null, messageId = null, isFirst = null } = {}) {
   const stepNum = Number(step);
   // Number(null) is 0 (finite), so an absent step must be excluded explicitly —
   // otherwise a missing step would look like a known Step 0 and wrongly block the
@@ -346,10 +349,12 @@ async function markFollowupSent(creatorId, { step = null, messageId = null } = {
   const stepKnown = step != null && step !== '' && Number.isFinite(stepNum);
   const stepForStore = stepKnown ? stepNum : 0;
   const byStep = isExplicitFollowupStep(step);
-  // The time-gap fallback is permitted ONLY when the step is unknown. A known
-  // Step 1 is the initial outreach and must hard-block, never leaking through
-  // the gap path.
-  const allowGapFallback = !stepKnown;
+  // Gap-eligible: either an explicit step >= 2 (still needs corroboration) or
+  // the step is entirely unknown (the gap is the only signal left). A known
+  // Step 1 is neither and falls through to false, hard-blocking it.
+  const gapEligible = byStep || !stepKnown;
+  // Unambiguous hard block regardless of step/timing.
+  const hardBlock = isFirst === true;
   const res = await db.query(
     `UPDATE creators
         SET status = 'followup_sent',
@@ -360,8 +365,10 @@ async function markFollowupSent(creatorId, { step = null, messageId = null } = {
       WHERE id = $1
         AND status = 'outreach_sent'
         AND outreach_sent_at IS NOT NULL
-        AND ($4 OR ($5 AND outreach_sent_at < NOW() - INTERVAL '${FOLLOWUP_MIN_GAP_MINUTES} minutes'))`,
-    [creatorId, stepForStore, messageId, byStep, allowGapFallback],
+        AND NOT $5
+        AND $4
+        AND outreach_sent_at < NOW() - INTERVAL '${FOLLOWUP_MIN_GAP_MINUTES} minutes'`,
+    [creatorId, stepForStore, messageId, gapEligible, hardBlock],
   );
   if (res.rowCount > 0) {
     // Only log the event when the status actually advanced, so a retried

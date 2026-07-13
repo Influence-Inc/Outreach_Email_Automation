@@ -90,18 +90,20 @@ test('isExplicitFollowupStep is false when the step is missing/unparseable', () 
 //    follow-up, even when its webhook arrives long after enrollment. ──────────
 //
 // Regression for the bug where the Deal Studio timeline showed "Follow-up sent"
-// for creators who only ever got the outreach email. Instantly batches the
-// initial send on its own schedule, so the Step 1 email_sent webhook can land
-// well past FOLLOWUP_MIN_GAP_MINUTES after outreach_sent_at (which marks
-// enrollment, not the actual send). The elapsed-time fallback then flipped those
-// creators to followup_sent. The fix: an explicit step wins over the gap
-// heuristic — Step 1 hard-blocks, and the gap fallback is only allowed when the
-// step is unknown.
+// for creators who only ever got the outreach email. A first attempt trusted an
+// explicit Instantly `step` outright (Step 2+ advances no matter the timing),
+// but that alone did NOT stop the mislabeling from recurring in production —
+// `step` is not the unimpeachable signal it was assumed to be. The fix now
+// requires corroboration: a known Step 2+ must ALSO clear the elapsed-time
+// floor, a known Step 1 always hard-blocks, an entirely unknown step falls back
+// to the floor alone, and Instantly's `is_first` (when present) hard-blocks
+// unconditionally regardless of step or timing.
 //
-// markFollowupSent encodes its decision into the UPDATE's params: $4 = byStep
-// (advance because it's Step 2+), $5 = allowGapFallback (fall back to the elapsed
-// -time clause). We stub db.query to capture them without a real DB. The SQL is
-// guarded so no row would actually change unless the app itself decided it could.
+// markFollowupSent encodes its decision into the UPDATE's params: $4 =
+// gapEligible (byStep-or-unknown-step, still gated by the floor in SQL), $5 =
+// hardBlock (is_first === true, unconditional). We stub db.query to capture
+// them without a real DB. The SQL is guarded so no row would actually change
+// unless the app itself decided it could.
 const origQuery = db.query;
 function captureFollowupUpdate() {
   const calls = [];
@@ -112,28 +114,26 @@ function captureFollowupUpdate() {
   return calls;
 }
 
-test('markFollowupSent: known Step 1 never enables the time-gap fallback', async (t) => {
+test('markFollowupSent: known Step 1 is never gap-eligible', async (t) => {
   const calls = captureFollowupUpdate();
   t.after(() => { db.query = origQuery; });
   await markFollowupSent(7, { step: 1, messageId: 'm1' });
   const update = calls.find((c) => /SET status = 'followup_sent'/.test(c.sql));
   assert.ok(update, 'the follow-up UPDATE runs');
-  const [, , , byStep, allowGapFallback] = update.params;
-  assert.strictEqual(byStep, false, 'Step 1 is not an explicit follow-up');
-  assert.strictEqual(
-    allowGapFallback,
-    false,
-    'a known Step 1 must NOT fall through to the elapsed-time clause',
-  );
+  const [, , , gapEligible, hardBlock] = update.params;
+  assert.strictEqual(gapEligible, false, 'a known Step 1 must never be gap-eligible');
+  assert.strictEqual(hardBlock, false);
 });
 
-test('markFollowupSent: explicit Step 2+ advances via byStep', async (t) => {
+test('markFollowupSent: explicit Step 2+ is gap-eligible but still needs the floor', async (t) => {
   const calls = captureFollowupUpdate();
   t.after(() => { db.query = origQuery; });
   await markFollowupSent(7, { step: 2, messageId: 'm2' });
   const update = calls.find((c) => /SET status = 'followup_sent'/.test(c.sql));
-  const [, , , byStep] = update.params;
-  assert.strictEqual(byStep, true, 'Step 2 advances outright, independent of timing');
+  const [, , , gapEligible] = update.params;
+  assert.strictEqual(gapEligible, true, 'Step 2 is gap-eligible');
+  assert.match(update.sql, /outreach_sent_at < NOW\(\) - INTERVAL '180 minutes'/,
+    'Step 2+ must still clear the elapsed-time floor, not advance on step alone');
 });
 
 test('markFollowupSent: absent step still permits the time-gap fallback', async (t) => {
@@ -141,11 +141,29 @@ test('markFollowupSent: absent step still permits the time-gap fallback', async 
   t.after(() => { db.query = origQuery; });
   await markFollowupSent(7, { step: null, messageId: 'm3' });
   const update = calls.find((c) => /SET status = 'followup_sent'/.test(c.sql));
-  const [, , , byStep, allowGapFallback] = update.params;
-  assert.strictEqual(byStep, false);
+  const [, , , gapEligible] = update.params;
   assert.strictEqual(
-    allowGapFallback,
+    gapEligible,
     true,
     'with no step, the elapsed-time heuristic is the only signal left',
   );
+});
+
+test('markFollowupSent: is_first hard-blocks regardless of step or timing', async (t) => {
+  const calls = captureFollowupUpdate();
+  t.after(() => { db.query = origQuery; });
+  await markFollowupSent(7, { step: 2, messageId: 'm4', isFirst: true });
+  const update = calls.find((c) => /SET status = 'followup_sent'/.test(c.sql));
+  const [, , , gapEligible, hardBlock] = update.params;
+  assert.strictEqual(gapEligible, true, 'step 2 is still gap-eligible on its own');
+  assert.strictEqual(hardBlock, true, 'is_first must override an explicit Step 2+');
+});
+
+test('markFollowupSent: is_first absent/false does not hard-block', async (t) => {
+  const calls = captureFollowupUpdate();
+  t.after(() => { db.query = origQuery; });
+  await markFollowupSent(7, { step: 2, messageId: 'm5' });
+  const update = calls.find((c) => /SET status = 'followup_sent'/.test(c.sql));
+  const [, , , , hardBlock] = update.params;
+  assert.strictEqual(hardBlock, false);
 });

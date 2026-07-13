@@ -35,6 +35,16 @@ test('pickStep preserves step 1 (outreach) so it is not mistaken for a follow-up
   assert.strictEqual(webhook.pickStep({ step: 1 }), 1);
 });
 
+test('pickIsFirst reads the is_first flag defensively and only true is truthy', () => {
+  assert.strictEqual(webhook.pickIsFirst({ is_first: true }), true);
+  assert.strictEqual(webhook.pickIsFirst({ isFirst: true }), true);
+  assert.strictEqual(webhook.pickIsFirst({ email: { is_first: true } }), true);
+  assert.strictEqual(webhook.pickIsFirst({ is_first: false }), false);
+  assert.strictEqual(webhook.pickIsFirst({}), false);
+  // Truthy-but-not-boolean-true values must not accidentally hard-block.
+  assert.strictEqual(webhook.pickIsFirst({ is_first: 'true' }), false);
+});
+
 test('pickSentMessageId reads the sent message id defensively', () => {
   assert.strictEqual(webhook.pickSentMessageId({ message_id: 'abc' }), 'abc');
   assert.strictEqual(webhook.pickSentMessageId({ email_id: 'def' }), 'def');
