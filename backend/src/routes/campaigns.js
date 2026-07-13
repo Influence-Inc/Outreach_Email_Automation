@@ -24,11 +24,14 @@ router.get('/', async (_req, res, next) => {
               -- duplicates (auto-rejected) and stopped creators, which never send.
               COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NULL AND cr.status NOT IN ('duplicate', 'stopped'))::int AS pending_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
-              -- Contracted: creators a contract has been sent to.
+              -- Contracted: creators who have SIGNED their contract. A signed
+              -- contract advances pending -> signed -> completed (contracts.status),
+              -- so both 'signed' and 'completed' count; 'pending' (sent but not yet
+              -- signed) does not.
               COUNT(cr.id) FILTER (
                 WHERE EXISTS (
-                  SELECT 1 FROM email_events ee
-                  WHERE ee.creator_id = cr.id AND ee.type = 'contract_sent'
+                  SELECT 1 FROM contracts ct
+                  WHERE ct.creator_id = cr.id AND ct.status IN ('signed', 'completed')
                 )
               )::int AS contracted_count,
               COUNT(cr.id) FILTER (WHERE cr.needs_human)::int AS needs_human_count,
