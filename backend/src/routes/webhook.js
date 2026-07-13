@@ -71,6 +71,17 @@ function pickStep(body) {
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
+// Instantly's "is this the first email_sent event we've ever fired for this
+// lead" flag, when present. Unlike `step` (which turned out to be an
+// unreliable/unverified signal in production — the initial outreach send was
+// still getting mislabeled a follow-up after we started trusting an explicit
+// step outright), is_first is unambiguous: true means this webhook is
+// necessarily reporting the very first send, i.e. our outreach. Read
+// defensively since the field name isn't confirmed across Instantly versions.
+function pickIsFirst(body) {
+  const raw = body.is_first ?? body.isFirst ?? (body.email && (body.email.is_first ?? body.email.isFirst)) ?? null;
+  return raw === true;
+}
 // The sent message's own id (distinct from a reply's uuid), for the audit trail.
 function pickSentMessageId(body) {
   return (
@@ -263,11 +274,12 @@ router.post('/instantly', async (req, res) => {
         return;
       }
       const step = pickStep(body);
+      const isFirst = pickIsFirst(body);
       const messageId = pickSentMessageId(body);
-      const advanced = await markFollowupSent(creator.id, { step, messageId });
+      const advanced = await markFollowupSent(creator.id, { step, messageId, isFirst });
       if (advanced) {
         console.log(
-          `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} ` +
+          `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} is_first=${isFirst} ` +
             `(instantly campaign ${campaignId || 'n/a'}) → followup_sent`,
         );
         return;
@@ -306,9 +318,13 @@ router.post('/instantly', async (req, res) => {
         );
         return;
       }
+      // Log the raw body too (truncated) on this path — it's exactly the case
+      // (webhook fired, but we decided NOT to advance) we need visibility into
+      // to confirm what Instantly actually sent, since trusting `step` alone
+      // previously failed to stop the initial send from being mislabeled.
       console.log(
-        `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} ` +
-          `(instantly campaign ${campaignId || 'n/a'}) → no status change`,
+        `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} is_first=${isFirst} ` +
+          `(instantly campaign ${campaignId || 'n/a'}) → no status change; raw=${JSON.stringify(body).slice(0, 500)}`,
       );
       return;
     }
@@ -380,6 +396,7 @@ router.post('/instantly', async (req, res) => {
 // `app.use('/webhook', webhook)` still works) so they can be unit-tested.
 router.pickEventType = pickEventType;
 router.pickStep = pickStep;
+router.pickIsFirst = pickIsFirst;
 router.pickSentMessageId = pickSentMessageId;
 router.pickSentBody = pickSentBody;
 router.pickSentSubject = pickSentSubject;
