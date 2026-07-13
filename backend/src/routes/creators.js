@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { sendOutreach } = require('../services/outreach');
+const instantly = require('../services/instantly');
 const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const contracts = require('../services/contracts');
@@ -25,6 +26,7 @@ const RATE_LOG_TYPES = [
   'contract_sent',
   'contract_signed',
   'contract_synced',
+  'outreach_stopped',
 ];
 
 const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
@@ -90,6 +92,8 @@ function rateLogEntry(type, detail) {
       return { text: 'Reply sent (from delegate)', tone: 'done' };
     case 'sent_manual_reply':
       return { text: 'Manual reply sent', tone: 'done' };
+    case 'outreach_stopped':
+      return { text: d.blocklisted ? 'Outreach stopped (blocklisted)' : 'Outreach stopped', tone: 'muted' };
     case 'contract_sent':
       return { text: 'Contract sent', tone: 'active' };
     case 'contract_signed':
@@ -524,6 +528,75 @@ router.post('/:id/send-outreach', async (req, res, next) => {
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Stop outreach for a creator. Instantly owns the follow-up sequence, so
+// halting it means blocking the address on Instantly's side — deleting or
+// pausing our local row does nothing to the queued follow-ups. We:
+//   1. blocklist the email on Instantly (the step that actually stops the
+//      follow-ups), best-effort so a missing API key / already-listed address
+//      doesn't fail the whole action;
+//   2. suppress the email locally so we never re-enroll it (prepareOutreach
+//      + the bulk sender both honor the suppression list); and
+//   3. mark the creator 'stopped' with an audit event.
+// Reports whether the Instantly blocklist actually landed so the caller can
+// warn the operator to remove the lead by hand if it didn't.
+router.post('/:id/stop-outreach', async (req, res, next) => {
+  try {
+    const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    if (!creator) return res.status(404).json({ error: 'not found' });
+
+    let blocklisted = false;
+    let warning = null;
+    if (creator.email) {
+      // Local suppression first — this always succeeds and is what our own send
+      // paths check, so outreach is stopped on our side even if Instantly is
+      // unreachable.
+      await db.query(
+        `INSERT INTO email_suppressions (email, reason, creator_id)
+         VALUES (LOWER($1), 'stopped', $2)
+         ON CONFLICT (email) DO UPDATE SET reason = 'stopped', creator_id = EXCLUDED.creator_id`,
+        [creator.email, creator.id],
+      );
+      if (process.env.INSTANTLY_API_KEY) {
+        try {
+          await instantly.blocklistEmail(creator.email);
+          blocklisted = true;
+        } catch (err) {
+          // Instantly returns a 4xx when the address is already on the block
+          // list — that's the desired end state, so treat it as success.
+          if (/already|exists|duplicate/i.test(err.message)) {
+            blocklisted = true;
+          } else {
+            warning = `Instantly blocklist failed: ${err.message}. Remove the lead in Instantly manually to halt follow-ups.`;
+            console.error(`[stop-outreach] creator ${creator.id} blocklist failed:`, err.message);
+          }
+        }
+      } else {
+        warning = 'INSTANTLY_API_KEY is unset — email suppressed locally but the Instantly lead must be removed manually to halt follow-ups.';
+      }
+    }
+
+    const updated = await db.one(
+      `UPDATE creators
+         SET status = 'stopped',
+             notes = 'outreach stopped',
+             updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [creator.id],
+    );
+
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'outreach_stopped', $2)`,
+      [creator.id, { email: creator.email || null, blocklisted }],
+    );
+
+    res.json({ ok: true, creator: updated, blocklisted, warning });
+  } catch (err) {
+    console.error('stop-outreach failed:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
