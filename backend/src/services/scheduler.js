@@ -36,9 +36,13 @@ async function pollNegotiations() {
 
     // 2. Ongoing replies: a new inbound while we await a rate or a decision.
     //    processReply de-dupes on last_negotiation_msg_id, so this is cheap.
+    //    `status <> 'stopped'` (here and in every step below) drops creators
+    //    whose outreach was explicitly stopped — stop halts the automated
+    //    conversation at every stage, not just the outreach follow-ups.
     const ongoing = await db.many(
       `SELECT id FROM creators
-       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')`,
+       WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')
+         AND status <> 'stopped'`,
     );
     for (const c of ongoing) {
       try {
@@ -56,7 +60,8 @@ async function pollNegotiations() {
     //     never auto-reply here; a human is deliberately in the loop at approval.
     const awaitingApprovalReplies = await db.many(
       `SELECT id FROM creators
-       WHERE negotiation_status = 'AWAITING_APPROVAL' AND latest_inbound_text IS NOT NULL`,
+       WHERE negotiation_status = 'AWAITING_APPROVAL' AND latest_inbound_text IS NOT NULL
+         AND status <> 'stopped'`,
     );
     for (const c of awaitingApprovalReplies) {
       try {
@@ -86,6 +91,7 @@ async function pollNegotiations() {
       `SELECT id, last_negotiation_email_at, replied_at, updated_at
        FROM creators
        WHERE negotiation_status IN ('AWAITING_RATE', 'AWAITING_DECISION')
+         AND status <> 'stopped'
          AND needs_human = FALSE
          AND latest_inbound_text IS NULL
          AND (
@@ -110,6 +116,7 @@ async function pollNegotiations() {
     const acceptedNoContract = await db.many(
       `SELECT id FROM creators
        WHERE negotiation_status = 'ACCEPTED'
+         AND status <> 'stopped'
          AND NOT EXISTS (SELECT 1 FROM contracts ct WHERE ct.creator_id = creators.id)`,
     );
     for (const c of acceptedNoContract) {
@@ -129,7 +136,8 @@ async function pollNegotiations() {
     //    ever left unattended.
     const acceptedWithReply = await db.many(
       `SELECT id FROM creators
-       WHERE negotiation_status = 'ACCEPTED' AND latest_inbound_text IS NOT NULL`,
+       WHERE negotiation_status = 'ACCEPTED' AND latest_inbound_text IS NOT NULL
+         AND status <> 'stopped'`,
     );
     for (const c of acceptedWithReply) {
       try {

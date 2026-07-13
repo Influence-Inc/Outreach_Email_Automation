@@ -600,6 +600,11 @@ function renderRateCell(r, cell) {
 const TRASH_SVG =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
 
+// "Stop outreach" — a ban/no-entry glyph for the square icon button that sits
+// beside the delete button on every creator row.
+const STOP_SVG =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"></line></svg>';
+
 // "Decide offer": open this creator's Instagram profile in a new tab with the
 // Chrome extension's offer panel latched to the right. The extension handles the
 // hand-off (see dashboard-bridge.js → background.js openDecideOffer); here we
@@ -693,6 +698,32 @@ function renderStatusCell(r, cell) {
 
   top.appendChild(left);
 
+  // Stop outreach — a square icon button beside delete, available on every
+  // creator at any lifecycle stage (only hidden once already stopped, where it
+  // would be a no-op). Blocklists the email on Instantly so any queued
+  // follow-ups actually halt, then suppresses + marks the row stopped.
+  if (r.status !== 'stopped') {
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'icon-btn-sq';
+    stop.title = 'Stop outreach — blocklist on Instantly so no further emails are sent';
+    stop.innerHTML = STOP_SVG;
+    stop.onclick = async () => {
+      if (!confirm('Stop outreach for this creator? This blocklists their email on Instantly so no further outreach or follow-ups are sent.')) return;
+      stop.disabled = true;
+      try {
+        const res = await api(`/api/creators/${r.id}/stop-outreach`, { method: 'POST' });
+        if (res && res.warning) alert(res.warning);
+        await refreshCreators();
+        await refreshCampaigns();
+      } catch (err) {
+        alert(err.message);
+        stop.disabled = false;
+      }
+    };
+    top.appendChild(stop);
+  }
+
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'icon-btn-sq';
@@ -724,31 +755,6 @@ function renderStatusCell(r, cell) {
       }
     };
     cell.appendChild(send);
-  }
-
-  // While the outreach sequence is in flight (outreach sent, follow-ups still
-  // firing from Instantly), offer a "Stop outreach" action. It blocklists the
-  // address on Instantly so the queued follow-ups actually halt — pausing our
-  // row alone wouldn't stop them.
-  if (r.status === 'outreach_sent' || r.status === 'followup_sent') {
-    const stop = document.createElement('button');
-    stop.type = 'button';
-    stop.className = 'ghost small cr-send-btn';
-    stop.textContent = 'Stop outreach';
-    stop.onclick = async () => {
-      if (!confirm('Stop outreach? This blocklists the email on Instantly so no further follow-ups are sent.')) return;
-      stop.disabled = true;
-      try {
-        const res = await api(`/api/creators/${r.id}/stop-outreach`, { method: 'POST' });
-        if (res && res.warning) alert(res.warning);
-        await refreshCreators();
-        await refreshCampaigns();
-      } catch (err) {
-        alert(err.message);
-        stop.disabled = false;
-      }
-    };
-    cell.appendChild(stop);
   }
 
   // On a creator awaiting our offer, surface "Decide offer" right by the

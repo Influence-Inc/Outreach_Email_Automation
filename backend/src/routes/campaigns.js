@@ -21,8 +21,8 @@ router.get('/', async (_req, res, next) => {
               -- set once when outreach sends and never cleared.
               COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS outreach_sent_count,
               -- Pending: creators still awaiting their outreach email. Excludes
-              -- duplicates, which are auto-rejected and never send.
-              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NULL AND cr.status <> 'duplicate')::int AS pending_count,
+              -- duplicates (auto-rejected) and stopped creators, which never send.
+              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NULL AND cr.status NOT IN ('duplicate', 'stopped'))::int AS pending_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
               -- Contracted: creators a contract has been sent to.
               COUNT(cr.id) FILTER (
