@@ -432,6 +432,15 @@ function dealSummaryItems(data) {
   }
   if (usageBits.length) items.push({ label: 'USAGE', value: usageBits.join(' · ') });
 
+  // Payment schedule — only shown when an upfront split actually applies (the
+  // creator demanded upfront payment). No split means "paid in full on
+  // completion", the default, so there's nothing to surface here.
+  const upPct = Number(data.upfrontPercent);
+  const remPct = Number(data.remainderPercent);
+  if (upPct > 0 && remPct > 0) {
+    items.push({ label: 'PAYMENT', value: `${upPct}% upfront, ${remPct}% on completion` });
+  }
+
   return items;
 }
 
@@ -544,6 +553,36 @@ function renderEditableDeal(cell, r, data) {
     placeholder: 'None',
     onSave: (v) => saveContractField(r, { exclusivity: v }),
   });
+
+  // Upfront payment is a boolean toggle: ON adds the default 30/70 split, OFF
+  // means paid in full on completion. The payment schedule is only meant to be
+  // on the contract when the creator explicitly demanded upfront payment — this
+  // is the control that adds/removes it by hand.
+  const upfrontLine = document.createElement('div');
+  upfrontLine.className = 'deal-line';
+  const upfrontTag = document.createElement('span');
+  upfrontTag.className = 'deal-tag';
+  upfrontTag.textContent = 'UPFRONT';
+  const upfrontVal = document.createElement('span');
+  upfrontVal.className = 'deal-val deal-toggle';
+  const upPct = Number(data.upfrontPercent);
+  const remPct = Number(data.remainderPercent);
+  const hasUpfront = upPct > 0 && remPct > 0;
+  upfrontVal.textContent = hasUpfront ? `${upPct}% upfront ✓` : 'On completion';
+  upfrontVal.classList.toggle('on', hasUpfront);
+  upfrontVal.title = 'Click to toggle an upfront payment split';
+  upfrontVal.onclick = async () => {
+    try {
+      await saveContractField(r, { upfrontPayment: !hasUpfront });
+    } catch (err) {
+      alert(err.message);
+    }
+    await refreshCreators();
+    await refreshCampaigns();
+  };
+  upfrontLine.appendChild(upfrontTag);
+  upfrontLine.appendChild(upfrontVal);
+  cell.appendChild(upfrontLine);
 }
 
 // Rate column ("Deals"): the editable agreed/quoted rate, plus — once the

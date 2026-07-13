@@ -54,10 +54,12 @@ test('baseContractData fills a complete contract from known creator + offer', ()
   assert.strictEqual(d.numberOfVideos, 3);
   assert.strictEqual(d.minTotalViews, 100000);
   assert.strictEqual(d.guaranteedViews, 100000);
-  // Compensation split
+  // Compensation — paid in full on completion by default: no upfront split
+  // unless the creator demanded one (see the payment-schedule tests below).
   assert.strictEqual(d.compensation, 900);
   assert.strictEqual(d.totalPayment, 900);
-  assert.strictEqual(d.upfrontPercent + d.remainderPercent, 100);
+  assert.strictEqual(d.upfrontPercent, null);
+  assert.strictEqual(d.remainderPercent, null);
   assert.strictEqual(d.paymentTermsDays, 7);
   // Usage rights
   assert.strictEqual(d.paidAdsIncluded, false);
@@ -437,6 +439,104 @@ test('changesContractTerms: questions/acknowledgements are not changes', async (
   for (const text of cases) {
     assert.strictEqual(await contracts.changesContractTerms(text), false, `should NOT be a change: "${text}"`);
   }
+});
+
+// ── Payment schedule (upfront/remainder split) ──────────────────────────────
+// The 30/70 upfront split is NOT a standard clause — it belongs on a contract
+// ONLY when the creator explicitly demanded upfront payment. By default a
+// contract is paid in full on completion (no schedule row).
+
+test('paymentScheduleFor: off -> no split, on -> 30/70 default, honours a valid percent', () => {
+  const off = contracts.paymentScheduleFor(false);
+  assert.strictEqual(off.upfrontPercent, null);
+  assert.strictEqual(off.remainderPercent, null);
+  assert.strictEqual(off.upfrontTrigger, null);
+  assert.strictEqual(off.remainderTrigger, null);
+
+  const on = contracts.paymentScheduleFor(true);
+  assert.strictEqual(on.upfrontPercent, 30);
+  assert.strictEqual(on.remainderPercent, 70);
+  assert.match(on.remainderTrigger, /completed, posted and confirmed live/i);
+
+  const half = contracts.paymentScheduleFor(true, 50);
+  assert.strictEqual(half.upfrontPercent, 50);
+  assert.strictEqual(half.remainderPercent, 50);
+
+  // Out-of-range percents fall back to the 30 default.
+  assert.strictEqual(contracts.paymentScheduleFor(true, 0).upfrontPercent, 30);
+  assert.strictEqual(contracts.paymentScheduleFor(true, 150).upfrontPercent, 30);
+});
+
+test('baseContractData: no upfront split by default (paid in full on completion)', () => {
+  const d = contracts.baseContractData({ full_name: 'Alex' }, 900, { num_videos: 2 });
+  assert.strictEqual(d.upfrontPercent, null);
+  assert.strictEqual(d.remainderPercent, null);
+  // The standard "pay on completion" terms line stays.
+  assert.match(d.paymentTerms, /completing and posting all agreed deliverables/i);
+});
+
+// No ANTHROPIC_API_KEY in the test env, so requestedUpfrontPayment exercises
+// its deterministic keyword fallback — the same path production falls back to.
+test('requestedUpfrontPayment: empty/blank thread -> no upfront', async () => {
+  assert.deepStrictEqual(await contracts.requestedUpfrontPayment(''), { upfront: false, pct: null });
+  assert.deepStrictEqual(await contracts.requestedUpfrontPayment(null), { upfront: false, pct: null });
+});
+
+test('requestedUpfrontPayment: a clear upfront demand is detected', async () => {
+  const cases = [
+    'Sounds good! I do require 50% upfront before I start filming.',
+    'I need a deposit before we begin.',
+    'Can we do half now, half on delivery?',
+    'I work on a retainer up front for new brands.',
+  ];
+  for (const text of cases) {
+    const r = await contracts.requestedUpfrontPayment(text);
+    assert.strictEqual(r.upfront, true, `should detect upfront demand: "${text}"`);
+  }
+  // A named percentage is captured when present.
+  assert.strictEqual((await contracts.requestedUpfrontPayment('I need 50% upfront')).pct, 50);
+});
+
+test('requestedUpfrontPayment: no upfront ask keeps the schedule off', async () => {
+  const cases = [
+    'Sounds great, my rate for 2 videos is $800. Looking forward to it!',
+    'When will the payment go through after I post?',
+    // A brand-side offer of upfront money is not the creator demanding it — but
+    // the conservative fallback only checks for keywords, so keep these clean of
+    // upfront/deposit markers to reflect the common case.
+    'Thanks for reaching out — I can do Instagram and TikTok.',
+  ];
+  for (const text of cases) {
+    const r = await contracts.requestedUpfrontPayment(text);
+    assert.strictEqual(r.upfront, false, `should NOT detect upfront: "${text}"`);
+  }
+});
+
+test('resolvePaymentSchedule: no upfront ask -> full payment on completion (no split)', async () => {
+  const s = await contracts.resolvePaymentSchedule('Great, $800 for 2 videos works!');
+  assert.strictEqual(s.upfrontPercent, null);
+  assert.strictEqual(s.remainderPercent, null);
+});
+
+test('resolvePaymentSchedule: creator demands upfront -> split added', async () => {
+  const s = await contracts.resolvePaymentSchedule('I need 50% upfront as a deposit before I start.');
+  assert.strictEqual(s.upfrontPercent, 50);
+  assert.strictEqual(s.remainderPercent, 50);
+});
+
+test('coerceContractPatch: upfront toggle adds/removes the schedule from the Deals column', () => {
+  const on = contracts.coerceContractPatch({ upfrontPayment: true });
+  assert.strictEqual(on.upfrontPercent, 30);
+  assert.strictEqual(on.remainderPercent, 70);
+
+  const off = contracts.coerceContractPatch({ upfrontPayment: false });
+  assert.strictEqual(off.upfrontPercent, null);
+  assert.strictEqual(off.remainderPercent, null);
+
+  // An explicit percentage alongside the toggle is honoured.
+  const custom = contracts.coerceContractPatch({ upfrontPayment: true, upfrontPercent: 40 });
+  assert.strictEqual(custom.upfrontPercent, 40);
+  assert.strictEqual(custom.remainderPercent, 60);
 });
 
 test('removeUsageRightsFromContract exports usageRightsFor(no_rights) shape for reuse', () => {
