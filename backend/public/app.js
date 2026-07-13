@@ -700,16 +700,17 @@ function renderStatusCell(r, cell) {
 
   // Stop outreach — a square icon button beside delete, available on every
   // creator at any lifecycle stage (only hidden once already stopped, where it
-  // would be a no-op). Blocklists the email on Instantly so any queued
-  // follow-ups actually halt, then suppresses + marks the row stopped.
+  // would be a no-op). Removes the creator's lead from THIS Instantly campaign
+  // so its queued follow-ups halt, then marks the row stopped. Scoped to this
+  // campaign — the same person stays free to be enrolled elsewhere later.
   if (r.status !== 'stopped') {
     const stop = document.createElement('button');
     stop.type = 'button';
     stop.className = 'icon-btn-sq';
-    stop.title = 'Stop outreach — blocklist on Instantly so no further emails are sent';
+    stop.title = 'Stop outreach for this campaign — removes the lead from this Instantly campaign so no further emails are sent';
     stop.innerHTML = STOP_SVG;
     stop.onclick = async () => {
-      if (!confirm('Stop outreach for this creator? This blocklists their email on Instantly so no further outreach or follow-ups are sent.')) return;
+      if (!confirm('Stop outreach for this creator in this campaign? This removes them from this Instantly campaign so no further outreach or follow-ups are sent. It does not affect any other campaign.')) return;
       stop.disabled = true;
       try {
         const res = await api(`/api/creators/${r.id}/stop-outreach`, { method: 'POST' });
