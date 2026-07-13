@@ -4,6 +4,7 @@ const { sendOutreach } = require('../services/outreach');
 const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const contracts = require('../services/contracts');
+const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 
 // Event types that make up the per-creator "Rate" timeline (delivery-tracking
 // style). A curated subset of email_events — the offer email's own
@@ -174,10 +175,31 @@ router.post('/', async (req, res, next) => {
     const normalizedUrl = username
       ? `https://www.instagram.com/${username}/`
       : instagram_url;
-    const status = email ? 'email_found' : 'pending_extraction';
+
+    // Auto-reject a creator the campaign is already reaching out to (same
+    // handle or email under a different row), so the outreach email never goes
+    // out twice. The exact same URL is an idempotent re-add, not a duplicate —
+    // that path falls through to the ON CONFLICT upsert below.
+    const dup = await findDuplicateCreator({
+      campaignId: campaign_id,
+      username,
+      email,
+      excludeUrl: normalizedUrl,
+    });
+
+    let status;
+    let notes = null;
+    if (dup) {
+      status = 'duplicate';
+      const ref = dup.instagram_username ? `@${dup.instagram_username}` : `creator #${dup.id}`;
+      notes = `Duplicate of ${ref} already in this campaign — auto-rejected so outreach isn't sent twice`;
+    } else {
+      status = email ? 'email_found' : 'pending_extraction';
+    }
+
     const row = await db.one(
-      `INSERT INTO creators (campaign_id, instagram_url, instagram_username, email, first_name, full_name, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO creators (campaign_id, instagram_url, instagram_username, email, first_name, full_name, status, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (campaign_id, instagram_url) DO UPDATE SET
          email = COALESCE(EXCLUDED.email, creators.email),
          first_name = COALESCE(EXCLUDED.first_name, creators.first_name),
@@ -185,8 +207,27 @@ router.post('/', async (req, res, next) => {
          instagram_username = COALESCE(EXCLUDED.instagram_username, creators.instagram_username),
          updated_at = NOW()
        RETURNING *`,
-      [campaign_id, normalizedUrl, username, email || null, first_name || null, full_name || null, status],
+      [campaign_id, normalizedUrl, username, email || null, first_name || null, full_name || null, status, notes],
     );
+
+    // Only when the row was actually inserted as a duplicate (not an ON CONFLICT
+    // re-add of the same URL, which keeps its own status) do we log the audit
+    // event that surfaces on the creator's timeline.
+    if (dup && row.status === 'duplicate') {
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'duplicate_rejected', $2)`,
+        [
+          row.id,
+          {
+            of: dup.id,
+            matchedOn: duplicateMatchReason({ username, dup }),
+            handle: dup.instagram_username || null,
+            email: email || null,
+          },
+        ],
+      );
+    }
+
     res.status(201).json(row);
   } catch (err) { next(err); }
 });

@@ -71,6 +71,13 @@ async function prepareOutreach(creatorId) {
   if (creator.outreach_sent_at) {
     return { ok: false, skipReason: 'already_sent', message: `Outreach already sent to creator ${creatorId}` };
   }
+  // A creator flagged as a duplicate of another row in the campaign never gets
+  // its own outreach — the original row carries the conversation. This also
+  // guards a stray single-row "Send outreach" click (the bulk sender already
+  // filters on status = 'email_found').
+  if (creator.status === 'duplicate') {
+    return { ok: false, skipReason: 'duplicate', message: `Creator ${creatorId} is a duplicate — outreach skipped so it isn't sent twice` };
+  }
 
   const suppressed = await lookupSuppression(creator.email);
   if (suppressed) {
