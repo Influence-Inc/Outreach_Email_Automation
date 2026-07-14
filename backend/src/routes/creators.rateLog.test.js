@@ -12,8 +12,28 @@ const { rateLogEntry } = require('./creators');
 
 test('replied quotes a super-short gist of the creator message', () => {
   const entry = rateLogEntry('replied', null, "Hi Jennifer, this sounds great! When can we start?");
-  assert.strictEqual(entry.text, 'Replied: “this sounds great! When can we start?”');
+  assert.strictEqual(entry.text, 'Replied: “this sounds great!”');
   assert.strictEqual(entry.tone, 'done');
+});
+
+test('replied prefers the Claude summary over the deterministic gist', () => {
+  const entry = rateLogEntry(
+    'replied',
+    null,
+    'The price is listed in my media kit: $1,600 per video. Unfortunately, my schedule is fully booked for July.',
+    '$1,600 per video, available early August, 50% upfront with approval before publishing',
+  );
+  assert.strictEqual(
+    entry.text,
+    'Replied: “$1,600 per video, available early August, 50% upfront with approval before publishing”',
+  );
+});
+
+test('sent replies prefer the Claude summary too', () => {
+  assert.strictEqual(
+    rateLogEntry('sent_manual_reply', {}, 'Hey! We can do $3,000 for two reels.', 'offered $3,000 for two reels').text,
+    'Sent: “offered $3,000 for two reels”',
+  );
 });
 
 test('replied falls back to the plain label only when no message is on file', () => {

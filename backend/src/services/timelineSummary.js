@@ -5,17 +5,24 @@
 // column shows one line per event, so instead of a content-free label like
 // "Creator replied" we surface WHAT the message actually said.
 //
-// Pure + deterministic (no LLM): strips the quoted reply history and a leading
-// salutation, collapses whitespace, and packs as many WHOLE sentences as fit in
-// the length budget — so a multi-point message (price + availability + terms)
-// is summarized rather than clipped to its opening line. This runs at read time
-// over the stored conversation, so it applies to every creator — past and
-// future — without any backfill. Returns '' when there's nothing to show.
+// Two summarizers live here:
+//   • summarizeMessage()  — pure + deterministic (no LLM). Strips the quoted
+//     reply history and a leading salutation, collapses whitespace, and keeps
+//     the first sentence (or a character-capped snippet). Cheap, synchronous,
+//     always available — used as the immediate render and the fallback when
+//     Claude is unavailable.
+//   • summarizeEmail()    — an LLM recap (via Claude) that condenses the WHOLE
+//     email into one short line of the key points ("$1,600 per video, available
+//     early August, 50% upfront with approval before publishing") instead of
+//     just echoing the opening sentence. Generated once and cached on
+//     email_messages.summary (see routes/creators.js), so the LLM runs at most
+//     once per message, never on every dashboard read.
 
 const { stripQuotedHistory } = require('./replyLearning');
 const { parseRateOptionsFromText } = require('./negotiation');
+const { callClaudeText } = require('./claudeClient');
 
-function summarizeMessage(body, { maxLen = 200 } = {}) {
+function summarizeMessage(body, { maxLen = 90 } = {}) {
   if (body == null) return '';
   let s = stripQuotedHistory(String(body)) || String(body);
   s = s.replace(/\s+/g, ' ').trim();
@@ -26,34 +33,52 @@ function summarizeMessage(body, { maxLen = 200 } = {}) {
     .replace(/^(?:hi+|hey+|hello|hiya|dear|yo|good (?:morning|afternoon|evening))\b[^,.!?\n]{0,40}[,!.—–-]*\s*/i, '')
     .trim();
   if (!s) return '';
-  // Pack complete sentences into the budget so the gist covers the whole
-  // message, not just its first line. Stop before a sentence that would
-  // overflow and mark the tail with an ellipsis so it's clear more was said.
-  const sentences = s.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g) || [s];
-  let out = '';
-  let dropped = false;
-  for (const raw of sentences) {
-    const piece = raw.trim();
-    if (!piece) continue;
-    const candidate = out ? `${out} ${piece}` : piece;
-    if (candidate.length <= maxLen) {
-      out = candidate;
-    } else {
-      dropped = true;
-      break;
-    }
-  }
-  // The opening sentence alone can already blow the budget — fall back to a
-  // word-boundary snippet of the text in that case.
-  if (!out) {
-    out = s.slice(0, maxLen);
+  // Prefer the first sentence when it fits; otherwise fall back to a snippet.
+  const sentence = s.match(/^.*?[.!?](?=\s|$)/);
+  let out = sentence && sentence[0].length <= maxLen ? sentence[0] : s;
+  if (out.length > maxLen) {
+    out = out.slice(0, maxLen);
     const sp = out.lastIndexOf(' ');
     if (sp > maxLen * 0.6) out = out.slice(0, sp);
-    out = out.replace(/[\s,;:–—-]+$/, '');
-    dropped = out.length < s.length;
+    out = out.replace(/[\s,;:–—-]+$/, '') + '…';
   }
-  if (dropped) out = out.replace(/[.!?…\s]+$/, '') + '…';
   return out.trim();
+}
+
+// Condense a whole email into a single short line of its key points, using
+// Claude. Unlike summarizeMessage (which only ever surfaces the opening
+// sentence), this reads the ENTIRE message and recaps every material point —
+// price, availability, payment terms, workflow — the way a person skimming the
+// timeline would want it. Deterministic in shape, not in wording: we ask for a
+// terse, comma-joined recap with no preamble or trailing punctuation.
+//
+// Returns '' when there's nothing to summarize, and null when Claude is
+// unavailable or the call fails — so the caller keeps the deterministic gist as
+// a fallback and can retry generation later.
+const SUMMARY_SYSTEM =
+  'You summarize a single email from an influencer/creator negotiation into ONE short line for a CRM timeline. ' +
+  'Capture every material point the reader needs — price/rate, availability or timing, payment terms, workflow/approval, and any conditions — in a compact, comma-separated recap. ' +
+  'Write in third person about the sender (e.g. "they\'re available in early August"). ' +
+  'No preamble, no greeting, no quotes, no trailing period, no line breaks. Aim for under 200 characters. ' +
+  'If the email has no substantive content (just a greeting or pleasantry), reply with a dash "-".';
+
+async function summarizeEmail(body, { maxLen = 240 } = {}) {
+  if (body == null) return '';
+  const clean = stripQuotedHistory(String(body)) || String(body);
+  const trimmed = clean.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return '';
+  const out = await callClaudeText(SUMMARY_SYSTEM, `Email:\n"""\n${clean.trim()}\n"""\n\nOne-line summary:`, 200);
+  if (out == null) return null; // Claude unavailable — caller falls back
+  let s = out.replace(/\s+/g, ' ').trim().replace(/^["'“”]+|["'“”]+$/g, '').trim();
+  if (!s || s === '-') return '';
+  s = s.replace(/[.\s]+$/, '');
+  if (s.length > maxLen) {
+    s = s.slice(0, maxLen);
+    const sp = s.lastIndexOf(' ');
+    if (sp > maxLen * 0.6) s = s.slice(0, sp);
+    s = s.replace(/[\s,;:–—-]+$/, '') + '…';
+  }
+  return s;
 }
 
 // Strip the $-amount token(s) and any leading filler out of a rate label,
@@ -100,4 +125,4 @@ function deliverableForAmount(text, amount) {
   return deliverableFromLabel(match.label, amount);
 }
 
-module.exports = { summarizeMessage, deliverableFromLabel, deliverableForAmount };
+module.exports = { summarizeMessage, summarizeEmail, deliverableFromLabel, deliverableForAmount };
