@@ -11,9 +11,24 @@ const {
 
 // ── summarizeMessage ────────────────────────────────────────────────────────
 
-test('summarizeMessage drops the greeting and keeps the first sentence', () => {
+test('summarizeMessage drops the greeting and keeps the following sentences', () => {
   const s = summarizeMessage("Hi Jennifer, this sounds great! What did you have in mind?");
-  assert.strictEqual(s, 'this sounds great!');
+  assert.strictEqual(s, 'this sounds great! What did you have in mind?');
+});
+
+test('summarizeMessage packs multiple sentences up to the budget, marking the rest with …', () => {
+  const body = [
+    'The price is listed in my media kit: $1,600 per video.',
+    'Unfortunately, my schedule is fully booked for July, so my next available slot is at the beginning of August.',
+    'I only book projects after receiving a 50% upfront payment.',
+  ].join(' ');
+  const s = summarizeMessage(body);
+  // Both the price AND the availability make it in — not just the first line.
+  assert.ok(s.startsWith('The price is listed in my media kit: $1,600 per video.'), s);
+  assert.ok(s.includes('next available slot is at the beginning of August'), s);
+  // The payment-terms sentence overflows the budget, so the tail is elided.
+  assert.ok(s.endsWith('…'), s);
+  assert.ok(!s.includes('upfront payment'), s);
 });
 
 test('summarizeMessage strips quoted reply history', () => {

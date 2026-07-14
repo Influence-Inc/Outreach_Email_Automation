@@ -6,15 +6,16 @@
 // "Creator replied" we surface WHAT the message actually said.
 //
 // Pure + deterministic (no LLM): strips the quoted reply history and a leading
-// salutation, collapses whitespace, and keeps the first sentence (or a
-// character-capped snippet). This runs at read time over the stored
-// conversation, so it applies to every creator — past and future — without any
-// backfill. Returns '' when there's nothing meaningful to show.
+// salutation, collapses whitespace, and packs as many WHOLE sentences as fit in
+// the length budget — so a multi-point message (price + availability + terms)
+// is summarized rather than clipped to its opening line. This runs at read time
+// over the stored conversation, so it applies to every creator — past and
+// future — without any backfill. Returns '' when there's nothing to show.
 
 const { stripQuotedHistory } = require('./replyLearning');
 const { parseRateOptionsFromText } = require('./negotiation');
 
-function summarizeMessage(body, { maxLen = 90 } = {}) {
+function summarizeMessage(body, { maxLen = 200 } = {}) {
   if (body == null) return '';
   let s = stripQuotedHistory(String(body)) || String(body);
   s = s.replace(/\s+/g, ' ').trim();
@@ -25,15 +26,33 @@ function summarizeMessage(body, { maxLen = 90 } = {}) {
     .replace(/^(?:hi+|hey+|hello|hiya|dear|yo|good (?:morning|afternoon|evening))\b[^,.!?\n]{0,40}[,!.—–-]*\s*/i, '')
     .trim();
   if (!s) return '';
-  // Prefer the first sentence when it fits; otherwise fall back to a snippet.
-  const sentence = s.match(/^.*?[.!?](?=\s|$)/);
-  let out = sentence && sentence[0].length <= maxLen ? sentence[0] : s;
-  if (out.length > maxLen) {
-    out = out.slice(0, maxLen);
+  // Pack complete sentences into the budget so the gist covers the whole
+  // message, not just its first line. Stop before a sentence that would
+  // overflow and mark the tail with an ellipsis so it's clear more was said.
+  const sentences = s.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g) || [s];
+  let out = '';
+  let dropped = false;
+  for (const raw of sentences) {
+    const piece = raw.trim();
+    if (!piece) continue;
+    const candidate = out ? `${out} ${piece}` : piece;
+    if (candidate.length <= maxLen) {
+      out = candidate;
+    } else {
+      dropped = true;
+      break;
+    }
+  }
+  // The opening sentence alone can already blow the budget — fall back to a
+  // word-boundary snippet of the text in that case.
+  if (!out) {
+    out = s.slice(0, maxLen);
     const sp = out.lastIndexOf(' ');
     if (sp > maxLen * 0.6) out = out.slice(0, sp);
-    out = out.replace(/[\s,;:–—-]+$/, '') + '…';
+    out = out.replace(/[\s,;:–—-]+$/, '');
+    dropped = out.length < s.length;
   }
+  if (dropped) out = out.replace(/[.!?…\s]+$/, '') + '…';
   return out.trim();
 }
 

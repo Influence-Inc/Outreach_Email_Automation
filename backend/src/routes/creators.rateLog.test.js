@@ -12,7 +12,7 @@ const { rateLogEntry } = require('./creators');
 
 test('replied quotes a super-short gist of the creator message', () => {
   const entry = rateLogEntry('replied', null, "Hi Jennifer, this sounds great! When can we start?");
-  assert.strictEqual(entry.text, 'Replied: “this sounds great!”');
+  assert.strictEqual(entry.text, 'Replied: “this sounds great! When can we start?”');
   assert.strictEqual(entry.tone, 'done');
 });
 
