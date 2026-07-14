@@ -46,24 +46,25 @@ function summarizeMessage(body, { maxLen = 90 } = {}) {
   return out.trim();
 }
 
-// Condense a whole email into a single short line of its key points, using
-// Claude. Unlike summarizeMessage (which only ever surfaces the opening
-// sentence), this reads the ENTIRE message and recaps every material point —
-// price, availability, payment terms, workflow — the way a person skimming the
-// timeline would want it. Deterministic in shape, not in wording: we ask for a
-// terse, comma-joined recap with no preamble or trailing punctuation.
+// Condense a whole email into a SHORT timeline label, using Claude. Unlike
+// summarizeMessage (which only surfaces the opening sentence), this reads the
+// ENTIRE message — but the goal is a glanceable one-liner, like a text-message
+// preview, not an exhaustive recap. We ask for the single most important point
+// under a hard word cap; the length ceiling below is a backstop, not the target.
 //
 // Returns '' when there's nothing to summarize, and null when Claude is
 // unavailable or the call fails — so the caller keeps the deterministic gist as
 // a fallback and can retry generation later.
 const SUMMARY_SYSTEM =
-  'You summarize a single email from an influencer/creator negotiation into ONE short line for a CRM timeline. ' +
-  'Capture every material point the reader needs — price/rate, availability or timing, payment terms, workflow/approval, and any conditions — in a compact, comma-separated recap. ' +
-  'Write in third person about the sender (e.g. "they\'re available in early August"). ' +
-  'No preamble, no greeting, no quotes, no trailing period, no line breaks. Aim for under 200 characters. ' +
+  'You write a SHORT timeline label summarizing one email from an influencer/creator negotiation, for a CRM the reader skims at a glance. ' +
+  'Give only the single most important takeaway — their rate, their answer, or their main ask — in at most 12 words. ' +
+  'Lead with the number when they quoted one (e.g. "$9,000 for a 45-sec Reel with ManyChat automation"). ' +
+  'Write in third person about the sender. ' +
+  'Do NOT list every detail or stack clauses with semicolons — pick the one thing that matters and drop the rest. ' +
+  'No preamble, no greeting, no quotes, no trailing punctuation, no line breaks. ' +
   'If the email has no substantive content (just a greeting or pleasantry), reply with a dash "-".';
 
-async function summarizeEmail(body, { maxLen = 240 } = {}) {
+async function summarizeEmail(body, { maxLen = 100 } = {}) {
   if (body == null) return '';
   const clean = stripQuotedHistory(String(body)) || String(body);
   const trimmed = clean.replace(/\s+/g, ' ').trim();
