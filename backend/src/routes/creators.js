@@ -6,7 +6,7 @@ const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const contracts = require('../services/contracts');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
-const { summarizeMessage, deliverableForAmount } = require('../services/timelineSummary');
+const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 
 // Event types that make up the per-creator "Rate" timeline (delivery-tracking
 // style). A curated subset of email_events — the offer email's own
@@ -42,7 +42,14 @@ const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
 // each line summarize what was actually said instead of a content-free label
 // like "Creator replied". Always optional: when the thread has nothing on file
 // (e.g. very old creators) the entry degrades to its plain label.
-function rateLogEntry(type, detail, msg) {
+//
+// `summary` is an optional pre-generated Claude recap of the whole email (cached
+// on email_messages.summary). When present it's used verbatim for the free-text
+// gist rows ("Replied: …" / "Sent: …") instead of the deterministic first-
+// sentence gist, so the timeline reflects the ENTIRE message. It is deliberately
+// NOT used for 'rate_quoted', whose label is mined from the raw text ("Creator
+// quoted $X for Y") rather than free-form.
+function rateLogEntry(type, detail, msg, summary) {
   const d = detail || {};
   switch (type) {
     case 'outreach_queued':
@@ -57,9 +64,10 @@ function rateLogEntry(type, detail, msg) {
       // but the timeline label stays clean — just "Follow-up sent".
       return { text: 'Follow-up sent', tone: 'done' };
     case 'replied': {
-      // Never a bare "Creator replied" — surface a super-short gist of what the
-      // creator actually wrote (quoted in their own words).
-      const gist = summarizeMessage(msg);
+      // Never a bare "Creator replied" — surface a recap of what the creator
+      // actually wrote: the Claude summary of the whole email when we have one,
+      // otherwise the deterministic first-sentence gist.
+      const gist = summary || summarizeMessage(msg);
       return { text: gist ? `Replied: “${gist}”` : 'Creator replied', tone: 'done' };
     }
     case 'rate_quoted': {
@@ -119,11 +127,11 @@ function rateLogEntry(type, detail, msg) {
     case 'rate_declined':
       return { text: 'Creator declined', tone: 'muted' };
     case 'sent_delegate_reply': {
-      const gist = summarizeMessage(msg);
+      const gist = summary || summarizeMessage(msg);
       return { text: gist ? `Sent: “${gist}”` : 'Reply sent (from delegate)', tone: 'done' };
     }
     case 'sent_manual_reply': {
-      const gist = summarizeMessage(msg);
+      const gist = summary || summarizeMessage(msg);
       return { text: gist ? `Sent: “${gist}”` : 'Manual reply sent', tone: 'done' };
     }
     case 'outreach_stopped':
@@ -147,6 +155,26 @@ function rateLogEntry(type, detail, msg) {
 const INBOUND_MSG_EVENTS = new Set(['replied', 'rate_quoted']);
 const OUTBOUND_MSG_EVENTS = new Set(['sent_delegate_reply', 'sent_manual_reply']);
 
+// The events whose timeline label is a free-text recap of an email (as opposed
+// to a mined "Creator quoted $X" label). Only these warrant a Claude summary —
+// 'rate_quoted' is excluded because its label comes from the raw text, not a
+// free-form gist.
+const GIST_MSG_EVENTS = new Set(['replied', 'sent_delegate_reply', 'sent_manual_reply']);
+
+// Safety net for un-summarized gist messages. Summaries are normally generated
+// on receipt (thread.recordMessage), so this only catches rows that predate
+// that (legacy) or whose receipt-time generation failed (Claude was down).
+// Fire-and-forget: the current response already rendered the deterministic
+// gist; the summary lands in the DB for the next load. summarizeAndStore dedupes
+// by id, so this never races the receipt-time call.
+function backfillSummaries(pending) {
+  for (const { id, body } of pending) {
+    summarizeAndStore(id, body).catch((e) =>
+      console.warn(`[timeline] summary generation failed for message ${id}: ${e.message}`),
+    );
+  }
+}
+
 // Attach a `rate_log` array (oldest→newest) to each creator row, in place. One
 // grouped query over the curated event types for all returned creators.
 async function attachRateLog(rows) {
@@ -165,7 +193,7 @@ async function attachRateLog(rows) {
     // templated outbound sends (outreach, follow-up, offer emails) get their own
     // descriptive labels, so their bodies aren't needed here.
     db.many(
-      `SELECT creator_id, direction, body, created_at
+      `SELECT id, creator_id, direction, body, summary, created_at
        FROM email_messages
        WHERE creator_id = ANY($1::int[])
          AND (direction = 'inbound' OR kind IN ('delegate_reply', 'manual_reply'))
@@ -187,7 +215,8 @@ async function attachRateLog(rows) {
   }
   // The message an event describes: the latest one of the right direction at or
   // just before the event's time. A small forward slack absorbs the sub-second
-  // gap when the message row is written just after the event row.
+  // gap when the message row is written just after the event row. Returns the
+  // full row (id, body, summary) so the caller can both render and cache.
   const msgForEvent = (creatorId, type, at) => {
     const map = INBOUND_MSG_EVENTS.has(type)
       ? inboundByCreator
@@ -203,13 +232,19 @@ async function attachRateLog(rows) {
       if (new Date(m.created_at).getTime() <= cutoff) found = m;
       else break;
     }
-    return found ? found.body : null;
+    return found || null;
   };
 
   const byCreator = new Map();
+  // Messages that back a free-text timeline row but have no cached summary yet,
+  // deduped by id — handed to Claude in the background after this response.
+  const pendingSummaries = new Map();
   for (const e of events) {
-    const msg = msgForEvent(e.creator_id, e.type, e.created_at);
-    const entry = rateLogEntry(e.type, e.detail, msg);
+    const m = msgForEvent(e.creator_id, e.type, e.created_at);
+    const entry = rateLogEntry(e.type, e.detail, m ? m.body : null, m ? m.summary : null);
+    if (m && GIST_MSG_EVENTS.has(e.type) && m.summary == null && !pendingSummaries.has(m.id)) {
+      pendingSummaries.set(m.id, { id: m.id, body: m.body });
+    }
     if (!entry) continue;
     entry.at = e.created_at;
     entry.type = e.type;
@@ -222,6 +257,11 @@ async function attachRateLog(rows) {
     byCreator.get(e.creator_id).push(entry);
   }
   for (const r of rows) r.rate_log = byCreator.get(r.id) || [];
+
+  // Kick off Claude summary generation for any un-summarized gist messages.
+  // Fire-and-forget: this response already went out with the deterministic
+  // gist; the summaries land in the DB and show on the next load.
+  if (pendingSummaries.size) backfillSummaries(pendingSummaries.values());
 }
 
 const router = express.Router();

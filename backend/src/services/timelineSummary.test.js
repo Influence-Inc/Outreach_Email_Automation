@@ -5,9 +5,11 @@ const assert = require('node:assert');
 
 const {
   summarizeMessage,
+  summarizeEmail,
   deliverableFromLabel,
   deliverableForAmount,
 } = require('./timelineSummary');
+const claude = require('./claudeClient');
 
 // ── summarizeMessage ────────────────────────────────────────────────────────
 
@@ -39,6 +41,52 @@ test('summarizeMessage returns empty for a greeting-only message', () => {
   assert.strictEqual(summarizeMessage('Hi there,'), '');
   assert.strictEqual(summarizeMessage('   '), '');
   assert.strictEqual(summarizeMessage(null), '');
+});
+
+// ── summarizeEmail (Claude) ─────────────────────────────────────────────────
+
+// A fake client that records the prompt and returns a canned completion, so we
+// can exercise the LLM path without a network call (mirrors negotiation tests).
+function fakeClient(reply) {
+  return {
+    messages: {
+      create: async () => ({ content: [{ type: 'text', text: reply }] }),
+    },
+  };
+}
+
+test('summarizeEmail recaps the whole email, cleaned of quotes/preamble/trailing period', async () => {
+  claude._setClient(fakeClient('"$1,600 per video, available early August, 50% upfront with approval before publishing."'));
+  try {
+    const body = [
+      'The price is listed in my media kit: $1,600 per video.',
+      'Unfortunately, my schedule is fully booked for July, so my next slot is early August.',
+      'I only book after a 50% upfront payment, with the rest on publish, and I wait for approval before publishing.',
+    ].join('\n\n');
+    const s = await summarizeEmail(body);
+    assert.strictEqual(s, '$1,600 per video, available early August, 50% upfront with approval before publishing');
+  } finally {
+    claude._setClient(null);
+  }
+});
+
+test('summarizeEmail returns empty when Claude reports no substance', async () => {
+  claude._setClient(fakeClient('-'));
+  try {
+    assert.strictEqual(await summarizeEmail('Hey! Thanks so much :)'), '');
+  } finally {
+    claude._setClient(null);
+  }
+});
+
+test('summarizeEmail returns null when Claude is unavailable (caller falls back)', async () => {
+  claude._setClient(null); // no API key / no client
+  assert.strictEqual(await summarizeEmail('My rate is $1,600 per video.'), null);
+});
+
+test('summarizeEmail returns empty for a blank body without calling Claude', async () => {
+  assert.strictEqual(await summarizeEmail('   '), '');
+  assert.strictEqual(await summarizeEmail(null), '');
 });
 
 // ── deliverableFromLabel ────────────────────────────────────────────────────

@@ -282,3 +282,10 @@ CREATE TABLE IF NOT EXISTS email_messages (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_email_messages_creator ON email_messages(creator_id, created_at, id);
+
+-- A one-line, Claude-generated recap of this message, shown in the dashboard's
+-- Rate-column timeline instead of a bare "Replied" or the raw opening sentence.
+-- Generated lazily and cached here (see routes/creators.js attachRateLog) so the
+-- LLM runs at most once per message, never on every dashboard read. NULL until
+-- generated; the timeline falls back to the deterministic gist meanwhile.
+ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS summary TEXT;
