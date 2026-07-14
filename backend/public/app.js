@@ -1709,18 +1709,20 @@ el('send-emails-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
   const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
   const pendingCount = c ? c.email_found_count : '?';
-  if (!confirm(`Send outreach to ${pendingCount} pending creator(s)? This sends real emails.`)) return;
+  if (!confirm(`Send outreach to ${pendingCount} pending creator(s)? This queues real emails in Instantly.`)) return;
   const btn = el('send-emails-btn');
   const status = el('fetch-status');
   btn.disabled = true;
   status.hidden = false;
-  status.textContent = 'Sending outreach emails…';
+  status.textContent = 'Queuing outreach emails…';
   try {
     const result = await api('/api/creators/bulk/send-outreach', {
       method: 'POST',
       body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
     });
-    status.textContent = `Done. Sent ${result.sent}, failed ${result.failed} (of ${result.processed}).`;
+    // "Queued", not "Sent" — Instantly dispatches each Step 1 email on its own
+    // schedule; the creator flips to "Outreach sent" once its send is confirmed.
+    status.textContent = `Done. Queued ${result.sent}, failed ${result.failed} (of ${result.processed}).`;
     await refreshCreators();
     await refreshCampaigns();
   } catch (err) {

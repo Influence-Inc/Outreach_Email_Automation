@@ -14,6 +14,7 @@ const { summarizeMessage, deliverableForAmount } = require('../services/timeline
 // 'rate_offer_sent' carrying the fee/CPM instead so the timeline can describe
 // the offer without the email body.
 const RATE_LOG_TYPES = [
+  'outreach_queued',
   'sent_outreach',
   'sent_followup',
   'replied',
@@ -44,6 +45,11 @@ const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
 function rateLogEntry(type, detail, msg) {
   const d = detail || {};
   switch (type) {
+    case 'outreach_queued':
+      // The lead was enrolled in Instantly but the outreach email hasn't gone
+      // out yet — Instantly sends it on its own schedule. Shown as a distinct,
+      // in-progress step so the timeline never claims "sent" before it is.
+      return { text: 'Outreach queued', tone: 'active' };
     case 'sent_outreach':
       return { text: 'Outreach sent', tone: 'done' };
     case 'sent_followup':

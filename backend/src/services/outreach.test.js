@@ -10,7 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const db = require('../db');
 const outreach = require('./outreach');
-const { outreachFirstName, isExplicitFollowupStep, markFollowupSent } = outreach;
+const { outreachFirstName, isExplicitFollowupStep, markFollowupSent, markOutreachSent } = outreach;
 
 test('outreachFirstName uses first_name verbatim when present', () => {
   assert.strictEqual(
@@ -166,4 +166,54 @@ test('markFollowupSent: is_first absent/false does not hard-block', async (t) =>
   const update = calls.find((c) => /SET status = 'followup_sent'/.test(c.sql));
   const [, , , , hardBlock] = update.params;
   assert.strictEqual(hardBlock, false);
+});
+
+// ── markOutreachSent: the queued → sent transition, driven by Instantly's
+//    email_sent webhook confirming the Step 1 send actually went out. ──────────
+//
+// Enrollment (sendOutreach) only parks the creator in 'outreach_queued'; the
+// dashboard must not show "Outreach sent" until this runs. The transition is
+// gated purely on the queued status — no reliance on the unreliable step/is_first
+// fields — because Instantly can't send a later step before Step 1.
+
+// Stub db.query so the UPDATE reports it changed a row, and capture every call so
+// we can assert the follow-on 'sent_outreach' event insert.
+function captureOutreachSent({ updated = true } = {}) {
+  const calls = [];
+  db.query = async (sql, params) => {
+    calls.push({ sql, params });
+    if (/SET status = 'outreach_sent'/.test(sql)) {
+      return { rowCount: updated ? 1 : 0, rows: [] };
+    }
+    return { rowCount: 0, rows: [] };
+  };
+  return calls;
+}
+
+test('markOutreachSent: gates on outreach_queued and stamps the real send time', async (t) => {
+  const calls = captureOutreachSent();
+  t.after(() => { db.query = origQuery; });
+  const advanced = await markOutreachSent(7, { messageId: 'sent-1' });
+  assert.strictEqual(advanced, true, 'a queued creator advances to outreach_sent');
+  const update = calls.find((c) => /SET status = 'outreach_sent'/.test(c.sql));
+  assert.ok(update, 'the outreach-sent UPDATE runs');
+  assert.match(update.sql, /status = 'outreach_queued'/, 'only a queued creator may advance');
+  assert.match(update.sql, /outreach_sent_at = NOW\(\)/, 'the confirmed send time is stamped');
+});
+
+test('markOutreachSent: logs a sent_outreach event only when the row advanced', async (t) => {
+  const calls = captureOutreachSent();
+  t.after(() => { db.query = origQuery; });
+  await markOutreachSent(7, { messageId: 'sent-1' });
+  const evt = calls.find((c) => /INSERT INTO email_events/.test(c.sql) && /'sent_outreach'/.test(c.sql));
+  assert.ok(evt, 'the sent_outreach timeline event is logged on the confirmed send');
+});
+
+test('markOutreachSent: no-op (no event) when the creator was not queued', async (t) => {
+  const calls = captureOutreachSent({ updated: false });
+  t.after(() => { db.query = origQuery; });
+  const advanced = await markOutreachSent(7, { messageId: 'sent-1' });
+  assert.strictEqual(advanced, false, 'a non-queued creator does not advance');
+  const evt = calls.find((c) => /INSERT INTO email_events/.test(c.sql));
+  assert.strictEqual(evt, undefined, 'no timeline event is logged when nothing changed');
 });

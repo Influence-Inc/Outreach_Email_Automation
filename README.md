@@ -40,8 +40,10 @@ admin picks a campaign → adds creator IG URL → status: pending_extraction
   ↓ backend hits IG's web_profile_info endpoint, then HTML fallback
   ↓ status: email_found  (or no_email if nothing was scrapable)
   ↓ user clicks "Send outreach" on a row
-  ↓ Gmail API sends as jennifer@useinfluence.xyz with tracking pixel
-  ↓ status: outreach_sent
+  ↓ lead is enrolled in its Instantly campaign (email not yet sent)
+  ↓ status: outreach_queued
+  ↓ Instantly dispatches the Step 1 email → email_sent webhook confirms it
+  ↓ status: outreach_sent   (only now does the dashboard show "Outreach sent")
   ↓ scheduler (every 15 min):
     · checks Gmail thread for replies → status: replied
     · if 48h elapsed and no reply → sends follow-up

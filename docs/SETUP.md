@@ -101,8 +101,12 @@ into the local DB. Click **Refresh** in the sidebar to re-sync on demand.
 4. Click **Fetch emails** at the top of the creators table. The backend
    scrapes every creator with status `pending_extraction` or `no_email`. Rows
    move to `email_found` (with an email filled in) or stay as `no_email`.
-5. Click **Send outreach** on each `email_found` row. The backend sends via the
-   Gmail API with a tracking pixel. Status → `outreach_sent`.
+5. Click **Send outreach** on each `email_found` row. The backend enrolls the
+   lead in its Instantly campaign; the row moves to `outreach_queued`. Instantly
+   dispatches the actual Step 1 email on its own schedule, and only once its
+   `email_sent` webhook confirms the send does the row advance to `outreach_sent`
+   (i.e. the dashboard shows "Outreach sent" only when the email has truly gone
+   out, matching what Instantly reports).
 6. Leave the backend running. Every 15 minutes the scheduler:
    - Checks Gmail threads for replies (→ `replied`).
    - Sends follow-ups for any outreach that's >48h old with no reply (→ `followup_sent`).
