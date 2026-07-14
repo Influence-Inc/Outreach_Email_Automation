@@ -18,6 +18,7 @@
 //     email_messages.summary (see routes/creators.js), so the LLM runs at most
 //     once per message, never on every dashboard read.
 
+const db = require('../db');
 const { stripQuotedHistory } = require('./replyLearning');
 const { parseRateOptionsFromText } = require('./negotiation');
 const { callClaudeText } = require('./claudeClient');
@@ -125,4 +126,35 @@ function deliverableForAmount(text, amount) {
   return deliverableFromLabel(match.label, amount);
 }
 
-module.exports = { summarizeMessage, summarizeEmail, deliverableFromLabel, deliverableForAmount };
+// Generate the Claude summary for one email_messages row and cache it on the
+// row's `summary` column, so the timeline reads it back instead of re-running
+// the LLM. Called on receipt (thread.recordMessage) as the primary path, and
+// again from the dashboard read as a safety net for legacy rows or receipt-time
+// failures. Deduped by message id via a shared in-flight set so the receipt
+// call and an overlapping dashboard load never summarize the same row twice.
+//
+// Best-effort by contract: returns null (and writes nothing) when there's no id
+// or when Claude is unavailable/failed — leaving `summary` NULL so a later pass
+// retries. Stores '' when the email has no substance, so we stop re-asking.
+const _summariesInFlight = new Set();
+
+async function summarizeAndStore(id, body) {
+  if (id == null || _summariesInFlight.has(id)) return null;
+  _summariesInFlight.add(id);
+  try {
+    const summary = await summarizeEmail(body);
+    if (summary == null) return null; // Claude unavailable/failed — retry later
+    await db.query('UPDATE email_messages SET summary = $2 WHERE id = $1', [id, summary]);
+    return summary;
+  } finally {
+    _summariesInFlight.delete(id);
+  }
+}
+
+module.exports = {
+  summarizeMessage,
+  summarizeEmail,
+  summarizeAndStore,
+  deliverableFromLabel,
+  deliverableForAmount,
+};

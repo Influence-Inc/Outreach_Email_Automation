@@ -6,7 +6,7 @@ const { scrapeProfile } = require('../services/igScraper');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const contracts = require('../services/contracts');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
-const { summarizeMessage, summarizeEmail, deliverableForAmount } = require('../services/timelineSummary');
+const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 
 // Event types that make up the per-creator "Rate" timeline (delivery-tracking
 // style). A curated subset of email_events — the offer email's own
@@ -161,29 +161,17 @@ const OUTBOUND_MSG_EVENTS = new Set(['sent_delegate_reply', 'sent_manual_reply']
 // free-form gist.
 const GIST_MSG_EVENTS = new Set(['replied', 'sent_delegate_reply', 'sent_manual_reply']);
 
-// Message IDs whose summary is currently being generated, so overlapping
-// dashboard loads don't fire duplicate Claude calls for the same message.
-const _summariesInFlight = new Set();
-
-// Lazily generate + cache Claude summaries for the messages that power a
-// free-text timeline row but don't have one yet. Fire-and-forget from the read
-// path: this request still renders the deterministic gist, and the next load
-// picks up the stored summary. Runs the LLM at most once per message.
+// Safety net for un-summarized gist messages. Summaries are normally generated
+// on receipt (thread.recordMessage), so this only catches rows that predate
+// that (legacy) or whose receipt-time generation failed (Claude was down).
+// Fire-and-forget: the current response already rendered the deterministic
+// gist; the summary lands in the DB for the next load. summarizeAndStore dedupes
+// by id, so this never races the receipt-time call.
 function backfillSummaries(pending) {
   for (const { id, body } of pending) {
-    if (_summariesInFlight.has(id)) continue;
-    _summariesInFlight.add(id);
-    Promise.resolve()
-      .then(async () => {
-        const summary = await summarizeEmail(body);
-        // null = Claude unavailable/failed → leave NULL and retry on a later
-        // load. '' = genuinely nothing to summarize → store '' so we don't keep
-        // re-asking (an empty gist just degrades to the plain label).
-        if (summary == null) return;
-        await db.query('UPDATE email_messages SET summary = $2 WHERE id = $1', [id, summary]);
-      })
-      .catch((e) => console.warn(`[timeline] summary generation failed for message ${id}: ${e.message}`))
-      .finally(() => _summariesInFlight.delete(id));
+    summarizeAndStore(id, body).catch((e) =>
+      console.warn(`[timeline] summary generation failed for message ${id}: ${e.message}`),
+    );
   }
 }
 
