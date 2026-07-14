@@ -430,6 +430,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status-pill.pending_extraction { background: var(--surface-3); color: var(--muted); }
 .status-pill.email_found        { background: #e9edf4; color: #47566e; }
 .status-pill.no_email           { background: var(--surface-3); color: var(--faint); }
+.status-pill.outreach_queued    { background: #eef2f7; color: #5a6b86; }
 .status-pill.outreach_sent      { background: #f6ecd8; color: #9a6412; }
 .status-pill.followup_sent      { background: #f3e4cb; color: #855a1a; }
 .status-pill.replied            { background: #dde7f7; color: #2952a3; }

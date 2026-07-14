@@ -68,7 +68,11 @@ async function prepareOutreach(creatorId) {
   const creator = await loadCreatorContext(creatorId);
   if (!creator) throw new Error(`Creator ${creatorId} not found`);
   if (!creator.email) throw new Error(`Creator ${creatorId} has no email`);
-  if (creator.outreach_sent_at) {
+  // Already enrolled? outreach_queued_at is stamped the moment the lead is added
+  // to Instantly (before the email actually sends), and outreach_sent_at once
+  // Instantly confirms the send. Either one means this creator is already in the
+  // outreach pipeline — re-enrolling would add a duplicate lead / double-send.
+  if (creator.outreach_queued_at || creator.outreach_sent_at) {
     return { ok: false, skipReason: 'already_sent', message: `Outreach already sent to creator ${creatorId}` };
   }
   // A creator flagged as a duplicate of another row in the campaign never gets
@@ -170,19 +174,29 @@ async function sendOutreach(creatorId) {
       );
     }
 
+    // Enrolling the lead is NOT the same as the outreach email going out —
+    // Instantly queues the Step 1 send and dispatches it later on its own
+    // schedule. So we park the creator in 'outreach_queued' now and only advance
+    // to 'outreach_sent' (stamping outreach_sent_at) when Instantly's email_sent
+    // webhook confirms the actual send (see markOutreachSent). This is what keeps
+    // the dashboard from showing "Outreach sent" while Instantly still reads
+    // "Not yet contacted". outreach_sent_at is deliberately left NULL here.
     await db.query(
       `UPDATE creators
-       SET status = 'outreach_sent',
+       SET status = 'outreach_queued',
            outreach_message_id = $2,
-           outreach_sent_at = NOW(),
+           outreach_queued_at = NOW(),
            updated_at = NOW()
        WHERE id = $1`,
       [creatorId, trackingId],
     );
 
+    // Audit the enrollment (distinct from the 'sent_outreach' event, which is
+    // logged only once the send is confirmed). Carries the template context here
+    // since the webhook that later confirms the send doesn't have it on hand.
     await db.query(
       `INSERT INTO email_events (creator_id, type, message_id, detail)
-       VALUES ($1, 'sent_outreach', $2, $3)`,
+       VALUES ($1, 'outreach_queued', $2, $3)`,
       [creatorId, trackingId, {
         via: 'instantly',
         instantlyCampaignId,
@@ -191,8 +205,8 @@ async function sendOutreach(creatorId) {
       }],
     );
 
-    console.log(`[outreach] creator ${creatorId} added to Instantly campaign ${instantlyCampaignId}`);
-    return { ok: true, trackingId };
+    console.log(`[outreach] creator ${creatorId} enrolled in Instantly campaign ${instantlyCampaignId} (queued — awaiting email_sent confirmation)`);
+    return { ok: true, trackingId, queued: true };
   } catch (err) {
     console.error(`[outreach] creator ${creatorId} send failed:`, err.message);
     await db.query(
@@ -206,6 +220,39 @@ async function sendOutreach(creatorId) {
     );
     throw err;
   }
+}
+
+// Advance a creator from 'outreach_queued' → 'outreach_sent' when Instantly's
+// email_sent webhook confirms the Step 1 outreach actually went out. Enrollment
+// (sendOutreach) only queues the send; THIS is the point at which the dashboard
+// is allowed to show "Outreach sent", so outreach_sent_at is stamped here — the
+// real send time, not the enrollment time.
+//
+// Disambiguation is free: while a creator is still 'outreach_queued', Instantly
+// cannot have sent any later sequence step yet, so the first email_sent event we
+// see for it is necessarily the Step 1 outreach. We therefore gate purely on the
+// status ('outreach_queued'), sidestepping the unreliable `step`/`is_first`
+// fields entirely for this transition. Returns true when the row actually
+// advanced (so a re-delivered webhook doesn't double-log the timeline entry).
+async function markOutreachSent(creatorId, { messageId = null } = {}) {
+  const res = await db.query(
+    `UPDATE creators
+        SET status = 'outreach_sent',
+            outreach_sent_at = NOW(),
+            outreach_message_id = COALESCE($2, outreach_message_id),
+            updated_at = NOW()
+      WHERE id = $1
+        AND status = 'outreach_queued'`,
+    [creatorId, messageId],
+  );
+  if (res.rowCount > 0) {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, message_id, detail)
+       VALUES ($1, 'sent_outreach', $2, $3)`,
+      [creatorId, messageId, { via: 'instantly' }],
+    );
+  }
+  return res.rowCount > 0;
 }
 
 // Types of outbound sends the app has ALREADY logged for a creator. When an
@@ -385,6 +432,7 @@ async function markFollowupSent(creatorId, { step = null, messageId = null, isFi
 
 module.exports = {
   sendOutreach,
+  markOutreachSent,
   markReplied,
   markFollowupSent,
   markManualReplySent,

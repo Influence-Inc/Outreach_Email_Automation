@@ -66,6 +66,15 @@ ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS templates JSONB NOT NULL DEFAULT 
 -- Track which follow-up step a creator is on. 0 = no follow-ups sent yet.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS followup_step INTEGER NOT NULL DEFAULT 0;
 
+-- When the lead was ENROLLED into its Instantly campaign (the "Send outreach"
+-- click). Instantly sends the actual Step 1 email later on its own schedule, so
+-- enrollment is NOT the same as the email having gone out. The row sits in
+-- status 'outreach_queued' from this moment until Instantly's email_sent webhook
+-- confirms the send, at which point outreach_sent_at is stamped and the status
+-- advances to 'outreach_sent'. Keeping the two timestamps distinct is what lets
+-- the dashboard show "Outreach sent" only once the email has truly been sent.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS outreach_queued_at TIMESTAMPTZ;
+
 -- Seed the legacy single-bump cadence as a visible "Default" sequence so it
 -- shows up in the sidebar / campaign picker. Idempotent.
 INSERT INTO follow_up_sequences (name, steps)

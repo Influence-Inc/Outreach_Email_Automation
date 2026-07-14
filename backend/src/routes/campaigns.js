@@ -18,10 +18,14 @@ router.get('/', async (_req, res, next) => {
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
               -- Outreach: creators the outreach email has actually gone out to,
               -- regardless of any later follow-ups/replies. outreach_sent_at is
-              -- set once when outreach sends and never cleared.
+              -- stamped only once Instantly CONFIRMS the send (not at enrollment),
+              -- so a queued-but-not-yet-sent creator is deliberately not counted
+              -- here — it still reads as pending until the email truly sends.
               COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS outreach_sent_count,
-              -- Pending: creators still awaiting their outreach email. Excludes
-              -- duplicates (auto-rejected) and stopped creators, which never send.
+              -- Pending: creators still awaiting their outreach email to actually
+              -- go out — this includes 'outreach_queued' leads (enrolled in
+              -- Instantly, send not yet confirmed). Excludes duplicates
+              -- (auto-rejected) and stopped creators, which never send.
               COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NULL AND cr.status NOT IN ('duplicate', 'stopped'))::int AS pending_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
               -- Contracted: creators who have SIGNED their contract. A signed

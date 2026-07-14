@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { markReplied, markFollowupSent, markOpened, markManualReplySent } = require('../services/outreach');
+const { markReplied, markOutreachSent, markFollowupSent, markOpened, markManualReplySent } = require('../services/outreach');
 const thread = require('../services/thread');
 
 const router = express.Router();
@@ -276,6 +276,25 @@ router.post('/instantly', async (req, res) => {
       const step = pickStep(body);
       const isFirst = pickIsFirst(body);
       const messageId = pickSentMessageId(body);
+
+      // A creator still sitting in 'outreach_queued' means we enrolled the lead
+      // but Instantly hadn't yet reported sending the outreach email. This
+      // email_sent event IS that confirmation — advance queued → outreach_sent
+      // (stamping the real send time) so the dashboard flips to "Outreach sent"
+      // only now. Because Instantly can't have sent a later step before Step 1,
+      // the queued status alone tells us this is the initial outreach; we don't
+      // need to trust `step`/`is_first` here.
+      if (creator.status === 'outreach_queued') {
+        const sent = await markOutreachSent(creator.id, { messageId });
+        if (sent) {
+          console.log(
+            `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} is_first=${isFirst} ` +
+              `(instantly campaign ${campaignId || 'n/a'}) → outreach_sent (send confirmed)`,
+          );
+          return;
+        }
+      }
+
       const advanced = await markFollowupSent(creator.id, { step, messageId, isFirst });
       if (advanced) {
         console.log(
