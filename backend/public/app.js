@@ -19,6 +19,8 @@ const STAGE_FILTERS = {
   replied: (r) => r.status === 'replied',
   // Contract signed or completed (a merely-sent 'pending' contract doesn't count).
   contracted: (r) => r.contract && (r.contract.status === 'signed' || r.contract.status === 'completed'),
+  // Removed: outreach explicitly stopped for this creator (removed from campaign).
+  removed: (r) => r.status === 'stopped',
 };
 
 async function api(path, options = {}) {
@@ -223,6 +225,7 @@ async function selectCampaign(id) {
     { stage: 'outreach', label: 'Outreach', value: c.outreach_sent_count },
     { stage: 'replied', label: 'Replied', value: c.replied_count, accent: true },
     { stage: 'contracted', label: 'Contracted', value: c.contracted_count },
+    { stage: 'removed', label: 'Removed', value: c.stopped_count },
   ];
   const statsEl = el('campaign-stats');
   statsEl.hidden = false;
@@ -1512,9 +1515,13 @@ async function refreshCreators() {
   const predicate = (state.stageFilter && STAGE_FILTERS[state.stageFilter]) || null;
   const rows = predicate ? allRows.filter(predicate) : allRows;
   if (!rows.length) {
-    const label = { pending: 'pending', outreach: 'in outreach', replied: 'replied', contracted: 'contracted' }[
-      state.stageFilter
-    ];
+    const label = {
+      pending: 'pending',
+      outreach: 'in outreach',
+      replied: 'replied',
+      contracted: 'contracted',
+      removed: 'removed',
+    }[state.stageFilter];
     container.innerHTML = `<div class="hint" style="padding:26px 6px;">No ${label} creators. <a href="#" class="stage-filter-clear">Show all</a></div>`;
     container.querySelector('.stage-filter-clear').addEventListener('click', (e) => {
       e.preventDefault();

@@ -28,6 +28,9 @@ router.get('/', async (_req, res, next) => {
               -- (auto-rejected) and stopped creators, which never send.
               COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NULL AND cr.status NOT IN ('duplicate', 'stopped'))::int AS pending_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
+              -- Removed: creators whose outreach was explicitly stopped (removed
+              -- from the campaign). The automated follow-up steps skip these.
+              COUNT(cr.id) FILTER (WHERE cr.status = 'stopped')::int AS stopped_count,
               -- Contracted: creators who have SIGNED their contract. A signed
               -- contract advances pending -> signed -> completed (contracts.status),
               -- so both 'signed' and 'completed' count; 'pending' (sent but not yet
