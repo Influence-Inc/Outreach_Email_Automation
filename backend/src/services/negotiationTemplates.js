@@ -344,7 +344,7 @@ function followup1(vars) {
   const v = withDefaults(vars);
   return {
     subject: fill(REPLY1_SUBJECT, v),
-    body: `Hi ${v.salutation}, Did you get a chance to check my last email? Please let me know your rate! Would love to collaborate. :) - ${v.managerName}`,
+    body: `Hi ${v.salutation},\n\nDid you get a chance to check my last email?\n\nPlease let me know your rate! Would love to collaborate. :)\n\n- ${v.managerName}`,
   };
 }
 
@@ -352,7 +352,7 @@ function followup2(vars) {
   const v = withDefaults(vars);
   return {
     subject: fill(REPLY1_SUBJECT, v),
-    body: `Hi ${v.salutation}, Did you get a chance to check my last email? Looking fwd to hearing your thoughts! We'd love to collab with you. :) - ${v.managerName}`,
+    body: `Hi ${v.salutation},\n\nDid you get a chance to check my last email?\n\nLooking fwd to hearing your thoughts! We'd love to collab with you. :)\n\n- ${v.managerName}`,
   };
 }
 
