@@ -3,6 +3,24 @@ const API = '';
 const state = {
   campaigns: [],
   selectedCampaignId: null,
+  // Which stage stat the creator table is filtered by (null = show all).
+  stageFilter: null,
+};
+
+// Predicate for each clickable stat, mirroring the FILTER (...) definitions the
+// backend uses to compute the counts in the stats bar (see routes/campaigns.js).
+// Keeping these in sync means clicking a stat shows exactly that many rows.
+const STAGE_FILTERS = {
+  creators: () => true,
+  // Awaiting outreach: not yet sent, and not an auto-rejected duplicate/stopped.
+  pending: (r) => !r.outreach_sent_at && r.status !== 'duplicate' && r.status !== 'stopped',
+  // Outreach email confirmed sent.
+  outreach: (r) => r.outreach_sent_at != null,
+  replied: (r) => r.status === 'replied',
+  // Contract signed or completed (a merely-sent 'pending' contract doesn't count).
+  contracted: (r) => r.contract && (r.contract.status === 'signed' || r.contract.status === 'completed'),
+  // Removed: outreach explicitly stopped for this creator (removed from campaign).
+  removed: (r) => r.status === 'stopped',
 };
 
 async function api(path, options = {}) {
@@ -199,23 +217,29 @@ async function selectCampaign(id) {
   eyebrow.textContent = c.brand_name;
   eyebrow.hidden = false;
   el('campaign-title').textContent = c.name;
+  // Switching campaigns clears any stage filter carried over from the last one.
+  state.stageFilter = null;
   const stats = [
-    { label: 'Creators', value: c.creator_count },
-    { label: 'Pending', value: c.pending_count },
-    { label: 'Outreach', value: c.outreach_sent_count },
-    { label: 'Replied', value: c.replied_count, accent: true },
-    { label: 'Contracted', value: c.contracted_count },
+    { stage: 'creators', label: 'Creators', value: c.creator_count },
+    { stage: 'pending', label: 'Pending', value: c.pending_count },
+    { stage: 'outreach', label: 'Outreach', value: c.outreach_sent_count },
+    { stage: 'replied', label: 'Replied', value: c.replied_count, accent: true },
+    { stage: 'contracted', label: 'Contracted', value: c.contracted_count },
+    { stage: 'removed', label: 'Removed', value: c.stopped_count },
   ];
   const statsEl = el('campaign-stats');
   statsEl.hidden = false;
   statsEl.innerHTML = stats
     .map(
-      (s) => `<div class="stat-cell">
+      (s) => `<button type="button" class="stat-cell" data-stage="${s.stage}" aria-pressed="false">
         <div class="stat-label">${s.label}</div>
         <div class="stat-value num${s.accent && Number(s.value) > 0 ? ' accent' : ''}">${s.value}</div>
-      </div>`,
+      </button>`,
     )
     .join('');
+  statsEl.querySelectorAll('.stat-cell').forEach((cell) => {
+    cell.addEventListener('click', () => setStageFilter(cell.dataset.stage));
+  });
   updateDelegateBadge(c.action_count || 0);
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
@@ -223,7 +247,29 @@ async function selectCampaign(id) {
   el('usage-rights-status').textContent = '';
   el('campaign-instantly-id').value = c.instantly_campaign_id || '';
   el('instantly-status').textContent = '';
+  syncStageFilterUI();
   await refreshCreators();
+}
+
+// Toggle the creator table's stage filter. Clicking the active stage (or the
+// "Creators" total, which represents everything) clears the filter.
+function setStageFilter(stage) {
+  const next = stage === 'creators' || state.stageFilter === stage ? null : stage;
+  state.stageFilter = next;
+  syncStageFilterUI();
+  refreshCreators();
+}
+
+// Reflect the current filter on the stat buttons — the active one is highlighted
+// so it's clear which stage the table is scoped to.
+function syncStageFilterUI() {
+  el('campaign-stats')
+    .querySelectorAll('.stat-cell')
+    .forEach((cell) => {
+      const active = state.stageFilter === cell.dataset.stage;
+      cell.classList.toggle('active', active);
+      cell.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
 }
 
 function makeEditable(td, { value, placeholder, onSave, allowEmpty = false }) {
@@ -1458,12 +1504,29 @@ function buildOfferConfigurator(r, onRefresh) {
 
 async function refreshCreators() {
   if (!state.selectedCampaignId) return;
-  const rows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
+  const allRows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
   const container = el('creator-rows');
   container.innerHTML = '';
-  if (!rows.length) {
+  if (!allRows.length) {
     container.innerHTML =
       '<div class="hint" style="padding:26px 6px;">No creators yet. Paste Instagram links above to add some.</div>';
+    return;
+  }
+  const predicate = (state.stageFilter && STAGE_FILTERS[state.stageFilter]) || null;
+  const rows = predicate ? allRows.filter(predicate) : allRows;
+  if (!rows.length) {
+    const label = {
+      pending: 'pending',
+      outreach: 'in outreach',
+      replied: 'replied',
+      contracted: 'contracted',
+      removed: 'removed',
+    }[state.stageFilter];
+    container.innerHTML = `<div class="hint" style="padding:26px 6px;">No ${label} creators. <a href="#" class="stage-filter-clear">Show all</a></div>`;
+    container.querySelector('.stage-filter-clear').addEventListener('click', (e) => {
+      e.preventDefault();
+      setStageFilter(null);
+    });
     return;
   }
   rows.forEach((r, idx) => {

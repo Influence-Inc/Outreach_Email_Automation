@@ -189,12 +189,24 @@ a { color: var(--ink); }
 }
 .stats .stat-cell {
   display: flex; flex-direction: column; gap: 5px; padding: 14px 20px;
+  /* Reset button chrome — these are clickable filters, not buttons visually. */
+  background: none; border: 0; margin: 0; font: inherit; text-align: left;
+  cursor: pointer; position: relative; transition: background 0.12s ease;
 }
 .stats .stat-cell + .stat-cell { border-left: 1px solid var(--line-3); }
+.stats .stat-cell:hover { background: var(--surface-2); }
+/* Active filter: tinted well + a bottom marker so it reads as the selected tab. */
+.stats .stat-cell.active { background: var(--surface-3); }
+.stats .stat-cell.active::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0;
+  height: 2px; background: var(--green);
+}
+.stats .stat-cell:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
 .stats .stat-label {
   font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--faint); white-space: nowrap;
 }
+.stats .stat-cell.active .stat-label { color: var(--ink-2); }
 .stats .stat-value { font-size: 22px; font-weight: 600; line-height: 1; color: var(--ink); }
 .stats .stat-value.accent { color: var(--green); }
 
