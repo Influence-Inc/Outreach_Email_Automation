@@ -57,7 +57,8 @@ test('markManualReplySent logs a fresh manual reply and clears delegate flags', 
 test('markManualReplySent is idempotent on message_id — duplicate webhook is a no-op', async () => {
   const writes = [];
   db.one = async (sql) => {
-    if (/type = 'sent_manual_reply'/i.test(sql)) return { id: 42 }; // already logged
+    // The dedupe now matches ANY prior event carrying this message_id.
+    if (/message_id = \$2/i.test(sql)) return { id: 42 }; // already logged
     return null;
   };
   db.query = async (sql, params) => {
@@ -71,6 +72,33 @@ test('markManualReplySent is idempotent on message_id — duplicate webhook is a
     });
     assert.strictEqual(inserted, false);
     assert.strictEqual(writes.length, 0, 'nothing is written on the duplicate');
+  } finally {
+    restore();
+  }
+});
+
+test('markManualReplySent skips the echo of a sequence send that shares its message_id', async () => {
+  // The bug class: an email_sent webhook re-fires with the SAME message_id as a
+  // send we already logged (the outreach or a follow-up). It must not become a
+  // second "Manual reply sent" — the message_id dedupe catches it even though no
+  // prior sent_manual_reply exists for it.
+  const writes = [];
+  db.one = async (sql) => {
+    // A prior event exists for this message_id (e.g. the logged sent_followup).
+    if (/message_id = \$2/i.test(sql)) return { id: 7 };
+    return null;
+  };
+  db.query = async (sql, params) => {
+    writes.push({ sql, params });
+    return { rows: [], rowCount: 0 };
+  };
+  try {
+    const inserted = await outreach.markManualReplySent(7, {
+      messageId: 'followup-msg-id',
+      body: 'echoed follow-up body',
+    });
+    assert.strictEqual(inserted, false, 'the sequence echo is not logged as a manual reply');
+    assert.strictEqual(writes.length, 0);
   } finally {
     restore();
   }

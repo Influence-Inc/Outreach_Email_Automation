@@ -74,9 +74,19 @@ test('OPEN_EVENTS is disjoint from send + reply event sets', () => {
 // isCreatorPastInitialOutreach flips the email_sent handler between "this is a
 // campaign follow-up" and "this is a manual reply someone just typed" — the
 // distinction that turns an otherwise-silent send into a timeline entry.
-test('isCreatorPastInitialOutreach: outreach_sent with no negotiation is still the initial send', () => {
+test('isCreatorPastInitialOutreach: outreach_sent is manual-reply territory (outreach already went out)', () => {
+  // A manual Gmail send right after the outreach must show. The outreach email's
+  // own echo is filtered by the body requirement + message_id dedupe downstream,
+  // not by excluding this stage.
   assert.strictEqual(
     webhook.isCreatorPastInitialOutreach({ status: 'outreach_sent', negotiation_status: null }),
+    true,
+  );
+});
+
+test('isCreatorPastInitialOutreach: outreach_queued is NOT (nothing sent yet)', () => {
+  assert.strictEqual(
+    webhook.isCreatorPastInitialOutreach({ status: 'outreach_queued', negotiation_status: null }),
     false,
   );
 });
@@ -89,6 +99,9 @@ test('isCreatorPastInitialOutreach: creator has replied → manual reply territo
 });
 
 test('isCreatorPastInitialOutreach: follow-up already sent → manual reply territory', () => {
+  // A creator past the outreach step can receive a human manual reply (e.g. a
+  // Gmail send). The false-positive guard is a BODY requirement in the handler,
+  // not this gate — a bodyless echo is filtered there, a real send is kept.
   assert.strictEqual(
     webhook.isCreatorPastInitialOutreach({ status: 'followup_sent', negotiation_status: null }),
     true,

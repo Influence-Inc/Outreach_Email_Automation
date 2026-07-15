@@ -268,18 +268,24 @@ const APP_OUTBOUND_TYPES = [
 ];
 
 // Record a manual reply sent by a human — either from Instantly's unibox or
-// directly from the connected mailbox. Idempotent on messageId: a re-delivered
-// webhook logs the event exactly once, so the timeline never doubles up.
-// Also skipped when an app-initiated send (delegate reply, priced offer,
-// negotiation reply, contract) was just logged for this creator — that
-// webhook fire is the echo of a send we already recorded, not a new manual
-// send. Returns true when a fresh row was inserted. Does NOT change the
-// creator's funnel status — a manual reply is a response, not a transition.
+// directly from the connected mailbox. Idempotent on messageId, and echo-safe:
+// if ANY prior event already carries this messageId — the outreach send, a
+// follow-up, an earlier manual reply, an app-initiated send — this webhook is a
+// re-fire of a message we've already logged, not a new manual send, so it's
+// skipped and the timeline never doubles up or sprouts a phantom "Manual reply
+// sent". Also skipped when an app-initiated send (delegate reply, priced offer,
+// negotiation reply, contract) was just logged for this creator. Returns true
+// when a fresh row was inserted. Does NOT change the creator's funnel status —
+// a manual reply is a response, not a transition.
 async function markManualReplySent(creatorId, { messageId = null, subject = null, body = null, source = null } = {}) {
   if (messageId) {
+    // Dedupe against EVERY prior event for this message, not just prior manual
+    // replies: a messageId uniquely identifies one send, so if we've recorded
+    // anything for it (outreach, follow-up, a previous manual reply), this fire
+    // is that send's echo — never a distinct manual reply.
     const existing = await db.one(
       `SELECT id FROM email_events
-       WHERE creator_id = $1 AND type = 'sent_manual_reply' AND message_id = $2
+       WHERE creator_id = $1 AND message_id = $2
        LIMIT 1`,
       [creatorId, messageId],
     );
@@ -426,8 +432,59 @@ async function markFollowupSent(creatorId, { step = null, messageId = null, isFi
        VALUES ($1, 'sent_followup', $2, $3)`,
       [creatorId, messageId, { via: 'instantly', step: Number.isFinite(stepNum) ? stepNum : null }],
     );
+    return true;
   }
-  return res.rowCount > 0;
+  // The initial outreach_sent → followup_sent advance didn't happen. That does
+  // NOT mean the send is a manual reply: a campaign with 3+ sequence steps keeps
+  // firing email_sent events for a creator already at 'followup_sent' (Step 3,
+  // Step 4, …), and a retried webhook re-fires the very step that already
+  // advanced them. Both are AUTOMATED follow-ups — but the caller's fallback
+  // treats any non-advancing send from a past-outreach creator as a human manual
+  // reply, so without this they get mislabeled "Manual reply sent" on the
+  // timeline. An explicit Step 2+ (a human typing from the unibox never carries a
+  // sequence step) recorded as a subsequent follow-up short-circuits that path.
+  if (byStep) {
+    return markSubsequentFollowupSent(creatorId, { step: stepForStore, messageId });
+  }
+  return false;
+}
+
+// Record a further automated sequence step for a creator already at
+// 'followup_sent' — the second/third/… follow-up in a multi-step Instantly
+// campaign. Returns true when the send is (or already was) an automated
+// follow-up, so the webhook does NOT fall through to logging it as a manual
+// reply; false only when this isn't that case (leaving the manual-reply path
+// intact for genuine human sends). Idempotent on message_id: a re-delivered
+// webhook — even the redelivery of the earlier step that first advanced the
+// creator — is recognized as an already-recorded follow-up, never doubled and
+// never demoted to a manual reply.
+async function markSubsequentFollowupSent(creatorId, { step = 0, messageId = null } = {}) {
+  if (messageId) {
+    const existing = await db.one(
+      `SELECT id FROM email_events
+       WHERE creator_id = $1 AND type = 'sent_followup' AND message_id = $2
+       LIMIT 1`,
+      [creatorId, messageId],
+    );
+    if (existing) return true;
+  }
+  const res = await db.query(
+    `UPDATE creators
+        SET followup_sent_at = NOW(),
+            followup_message_id = COALESCE($3, followup_message_id),
+            followup_step = GREATEST(followup_step, $2),
+            updated_at = NOW()
+      WHERE id = $1
+        AND status = 'followup_sent'`,
+    [creatorId, step, messageId],
+  );
+  if (res.rowCount === 0) return false;
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, message_id, detail)
+     VALUES ($1, 'sent_followup', $2, $3)`,
+    [creatorId, messageId, { via: 'instantly', step: step || null }],
+  );
+  return true;
 }
 
 module.exports = {
@@ -435,6 +492,7 @@ module.exports = {
   markOutreachSent,
   markReplied,
   markFollowupSent,
+  markSubsequentFollowupSent,
   markManualReplySent,
   markOpened,
   prepareOutreach,
