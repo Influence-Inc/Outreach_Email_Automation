@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const { markReplied, markOutreachSent, markFollowupSent, markOpened, markManualReplySent } = require('../services/outreach');
 const thread = require('../services/thread');
+const instantly = require('../services/instantly');
 
 const router = express.Router();
 
@@ -156,6 +157,34 @@ function pickCampaignId(body) {
 // the thread even when In-Reply-To is set).
 function pickReplySubject(body) {
   return body.reply_subject || body.subject || null;
+}
+// The inbound reply's recipient lists (To + Cc), when the payload carries them.
+// Returns null when NO recipient-list field is present at all — unknown is not
+// the same as "nobody else was on the email", and the handler falls back to
+// fetching the email object from the API. body.email is guarded because on some
+// payload versions it is the lead's address (a string), not an object.
+function pickReplyRecipients(body) {
+  const email = body.email && typeof body.email === 'object' ? body.email : {};
+  const to =
+    body.to_address_email_list ??
+    body.reply_to_address_email_list ??
+    email.to_address_email_list ??
+    null;
+  const cc =
+    body.cc_address_email_list ??
+    body.reply_cc ??
+    email.cc_address_email_list ??
+    body.cc ??
+    null;
+  if (to == null && cc == null) return null;
+  return { to, cc };
+}
+// Who actually sent the reply (may be an agent/manager, not the lead). Used
+// only to exclude the sender from the CC list we echo back — /emails/reply
+// already addresses them as the To.
+function pickReplyFrom(body) {
+  const email = body.email && typeof body.email === 'object' ? body.email : {};
+  return body.reply_from || body.from_address_email || email.from_address_email || body.from_email || null;
 }
 
 // Has this creator's outreach already gone out — so a subsequent non-sequence
@@ -407,6 +436,37 @@ router.post('/instantly', async (req, res) => {
       return;
     }
 
+    // Reply-all capture: everyone else on the creator's reply (its To + Cc
+    // minus our mailbox and the sender), so our threaded replies keep them
+    // CC'd — dropping an address that was on the inbound email (a manager, or
+    // the creator when their agent replied) silently cut them out of the deal
+    // thread. The email object fetched from the API is authoritative (the
+    // webhook payload rarely carries recipient lists); payload fields are the
+    // fallback when the fetch fails. Best-effort: never block recording the
+    // reply. null = unknown (keep any previous value); '' = nobody else.
+    let reply_cc = null;
+    if (reply_to_uuid) {
+      try {
+        reply_cc = (await instantly.fetchReplyAllCc({ emailId: reply_to_uuid, eaccount: email_account })).join(',');
+      } catch (e) {
+        const lists = pickReplyRecipients(body);
+        if (lists) {
+          reply_cc = instantly
+            .replyAllCc({
+              toList: lists.to,
+              ccList: lists.cc,
+              fromAddress: pickReplyFrom(body),
+              eaccount: email_account,
+            })
+            .join(',');
+        }
+        console.warn(
+          `[webhook/instantly] cc lookup via API failed for creator ${creator.id} (${e.message}); ` +
+            `${lists ? 'used payload recipient fields' : 'no payload recipient fields — cc left unknown'}`,
+        );
+      }
+    }
+
     // Store the plain-text reply and Instantly's thread handle so that
     // negotiation.processReply() can read the text and send a threaded reply.
     await db.query(
@@ -415,9 +475,10 @@ router.post('/instantly', async (req, res) => {
            instantly_reply_uuid = $3,
            instantly_email_account = COALESCE($4, instantly_email_account),
            instantly_reply_subject = COALESCE($5, instantly_reply_subject),
+           instantly_reply_cc = COALESCE($6, instantly_reply_cc),
            updated_at = NOW()
        WHERE id = $1`,
-      [creator.id, reply_text, reply_to_uuid || null, email_account, reply_subject],
+      [creator.id, reply_text, reply_to_uuid || null, email_account, reply_subject, reply_cc],
     );
 
     // Persist this inbound message to the full conversation thread (used later
@@ -451,6 +512,8 @@ router.pickIsFirst = pickIsFirst;
 router.pickSentMessageId = pickSentMessageId;
 router.pickSentBody = pickSentBody;
 router.pickSentSubject = pickSentSubject;
+router.pickReplyRecipients = pickReplyRecipients;
+router.pickReplyFrom = pickReplyFrom;
 router.isCreatorPastInitialOutreach = isCreatorPastInitialOutreach;
 router.SENT_EVENTS = SENT_EVENTS;
 router.OPEN_EVENTS = OPEN_EVENTS;

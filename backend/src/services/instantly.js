@@ -103,6 +103,60 @@ function stripMarkdown(text) {
 // Kept for backward compatibility with anything importing the old name.
 const textToHtml = renderMarkdown;
 
+// Extract bare email addresses from an Instantly recipient list. The API
+// carries to/cc as either an array or a comma-separated string, and each entry
+// may be a bare address or a '"Display Name" <addr>' form. Output is lowercase,
+// deduped, order-preserving; null/empty input yields [].
+function parseAddressList(value) {
+  const items = Array.isArray(value) ? value : String(value == null ? '' : value).split(',');
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    const s = String(item == null ? '' : item).trim();
+    if (!s) continue;
+    const angled = s.match(/<([^<>\s]+@[^<>\s]+)>/);
+    const bare = angled ? angled[1] : (s.match(/[^\s<>,;"']+@[^\s<>,;"']+/) || [])[0];
+    if (!bare) continue;
+    const addr = bare.toLowerCase();
+    if (seen.has(addr)) continue;
+    seen.add(addr);
+    out.push(addr);
+  }
+  return out;
+}
+
+// Reply-all CC list for a threaded reply: everyone the inbound email was
+// addressed to (To + Cc) EXCEPT ourselves (the sending mailbox) and the
+// inbound sender — /emails/reply already addresses the sender as the To.
+// Deliberately does NOT exclude the lead's own address: when an agent replies
+// on the creator's behalf with the creator in To/Cc, the creator must stay
+// CC'd on our reply (dropping them was the reported bug).
+function replyAllCc({ toList, ccList, fromAddress, eaccount }) {
+  const exclude = new Set([...parseAddressList(fromAddress), ...parseAddressList(eaccount)]);
+  return [...parseAddressList(toList), ...parseAddressList(ccList)].filter(
+    (addr, i, all) => !exclude.has(addr) && all.indexOf(addr) === i,
+  );
+}
+
+// Fetch a single email (sent or received) by its Instantly id — the same id the
+// reply webhook hands us as reply_to_uuid.
+async function getEmail(emailId) {
+  return request('GET', `/emails/${encodeURIComponent(emailId)}`);
+}
+
+// Fetch the inbound email by id and compute the reply-all CC list from its
+// authoritative recipient fields. Throws on API failure — callers treat the CC
+// list as best-effort and must never let this block a send.
+async function fetchReplyAllCc({ emailId, eaccount }) {
+  const email = await getEmail(emailId);
+  return replyAllCc({
+    toList: email && email.to_address_email_list,
+    ccList: email && email.cc_address_email_list,
+    fromAddress: email && email.from_address_email,
+    eaccount,
+  });
+}
+
 // Add a single lead to the outreach campaign. Instantly will send the
 // campaign's Step 1 email (outreach) and any configured follow-up steps
 // automatically.
@@ -133,20 +187,25 @@ async function addLeadToCampaign({ email, firstName, campaignId, companyName }) 
 // comes from the reply_received webhook payload and routes the reply into the
 // correct thread; eaccount is the connected sending mailbox to reply FROM
 // (Instantly requires it — it's the email_account from the reply webhook).
-async function replyToEmail({ replyToUuid, eaccount, subject, body }) {
+async function replyToEmail({ replyToUuid, eaccount, subject, body, cc }) {
   // `sendOnce`: sending an email isn't idempotent — a timeout after the server
   // has already accepted the request produces a real duplicate email in the
   // creator's inbox. Retrying on timeout/network is what caused the "showed
   // aborted, still got 3 emails" bug. We only retry on explicit server-side
   // rejections (5xx / 429), which are safe.
-  return request('POST', '/emails/reply', {
+  const payload = {
     reply_to_uuid: replyToUuid,
     eaccount,
     subject,
     // text = markdown-stripped so text-only clients see clean prose;
     // html = markdown-rendered so bold and links land as formatting.
     body: { text: stripMarkdown(body), html: renderMarkdown(body) },
-  }, { sendOnce: true });
+  };
+  // Keep everyone else from the inbound email on the thread. /emails/reply
+  // addresses only the original sender unless we pass the CC list explicitly.
+  const ccList = parseAddressList(cc);
+  if (ccList.length) payload.cc_address_email_list = ccList.join(',');
+  return request('POST', '/emails/reply', payload, { sendOnce: true });
 }
 
 // Find the Instantly lead id(s) for an address WITHIN a single campaign. The
@@ -203,6 +262,10 @@ module.exports = {
   removeLeadFromCampaign,
   findCampaignLeadIds,
   listEmails,
+  getEmail,
+  parseAddressList,
+  replyAllCc,
+  fetchReplyAllCc,
   // Exported for tests and any other caller that needs the same rendering
   // logic outside the reply path.
   renderMarkdown,

@@ -3,7 +3,15 @@
 // Run with: npm test  (node --test)
 const test = require('node:test');
 const assert = require('node:assert');
-const { renderMarkdown, stripMarkdown, replyToEmail, removeLeadFromCampaign } = require('./instantly');
+const {
+  renderMarkdown,
+  stripMarkdown,
+  replyToEmail,
+  removeLeadFromCampaign,
+  parseAddressList,
+  replyAllCc,
+  fetchReplyAllCc,
+} = require('./instantly');
 
 // ── renderMarkdown ─────────────────────────────────────────────────────────
 
@@ -220,4 +228,121 @@ test('replyToEmail DOES retry on explicit 5xx — server confirmed no-op, safe t
     },
   );
   assert.strictEqual(calls, 2, '5xx retry is safe — server said it did NOT process the request');
+});
+
+// ── Reply-all CC (regression guard) ─────────────────────────────────────────
+// The reported bug: an agent replied with the creator (and others) in To/Cc,
+// and our threaded reply went ONLY to the agent — everyone else on the inbound
+// email was silently dropped from the deal thread. Replies must CC every other
+// recipient of the inbound email (reply-all), excluding only our own sending
+// mailbox and the sender (who is already the reply's To).
+
+test('parseAddressList handles arrays, comma strings, and "Name <addr>" forms', () => {
+  assert.deepStrictEqual(
+    parseAddressList('Rocco Sacino <rocco@rakugomedia.com>, willschafer@gmail.com'),
+    ['rocco@rakugomedia.com', 'willschafer@gmail.com'],
+  );
+  assert.deepStrictEqual(
+    parseAddressList(['A@B.co', 'a@b.co', '  ', 'c@d.co']),
+    ['a@b.co', 'c@d.co'],
+  );
+  assert.deepStrictEqual(parseAddressList(null), []);
+  assert.deepStrictEqual(parseAddressList(''), []);
+});
+
+test('replyAllCc keeps every inbound recipient except our mailbox and the sender', () => {
+  // The screenshot case: rocco (agent) sends To: willschafer + jennifer (us).
+  // Our reply goes To rocco via reply_to_uuid — willschafer must be CC'd.
+  assert.deepStrictEqual(
+    replyAllCc({
+      toList: 'willschafer@gmail.com, Jennifer <jennifer@frominfluence.com>',
+      ccList: null,
+      fromAddress: 'Rocco Sacino <rocco@rakugomedia.com>',
+      eaccount: 'jennifer@frominfluence.com',
+    }),
+    ['willschafer@gmail.com'],
+  );
+});
+
+test('replyAllCc merges To + Cc, dedupes, and compares case-insensitively', () => {
+  assert.deepStrictEqual(
+    replyAllCc({
+      toList: 'Jennifer@FromInfluence.com, agent@mgmt.co',
+      ccList: ['creator@gmail.com', 'agent@mgmt.co'],
+      fromAddress: 'agent@mgmt.co',
+      eaccount: 'jennifer@frominfluence.com',
+    }),
+    ['creator@gmail.com'],
+  );
+});
+
+test('replyAllCc is empty when the creator replied directly with nobody else on the email', () => {
+  assert.deepStrictEqual(
+    replyAllCc({
+      toList: 'jennifer@frominfluence.com',
+      ccList: '',
+      fromAddress: 'creator@gmail.com',
+      eaccount: 'jennifer@frominfluence.com',
+    }),
+    [],
+  );
+});
+
+test('replyToEmail sends cc_address_email_list when a cc list is given', async () => {
+  let sent;
+  await withStubbedFetch(
+    async () => {
+      await replyToEmail({
+        replyToUuid: 'u',
+        eaccount: 'a@b.co',
+        subject: 's',
+        body: 'b',
+        cc: ['willschafer@gmail.com', 'agent@mgmt.co'],
+      });
+    },
+    async (url, opts) => {
+      sent = JSON.parse(opts.body);
+      return { status: 200, ok: true, text: async () => '', json: async () => ({ ok: true }) };
+    },
+  );
+  assert.strictEqual(sent.cc_address_email_list, 'willschafer@gmail.com,agent@mgmt.co');
+});
+
+test('replyToEmail omits cc_address_email_list when there is nobody to CC', async () => {
+  let sent;
+  await withStubbedFetch(
+    async () => {
+      await replyToEmail({ replyToUuid: 'u', eaccount: 'a@b.co', subject: 's', body: 'b', cc: [] });
+    },
+    async (url, opts) => {
+      sent = JSON.parse(opts.body);
+      return { status: 200, ok: true, text: async () => '', json: async () => ({ ok: true }) };
+    },
+  );
+  assert.strictEqual('cc_address_email_list' in sent, false);
+});
+
+test('fetchReplyAllCc computes the CC list from the fetched email object', async () => {
+  let fetchedUrl;
+  await withStubbedFetch(
+    async () => {
+      const cc = await fetchReplyAllCc({ emailId: 'uuid-1', eaccount: 'jennifer@frominfluence.com' });
+      assert.deepStrictEqual(cc, ['willschafer@gmail.com']);
+    },
+    async (url) => {
+      fetchedUrl = url;
+      return {
+        status: 200,
+        ok: true,
+        text: async () => '',
+        json: async () => ({
+          id: 'uuid-1',
+          from_address_email: 'Rocco Sacino <rocco@rakugomedia.com>',
+          to_address_email_list: 'willschafer@gmail.com, jennifer@frominfluence.com',
+          cc_address_email_list: '',
+        }),
+      };
+    },
+  );
+  assert.ok(fetchedUrl.endsWith('/emails/uuid-1'), 'fetches the inbound email by id');
 });
