@@ -158,20 +158,22 @@ function pickReplySubject(body) {
   return body.reply_subject || body.subject || null;
 }
 
-// Has this creator moved beyond the initial outreach step? True once they've
-// replied, once a follow-up has gone out, or once negotiation has advanced to
-// any stage. Used to distinguish a real follow-up send from a manual reply
-// typed by a human — after the initial outreach, a send that isn't a numbered
-// sequence step is a human's manual reply (e.g. emailing the creator directly
-// from Gmail / the connected mailbox). The initial-outreach stage is excluded so
-// the outreach email's own echo is never mistaken for a manual reply.
+// Has this creator's outreach already gone out — so a subsequent non-sequence
+// send is a human's manual reply (e.g. emailing the creator directly from Gmail
+// / the connected mailbox)? True once the outreach has been sent (outreach_sent,
+// followup_sent, replied) or a negotiation is in flight; false while still
+// 'outreach_queued' (nothing sent yet) or in a terminal non-send state
+// (suppressed / invalid_email / failed).
+//
+// The initial outreach send itself never reaches the manual-reply branch: the
+// first outreach email_sent is consumed by the outreach_queued → outreach_sent
+// transition. Its later ECHOES, while the creator sits at 'outreach_sent', are
+// filtered downstream — the caller requires a real body (echoes are bodyless),
+// and markManualReplySent dedupes on message_id (the outreach send's id is
+// recorded, so a re-fire of it is recognized as a duplicate, not a new reply).
 function isCreatorPastInitialOutreach(creator) {
   if (!creator) return false;
-  if (creator.status && creator.status !== 'outreach_sent') {
-    // 'replied', 'followup_sent', 'suppressed', 'invalid_email', 'failed' — any
-    // status other than the initial outreach means the initial send is done.
-    if (['replied', 'followup_sent'].includes(creator.status)) return true;
-  }
+  if (['outreach_sent', 'followup_sent', 'replied'].includes(creator.status)) return true;
   if (creator.negotiation_status) return true;
   return false;
 }
@@ -315,6 +317,17 @@ router.post('/instantly', async (req, res) => {
       // the next auto-reply has the human's answer as context.
       const isManualReply = isCreatorPastInitialOutreach(creator);
       if (isManualReply) {
+        // An is_first send is, by definition, the very first send for this lead —
+        // the outreach itself (or a re-fire of it), never a human's manual reply.
+        // This guards the outreach_sent stage against the initial send's own
+        // echo even when it arrives with a body but no message_id to dedupe on.
+        if (isFirst === true) {
+          console.log(
+            `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} is_first=true ` +
+              `(instantly campaign ${campaignId || 'n/a'}) → outreach echo, not a manual reply`,
+          );
+          return;
+        }
         const sentBody = pickSentBody(body);
         const sentSubject = pickSentSubject(body);
         // A manual reply MUST carry a body. A bodyless email_sent for a
