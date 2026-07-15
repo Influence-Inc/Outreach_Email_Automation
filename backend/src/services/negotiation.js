@@ -744,13 +744,38 @@ async function sendNegotiationEmail(creator, email, kind) {
         `No sending account (eaccount) for creator ${creator.id} — it is captured from the reply webhook; set INSTANTLY_EACCOUNT as a fallback`,
       );
     }
+    // Reply-all: CC everyone else who was on the creator's last inbound email
+    // (their manager/agent — or the creator themselves when an agent replied on
+    // their behalf) so our reply never drops them from the thread. The webhook
+    // stores the computed list on each inbound ('' = nobody else); NULL means
+    // the row predates cc capture, so recover the list from the inbound email
+    // object. Best-effort: a cc lookup failure must never block the send.
+    let cc =
+      creator.instantly_reply_cc != null
+        ? instantly.parseAddressList(creator.instantly_reply_cc)
+        : null;
+    if (cc == null) {
+      try {
+        cc = await instantly.fetchReplyAllCc({
+          emailId: creator.instantly_reply_uuid,
+          eaccount,
+        });
+      } catch (e) {
+        console.warn(
+          `[negotiation] cc lookup failed for creator ${creator.id}: ${e.message} — sending without cc`,
+        );
+        cc = [];
+      }
+    }
     await instantly.replyToEmail({
       replyToUuid: creator.instantly_reply_uuid,
       eaccount,
       subject,
       body: email.body,
+      cc,
     });
     detail = { ...detail, replyToUuid: creator.instantly_reply_uuid, eaccount };
+    if (cc.length) detail.cc = cc;
   }
   await db.query(
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'sent_negotiation', $2)`,

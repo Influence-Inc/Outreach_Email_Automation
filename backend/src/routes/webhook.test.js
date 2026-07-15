@@ -135,3 +135,41 @@ test('pickSentSubject reads the subject from the common Instantly aliases', () =
   assert.strictEqual(webhook.pickSentSubject({ email: { subject: 'Re: X' } }), 'Re: X');
   assert.strictEqual(webhook.pickSentSubject({}), null);
 });
+
+// pickReplyRecipients / pickReplyFrom feed the reply-all CC capture: everyone
+// on the inbound email's To + Cc (minus us and the sender) is stored and
+// echoed on our threaded replies so nobody is dropped from the deal thread.
+test('pickReplyRecipients reads recipient lists from the common aliases', () => {
+  assert.deepStrictEqual(
+    webhook.pickReplyRecipients({ to_address_email_list: 'a@b.co', cc_address_email_list: 'c@d.co' }),
+    { to: 'a@b.co', cc: 'c@d.co' },
+  );
+  assert.deepStrictEqual(
+    webhook.pickReplyRecipients({ email: { to_address_email_list: 'a@b.co' } }),
+    { to: 'a@b.co', cc: null },
+  );
+  assert.deepStrictEqual(
+    webhook.pickReplyRecipients({ reply_cc: ['c@d.co'] }),
+    { to: null, cc: ['c@d.co'] },
+  );
+});
+
+test('pickReplyRecipients returns null (unknown) when the payload has no recipient fields', () => {
+  // Unknown must stay distinct from "nobody else was on the email" — the
+  // handler only falls back to the API fetch / keeps the previous stored value
+  // when the payload genuinely says nothing.
+  assert.strictEqual(webhook.pickReplyRecipients({ reply_text: 'hi' }), null);
+  // body.email as the lead's address string must not be mistaken for an
+  // email object carrying recipient lists.
+  assert.strictEqual(webhook.pickReplyRecipients({ email: 'lead@example.com' }), null);
+});
+
+test('pickReplyFrom reads the sender from the common aliases', () => {
+  assert.strictEqual(webhook.pickReplyFrom({ reply_from: 'agent@mgmt.co' }), 'agent@mgmt.co');
+  assert.strictEqual(webhook.pickReplyFrom({ from_address_email: 'agent@mgmt.co' }), 'agent@mgmt.co');
+  assert.strictEqual(
+    webhook.pickReplyFrom({ email: { from_address_email: 'agent@mgmt.co' } }),
+    'agent@mgmt.co',
+  );
+  assert.strictEqual(webhook.pickReplyFrom({}), null);
+});

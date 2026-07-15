@@ -175,6 +175,14 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_email_account TEXT;
 -- verbatim when we reply so Gmail keeps the whole exchange in ONE thread — a
 -- changed subject makes Gmail split off a new conversation even with In-Reply-To.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_reply_subject TEXT;
+-- Everyone else on the creator's most recent inbound email — its To + Cc lists
+-- minus our sending mailbox and the sender — as a comma-separated lowercase
+-- list. Echoed as cc_address_email_list on our threaded replies so a
+-- manager/agent (or the creator themselves, when an agent replied on their
+-- behalf) is never dropped from the thread. '' means computed-and-empty
+-- (nobody else on the thread); NULL means not captured yet (row predates cc
+-- capture) — the sender then recovers the list from the Instantly email object.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_reply_cc TEXT;
 -- The webhook resolves replies by case-insensitive email; index the expression.
 CREATE INDEX IF NOT EXISTS idx_creators_lower_email ON creators(LOWER(email));
 
