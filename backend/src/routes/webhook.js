@@ -158,18 +158,24 @@ function pickReplySubject(body) {
   return body.reply_subject || body.subject || null;
 }
 
-// Has this creator moved beyond the initial outreach step? True once they've
-// replied, once a follow-up has gone out, or once negotiation has advanced to
-// any stage. Used to distinguish a real follow-up send from a manual reply
-// typed by a human — after the creator engages, further outbound sends that
-// aren't a numbered sequence step are manual, not automated follow-ups.
+// Has this creator actually ENGAGED — replied at least once, or entered
+// negotiation? Used to decide whether an email_sent-type webhook that isn't an
+// automated sequence step is a human's manual reply. A manual reply is a
+// RESPONSE to the creator, so it only makes sense once the creator has written
+// back.
+//
+// Crucially this is NOT true merely because a follow-up was sent: 'followup_sent'
+// means WE sent a follow-up, not that the creator engaged (markReplied always
+// moves the status to 'replied', so a creator still sitting at 'followup_sent'
+// has provably never replied). Treating 'followup_sent' as engagement is what
+// made a stray/duplicate email_sent webhook — with no real email behind it — get
+// logged as "Manual reply sent" for creators who only ever got outreach + one
+// follow-up. Engagement is keyed off replied_at (durable across later status
+// changes) with status/negotiation as backstops.
 function isCreatorPastInitialOutreach(creator) {
   if (!creator) return false;
-  if (creator.status && creator.status !== 'outreach_sent') {
-    // 'replied', 'followup_sent', 'suppressed', 'invalid_email', 'failed' — any
-    // status other than the initial outreach means the initial send is done.
-    if (['replied', 'followup_sent'].includes(creator.status)) return true;
-  }
+  if (creator.replied_at) return true;
+  if (creator.status === 'replied') return true;
   if (creator.negotiation_status) return true;
   return false;
 }
@@ -183,7 +189,7 @@ async function resolveCreator(email, campaignId) {
   let creator = null;
   if (campaignId) {
     creator = await db.one(
-      `SELECT c.id, c.status, c.negotiation_status FROM creators c
+      `SELECT c.id, c.status, c.negotiation_status, c.replied_at FROM creators c
        JOIN campaigns ca ON ca.id = c.campaign_id
        WHERE LOWER(c.email) = LOWER($1)
          AND COALESCE(ca.instantly_campaign_id, $3) = $2
@@ -194,7 +200,7 @@ async function resolveCreator(email, campaignId) {
   }
   if (!creator) {
     creator = await db.one(
-      `SELECT id, status, negotiation_status FROM creators
+      `SELECT id, status, negotiation_status, replied_at FROM creators
        WHERE LOWER(email) = LOWER($1)
        ORDER BY outreach_sent_at DESC NULLS LAST
        LIMIT 1`,
@@ -306,10 +312,11 @@ router.post('/instantly', async (req, res) => {
       // Not a follow-up advance. markFollowupSent also owns SUBSEQUENT automated
       // follow-ups (Step 3+ in a multi-step campaign, and redelivered follow-up
       // webhooks) — it returns true for those too, so reaching here means the
-      // send is NOT any automated sequence step. If the creator is already past
-      // the initial outreach (replied / negotiating / accepted), this is a human
-      // manual reply — log it on the timeline and add it to the thread so the
-      // next auto-reply has the human's answer as context.
+      // send is NOT any automated sequence step. It's a human manual reply ONLY
+      // when the creator has actually engaged (replied / negotiating). A creator
+      // who only got outreach + a follow-up has never written back, so a stray
+      // or duplicate email_sent webhook for them is not a manual reply — logging
+      // it as one is exactly the "Manual reply sent" false positive.
       const isManualReply = isCreatorPastInitialOutreach(creator);
       if (isManualReply) {
         const sentBody = pickSentBody(body);

@@ -88,10 +88,21 @@ test('isCreatorPastInitialOutreach: creator has replied → manual reply territo
   );
 });
 
-test('isCreatorPastInitialOutreach: follow-up already sent → manual reply territory', () => {
+test('isCreatorPastInitialOutreach: replied_at set → manual reply territory (durable across later status)', () => {
+  // Engagement is keyed off replied_at so it survives later status transitions.
   assert.strictEqual(
-    webhook.isCreatorPastInitialOutreach({ status: 'followup_sent', negotiation_status: null }),
+    webhook.isCreatorPastInitialOutreach({ status: 'followup_sent', replied_at: '2026-07-15T00:00:00Z' }),
     true,
+  );
+});
+
+test('isCreatorPastInitialOutreach: follow-up sent but never replied → NOT manual reply territory', () => {
+  // Regression for the "Manual reply sent" false positive: a creator who only
+  // got outreach + a follow-up (no reply_at, no negotiation) has never written
+  // back, so a stray/duplicate email_sent webhook must NOT become a manual reply.
+  assert.strictEqual(
+    webhook.isCreatorPastInitialOutreach({ status: 'followup_sent', negotiation_status: null, replied_at: null }),
+    false,
   );
 });
 
