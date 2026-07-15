@@ -158,24 +158,20 @@ function pickReplySubject(body) {
   return body.reply_subject || body.subject || null;
 }
 
-// Has this creator actually ENGAGED — replied at least once, or entered
-// negotiation? Used to decide whether an email_sent-type webhook that isn't an
-// automated sequence step is a human's manual reply. A manual reply is a
-// RESPONSE to the creator, so it only makes sense once the creator has written
-// back.
-//
-// Crucially this is NOT true merely because a follow-up was sent: 'followup_sent'
-// means WE sent a follow-up, not that the creator engaged (markReplied always
-// moves the status to 'replied', so a creator still sitting at 'followup_sent'
-// has provably never replied). Treating 'followup_sent' as engagement is what
-// made a stray/duplicate email_sent webhook — with no real email behind it — get
-// logged as "Manual reply sent" for creators who only ever got outreach + one
-// follow-up. Engagement is keyed off replied_at (durable across later status
-// changes) with status/negotiation as backstops.
+// Has this creator moved beyond the initial outreach step? True once they've
+// replied, once a follow-up has gone out, or once negotiation has advanced to
+// any stage. Used to distinguish a real follow-up send from a manual reply
+// typed by a human — after the initial outreach, a send that isn't a numbered
+// sequence step is a human's manual reply (e.g. emailing the creator directly
+// from Gmail / the connected mailbox). The initial-outreach stage is excluded so
+// the outreach email's own echo is never mistaken for a manual reply.
 function isCreatorPastInitialOutreach(creator) {
   if (!creator) return false;
-  if (creator.replied_at) return true;
-  if (creator.status === 'replied') return true;
+  if (creator.status && creator.status !== 'outreach_sent') {
+    // 'replied', 'followup_sent', 'suppressed', 'invalid_email', 'failed' — any
+    // status other than the initial outreach means the initial send is done.
+    if (['replied', 'followup_sent'].includes(creator.status)) return true;
+  }
   if (creator.negotiation_status) return true;
   return false;
 }
@@ -189,7 +185,7 @@ async function resolveCreator(email, campaignId) {
   let creator = null;
   if (campaignId) {
     creator = await db.one(
-      `SELECT c.id, c.status, c.negotiation_status, c.replied_at FROM creators c
+      `SELECT c.id, c.status, c.negotiation_status FROM creators c
        JOIN campaigns ca ON ca.id = c.campaign_id
        WHERE LOWER(c.email) = LOWER($1)
          AND COALESCE(ca.instantly_campaign_id, $3) = $2
@@ -200,7 +196,7 @@ async function resolveCreator(email, campaignId) {
   }
   if (!creator) {
     creator = await db.one(
-      `SELECT id, status, negotiation_status, replied_at FROM creators
+      `SELECT id, status, negotiation_status FROM creators
        WHERE LOWER(email) = LOWER($1)
        ORDER BY outreach_sent_at DESC NULLS LAST
        LIMIT 1`,
@@ -312,22 +308,35 @@ router.post('/instantly', async (req, res) => {
       // Not a follow-up advance. markFollowupSent also owns SUBSEQUENT automated
       // follow-ups (Step 3+ in a multi-step campaign, and redelivered follow-up
       // webhooks) — it returns true for those too, so reaching here means the
-      // send is NOT any automated sequence step. It's a human manual reply ONLY
-      // when the creator has actually engaged (replied / negotiating). A creator
-      // who only got outreach + a follow-up has never written back, so a stray
-      // or duplicate email_sent webhook for them is not a manual reply — logging
-      // it as one is exactly the "Manual reply sent" false positive.
+      // send is NOT any automated sequence step. Once the creator is past the
+      // initial outreach, a send with a real body is a human's manual reply
+      // (typed from Gmail / the connected mailbox) — log it on the timeline WITH
+      // the body so the "Sent: …" summary generates, and add it to the thread so
+      // the next auto-reply has the human's answer as context.
       const isManualReply = isCreatorPastInitialOutreach(creator);
       if (isManualReply) {
         const sentBody = pickSentBody(body);
         const sentSubject = pickSentSubject(body);
+        // A manual reply MUST carry a body. A bodyless email_sent for a
+        // past-outreach creator is not a human send — it's the echo of a send we
+        // already made (a duplicate/tracking event Instantly re-fires with no
+        // content). Logging it produced a contentless "Manual reply sent" on the
+        // timeline for creators who never got a manual reply at all — the false
+        // positive. A genuine Gmail/unibox send always has the typed body.
+        if (!sentBody || !String(sentBody).trim()) {
+          console.log(
+            `[webhook/instantly] email_sent for creator ${creator.id} step=${step ?? 'n/a'} ` +
+              `(instantly campaign ${campaignId || 'n/a'}) → bodyless send, treated as an echo, not a manual reply`,
+          );
+          return;
+        }
         const logged = await markManualReplySent(creator.id, {
           messageId,
           subject: sentSubject,
           body: sentBody,
           source: 'instantly_unibox',
         });
-        if (logged && sentBody) {
+        if (logged) {
           try {
             await thread.recordMessage(creator.id, {
               direction: 'outbound',

@@ -1,37 +1,27 @@
 #!/usr/bin/env node
 'use strict';
 
-// One-off repair: remove bogus 'sent_manual_reply' timeline events (and their
-// paired thread messages) that were logged for automated follow-ups.
+// One-off repair: remove bogus, BODYLESS 'sent_manual_reply' timeline events.
 //
-// Background: the Instantly email_sent handler advances outreach_sent →
-// followup_sent for the FIRST follow-up, but a campaign with 3+ sequence steps
-// keeps firing email_sent for a creator already at 'followup_sent'. The old
-// code couldn't advance those (the guard requires status='outreach_sent'), so
-// they fell through to the "manual reply" branch and were logged as
-// 'sent_manual_reply' — the timeline then showed "Manual reply sent" for
-// creators who only ever got outreach + follow-up emails. (A redelivered
-// follow-up webhook hit the same path.) The code fix (markFollowupSent now owns
-// subsequent follow-ups and redeliveries) stops new occurrences; this script
-// cleans up the rows already corrupted.
+// Background: the Instantly email_sent handler treats a send from a
+// past-outreach creator as a human "manual reply". But Instantly re-fires
+// email_sent as an echo/tracking event for a send we already made — with NO
+// body — and the old handler logged those too, producing a contentless "Manual
+// reply sent" on the timeline for creators who never actually got a manual
+// reply. The code fix now requires a real body before logging a manual reply
+// (a genuine Gmail / unibox send always carries the typed body); this script
+// cleans up the bodyless rows already logged.
 //
-// Signal used — airtight for this system's flow: a genuine manual reply is only
-// ever sent in RESPONSE to a creator's reply. So a 'sent_manual_reply' on a
-// creator with NO inbound reply on record (no 'replied' event AND no inbound
-// email_messages row) cannot be a real manual reply — there was nothing to
-// reply to. Those are the mislabeled automated follow-ups. Creators who have
-// since replied / negotiated are left completely untouched, because for them a
-// manual reply is plausible and we can't safely tell it apart.
+// Signal used: a real manual reply always stored its body — detail.snippet is
+// set (and a paired kind='manual_reply' thread message exists). The phantoms
+// have NEITHER: detail->>'snippet' IS NULL. So a 'sent_manual_reply' event with
+// no snippet is exactly a bodyless echo. GENUINE manual sends (with a body /
+// snippet) are left completely untouched, whether or not the creator has
+// replied — deleting those would erase real activity.
 //
-// We, for each such creator:
-//   1. delete their 'sent_manual_reply' events (removes "Manual reply sent"),
-//   2. delete their kind='manual_reply' thread messages (the follow-up template
-//      wrongly stored as a human reply, which would otherwise pollute the
-//      context handed to the next auto-reply).
-// Creator status / flags are NOT touched — needs_human was already clear and
-// the funnel status was never changed by a manual-reply log.
-//
-// The deletes run in a single transaction.
+// We delete only the bodyless 'sent_manual_reply' events. No thread messages are
+// touched: bodyless phantoms never recorded one, and every kind='manual_reply'
+// message belongs to a real send we must keep.
 //
 // Prereqs:  DATABASE_URL   (same env the backend uses)
 //
@@ -50,51 +40,39 @@ function parseArgs(argv) {
   return args;
 }
 
-// A creator qualifies when they have at least one 'sent_manual_reply' event but
-// have NEVER received an inbound reply — no 'replied' email_event and no inbound
-// email_messages row. Such a manual reply is impossible-by-definition, so every
-// 'sent_manual_reply' on the row is a mislabeled automated follow-up.
-const HAS_NO_INBOUND = `
-    NOT EXISTS (
-      SELECT 1 FROM email_events e2
-       WHERE e2.creator_id = c.id AND e2.type = 'replied'
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM email_messages m
-       WHERE m.creator_id = c.id AND m.direction = 'inbound'
-    )`;
+// A bogus event: type 'sent_manual_reply' with no stored body (snippet). The
+// genuine ones always carry detail.snippet, so this never matches a real send.
+const BOGUS_WHERE = `
+      ee.type = 'sent_manual_reply'
+      AND (ee.detail IS NULL OR ee.detail->>'snippet' IS NULL)`;
 
 async function main() {
   const { dryRun } = parseArgs(process.argv.slice(2));
 
-  // Preview: every creator with a bogus manual reply (no inbound on record).
-  const affected = await db.many(
-    `SELECT c.id,
+  const bogus = await db.many(
+    `SELECT ee.id AS event_id,
+            ee.creator_id,
+            ee.created_at,
             c.status,
-            c.negotiation_status,
-            c.instagram_username,
-            COUNT(ee.id) AS manual_reply_events
-       FROM creators c
-       JOIN email_events ee
-         ON ee.creator_id = c.id AND ee.type = 'sent_manual_reply'
-      WHERE ${HAS_NO_INBOUND}
-      GROUP BY c.id
-      ORDER BY c.id`,
+            c.instagram_username
+       FROM email_events ee
+       JOIN creators c ON c.id = ee.creator_id
+      WHERE ${BOGUS_WHERE}
+      ORDER BY ee.creator_id, ee.created_at`,
     [],
   );
 
   console.log(
-    `Found ${affected.length} creator(s) with a bogus 'sent_manual_reply' (no inbound reply on record):`,
+    `Found ${bogus.length} bogus, bodyless 'sent_manual_reply' event(s) ` +
+      `(contentless "Manual reply sent"):`,
   );
-  for (const c of affected) {
+  for (const b of bogus) {
     console.log(
-      `  creator ${c.id} @${c.instagram_username || '?'} — status=${c.status}` +
-        `${c.negotiation_status ? `/${c.negotiation_status}` : ''}, ` +
-        `${c.manual_reply_events} manual-reply event(s)`,
+      `  creator ${b.creator_id} @${b.instagram_username || '?'} — status=${b.status}, at ${b.created_at.toISOString?.() || b.created_at}`,
     );
   }
 
-  if (!affected.length) {
+  if (!bogus.length) {
     console.log('Nothing to clean up.');
     process.exit(0);
   }
@@ -104,40 +82,11 @@ async function main() {
     process.exit(0);
   }
 
-  const client = await db.pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const delEvents = await client.query(
-      `DELETE FROM email_events ee
-        USING creators c
-        WHERE ee.creator_id = c.id
-          AND ee.type = 'sent_manual_reply'
-          AND ${HAS_NO_INBOUND}`,
-    );
-
-    // The paired thread messages (the follow-up template wrongly stored as a
-    // human reply). Safe to remove for these creators: with no inbound, every
-    // 'manual_reply' message on the row is one of the bogus follow-ups.
-    const delMessages = await client.query(
-      `DELETE FROM email_messages m
-        USING creators c
-        WHERE m.creator_id = c.id
-          AND m.kind = 'manual_reply'
-          AND ${HAS_NO_INBOUND}`,
-    );
-
-    await client.query('COMMIT');
-    console.log(
-      `\n✓ Deleted ${delEvents.rowCount} bogus 'sent_manual_reply' event(s) and ` +
-        `${delMessages.rowCount} paired thread message(s) across ${affected.length} creator(s).`,
-    );
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  const del = await db.query(
+    `DELETE FROM email_events ee
+      WHERE ${BOGUS_WHERE}`,
+  );
+  console.log(`\n✓ Deleted ${del.rowCount} bodyless 'sent_manual_reply' event(s).`);
   process.exit(0);
 }
 

@@ -268,18 +268,24 @@ const APP_OUTBOUND_TYPES = [
 ];
 
 // Record a manual reply sent by a human — either from Instantly's unibox or
-// directly from the connected mailbox. Idempotent on messageId: a re-delivered
-// webhook logs the event exactly once, so the timeline never doubles up.
-// Also skipped when an app-initiated send (delegate reply, priced offer,
-// negotiation reply, contract) was just logged for this creator — that
-// webhook fire is the echo of a send we already recorded, not a new manual
-// send. Returns true when a fresh row was inserted. Does NOT change the
-// creator's funnel status — a manual reply is a response, not a transition.
+// directly from the connected mailbox. Idempotent on messageId, and echo-safe:
+// if ANY prior event already carries this messageId — the outreach send, a
+// follow-up, an earlier manual reply, an app-initiated send — this webhook is a
+// re-fire of a message we've already logged, not a new manual send, so it's
+// skipped and the timeline never doubles up or sprouts a phantom "Manual reply
+// sent". Also skipped when an app-initiated send (delegate reply, priced offer,
+// negotiation reply, contract) was just logged for this creator. Returns true
+// when a fresh row was inserted. Does NOT change the creator's funnel status —
+// a manual reply is a response, not a transition.
 async function markManualReplySent(creatorId, { messageId = null, subject = null, body = null, source = null } = {}) {
   if (messageId) {
+    // Dedupe against EVERY prior event for this message, not just prior manual
+    // replies: a messageId uniquely identifies one send, so if we've recorded
+    // anything for it (outreach, follow-up, a previous manual reply), this fire
+    // is that send's echo — never a distinct manual reply.
     const existing = await db.one(
       `SELECT id FROM email_events
-       WHERE creator_id = $1 AND type = 'sent_manual_reply' AND message_id = $2
+       WHERE creator_id = $1 AND message_id = $2
        LIMIT 1`,
       [creatorId, messageId],
     );
