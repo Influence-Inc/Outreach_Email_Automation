@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { rateLogEntry } = require('./creators');
+const { rateLogEntry, collapseSupersededSteps } = require('./creators');
 
 // ── replies summarize what was said, never a bare "Creator replied" ─────────
 
@@ -78,4 +78,33 @@ test('multiple quoted rates stay collapsed with their per-option deliverables', 
   assert.strictEqual(entry.text, 'Creator quoted rates');
   assert.strictEqual(entry.options.length, 2);
   assert.strictEqual(entry.options[1].label, '$5,000 for 600,000 combined views');
+});
+
+// ── "Outreach queued" collapses into "Outreach sent" once the send lands ─────
+
+test('the queued step is dropped once outreach has been sent', () => {
+  const log = [
+    { type: 'outreach_queued', text: 'Outreach queued' },
+    { type: 'sent_outreach', text: 'Outreach sent' },
+  ];
+  const collapsed = collapseSupersededSteps(log);
+  assert.deepStrictEqual(collapsed.map((e) => e.type), ['sent_outreach']);
+});
+
+test('the queued step stays while outreach is still pending', () => {
+  const log = [{ type: 'outreach_queued', text: 'Outreach queued' }];
+  const collapsed = collapseSupersededSteps(log);
+  assert.deepStrictEqual(collapsed.map((e) => e.type), ['outreach_queued']);
+});
+
+test('collapsing keeps every later step and returns a fresh array', () => {
+  const log = [
+    { type: 'outreach_queued', text: 'Outreach queued' },
+    { type: 'sent_outreach', text: 'Outreach sent' },
+    { type: 'sent_followup', text: 'Follow-up sent' },
+    { type: 'replied', text: 'Replied: “sounds great”' },
+  ];
+  const collapsed = collapseSupersededSteps(log);
+  assert.deepStrictEqual(collapsed.map((e) => e.type), ['sent_outreach', 'sent_followup', 'replied']);
+  assert.notStrictEqual(collapsed, log);
 });
