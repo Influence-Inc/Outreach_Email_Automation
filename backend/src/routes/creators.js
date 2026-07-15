@@ -149,6 +149,17 @@ function rateLogEntry(type, detail, msg, summary) {
   }
 }
 
+// Collapse superseded placeholder steps out of a creator's rate_log (oldest→
+// newest, each entry carrying a `type`). "Outreach queued" is only a stand-in
+// for the send that hasn't gone out yet; once "Outreach sent" lands it fully
+// replaces the queued step, so the queued entry is dropped rather than left
+// taking up its own timeline row above the sent one. Returns a new array.
+function collapseSupersededSteps(log) {
+  const entries = Array.isArray(log) ? log : [];
+  if (!entries.some((e) => e.type === 'sent_outreach')) return entries.slice();
+  return entries.filter((e) => e.type !== 'outreach_queued');
+}
+
 // The events whose timeline label summarizes an inbound creator reply vs. an
 // outbound reply we sent. Each is paired with the nearest matching message from
 // the stored thread so the label can quote what was actually said.
@@ -256,7 +267,7 @@ async function attachRateLog(rows) {
     if (!byCreator.has(e.creator_id)) byCreator.set(e.creator_id, []);
     byCreator.get(e.creator_id).push(entry);
   }
-  for (const r of rows) r.rate_log = byCreator.get(r.id) || [];
+  for (const r of rows) r.rate_log = collapseSupersededSteps(byCreator.get(r.id) || []);
 
   // Kick off Claude summary generation for any un-summarized gist messages.
   // Fire-and-forget: this response already went out with the deterministic
@@ -741,7 +752,9 @@ router.delete('/:id', async (req, res, next) => {
 });
 
 // Exposed for unit tests (same pattern as routes/webhook.js): rateLogEntry is a
-// pure label builder, so it can be asserted without a DB.
+// pure label builder and collapseSupersededSteps a pure log transform, so both
+// can be asserted without a DB.
 router.rateLogEntry = rateLogEntry;
+router.collapseSupersededSteps = collapseSupersededSteps;
 
 module.exports = router;
