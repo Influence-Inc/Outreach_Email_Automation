@@ -303,10 +303,13 @@ router.post('/instantly', async (req, res) => {
         );
         return;
       }
-      // Not a follow-up advance. If the creator is already past the initial
-      // outreach (replied / negotiating / accepted), this send is a manual
-      // reply — log it on the timeline and add it to the thread so the next
-      // auto-reply has the human's answer as context.
+      // Not a follow-up advance. markFollowupSent also owns SUBSEQUENT automated
+      // follow-ups (Step 3+ in a multi-step campaign, and redelivered follow-up
+      // webhooks) — it returns true for those too, so reaching here means the
+      // send is NOT any automated sequence step. If the creator is already past
+      // the initial outreach (replied / negotiating / accepted), this is a human
+      // manual reply — log it on the timeline and add it to the thread so the
+      // next auto-reply has the human's answer as context.
       const isManualReply = isCreatorPastInitialOutreach(creator);
       if (isManualReply) {
         const sentBody = pickSentBody(body);
