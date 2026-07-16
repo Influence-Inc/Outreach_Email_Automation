@@ -869,6 +869,10 @@
       }
       <div class="reply">
         <label>Your reply</label>
+        <div class="reply-ai-row">
+          <input class="reply-ai-note" type="text" placeholder="Or describe it and let AI draft — e.g. “reassure on timeline, ask for rate”">
+          <button class="btn btn-ghost reply-ai-draft" type="button">✎ AI</button>
+        </div>
         <textarea class="reply-text" rows="5" placeholder="Write your reply…  ([text](url) formatting supported)"></textarea>
         <div class="oc-send-status reply-status"></div>
         <div class="btn-row" style="margin-top:8px">
@@ -880,6 +884,33 @@
     const statusEl = block.querySelector('.reply-status');
     const sendBtn = block.querySelector('.reply-send');
     const dismissBtn = block.querySelector('.reply-dismiss');
+    const aiNote = block.querySelector('.reply-ai-note');
+    const aiDraftBtn = block.querySelector('.reply-ai-draft');
+
+    // "Draft with AI" — describe the reply, AI drafts it into the reply box for
+    // review/edit; the existing Send reply posts the reviewed body.
+    aiDraftBtn.onclick = async () => {
+      if (aiDraftBtn.dataset.busy === '1') return;
+      const instructions = aiNote.value.trim();
+      if (!instructions) { statusEl.textContent = 'Describe what the reply should say first.'; return; }
+      aiDraftBtn.dataset.busy = '1';
+      aiDraftBtn.disabled = true;
+      statusEl.textContent = 'Drafting…';
+      try {
+        const draft = await api(`/api/creators/${r.id}/draft-reply`, {
+          method: 'POST',
+          body: JSON.stringify({ instructions }),
+        });
+        textEl.value = draft.body || '';
+        statusEl.textContent = 'Draft ready — review and edit, then Send reply.';
+        textEl.focus();
+      } catch (err) {
+        statusEl.textContent = `Couldn't draft: ${err.message}`;
+      } finally {
+        aiDraftBtn.disabled = false;
+        aiDraftBtn.dataset.busy = '';
+      }
+    };
 
     sendBtn.onclick = async () => {
       const body = textEl.value.trim();

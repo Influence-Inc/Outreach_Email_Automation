@@ -83,3 +83,50 @@ test('draftOfferEmail omits the notes block when no instructions are given', asy
     negotiation._setClient(null);
   }
 });
+
+// ── Plain hand-off reply draft ("Draft with AI" on the reply box) ───────────
+
+const handoffCreator = {
+  ...creator,
+  negotiation_status: 'AWAITING_RATE',
+  delegate_reason: "Claude wasn't sure how to answer this one",
+  delegate_question: 'Do you cover TikTok too, or Instagram only?',
+};
+
+function fakeReplyClaude(capture, body) {
+  return {
+    messages: {
+      create: async (args) => {
+        capture.system = args.system;
+        return { content: [{ type: 'text', text: JSON.stringify({ subject: 'Re: test', body }) }] };
+      },
+    },
+  };
+}
+
+test('draftReplyEmail turns the admin instructions into a reply and passes context to Claude', async () => {
+  const capture = {};
+  negotiation._setClient(fakeReplyClaude(capture, 'DRAFTED REPLY BODY'));
+  try {
+    const ctx = negotiation.ctxFor(handoffCreator);
+    const notes = 'confirm we cross-post to TikTok and YouTube, then ask for their rate';
+    const email = await negotiation.draftReplyEmail(handoffCreator, ctx, { instructions: notes });
+
+    assert.strictEqual(email.body, 'DRAFTED REPLY BODY');
+    assert.ok(capture.system.includes(notes), 'admin instructions should reach the prompt');
+    assert.ok(/account manager/i.test(capture.system), 'prompt should flag the instructions as manager-authored');
+    assert.ok(capture.system.includes(handoffCreator.delegate_question), 'the parked question should be in the prompt');
+    assert.ok(/never invent specific offer numbers/i.test(capture.system), 'prompt should forbid inventing numbers');
+  } finally {
+    negotiation._setClient(null);
+  }
+});
+
+test('draftReplyEmail falls back to an editable draft when Claude is unavailable', async () => {
+  negotiation._setClient(null); // no client -> callClaude returns null -> fallback
+  const ctx = negotiation.ctxFor(handoffCreator);
+  const notes = 'let them know the timeline is flexible';
+  const email = await negotiation.draftReplyEmail(handoffCreator, ctx, { instructions: notes });
+  assert.ok(email.body.includes(notes), 'fallback body should seed from the instructions');
+  assert.ok(/^Hi Gordon,/.test(email.body), 'fallback should still greet the creator');
+});

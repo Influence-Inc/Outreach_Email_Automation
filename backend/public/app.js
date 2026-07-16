@@ -2566,6 +2566,10 @@ function buildReplyBlock(r) {
   block.className = 'delegate-reply-block';
   block.innerHTML = `
     <label>Your reply</label>
+    <div class="delegate-ai-row">
+      <input class="delegate-ai-note" type="text" placeholder="Or describe the reply and let AI draft it — e.g. “reassure them on the timeline, then ask for their rate”">
+      <button class="ghost small delegate-ai-draft" type="button">✎ Draft with AI</button>
+    </div>
     <textarea class="delegate-reply io-scroll" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
     <div class="delegate-reply-foot">
       <span class="delegate-status hint"></span>
@@ -2577,6 +2581,34 @@ function buildReplyBlock(r) {
   const statusEl = block.querySelector('.delegate-status');
   const sendBtn = block.querySelector('.delegate-send');
   const dismissBtn = block.querySelector('.delegate-dismiss');
+  const aiNote = block.querySelector('.delegate-ai-note');
+  const aiDraftBtn = block.querySelector('.delegate-ai-draft');
+
+  // "Draft with AI" — describe the reply in a line or two, AI drafts it into the
+  // reply box, which stays the review/edit surface. Sending is unchanged (the
+  // existing Send reply button posts the reviewed body).
+  aiDraftBtn.onclick = async () => {
+    if (aiDraftBtn.dataset.busy === '1') return;
+    const instructions = aiNote.value.trim();
+    if (!instructions) { statusEl.textContent = 'Describe what the reply should say first.'; return; }
+    aiDraftBtn.dataset.busy = '1';
+    aiDraftBtn.disabled = true;
+    statusEl.textContent = 'Drafting…';
+    try {
+      const draft = await api(`/api/creators/${r.id}/draft-reply`, {
+        method: 'POST',
+        body: JSON.stringify({ instructions }),
+      });
+      replyEl.value = draft.body || '';
+      statusEl.textContent = 'Draft ready — review and edit, then Send reply.';
+      replyEl.focus();
+    } catch (err) {
+      statusEl.textContent = `Couldn't draft: ${err.message}`;
+    } finally {
+      aiDraftBtn.disabled = false;
+      aiDraftBtn.dataset.busy = '';
+    }
+  };
 
   sendBtn.onclick = async () => {
     const body = replyEl.value.trim();

@@ -758,6 +758,96 @@ async function buildOfferDraft(creatorId, { offer: rawOffer, instructions = '' }
   return { subject: email.subject, body: email.body, offer };
 }
 
+// ── (c) Draft a plain hand-off reply from the admin's short instructions ───
+// The "Draft with AI" box on the Delegate hand-off reply (a creator's parked
+// question that needs a human, no offer involved). The account manager types a
+// line or two describing what to say; Claude turns that into a warm, on-brand
+// reply, grounded in the creator's parked message and our standard terms. This
+// only shapes wording — it never invents offer numbers or terms the manager
+// didn't give. The manager reviews/edits the result in the reply box and sends
+// it through the existing delegate-reply path. Degrades to a plain echo of the
+// instructions if Claude is unavailable, so the box is still usable to edit.
+async function draftReplyEmail(creator, ctx, { instructions = '' } = {}) {
+  const v = templateVars(ctx);
+  const note = String(instructions || '').trim();
+  const inbound = await latestCreatorMessage(creator);
+  const parkedQ = creator.delegate_question && String(creator.delegate_question).trim();
+  const parkedReason = creator.delegate_reason && String(creator.delegate_reason).trim();
+  const fallbackSubject = templates.reply1(v).subject;
+
+  const system = [
+    `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE.`,
+    `You're corresponding with the creator ${v.firstName} for the brand "${v.brandName}"${
+      ctx.campaignName ? ` (campaign: ${ctx.campaignName})` : ''
+    }.`,
+    v.salutation && v.salutation !== v.firstName
+      ? `This reply is going to ${v.salutation}, who is writing on ${v.firstName}'s behalf — greet ${v.salutation} by name ("Hi ${v.salutation},"), but refer to the creator as ${v.firstName} when discussing the collaboration.`
+      : `Greet the creator by their first name ("Hi ${v.firstName},").`,
+    `Today's date is ${todayStr()}. The desired posting cadence is "${v.cadence}".`,
+    '',
+    'A human account manager is writing this reply and has told you, in their own words, what to say. Your job is to turn their intent into a warm, professional, well-formatted email in their voice — not to decide the content yourself.',
+    `Account manager's instructions for THIS reply:\n"""${note}"""`,
+    '',
+    parkedReason ? `Why this reply needs a human: ${parkedReason}` : '',
+    parkedQ
+      ? `The creator's parked message you're responding to:\n"""${parkedQ}"""`
+      : inbound
+        ? `The creator's most recent message:\n"""${inbound}"""`
+        : '',
+    '',
+    'Grounding facts you may draw on (our standard collaboration terms) — use ONLY what the instructions actually call for, never dump the whole thing:',
+    '--- REPLY 1 (collaboration details) ---',
+    templates.REPLY1_BODY,
+    '--- REPLY 2 (offer / payment style) ---',
+    templates.REPLY2_BODY,
+    guidelinesBlock(ctx),
+    '',
+    'Rules:',
+    "- Follow the account manager's instructions faithfully — they decide the content and stance of this reply.",
+    '- Keep it short and natural. When there is a parked creator message, open by acknowledging what they said before answering.',
+    '- NEVER invent specific offer numbers, rates, discounts, or deal terms. If the instructions state a number, use exactly that; otherwise do not quote one. Do not promise anything beyond the standard terms above unless the instructions say so.',
+    `- Sign off "- ${v.managerName}".`,
+    `- ${FORMATTING_RULE}`,
+    '',
+    'Respond with STRICT JSON ONLY (no markdown fences): {"subject": string, "body": string}. The body carries the small markdown subset described above (bold headers, links); no other markdown.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const out = parseJsonLoose(await callClaudeText(system, 'Write the reply email now.', 1200));
+  if (out && out.body) return { subject: out.subject || fallbackSubject, body: out.body };
+  // Claude unavailable: hand back a minimal draft seeded from the instructions so
+  // the reply box still has something the admin can edit and send.
+  return {
+    subject: fallbackSubject,
+    body: `Hi ${v.salutation},\n\n${note}\n\n- ${v.managerName}`,
+  };
+}
+
+// Preview a plain hand-off reply WITHOUT sending — backs the "Draft with AI"
+// box on the Delegate reply block. No side effects; the reviewed body is sent
+// later through the existing POST /:id/delegate-reply path.
+async function buildReplyDraft(creatorId, { instructions = '' } = {}) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) {
+    const err = new Error('creator not found');
+    err.status = 404;
+    throw err;
+  }
+  if (!String(instructions || '').trim()) {
+    const err = new Error('Describe what the reply should say first.');
+    err.status = 400;
+    throw err;
+  }
+  const guidelines = await getGuidelines();
+  const salutation =
+    creator.reply_salutation ||
+    salutationFor(creator.first_name, creator.delegate_question || creator.latest_inbound_text);
+  const ctx = ctxFor(creator, { guidelines, salutation });
+  const email = await draftReplyEmail(creator, ctx, { instructions });
+  return { subject: email.subject, body: email.body };
+}
+
 // ── Email sending (threaded; DRY_RUN logs instead) ────────────────────────
 async function countSentNegotiation(creatorId) {
   const r = await db.one(
@@ -1867,6 +1957,8 @@ module.exports = {
   handleCreatorReply,
   draftOfferEmail,
   buildOfferDraft,
+  draftReplyEmail,
+  buildReplyDraft,
   processReply,
   sendApprovedOffer,
   sendDelegateReply,

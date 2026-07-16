@@ -87,6 +87,23 @@ router.post('/:id/draft-offer', async (req, res, next) => {
   }
 });
 
+// Preview a plain hand-off reply WITHOUT sending — the "Draft with AI" box on
+// the Delegate reply block. The admin describes what to say; we draft the reply
+// so they can review + edit it in the reply box, then send it through the
+// existing /:id/delegate-reply path. No side effects.
+router.post('/:id/draft-reply', async (req, res, next) => {
+  try {
+    const { instructions } = req.body || {};
+    const draft = await negotiation.buildReplyDraft(req.params.id, {
+      instructions: instructions || '',
+    });
+    res.json(draft);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
 // Manual rate override (e.g. admin types the creator's rate). Recomputes the 6
 // offers when IG stats already exist, and moves the creator into the approval
 // stage so the offers become approvable.
