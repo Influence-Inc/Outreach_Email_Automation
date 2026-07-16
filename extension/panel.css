@@ -297,6 +297,25 @@ a { color: inherit; }
 .oc-send-status { font-size: 11.5px; color: var(--ink-2); min-height: 15px; margin: 8px 0 0; }
 .oc-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 
+/* ---- Draft with AI (offer email) ---------------------------------------- */
+.oc-ai { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.oc-ai[hidden] { display: none; }
+.oc-ai-title { font-size: 12px; font-weight: 700; }
+.oc-ai-desc { font-size: 11px; color: var(--muted); margin: 3px 0 8px; line-height: 1.45; }
+.oc-ai-note, .oc-ai-body {
+  width: 100%; font: inherit; font-size: 12.5px; line-height: 1.5;
+  border: 1px solid var(--line-2); border-radius: var(--radius-xs);
+  background: var(--surface-2); padding: 9px 10px; color: var(--ink); resize: vertical;
+}
+.oc-ai-note:focus, .oc-ai-body:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgba), 0.12); }
+.oc-ai-note { min-height: 58px; }
+.oc-ai-body { min-height: 190px; white-space: pre-wrap; }
+.oc-ai-bar { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.oc-ai-status { font-size: 11.5px; color: var(--ink-2); min-height: 15px; margin-top: 8px; }
+.oc-ai-preview { margin-top: 12px; }
+.oc-ai-preview[hidden] { display: none; }
+.oc-ai-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint); margin-bottom: 5px; }
+
 /* ---- Buttons ------------------------------------------------------------- */
 .btn {
   font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;

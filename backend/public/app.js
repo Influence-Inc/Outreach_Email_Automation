@@ -1371,8 +1371,27 @@ function buildOfferConfigurator(r, onRefresh) {
             ? `<button class="oc-accept-rate btn-accept" type="button">Accept creator's rate — $${fmtNum(r.quoted_rate)} ✓</button>`
             : ''
         }
+        <button class="oc-ai-toggle ghost small" type="button">✎ Draft with AI</button>
         <button class="oc-dismiss ghost small" type="button">Dismiss</button>
         <button class="oc-approve btn-primary" type="button">${approveLabel} →</button>
+      </div>
+    </div>
+
+    <div class="oc-ai" hidden>
+      <div class="oc-ai-title">Draft with AI</div>
+      <div class="oc-ai-desc">Add your own thoughts in a sentence or two — AI writes the full email around the selected offer above. You review and edit it before anything sends. The offer numbers stay exactly as you set them.</div>
+      <textarea class="oc-ai-note" rows="3" placeholder="e.g. Push back gently on the per-view bonus, lean into the long-term retainer potential, and mention we can't do usage rights on this one."></textarea>
+      <div class="oc-ai-bar">
+        <button class="oc-ai-draft btn-primary" type="button">Draft email with AI →</button>
+        <span class="oc-ai-status hint"></span>
+      </div>
+      <div class="oc-ai-preview" hidden>
+        <div class="oc-ai-label">Review &amp; edit — this exact text is emailed to the creator</div>
+        <textarea class="oc-ai-body" rows="14"></textarea>
+        <div class="oc-ai-bar">
+          <button class="oc-ai-send btn-primary" type="button">Send to creator →</button>
+          <button class="oc-ai-redraft ghost small" type="button">Re-draft</button>
+        </div>
       </div>
     </div>
   `;
@@ -1600,6 +1619,130 @@ function buildOfferConfigurator(r, onRefresh) {
       dismissBtn.disabled = false;
     }
   };
+
+  // ── "Draft with AI" — describe the message in a line or two, AI writes the
+  //    full offer email around the selected offer, review/edit, then send. The
+  //    send reuses the exact approve→send path (PATCH /offer with the reviewed
+  //    body), so every send guarantee — atomic claim, timeline logging, stage
+  //    transition — is identical to Approve & send.
+  const aiPanel = root.querySelector('.oc-ai');
+  const aiToggle = root.querySelector('.oc-ai-toggle');
+  const aiNote = root.querySelector('.oc-ai-note');
+  const aiDraftBtn = root.querySelector('.oc-ai-draft');
+  const aiStatus = root.querySelector('.oc-ai-status');
+  const aiPreview = root.querySelector('.oc-ai-preview');
+  const aiBody = root.querySelector('.oc-ai-body');
+  const aiSendBtn = root.querySelector('.oc-ai-send');
+  const aiRedraftBtn = root.querySelector('.oc-ai-redraft');
+  // The offer snapshot the current preview was drafted for. Sending uses THIS
+  // (not the live sliders) so the logged fee always matches the body on screen;
+  // editing the sliders after a draft clears the preview to keep them in sync.
+  let draftedOffer = null;
+  let draftedSubject = null;
+
+  const resetAiPreview = () => {
+    aiPreview.hidden = true;
+    aiBody.value = '';
+    draftedOffer = null;
+    draftedSubject = null;
+  };
+
+  aiToggle.onclick = () => {
+    aiPanel.hidden = !aiPanel.hidden;
+    aiToggle.classList.toggle('is-open', !aiPanel.hidden);
+    if (!aiPanel.hidden) aiNote.focus();
+  };
+
+  aiDraftBtn.onclick = async () => {
+    if (aiDraftBtn.dataset.busy === '1') return;
+    aiDraftBtn.dataset.busy = '1';
+    aiDraftBtn.disabled = true;
+    aiStatus.textContent = 'Drafting…';
+    const offer = buildCustomOffer();
+    try {
+      const draft = await api(`/api/creators/${r.id}/draft-offer`, {
+        method: 'POST',
+        body: JSON.stringify({ custom_offer: offer, instructions: aiNote.value.trim() }),
+      });
+      draftedOffer = offer;
+      draftedSubject = draft.subject || null;
+      aiBody.value = draft.body || '';
+      aiPreview.hidden = false;
+      aiStatus.textContent = 'Draft ready — review and edit below, then send.';
+      aiBody.focus();
+    } catch (err) {
+      aiStatus.textContent = `Couldn't draft: ${err.message}`;
+    } finally {
+      aiDraftBtn.disabled = false;
+      aiDraftBtn.dataset.busy = '';
+    }
+  };
+
+  aiRedraftBtn.onclick = () => {
+    aiPreview.hidden = true;
+    aiStatus.textContent = '';
+    aiNote.focus();
+  };
+
+  aiSendBtn.onclick = async () => {
+    if (aiSendBtn.dataset.busy === '1') return;
+    const body = aiBody.value.trim();
+    if (!body) {
+      aiStatus.textContent = 'The email is empty — draft or write something first.';
+      return;
+    }
+    const offer = draftedOffer || buildCustomOffer();
+    aiSendBtn.dataset.busy = '1';
+    aiSendBtn.disabled = true;
+    aiRedraftBtn.disabled = true;
+    aiStatus.textContent = 'Sending…';
+    try {
+      const resp = await api(`/api/creators/${r.id}/offer`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          selected_offer_id: offer.offer_id,
+          custom_offer: offer,
+          offer_approved: true,
+          email: { subject: draftedSubject, body },
+        }),
+      });
+      const sr = resp && resp.send_result;
+      let hold = 1400;
+      if (sr && sr.sent) {
+        aiStatus.textContent = '✓ Your email was sent.';
+      } else if (sr && sr.error) {
+        aiStatus.textContent = `Send failed: ${sr.error}. Check the creator's inbox before re-sending to avoid a duplicate.`;
+        hold = 6000;
+      } else if (sr && sr.skipped) {
+        aiStatus.textContent = `Not sent — ${sr.skipped}.`;
+        hold = 4500;
+      } else {
+        aiStatus.textContent = '✓ Saved.';
+      }
+      setTimeout(onRefresh, hold);
+    } catch (err) {
+      aiStatus.textContent = err.message;
+      aiSendBtn.disabled = false;
+      aiRedraftBtn.disabled = false;
+      aiSendBtn.dataset.busy = '';
+    }
+  };
+
+  // Editing the offer after drafting would desync the preview from the numbers,
+  // so drop the stale draft and prompt a re-draft. (These listeners are additive
+  // to the recompute() ones already wired above.)
+  const markStaleOnEdit = () => {
+    if (!aiPreview.hidden) {
+      resetAiPreview();
+      aiStatus.textContent = 'Offer changed — draft again to match the new numbers.';
+    }
+  };
+  root.querySelectorAll('input[data-k]').forEach((input) => {
+    input.addEventListener('input', markStaleOnEdit);
+  });
+  root.querySelectorAll('.oc-choose').forEach((btn) => {
+    btn.addEventListener('click', markStaleOnEdit);
+  });
 
   // Let the admin jump to the creator's Instagram profile with this same offer
   // panel latched to the side, straight from the Delegate card.

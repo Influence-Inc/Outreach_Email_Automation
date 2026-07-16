@@ -750,6 +750,30 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .btn-accept:hover { background: #0f5f40; border-color: #0f5f40; }
 .oc-send-status { font-size: 13px; }
+.oc-ai-toggle.is-open { background: var(--line); border-color: var(--ink-2); }
+
+/* Draft with AI — describe the message, review the AI draft, then send */
+.oc-ai {
+  margin-top: 14px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow-card);
+}
+.oc-ai[hidden] { display: none; }
+.oc-ai-title { font-size: 14px; font-weight: 700; }
+.oc-ai-desc { font-size: 12.5px; color: var(--muted); margin: 4px 0 12px; max-width: 64ch; }
+.oc-ai-note, .oc-ai-body {
+  width: 100%; font: inherit; font-size: 14px; line-height: 1.5;
+  border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface-2);
+  padding: 11px 13px; color: var(--ink); resize: vertical;
+}
+.oc-ai-note:focus, .oc-ai-body:focus { outline: none; border-color: var(--ink); box-shadow: var(--ring); }
+.oc-ai-body { min-height: 260px; white-space: pre-wrap; }
+.oc-ai-bar { display: flex; align-items: center; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+.oc-ai-preview { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 14px; }
+.oc-ai-preview[hidden] { display: none; }
+.oc-ai-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--faint); margin-bottom: 6px;
+}
 
 /* --- Responsive ---------------------------------------------------------- */
 @media (max-width: 900px) {

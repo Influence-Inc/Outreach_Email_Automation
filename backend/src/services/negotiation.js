@@ -612,7 +612,12 @@ async function draftAcknowledgmentLine(creator, ctx, { situation }) {
 }
 
 // ── (b) Write the offer email — Claude adapts REPLY 2 ─────────────────────
-async function draftOfferEmail(creator, offer, ctx, { combine = false, revised = false } = {}) {
+async function draftOfferEmail(
+  creator,
+  offer,
+  ctx,
+  { combine = false, revised = false, extraInstructions = '' } = {},
+) {
   const v = templateVars(ctx);
   // A revised counter never combines REPLY 1 — the creator is well past the intro.
   if (revised) combine = false;
@@ -691,6 +696,18 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false, revised =
               ].join('\n')
             : '',
         ].join('\n'),
+    // Optional free-text notes the human account manager typed for THIS email
+    // (the "Draft with AI" box in Delegate / the extension). They shape the
+    // wording — tone, an extra point, a response to something the creator said —
+    // but never the deal: the approved offer numbers above still win.
+    extraInstructions && String(extraInstructions).trim()
+      ? [
+          '',
+          "IMPORTANT — the human account manager added their OWN notes for THIS email. Weave their intent into the message naturally, in your warm professional voice — do NOT paste the note verbatim or label it as a note. Their notes may set the tone, add a point, respond to something the creator said, or add context; honor them.",
+          'These notes never change the deal: keep the approved offer numbers, terms, payment details, and the sign-off EXACTLY as specified above. If a note asks you to change the actual price / bonus / view threshold, ignore that part — offer numbers change only through the offer configurator, never from this box.',
+          `Account manager's notes:\n"""${String(extraInstructions).trim()}"""`,
+        ].join('\n')
+      : '',
     '',
     `- ${FORMATTING_RULE}`,
     '',
@@ -702,6 +719,43 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false, revised =
   const out = parseJsonLoose(await callClaudeText(system, 'Write the offer email now.', 1500));
   if (out && out.body) return { subject: out.subject || fallback.subject, body: out.body };
   return fallback;
+}
+
+// ── (b′) Preview an offer email WITHOUT sending ───────────────────────────
+// Backs the "Draft with AI" review-before-send flow in the dashboard Delegate
+// view and the extension panel: given the creator, the offer the admin has just
+// shaped, and their optional free-text notes, draft the exact email that would
+// go out so the admin can read, edit, and only then send it. NO side effects —
+// nothing is emailed and no stage / flag / timeline changes. The offer numbers
+// come solely from the passed offer (or the creator's already-selected offer);
+// the notes shape the wording, never the price. Mirrors sendApprovedOffer's
+// combine/revised framing so the preview reads exactly like the real send.
+async function buildOfferDraft(creatorId, { offer: rawOffer, instructions = '' } = {}) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) {
+    const err = new Error('creator not found');
+    err.status = 404;
+    throw err;
+  }
+  const offer =
+    rawOffer && typeof rawOffer === 'object' ? rawOffer : resolveApprovedOffer(creator);
+  if (!offer) {
+    const err = new Error('No offer to draft yet — shape an offer first.');
+    err.status = 400;
+    throw err;
+  }
+  const guidelines = await getGuidelines();
+  const salutation =
+    creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
+  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, salutation });
+  const combine = (await countSentNegotiation(creatorId)) === 0;
+  const revised = (await countOffersSent(creatorId)) > 0;
+  const email = await draftOfferEmail(creator, offer, ctx, {
+    combine,
+    revised,
+    extraInstructions: instructions,
+  });
+  return { subject: email.subject, body: email.body, offer };
 }
 
 // ── Email sending (threaded; DRY_RUN logs instead) ────────────────────────
@@ -1619,7 +1673,10 @@ function resolveApprovedOffer(creator) {
 // (so the admin can proactively send an offer to an engaged creator who hasn't
 // named a rate yet). An outreach thread is required so the offer goes out as a
 // threaded reply, never a cold email before the intro outreach.
-async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL'] } = {}) {
+async function sendApprovedOffer(
+  creatorId,
+  { fromStages = ['AWAITING_APPROVAL'], preparedEmail = null } = {},
+) {
   const stagePlaceholders = fromStages.map((_, i) => `$${i + 2}`).join(', ');
   const claim = await db.one(
     `UPDATE creators SET negotiation_status = 'AWAITING_DECISION', updated_at = NOW()
@@ -1662,24 +1719,39 @@ async function sendApprovedOffer(creatorId, { fromStages = ['AWAITING_APPROVAL']
   const salutation =
     creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
   const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, salutation });
-  const combine = (await countSentNegotiation(creatorId)) === 0;
-  // A prior priced offer already went out -> this is a REVISED counter, so its
-  // email presents just the new numbers instead of re-pitching the whole deal.
-  const revised = (await countOffersSent(creatorId)) > 0;
 
-  // Draft is fully reversible — a Claude failure here left NO email in-flight,
-  // so we can safely roll the atomic-claim back to AWAITING_APPROVAL and let
-  // the admin retry.
+  // A reviewed/edited draft (from the "Draft with AI" review-before-send flow)
+  // is sent verbatim — we do NOT re-draft over wording the admin already
+  // approved on screen. Everything downstream (timeline logging, stage
+  // transition, flag/inbound cleanup) is identical to an auto-drafted send.
+  const hasPrepared =
+    preparedEmail && preparedEmail.body != null && String(preparedEmail.body).trim();
+
   let email;
-  try {
-    email = await draftOfferEmail(creator, offer, ctx, { combine, revised });
-  } catch (err) {
-    await db.query(
-      `UPDATE creators SET negotiation_status = 'AWAITING_APPROVAL', updated_at = NOW() WHERE id = $1`,
-      [creatorId],
-    );
-    console.error(`[negotiation] draftOfferEmail failed for creator ${creatorId}:`, err.message);
-    throw err;
+  if (hasPrepared) {
+    email = {
+      subject: preparedEmail.subject || threadSubject(creator),
+      body: String(preparedEmail.body),
+    };
+  } else {
+    const combine = (await countSentNegotiation(creatorId)) === 0;
+    // A prior priced offer already went out -> this is a REVISED counter, so its
+    // email presents just the new numbers instead of re-pitching the whole deal.
+    const revised = (await countOffersSent(creatorId)) > 0;
+
+    // Draft is fully reversible — a Claude failure here left NO email in-flight,
+    // so we can safely roll the atomic-claim back to AWAITING_APPROVAL and let
+    // the admin retry.
+    try {
+      email = await draftOfferEmail(creator, offer, ctx, { combine, revised });
+    } catch (err) {
+      await db.query(
+        `UPDATE creators SET negotiation_status = 'AWAITING_APPROVAL', updated_at = NOW() WHERE id = $1`,
+        [creatorId],
+      );
+      console.error(`[negotiation] draftOfferEmail failed for creator ${creatorId}:`, err.message);
+      throw err;
+    }
   }
 
   // ⚠ Past this point we DO NOT roll the stage back on failure. The moment
@@ -1794,6 +1866,7 @@ async function runNegotiationFollowup(creatorId) {
 module.exports = {
   handleCreatorReply,
   draftOfferEmail,
+  buildOfferDraft,
   processReply,
   sendApprovedOffer,
   sendDelegateReply,
