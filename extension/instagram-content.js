@@ -245,32 +245,76 @@
   // returns the contact email that a cookie-less server-side scrape usually
   // can't. Best-effort: any failure returns null and the DOM scrape takes over.
   const IG_APP_ID = '936619743392459';
+
+  // Normalize an API-provided email; return null unless it's actually
+  // email-shaped (guards against IG returning "" / a phone number / a flag).
+  function normApiEmail(v) {
+    if (!v) return null;
+    const s = String(v).trim().toLowerCase();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : null;
+  }
+
+  // Pull the public contact email out of a web_profile_info user object.
+  // business_email / public_email are the usual homes for the "Email"/"Contact"
+  // button address; if neither is set, fall back to ANY other key whose name
+  // contains "email" (covers Instagram renaming the field). Shallow scan only —
+  // we never descend into nested objects, so an unrelated address can't leak in.
+  function pickEmailFromUser(user) {
+    const primary = normApiEmail(user.business_email) || normApiEmail(user.public_email);
+    if (primary) return primary;
+    for (const [k, v] of Object.entries(user)) {
+      if (/email/i.test(k) && typeof v === 'string') {
+        const e = normApiEmail(v);
+        if (e) return e;
+      }
+    }
+    return null;
+  }
+
   async function fetchProfileApi(username) {
     if (!username) return null;
     try {
+      // Mirror the headers Instagram's own web app sends on this XHR. X-IG-App-ID
+      // alone is usually enough, but sending X-ASBD-ID / X-IG-WWW-Claim /
+      // X-Requested-With makes the request look like a first-party fetch and
+      // keeps it authenticated (a bare request can come back 401/empty).
       const resp = await fetch(
         `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
         {
-          headers: { 'X-IG-App-ID': IG_APP_ID },
+          headers: {
+            'X-IG-App-ID': IG_APP_ID,
+            'X-ASBD-ID': '129477',
+            'X-IG-WWW-Claim': '0',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
           credentials: 'include',
         },
       );
-      if (!resp.ok) return null;
+      if (!resp.ok) {
+        console.warn(`[OEA] web_profile_info HTTP ${resp.status} for @${username} — falling back to DOM scrape`);
+        return null;
+      }
       const data = await resp.json();
       const user = data && data.data && data.data.user;
-      if (!user) return null;
-      const norm = (v) => {
-        const s = v ? String(v).trim().toLowerCase() : '';
-        return s.includes('@') ? s : null;
-      };
+      if (!user) {
+        console.warn(`[OEA] web_profile_info returned no user block for @${username}`);
+        return null;
+      }
+      const email = pickEmailFromUser(user);
+      // Diagnostic: shows in the tab console (and the queue's service-worker
+      // console) exactly what the API surfaced, so a miss is easy to explain.
+      console.log(
+        `[OEA] web_profile_info @${username}: ${email ? 'email=' + email : 'no email field set'} ` +
+          `(business_email=${user.business_email ? 'y' : 'n'}, public_email=${user.public_email ? 'y' : 'n'}, ` +
+          `is_business=${!!user.is_business_account}, is_professional=${!!user.is_professional_account})`,
+      );
       return {
-        businessEmail: norm(user.business_email),
-        publicEmail: norm(user.public_email),
+        email,
         biography: user.biography || null,
         fullName: user.full_name || null,
       };
     } catch (e) {
-      console.warn('web_profile_info fetch failed (continuing with DOM scrape):', e);
+      console.warn('[OEA] web_profile_info fetch failed (continuing with DOM scrape):', e);
       return null;
     }
   }
@@ -381,9 +425,10 @@
       // full name from here if the DOM couldn't find one.
       const apiData = await fetchProfileApi(result.username);
       if (apiData) {
-        if (apiData.businessEmail) result.email = apiData.businessEmail;
-        else if (apiData.publicEmail) result.email = apiData.publicEmail;
-        if (result.email) console.log('Found contact email via web_profile_info:', result.email);
+        if (apiData.email) {
+          result.email = apiData.email;
+          console.log('Found contact email via web_profile_info:', result.email);
+        }
         if (!result.fullName && apiData.fullName) {
           result.fullName = apiData.fullName;
           result.firstName = apiData.fullName.split(/\s+/)[0];
