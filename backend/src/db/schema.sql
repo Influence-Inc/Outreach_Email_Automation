@@ -258,6 +258,18 @@ CREATE TABLE IF NOT EXISTS contracts (
 CREATE INDEX IF NOT EXISTS idx_contracts_creator_id ON contracts(creator_id);
 CREATE INDEX IF NOT EXISTS idx_contracts_status ON contracts(status);
 
+-- Brand-POC approval gate on contracts. An accepted deal no longer fires the
+-- contract email directly: it parks in the Delegate window until the team has
+-- the brand POC's go-ahead and approves it there (POST /:id/approve-contract).
+-- Only then is the contract generated + emailed. FALSE = approval pending.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS contract_approved BOOLEAN NOT NULL DEFAULT FALSE;
+-- Deals accepted before this gate existed already had their contract generated
+-- and sent on acceptance — mark them approved so they don't resurface in the
+-- Delegate window as pending approvals. Idempotent (a no-op after it first runs).
+UPDATE creators SET contract_approved = TRUE
+ WHERE NOT contract_approved
+   AND EXISTS (SELECT 1 FROM contracts ct WHERE ct.creator_id = creators.id);
+
 -- Per-campaign usage-rights policy, replacing the old per-campaign Max CPM
 -- dashboard control. Governs whether the generated contract includes paid ad
 -- rights, and whether Reply 1 tells the creator no ad rights are needed.

@@ -1047,15 +1047,15 @@ async function processReply(creatorId) {
     return { action: 'delegated', reason: 'reply1_after_start' };
   }
 
-  // Accepting an offer fires the contract workflow (generate + email the signing
-  // link) and can't be quietly undone. It is only meaningful once a priced offer
-  // is actually on the table — i.e. at AWAITING_DECISION. If "accepted" comes back
-  // at any other stage it's a misread (there is nothing to accept yet, and
-  // agreedOfferFee would resolve to null), so hand it to a human instead of
-  // firing a contract with no agreed rate.
+  // Accepting an offer locks the agreed fee and parks the deal for the brand
+  // POC's contract approval, and can't be quietly undone. It is only meaningful
+  // once a priced offer is actually on the table — i.e. at AWAITING_DECISION.
+  // If "accepted" comes back at any other stage it's a misread (there is
+  // nothing to accept yet, and agreedOfferFee would resolve to null), so hand
+  // it to a human instead of recording an acceptance with no agreed rate.
   if (result.action === 'accepted' && creator.negotiation_status !== 'AWAITING_DECISION') {
     console.log(
-      `[negotiation] creator ${creator.id}: accepted returned at stage ${creator.negotiation_status || 'NULL'} — no offer on the table, delegating instead of firing a contract`,
+      `[negotiation] creator ${creator.id}: accepted returned at stage ${creator.negotiation_status || 'NULL'} — no offer on the table, delegating instead of recording an acceptance`,
     );
     await delegate(
       creator,
@@ -1133,10 +1133,21 @@ async function agreedOfferFee(creator) {
   return null;
 }
 
+// Park an accepted deal for the brand POC's go-ahead. Only logs the timeline
+// step — the Delegate window derives its approval card from state (ACCEPTED +
+// contract_approved = FALSE + no contract yet), so no extra flag is needed and
+// the card can't be lost by an unrelated needs_human clear.
+async function requestContractApproval(creator, fee) {
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_approval_requested', $2)`,
+    [creator.id, { fee: fee != null ? fee : null }],
+  );
+}
+
 // Generate the creator's contract and email its signing link. Resilient by
-// design: any failure here is logged but never thrown out of applyReply — the
-// acceptance is already recorded, and the scheduler's contract backfill
-// (pollNegotiations) retries any ACCEPTED creator that has no contract yet.
+// design: any failure here is logged but never thrown out of the approval —
+// the approval is already recorded, and the scheduler's contract backfill
+// (pollNegotiations) retries any approved ACCEPTED creator with no contract.
 async function sendContractOnAcceptance(creator, ctx, result) {
   try {
     const { url } = await contracts.createContractForCreator(creator.id);
@@ -1161,22 +1172,80 @@ async function sendContractOnAcceptance(creator, ctx, result) {
 }
 
 // Backfill entry point for the scheduler: generate + email the contract for an
-// ACCEPTED creator that doesn't have one yet (e.g. the inline path errored).
-// Idempotent — contracts.createContractForCreator reuses any existing contract.
+// approved ACCEPTED creator that doesn't have one yet (e.g. the send at
+// approval time errored). Idempotent — contracts.createContractForCreator
+// reuses any existing contract. Hard gate: no contract ever goes out without
+// the brand POC's recorded go-ahead (contract_approved) — approveContract and
+// the manual contract route record it before calling here, and the scheduler
+// backfill filters on it.
 async function ensureContractSent(creatorId) {
   const creator = await loadCreator(creatorId);
   if (!creator) return { skipped: 'no creator' };
+  if (!creator.contract_approved) return { skipped: 'not approved' };
   await sendContractOnAcceptance(creator, ctxFor(creator), { send_now: true });
   return { ok: true };
+}
+
+// The brand-POC go-ahead on an accepted deal. The team must get a "go" from
+// the brand's point of contact before finalizing a creator, so acceptance
+// parks the deal in the Delegate window instead of firing the contract; this
+// records that approval and only then generates + emails the contract.
+// The claim on contract_approved is atomic, so a double-click can't approve
+// (and email the signing link) twice.
+async function approveContract(creatorId) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) {
+    const err = new Error('not found');
+    err.status = 404;
+    throw err;
+  }
+  if (creator.negotiation_status !== 'ACCEPTED') {
+    const err = new Error(
+      `Cannot approve — the deal is not accepted yet (stage: ${
+        creator.negotiation_status
+          ? creator.negotiation_status.replace(/_/g, ' ').toLowerCase()
+          : 'no reply yet'
+      }).`,
+    );
+    err.status = 409;
+    throw err;
+  }
+  const claim = await db.one(
+    `UPDATE creators
+       SET contract_approved = TRUE, updated_at = NOW()
+     WHERE id = $1 AND contract_approved = FALSE
+     RETURNING id`,
+    [creator.id],
+  );
+  if (claim) {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_approved', $2)`,
+      [creator.id, { by: 'admin' }],
+    );
+  } else {
+    // Already approved. Retry the send only when the contract never
+    // materialized (the earlier send failed); otherwise this is a duplicate
+    // click and re-emailing the signing link would spam the creator.
+    const existing = await db.one(`SELECT id FROM contracts WHERE creator_id = $1 LIMIT 1`, [creator.id]);
+    if (existing) return { action: 'approved', already: true };
+  }
+  await sendContractOnAcceptance(
+    { ...creator, contract_approved: true },
+    ctxFor(creator),
+    { send_now: true },
+  );
+  return { action: 'approved' };
 }
 
 // Admin accepts the creator's most recent quoted rate as-is instead of
 // countering it. This is the mirror image of the creator accepting OUR offer:
 // here WE agree to THEIR number. Lock the agreed fee to quoted_rate, move to
 // ACCEPTED, log it (by: 'admin' so the timeline reads "Accepted creator's
-// rate"), and kick off the contract at that fee. Works for any creator with a
-// live quoted rate, including ones already sitting in AWAITING_APPROVAL from a
-// past counter — no migration needed.
+// rate"), and park the deal for the brand POC's approval — like every
+// acceptance, the contract goes out only after approveContract records the
+// go-ahead. Works for any creator with a live quoted rate, including ones
+// already sitting in AWAITING_APPROVAL from a past counter — no migration
+// needed.
 async function acceptQuotedRate(creatorId) {
   const creator = await loadCreator(creatorId);
   if (!creator) {
@@ -1193,12 +1262,13 @@ async function acceptQuotedRate(creatorId) {
   // Only accept from stages where a creator rate is genuinely on the table.
   const acceptable = ['AWAITING_APPROVAL', 'AWAITING_RATE', 'AWAITING_DECISION'];
   // Atomic claim: the first accept wins and an already-ACCEPTED creator can't
-  // be re-accepted, so a double-click can't kick off two contracts.
+  // be re-accepted, so a double-click can't park two approvals.
   const claim = await db.one(
     `UPDATE creators
        SET negotiation_status = 'ACCEPTED',
            quoted_rate = $2,
            offer_approved = FALSE,
+           contract_approved = FALSE,
            needs_human = FALSE,
            delegate_reason = NULL,
            delegate_question = NULL,
@@ -1222,16 +1292,17 @@ async function acceptQuotedRate(creatorId) {
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
     [creator.id, { fee: rate, by: 'admin', source: 'creator_rate' }],
   );
-  // Merge the fresh row over the loaded creator so ctx/contract see the ACCEPTED
-  // stage and locked rate.
+  // Merge the fresh row over the loaded creator so the approval request sees
+  // the ACCEPTED stage and locked rate.
   const accepted = { ...creator, ...claim };
-  await sendContractOnAcceptance(accepted, ctxFor(accepted), { send_now: true });
+  await requestContractApproval(accepted, rate);
   return { action: 'accepted', fee: rate };
 }
 
 // Post-acceptance reply handler (scheduler-callable). A creator who already
-// ACCEPTED — the offer is agreed, the contract has been sent, and may already
-// be signed — can still reply: a payment question, a scheduling detail, a
+// ACCEPTED — the offer is agreed; the contract may still be awaiting the brand
+// POC's approval, or be sent, or even signed — can still reply: a payment
+// question, a scheduling detail, a
 // usage-rights objection, a change of heart. The main negotiation loop
 // (processReply) only runs for NULL / AWAITING_* stages, so without this those
 // replies would sit in latest_inbound_text forever, neither answered nor
@@ -1433,6 +1504,7 @@ async function applyReply(creator, ctx, result) {
         `UPDATE creators
          SET negotiation_status = 'ACCEPTED',
              quoted_rate = COALESCE($2, quoted_rate),
+             contract_approved = FALSE,
              updated_at = NOW()
          WHERE id = $1`,
         [creator.id, agreedFee],
@@ -1441,10 +1513,11 @@ async function applyReply(creator, ctx, result) {
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
         [creator.id, { fee: agreedFee }],
       );
-      // Acceptance kicks off the contract workflow: generate the unique contract
-      // and email its signing link. This replaces the plain acceptance email —
-      // the contract email IS the warm acceptance + link.
-      await sendContractOnAcceptance(creator, ctx, result);
+      // Acceptance does NOT fire the contract: the team needs the brand POC's
+      // go-ahead before a creator is finalized, so the accepted deal parks in
+      // the Delegate window as a pending approval instead. The contract is
+      // generated + emailed only when approveContract records that go-ahead.
+      await requestContractApproval(creator, agreedFee);
       return;
     }
     case 'declined': {
@@ -1714,6 +1787,7 @@ module.exports = {
   sendApprovedOffer,
   sendDelegateReply,
   ensureContractSent,
+  approveContract,
   acceptQuotedRate,
   handleAcceptedReply,
   surfaceApprovalReply,

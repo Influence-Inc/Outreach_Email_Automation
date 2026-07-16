@@ -42,9 +42,14 @@ router.get('/', async (_req, res, next) => {
                 )
               )::int AS contracted_count,
               COUNT(cr.id) FILTER (WHERE cr.needs_human)::int AS needs_human_count,
+              -- action_count also includes accepted deals parked for the brand
+              -- POC's go-ahead (no approval recorded, no contract yet) — they
+              -- render as approval cards in the Delegate window.
               COUNT(cr.id) FILTER (
                 WHERE cr.needs_human
                    OR (cr.suggested_offers IS NOT NULL AND cr.negotiation_status = 'AWAITING_APPROVAL')
+                   OR (cr.negotiation_status = 'ACCEPTED' AND NOT cr.contract_approved
+                       AND NOT EXISTS (SELECT 1 FROM contracts ct2 WHERE ct2.creator_id = cr.id))
               )::int AS action_count
        FROM campaigns c
        LEFT JOIN creators cr ON cr.campaign_id = c.id

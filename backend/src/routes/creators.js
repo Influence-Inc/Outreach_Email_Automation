@@ -25,6 +25,8 @@ const RATE_LOG_TYPES = [
   'rate_declined',
   'sent_delegate_reply',
   'sent_manual_reply',
+  'contract_approval_requested',
+  'contract_approved',
   'contract_sent',
   'contract_signed',
   'contract_synced',
@@ -136,6 +138,12 @@ function rateLogEntry(type, detail, msg, summary) {
     }
     case 'outreach_stopped':
       return { text: d.removed ? 'Outreach stopped (removed from campaign)' : 'Outreach stopped', tone: 'muted' };
+    case 'contract_approval_requested':
+      // The deal is agreed but parked for the brand POC's go-ahead — the
+      // contract is generated + sent only once it's approved in Delegate.
+      return { text: 'Awaiting brand approval to send contract', tone: 'active' };
+    case 'contract_approved':
+      return { text: 'Deal approved ✓', tone: 'success' };
     case 'contract_sent':
       return { text: 'Contract sent', tone: 'active' };
     case 'contract_signed':
