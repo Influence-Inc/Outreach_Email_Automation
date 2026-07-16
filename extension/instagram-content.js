@@ -372,6 +372,7 @@
   async function extractProfileData({ includeReels = true } = {}) {
     const result = {
       email: null,
+      emailSource: null,
       firstName: null,
       fullName: null,
       username: null,
@@ -478,6 +479,7 @@
       if (apiData) {
         if (apiData.email) {
           result.email = apiData.email;
+          result.emailSource = 'instagram_contact';
           console.log('Found contact email via web_profile_info:', result.email);
         }
         if (!result.fullName && apiData.fullName) {
@@ -613,6 +615,11 @@
       if (cleanedName) {
         result.firstName = cleanedName.split(' ')[0];
       }
+
+      // Any email that wasn't resolved from the profile's contact fields came
+      // from the bio / DOM / a mailto link — label it so the dashboard can show
+      // where it came from.
+      if (result.email && !result.emailSource) result.emailSource = 'instagram_bio';
 
       console.log('Instagram profile data extracted:', result);
 

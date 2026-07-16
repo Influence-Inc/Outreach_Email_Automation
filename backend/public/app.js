@@ -1592,12 +1592,14 @@ async function refreshCreators() {
     creatorCell.appendChild(avatar);
     creatorCell.appendChild(identity);
 
-    // --- Email (editable) ---
+    // --- Email (editable) + its source ---
     const emailCell = document.createElement('div');
     emailCell.className = 'cr-email';
-    if (r.email) emailCell.textContent = r.email;
-    else emailCell.innerHTML = '<span class="empty">—</span>';
-    makeEditable(emailCell, {
+    const emailValue = document.createElement('div');
+    emailValue.className = 'cr-email-value';
+    if (r.email) emailValue.textContent = r.email;
+    else emailValue.innerHTML = '<span class="empty">—</span>';
+    makeEditable(emailValue, {
       value: r.email || '',
       placeholder: 'creator@email.com',
       allowEmpty: true, // blanking the cell clears the email
@@ -1607,6 +1609,9 @@ async function refreshCreators() {
           body: JSON.stringify({ email: v || null }),
         }),
     });
+    emailCell.appendChild(emailValue);
+    const emailSrcEl = renderEmailSourceEl(r);
+    if (emailSrcEl) emailCell.appendChild(emailSrcEl);
 
     // --- Reach ---
     const reachCell = document.createElement('div');
@@ -1690,34 +1695,42 @@ el('creator-form').addEventListener('submit', async (e) => {
   submitBtn.disabled = false;
   await refreshCreators();
   await refreshCampaigns();
+  // Automatically scrape the freshly-added (still-pending) creators via the
+  // extension. When that finishes, off-Instagram enrichment runs on its own for
+  // anyone still without an email (see the 'done' handler).
+  if (added) startExtensionScrape({ onlyPending: true });
 });
 
 el('refresh-btn').addEventListener('click', refreshCreators);
 
-// Off-Instagram enrichment: for every creator in this campaign with no email,
-// follow the links captured off their profile (website / Linktree) and scrape a
-// verified contact address. Best-effort and paced server-side.
-el('enrich-emails-btn').addEventListener('click', async () => {
+// Off-Instagram enrichment: for every creator in this campaign still without an
+// email, follow the links captured off their profile (website / Linktree) and
+// scrape a verified contact address. Runs automatically after a scrape finishes
+// (no manual button). Best-effort and paced server-side.
+async function autoEnrichCampaign() {
   if (!state.selectedCampaignId) return;
-  const btn = el('enrich-emails-btn');
-  const status = el('fetch-status');
-  btn.disabled = true;
-  status.hidden = false;
-  status.textContent = 'Searching linked sites for contact emails… (this can take a minute)';
   try {
+    showScrapeProgress('Scrape done — searching linked sites for any missing emails…');
     const result = await api('/api/creators/bulk/enrich-email', {
       method: 'POST',
       body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
     });
-    status.textContent = `Found ${result.found || 0} email(s) across ${result.processed || 0} creator(s) with none on Instagram.`;
+    if (result.processed) {
+      showScrapeProgress(
+        `Done. Found ${result.found || 0} more email(s) off-site (of ${result.processed} without one). [hide]`,
+      );
+    } else {
+      showScrapeProgress('Done. [hide]');
+    }
+  } catch (err) {
+    // Enrichment is best-effort — a failure shouldn't erase the scrape summary.
+    console.warn('auto-enrich failed:', err);
+  } finally {
+    el('scrape-cancel-btn').textContent = 'Hide';
     await refreshCreators();
     await refreshCampaigns();
-  } catch (err) {
-    status.textContent = `Enrichment failed: ${err.message}`;
-  } finally {
-    btn.disabled = false;
   }
-});
+}
 
 el('remove-all-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
@@ -1856,6 +1869,8 @@ function hideScrapeProgress() {
 }
 
 let scrapeAffectedRowIds = new Set();
+// Guards against stacking scrape queues (e.g. adding creators while one runs).
+let scrapeInFlight = false;
 
 function handleScrapeProgress(msg) {
   if (msg.event === 'start') {
@@ -1882,20 +1897,23 @@ function handleScrapeProgress(msg) {
     }
     showScrapeProgress(`Scraping ${msg.index}/${msg.total} — ${tail}`);
   } else if (msg.event === 'done') {
+    scrapeInFlight = false;
     const s = msg.summary || {};
     showScrapeProgress(
       `Done. ${s.processed || 0} processed · ${s.emailFound || 0} found · ${s.noEmail || 0} no email · ` +
-      `${s.withViews || 0} with views · ${s.errors || 0} errors. [hide]`,
+      `${s.withViews || 0} with views · ${s.errors || 0} errors.`,
     );
-    el('scrape-cancel-btn').textContent = 'Hide';
-    refreshCreators();
-    refreshCampaigns();
+    // Automatically follow up: find emails off-Instagram for anyone the scrape
+    // left without one. autoEnrichCampaign refreshes the table when it's done.
+    autoEnrichCampaign();
   } else if (msg.event === 'aborted') {
+    scrapeInFlight = false;
     showScrapeProgress(`Aborted at ${msg.index}/${msg.total}.`);
     el('scrape-cancel-btn').textContent = 'Hide';
     refreshCreators();
     refreshCampaigns();
   } else if (msg.event === 'error') {
+    scrapeInFlight = false;
     showScrapeProgress(`Extension error: ${msg.error}`);
     el('scrape-cancel-btn').textContent = 'Hide';
   }
@@ -1911,10 +1929,12 @@ el('scrape-cancel-btn').addEventListener('click', () => {
   showScrapeProgress('Cancelling after current creator…');
 });
 
-el('run-extension-btn').addEventListener('click', async () => {
+// Kick off the extension scrape queue for this campaign. Runs automatically
+// when creators are added (onlyPending: true → just the freshly-added,
+// still-unscraped rows) and after the offer panel; there's no manual button.
+async function startExtensionScrape({ onlyPending = false } = {}) {
   if (!state.selectedCampaignId) return;
-  const btn = el('run-extension-btn');
-  btn.disabled = true;
+  if (scrapeInFlight) return; // don't stack queues over one another
   el('scrape-cancel-btn').textContent = 'Cancel';
   // Ask the bridge to (re)announce, so a missed initial handshake doesn't make
   // the "not detected" check below a false positive.
@@ -1923,16 +1943,21 @@ el('run-extension-btn').addEventListener('click', async () => {
     const rows = await api(
       `/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`,
     );
-    if (!rows.length) {
-      showScrapeProgress('No creators in this campaign.');
-      el('scrape-cancel-btn').textContent = 'Hide';
+    const list = onlyPending ? rows.filter((r) => r.status === 'pending_extraction') : rows;
+    if (!list.length) {
+      // Nothing to do. Only surface a message for an explicit full run.
+      if (!onlyPending) {
+        showScrapeProgress('No creators in this campaign.');
+        el('scrape-cancel-btn').textContent = 'Hide';
+      }
       return;
     }
-    const creators = rows.map((r) => ({
+    const creators = list.map((r) => ({
       id: r.id,
       instagramUrl: r.instagram_url,
       instagramUsername: r.instagram_username,
     }));
+    scrapeInFlight = true;
     showScrapeProgress(`Starting scrape for ${creators.length} creator(s)…`);
     window.postMessage(
       {
@@ -1948,6 +1973,7 @@ el('run-extension-btn').addEventListener('click', async () => {
     // If the extension never responds within 2s, assume it isn't installed.
     setTimeout(() => {
       if (!extensionBridge.ready) {
+        scrapeInFlight = false;
         showScrapeProgress(
           'Extension not detected. Load the unpacked extension at chrome://extensions then reload this page.',
         );
@@ -1955,12 +1981,54 @@ el('run-extension-btn').addEventListener('click', async () => {
       }
     }, 2000);
   } catch (err) {
+    scrapeInFlight = false;
     showScrapeProgress(`Failed: ${err.message}`);
     el('scrape-cancel-btn').textContent = 'Hide';
-  } finally {
-    btn.disabled = false;
   }
-});
+}
+
+// --- Email source display ------------------------------------------------
+
+// Short human label for a non-URL email source (Instagram / provider / manual).
+function emailSourceLabel(src) {
+  if (/^instagram_contact$/i.test(src) || /^(business_email|public_email)$/i.test(src))
+    return 'Instagram (contact)';
+  if (/^instagram_bio$/i.test(src) || /^(bio_regex|html_text)$/i.test(src))
+    return 'Instagram (bio)';
+  if (/^instagram/i.test(src)) return 'Instagram';
+  if (/^provider:/i.test(src)) {
+    const p = src.slice(src.indexOf(':') + 1);
+    return p ? p[0].toUpperCase() + p.slice(1) : 'provider';
+  }
+  if (src === 'manual') return 'manual entry';
+  return src;
+}
+
+// A small "via …" line under the email. Off-Instagram emails link to the EXACT
+// page they were scraped from (hostname shown, full URL on hover); Instagram /
+// provider / manual sources show a short label. Returns null when there's no
+// email or no recorded source.
+function renderEmailSourceEl(r) {
+  if (!r.email || !r.email_source) return null;
+  const src = String(r.email_source);
+  const wrap = document.createElement('div');
+  wrap.className = 'cr-email-src';
+  if (/^https?:\/\//i.test(src)) {
+    let host = src;
+    try { host = new URL(src).hostname.replace(/^www\./, ''); } catch { /* keep raw */ }
+    wrap.appendChild(document.createTextNode('via '));
+    const a = document.createElement('a');
+    a.href = src;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = host;
+    a.title = src; // the exact page the email was scraped from
+    wrap.appendChild(a);
+  } else {
+    wrap.textContent = 'via ' + emailSourceLabel(src);
+  }
+  return wrap;
+}
 
 // --- HTML escape ---------------------------------------------------------
 

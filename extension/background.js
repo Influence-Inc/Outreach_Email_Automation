@@ -240,12 +240,17 @@ async function runScrapeQueue(payload, sender) {
       if (!error && scraped) {
         const patchBody = {};
         if (scraped.email) patchBody.email = scraped.email;
+        if (scraped.emailSource) patchBody.email_source = scraped.emailSource;
         if (scraped.firstName) patchBody.first_name = scraped.firstName;
         if (scraped.fullName) patchBody.full_name = scraped.fullName;
         if (viewCount) patchBody.reel_views = cleanViews;
         if (Array.isArray(scraped.bioLinks) && scraped.bioLinks.length) {
           patchBody.bio_links = scraped.bioLinks;
         }
+        // Mark this as a completed scrape so the backend can move a still-pending
+        // creator to no_email when no address was found (the enrichment pass then
+        // runs). Also guarantees a non-empty PATCH so that status transition fires.
+        patchBody.scraped = true;
 
         if (Object.keys(patchBody).length > 0) {
           try {
