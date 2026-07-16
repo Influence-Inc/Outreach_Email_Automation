@@ -235,15 +235,17 @@
     return [...reels.values()].slice(0, maxReels);
   }
 
-  // ---- web_profile_info API (the Contact-button email) --------------------
+  // ---- Instagram private-API email lookup (the Contact-button email) -------
   // Instagram business/professional profiles expose a public contact email
   // behind the "Contact"/"Email" button. That button is a mobile-app affordance
   // — it never renders in the profile's web DOM — so scraping the page can't see
-  // the email. Instagram's own web_profile_info endpoint DOES return it as
-  // business_email / public_email. Because this fetch runs inside the logged-in
-  // instagram.com tab it's same-origin and carries the user's session, so it
-  // returns the contact email that a cookie-less server-side scrape usually
-  // can't. Best-effort: any failure returns null and the DOM scrape takes over.
+  // the email. Two logged-in JSON endpoints do carry it, and because these
+  // fetches run inside the instagram.com tab they're same-origin and carry the
+  // user's session (returning the contact email a cookie-less server-side scrape
+  // can't): web_profile_info exposes business_email/public_email for some
+  // accounts, and /users/{id}/info/ carries public_email for the rest (many
+  // profiles return null in web_profile_info but a real email here). Best-effort:
+  // any failure returns null and the DOM scrape takes over.
   const IG_APP_ID = '936619743392459';
 
   // Normalize an API-provided email; return null unless it's actually
@@ -271,52 +273,83 @@
     return null;
   }
 
+  // Fetch an Instagram private-API JSON endpoint from the logged-in tab. Mirrors
+  // the headers Instagram's own web app sends on these XHRs — X-IG-App-ID alone
+  // is usually enough, but X-ASBD-ID / X-IG-WWW-Claim / X-Requested-With make it
+  // look like a first-party fetch and keep it authenticated (a bare request can
+  // come back 401/empty).
+  async function fetchIgApi(url) {
+    return fetch(url, {
+      headers: {
+        'X-IG-App-ID': IG_APP_ID,
+        'X-ASBD-ID': '129477',
+        'X-IG-WWW-Claim': '0',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      credentials: 'include',
+    });
+  }
+
   async function fetchProfileApi(username) {
     if (!username) return null;
+
+    // 1) web_profile_info — the user id, full name, biography, and (for SOME
+    //    accounts) business_email / public_email inline.
+    let user = null;
     try {
-      // Mirror the headers Instagram's own web app sends on this XHR. X-IG-App-ID
-      // alone is usually enough, but sending X-ASBD-ID / X-IG-WWW-Claim /
-      // X-Requested-With makes the request look like a first-party fetch and
-      // keeps it authenticated (a bare request can come back 401/empty).
-      const resp = await fetch(
+      const resp = await fetchIgApi(
         `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
-        {
-          headers: {
-            'X-IG-App-ID': IG_APP_ID,
-            'X-ASBD-ID': '129477',
-            'X-IG-WWW-Claim': '0',
-            'X-Requested-With': 'XMLHttpRequest',
-          },
-          credentials: 'include',
-        },
       );
-      if (!resp.ok) {
-        console.warn(`[OEA] web_profile_info HTTP ${resp.status} for @${username} — falling back to DOM scrape`);
-        return null;
+      if (resp.ok) {
+        const data = await resp.json();
+        user = data && data.data && data.data.user;
+      } else {
+        console.warn(`[OEA] web_profile_info HTTP ${resp.status} for @${username}`);
       }
-      const data = await resp.json();
-      const user = data && data.data && data.data.user;
-      if (!user) {
-        console.warn(`[OEA] web_profile_info returned no user block for @${username}`);
-        return null;
-      }
-      const email = pickEmailFromUser(user);
-      // Diagnostic: shows in the tab console (and the queue's service-worker
-      // console) exactly what the API surfaced, so a miss is easy to explain.
-      console.log(
-        `[OEA] web_profile_info @${username}: ${email ? 'email=' + email : 'no email field set'} ` +
-          `(business_email=${user.business_email ? 'y' : 'n'}, public_email=${user.public_email ? 'y' : 'n'}, ` +
-          `is_business=${!!user.is_business_account}, is_professional=${!!user.is_professional_account})`,
-      );
-      return {
-        email,
-        biography: user.biography || null,
-        fullName: user.full_name || null,
-      };
     } catch (e) {
-      console.warn('[OEA] web_profile_info fetch failed (continuing with DOM scrape):', e);
-      return null;
+      console.warn('[OEA] web_profile_info fetch failed:', e);
     }
+
+    const out = {
+      email: user ? pickEmailFromUser(user) : null,
+      biography: (user && user.biography) || null,
+      fullName: (user && user.full_name) || null,
+    };
+    const userId = user && (user.id || user.pk);
+
+    // 2) The "Email"/"Contact" button address commonly lives ONLY in the
+    //    per-user info endpoint (as public_email), NOT in web_profile_info —
+    //    which returns null there. So when we have the id but still no email,
+    //    follow up with /users/{id}/info/. That's what fills these profiles in.
+    if (!out.email && userId) {
+      try {
+        const resp = await fetchIgApi(
+          `https://www.instagram.com/api/v1/users/${encodeURIComponent(userId)}/info/`,
+        );
+        if (resp.ok) {
+          const info = await resp.json();
+          const infoUser = info && info.user;
+          if (infoUser) {
+            out.email = pickEmailFromUser(infoUser);
+            if (!out.fullName && infoUser.full_name) out.fullName = infoUser.full_name;
+            if (!out.biography && infoUser.biography) out.biography = infoUser.biography;
+          }
+        } else {
+          console.warn(`[OEA] users/${userId}/info HTTP ${resp.status} for @${username}`);
+        }
+      } catch (e) {
+        console.warn('[OEA] users/info fetch failed:', e);
+      }
+    }
+
+    if (!user && !out.email) return null;
+
+    // Diagnostic (tab console + the queue's service-worker console): where the
+    // email came from, so a miss is easy to explain.
+    console.log(
+      `[OEA] api resolve @${username}: ${out.email ? 'email=' + out.email : 'no email'} (id=${userId || '?'})`,
+    );
+    return out;
   }
 
   async function extractProfileData({ includeReels = true } = {}) {
