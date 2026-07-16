@@ -508,6 +508,25 @@
                 : ''
             }
             <button class="btn btn-ghost oc-dismiss" type="button">Dismiss offer</button>
+            <button class="btn btn-ghost oc-ai-toggle" type="button">✎ Draft with AI</button>
+          </div>
+
+          <div class="oc-ai" hidden>
+            <div class="oc-ai-title">Draft with AI</div>
+            <div class="oc-ai-desc">Add your own thoughts — AI writes the full email around the selected offer. Review and edit before it sends; the numbers stay as you set them.</div>
+            <textarea class="oc-ai-note" rows="3" placeholder="e.g. Push back gently on the per-view bonus and lean into the long-term retainer."></textarea>
+            <div class="oc-ai-bar">
+              <button class="btn btn-primary oc-ai-draft" type="button">Draft email with AI →</button>
+            </div>
+            <div class="oc-ai-status"></div>
+            <div class="oc-ai-preview" hidden>
+              <div class="oc-ai-label">Review &amp; edit — sent to the creator as-is</div>
+              <textarea class="oc-ai-body" rows="12"></textarea>
+              <div class="oc-ai-bar">
+                <button class="btn btn-primary oc-ai-send" type="button">Send to creator →</button>
+                <button class="btn btn-ghost oc-ai-redraft" type="button">Re-draft</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -712,6 +731,124 @@
       }
     };
 
+    // ── "Draft with AI" — describe the message, AI writes the full offer email
+    //    around the selected offer, review/edit, then send. Sending reuses the
+    //    same PATCH /offer approve path (with the reviewed body) so all the send
+    //    guarantees match Approve & send.
+    const aiPanel = root.querySelector('.oc-ai');
+    const aiToggle = root.querySelector('.oc-ai-toggle');
+    const aiNote = root.querySelector('.oc-ai-note');
+    const aiDraftBtn = root.querySelector('.oc-ai-draft');
+    const aiStatus = root.querySelector('.oc-ai-status');
+    const aiPreview = root.querySelector('.oc-ai-preview');
+    const aiBody = root.querySelector('.oc-ai-body');
+    const aiSendBtn = root.querySelector('.oc-ai-send');
+    const aiRedraftBtn = root.querySelector('.oc-ai-redraft');
+    let draftedOffer = null;
+    let draftedSubject = null;
+
+    const resetAiPreview = () => {
+      aiPreview.hidden = true;
+      aiBody.value = '';
+      draftedOffer = null;
+      draftedSubject = null;
+    };
+
+    aiToggle.onclick = () => {
+      aiPanel.hidden = !aiPanel.hidden;
+      if (!aiPanel.hidden) aiNote.focus();
+    };
+
+    aiDraftBtn.onclick = async () => {
+      if (aiDraftBtn.dataset.busy === '1') return;
+      aiDraftBtn.dataset.busy = '1';
+      aiDraftBtn.disabled = true;
+      aiStatus.textContent = 'Drafting…';
+      const offer = buildCustomOffer();
+      try {
+        const draft = await api(`/api/creators/${r.id}/draft-offer`, {
+          method: 'POST',
+          body: JSON.stringify({ custom_offer: offer, instructions: aiNote.value.trim() }),
+        });
+        draftedOffer = offer;
+        draftedSubject = draft.subject || null;
+        aiBody.value = draft.body || '';
+        aiPreview.hidden = false;
+        aiStatus.textContent = 'Draft ready — review and edit below, then send.';
+        aiBody.focus();
+      } catch (err) {
+        aiStatus.textContent = `Couldn't draft: ${err.message}`;
+      } finally {
+        aiDraftBtn.disabled = false;
+        aiDraftBtn.dataset.busy = '';
+      }
+    };
+
+    aiRedraftBtn.onclick = () => {
+      aiPreview.hidden = true;
+      aiStatus.textContent = '';
+      aiNote.focus();
+    };
+
+    aiSendBtn.onclick = async () => {
+      if (aiSendBtn.dataset.busy === '1') return;
+      const body = aiBody.value.trim();
+      if (!body) {
+        aiStatus.textContent = 'The email is empty — draft or write something first.';
+        return;
+      }
+      const offer = draftedOffer || buildCustomOffer();
+      aiSendBtn.dataset.busy = '1';
+      aiSendBtn.disabled = true;
+      aiRedraftBtn.disabled = true;
+      aiStatus.textContent = 'Sending…';
+      try {
+        const resp = await api(`/api/creators/${r.id}/offer`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            selected_offer_id: offer.offer_id,
+            custom_offer: offer,
+            offer_approved: true,
+            email: { subject: draftedSubject, body },
+          }),
+        });
+        const sr = resp && resp.send_result;
+        let hold = 1200;
+        if (sr && sr.sent) {
+          aiStatus.textContent = '✓ Your email was sent.';
+        } else if (sr && sr.error) {
+          aiStatus.textContent = `Send failed: ${sr.error}. Check the creator's inbox before re-sending.`;
+          hold = 5000;
+        } else if (sr && sr.skipped) {
+          aiStatus.textContent = `Not sent — ${sr.skipped}.`;
+          hold = 4000;
+        } else {
+          aiStatus.textContent = '✓ Saved.';
+        }
+        setTimeout(onRefresh, hold);
+      } catch (err) {
+        aiStatus.textContent = err.message;
+        aiSendBtn.disabled = false;
+        aiRedraftBtn.disabled = false;
+        aiSendBtn.dataset.busy = '';
+      }
+    };
+
+    // Editing the offer after drafting desyncs the preview from the numbers —
+    // drop the stale draft and prompt a re-draft.
+    const markStaleOnEdit = () => {
+      if (!aiPreview.hidden) {
+        resetAiPreview();
+        aiStatus.textContent = 'Offer changed — draft again to match the new numbers.';
+      }
+    };
+    root.querySelectorAll('input[data-k]').forEach((input) => {
+      input.addEventListener('input', markStaleOnEdit);
+    });
+    root.querySelectorAll('.oc-choose').forEach((btn) => {
+      btn.addEventListener('click', markStaleOnEdit);
+    });
+
     recompute();
     return root;
   }
@@ -732,6 +869,10 @@
       }
       <div class="reply">
         <label>Your reply</label>
+        <div class="reply-ai-row">
+          <input class="reply-ai-note" type="text" placeholder="Or describe it and let AI draft — e.g. “reassure on timeline, ask for rate”">
+          <button class="btn btn-ghost reply-ai-draft" type="button">✎ AI</button>
+        </div>
         <textarea class="reply-text" rows="5" placeholder="Write your reply…  ([text](url) formatting supported)"></textarea>
         <div class="oc-send-status reply-status"></div>
         <div class="btn-row" style="margin-top:8px">
@@ -743,6 +884,33 @@
     const statusEl = block.querySelector('.reply-status');
     const sendBtn = block.querySelector('.reply-send');
     const dismissBtn = block.querySelector('.reply-dismiss');
+    const aiNote = block.querySelector('.reply-ai-note');
+    const aiDraftBtn = block.querySelector('.reply-ai-draft');
+
+    // "Draft with AI" — describe the reply, AI drafts it into the reply box for
+    // review/edit; the existing Send reply posts the reviewed body.
+    aiDraftBtn.onclick = async () => {
+      if (aiDraftBtn.dataset.busy === '1') return;
+      const instructions = aiNote.value.trim();
+      if (!instructions) { statusEl.textContent = 'Describe what the reply should say first.'; return; }
+      aiDraftBtn.dataset.busy = '1';
+      aiDraftBtn.disabled = true;
+      statusEl.textContent = 'Drafting…';
+      try {
+        const draft = await api(`/api/creators/${r.id}/draft-reply`, {
+          method: 'POST',
+          body: JSON.stringify({ instructions }),
+        });
+        textEl.value = draft.body || '';
+        statusEl.textContent = 'Draft ready — review and edit, then Send reply.';
+        textEl.focus();
+      } catch (err) {
+        statusEl.textContent = `Couldn't draft: ${err.message}`;
+      } finally {
+        aiDraftBtn.disabled = false;
+        aiDraftBtn.dataset.busy = '';
+      }
+    };
 
     sendBtn.onclick = async () => {
       const body = textEl.value.trim();

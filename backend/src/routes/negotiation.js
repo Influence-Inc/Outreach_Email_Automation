@@ -17,7 +17,7 @@ const router = express.Router();
 // re-approves once they are.
 router.patch('/:id/offer', async (req, res, next) => {
   try {
-    const { selected_offer_id, custom_offer, offer_approved } = req.body || {};
+    const { selected_offer_id, custom_offer, offer_approved, email } = req.body || {};
     const sets = [];
     const params = [req.params.id];
 
@@ -50,8 +50,12 @@ router.patch('/:id/offer', async (req, res, next) => {
         // admin can proactively offer an engaged creator. If the creator isn't
         // ready (no thread / not awaiting an offer), the approval is recorded
         // but nothing is sent — the admin re-approves once they are ready.
+        // When the admin reviewed an AI draft ("Draft with AI"), `email` carries
+        // the exact (possibly hand-edited) body — send it verbatim instead of
+        // re-drafting. Absent that, the offer email is auto-drafted as before.
         send_result = await negotiation.sendApprovedOffer(row.id, {
           fromStages: ['AWAITING_APPROVAL', 'AWAITING_RATE'],
+          preparedEmail: email && email.body ? email : null,
         });
       } catch (err) {
         send_result = { error: err.message };
@@ -60,6 +64,42 @@ router.patch('/:id/offer', async (req, res, next) => {
     const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [row.id]);
     res.json({ ...fresh, send_result });
   } catch (err) {
+    next(err);
+  }
+});
+
+// Preview the offer email WITHOUT sending — the "Draft with AI" flow. The admin
+// shapes an offer, optionally types a short note describing what to add, and we
+// return the drafted email so they can review + edit it before hitting send.
+// No side effects (nothing emailed, no stage/flag change). The reviewed body is
+// sent later through PATCH /:id/offer (offer_approved:true, email:{...}).
+router.post('/:id/draft-offer', async (req, res, next) => {
+  try {
+    const { custom_offer, instructions } = req.body || {};
+    const draft = await negotiation.buildOfferDraft(req.params.id, {
+      offer: custom_offer,
+      instructions: instructions || '',
+    });
+    res.json(draft);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Preview a plain hand-off reply WITHOUT sending — the "Draft with AI" box on
+// the Delegate reply block. The admin describes what to say; we draft the reply
+// so they can review + edit it in the reply box, then send it through the
+// existing /:id/delegate-reply path. No side effects.
+router.post('/:id/draft-reply', async (req, res, next) => {
+  try {
+    const { instructions } = req.body || {};
+    const draft = await negotiation.buildReplyDraft(req.params.id, {
+      instructions: instructions || '',
+    });
+    res.json(draft);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 });
