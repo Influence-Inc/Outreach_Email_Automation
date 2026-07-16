@@ -444,6 +444,75 @@ test('describeOffer view_based body does NOT mention any video count', () => {
   assert.ok(!/\b\d+\s*video/i.test(out), 'no "N video(s)" count language');
 });
 
+// ── View-based opener: lead with the creator's view range when it's wide ────
+// The offer opens by calling out how far the creator's views swing (least →
+// highest) ONLY when that spread is significant; otherwise it uses the standard
+// performance-deal opener.
+
+test('viewRangeFromStats reads the lowest & highest reel views from stored stats', () => {
+  const stats = { views_raw: [63200, 120000, 412000, 90000], min_views: 63200 };
+  assert.deepStrictEqual(templates.viewRangeFromStats(stats), { low: 63200, high: 412000 });
+});
+
+test('viewRangeFromStats returns null when there is no usable range', () => {
+  assert.strictEqual(templates.viewRangeFromStats(null), null);
+  assert.strictEqual(templates.viewRangeFromStats({ median: 51000 }), null);
+  assert.strictEqual(templates.viewRangeFromStats({ views_raw: [50000] }), null);
+});
+
+test('viewBasedOpener leads with the range when the spread is significant', () => {
+  const line = templates.viewBasedOpener({ low: 60000, high: 400000 });
+  assert.ok(
+    line.includes('your views can range anywhere from 60k to 400k+'),
+    'states the least → highest range with the high end marked "+"',
+  );
+  assert.ok(/views-based offer/i.test(line), 'pitches a views-based offer');
+});
+
+test('viewBasedOpener falls back to the standard opener when the spread is small', () => {
+  // 26k → 49k is only ~1.9x — not worth leading with.
+  const line = templates.viewBasedOpener({ low: 26000, high: 49000 });
+  assert.strictEqual(
+    line,
+    "We usually do performance-based deals with all our creators. We'd love to propose a view-based offer:",
+  );
+  assert.ok(!/range anywhere from/i.test(line), 'no range line for a narrow spread');
+});
+
+test('viewBasedOpener falls back when no range is available', () => {
+  assert.ok(!/range anywhere from/i.test(templates.viewBasedOpener(null)), 'null range → standard opener');
+});
+
+test('describeOffer view_based leads with a significant view range when given one', () => {
+  const out = templates.describeOffer(
+    { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 500000 },
+    'Acme',
+    { low: 60000, high: 400000 },
+  );
+  assert.ok(out.includes('your views can range anywhere from 60k to 400k+'), 'range-based opener used');
+  assert.ok(out.includes('**View-Based Offer ($1,500)**'), 'still presents the offer');
+});
+
+test('describeOffer view_based uses the standard opener for a narrow range', () => {
+  const out = templates.describeOffer(
+    { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 500000 },
+    'Acme',
+    { low: 26000, high: 49000 },
+  );
+  assert.ok(/performance-based deals/i.test(out), 'standard opener for a narrow spread');
+  assert.ok(!/range anywhere from/i.test(out), 'no range line');
+});
+
+test('offerEmail threads the view range into the view_based opener', () => {
+  const offer = { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 500000 };
+  const { body } = templates.offerEmail(
+    offer,
+    { firstName: 'Dua', salutation: 'Dua', brandName: 'Acme' },
+    { viewRange: { low: 80000, high: 500000 } },
+  );
+  assert.ok(body.includes('your views can range anywhere from 80k to 500k+'), 'range opener in the sent body');
+});
+
 test('offerEmail combine mode for view_based does NOT use the video-package REPLY 1', () => {
   const offer = { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 500000 };
   const { body } = templates.offerEmail(

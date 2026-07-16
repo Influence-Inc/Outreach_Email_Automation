@@ -184,10 +184,67 @@ Would love to work together and land on something that works well for both sides
 const fmtNum = (n) => Number(n || 0).toLocaleString('en-US');
 const fmtMoney = (n) => fmtNum(Math.round(Number(n || 0)));
 
+// How many times bigger the creator's HIGHEST recent view count must be than
+// their LOWEST before the spread is "significant" enough to lead the offer with
+// it. Their views ranging 60k–400k (≈6.7x) is worth calling out; 26k–49k
+// (≈1.9x) is not. Tunable via env; defaults to 3x.
+const SIGNIFICANT_VIEW_RANGE_RATIO = Number(process.env.SIGNIFICANT_VIEW_RANGE_RATIO || 3);
+
+// The standard view-based opener, used when we can't state a view range or the
+// spread isn't wide enough to be worth leading with.
+const VIEW_BASED_STANDARD_OPENER =
+  "We usually do performance-based deals with all our creators. We'd love to propose a view-based offer:";
+
+// Short, human view count: 63200 -> "63k", 1_250_000 -> "1.3M", 900 -> "900".
+function fmtViewsShort(n) {
+  const x = Math.max(0, Number(n) || 0);
+  if (x >= 1e6) {
+    const m = x / 1e6;
+    return `${m >= 10 ? Math.round(m) : Math.round(m * 10) / 10}M`;
+  }
+  if (x >= 1000) return `${Math.round(x / 1000)}k`;
+  return `${Math.round(x)}`;
+}
+
+// Pull the creator's lowest & highest recent view counts out of the stored IG
+// stats (see pricing.computeStats — it keeps the raw per-reel views in
+// `views_raw`). Returns null when there isn't enough data to state a range.
+function viewRangeFromStats(stats) {
+  if (!stats || typeof stats !== 'object') return null;
+  const raw = Array.isArray(stats.views_raw)
+    ? stats.views_raw.map(Number).filter((v) => Number.isFinite(v) && v > 0)
+    : [];
+  if (raw.length >= 2) return { low: Math.min(...raw), high: Math.max(...raw) };
+  // No raw list on file (older/partial stats): fall back to min_views + the
+  // best "high" percentile we have. Only usable if both are present and differ.
+  const low = Number(stats.min_views) || 0;
+  const high = Number(stats.p75) || Number(stats.max_views) || 0;
+  if (low > 0 && high > low) return { low, high };
+  return null;
+}
+
+// The opening line for a view-based offer. When the creator's own view history
+// swings widely (highest is at least SIGNIFICANT_VIEW_RANGE_RATIO x the lowest),
+// lead with that range to justify a view-based deal; otherwise use the standard
+// performance-deal opener. `viewRange` is { low, high } (or null).
+function viewBasedOpener(viewRange) {
+  const low = viewRange ? Number(viewRange.low) || 0 : 0;
+  const high = viewRange ? Number(viewRange.high) || 0 : 0;
+  if (low > 0 && high > low && high >= low * SIGNIFICANT_VIEW_RANGE_RATIO) {
+    return (
+      `Given that your views can range anywhere from ${fmtViewsShort(low)} to ${fmtViewsShort(high)}+, ` +
+      `we'd love to propose a slightly different views-based offer:`
+    );
+  }
+  return VIEW_BASED_STANDARD_OPENER;
+}
+
 // The headline lines describing a single admin-approved offer. The offer-type
 // header is **bold** so it renders as a section heading (mirrors REPLY 2's
-// "**Option 1 / Option 2**" style) in the sent email.
-function describeOffer(offer, brandName) {
+// "**Option 1 / Option 2**" style) in the sent email. `viewRange` ({ low, high }
+// or null) is the creator's recent view spread — when it's wide enough a
+// view-based offer leads with it instead of the standard performance opener.
+function describeOffer(offer, brandName, viewRange = null) {
   if (!offer) return '';
   if (offer.offer_type === 'view_based') {
     const views = Number(offer.view_guarantee || 0);
@@ -197,7 +254,7 @@ function describeOffer(offer, brandName) {
     // video", "further videos", "N-video package" is misleading here (it makes
     // the deal sound video-count-bounded when it isn't).
     return (
-      `We usually do performance-based deals with all our creators. We'd love to propose a view-based offer:\n\n` +
+      `${viewBasedOpener(viewRange)}\n\n` +
       `**View-Based Offer ($${fmtMoney(offer.flat_fee)})**\n` +
       `- $${fmtMoney(offer.flat_fee)} for a minimum of ${fmtNum(views)} combined total views on Instagram.\n` +
       `- Views are counted across all your posts for this collab — publish as many or as few as you'd like to hit the guaranteed view total.\n` +
@@ -321,7 +378,7 @@ If everything sounds good, please let me know your rates :)
 // Deterministic single-offer email built from the approved offer. When
 // `combine` is true (rate arrived in the creator's first reply), prepend the
 // Reply 1 details so the one email covers both.
-function offerEmail(offer, vars, { combine = false } = {}) {
+function offerEmail(offer, vars, { combine = false, viewRange = null } = {}) {
   const v = withDefaults(vars);
   const isViewBased = offer && offer.offer_type === 'view_based';
   const videos = !isViewBased ? Number(offer.num_videos || 2) : 2;
@@ -334,7 +391,7 @@ function offerEmail(offer, vars, { combine = false } = {}) {
   const lead = combine
     ? stripReferences(fill(reply1Body, v)).replace(/\n\nIf everything sounds good[\s\S]*$/, '\n')
     : `Hi ${v.salutation},\n\nThanks for sharing your rates!\n`;
-  const body = `${lead}\n${describeOffer(offer, v.brandName)}\n\n${fill(PAYMENT_AND_CLOSE, v)}`;
+  const body = `${lead}\n${describeOffer(offer, v.brandName, viewRange)}\n\n${fill(PAYMENT_AND_CLOSE, v)}`;
   const subject = fill(REPLY1_SUBJECT, v);
   return { subject, body };
 }
@@ -409,6 +466,10 @@ module.exports = {
   offerEmail,
   describeOffer,
   describeOfferConcise,
+  viewRangeFromStats,
+  viewBasedOpener,
+  fmtViewsShort,
+  SIGNIFICANT_VIEW_RANGE_RATIO,
   revisedOfferEmail,
   followup1,
   followup2,
