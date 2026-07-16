@@ -537,12 +537,16 @@ router.patch('/:id', async (req, res, next) => {
     }
 
     // email_source travels with the email: an explicit source from the scrape
-    // (e.g. 'instagram_contact') is stored; a manual email edit with no source
-    // is marked 'manual'; clearing the email clears the source.
+    // (e.g. 'instagram_contact') is stored; clearing the email clears the source.
+    // A PATCH with `scraped: true` came from the extension, which only reads
+    // Instagram — so an email it sends without an explicit source is still from
+    // Instagram, never a hand-typed "manual" entry. Only a bare human edit (no
+    // source, no `scraped` flag) is marked 'manual'.
     if (Object.prototype.hasOwnProperty.call(body, 'email')) {
       let src;
       if (body.email === '' || body.email == null) src = null;
       else if (body.email_source) src = String(body.email_source);
+      else if (body.scraped === true) src = 'instagram';
       else src = 'manual';
       params.push(src);
       updates.push(`email_source = $${params.length}`);

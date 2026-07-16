@@ -62,6 +62,52 @@ const JUNK_LOCAL_PARTS = new Set([
 // ("logo@2x.png" → local "logo", domain "2x.png"). Reject these outright.
 const ASSET_EXTS = /\.(png|jpe?g|gif|svg|webp|bmp|ico|css|js|woff2?|ttf)$/i;
 
+// Operational / support / no-reply mailboxes. A creator (or their manager) never
+// hands these out as an outreach contact — they're a company's customer-support
+// desk or an automated system address. When enrichment follows a creator's bio
+// links onto a sponsored third-party brand, THIS is what it scrapes (e.g.
+// support@higgsfield.ai, support@mail.pippit.ai), so we drop them. Note the list
+// deliberately EXCLUDES hello/hi/contact/info/team/bookings/press/pr/management/
+// mgmt/collab/partnerships — those ARE legitimate creator-brand / manager
+// inboxes and must survive.
+const ROLE_LOCAL_PARTS = new Set([
+  'support', 'help', 'helpdesk', 'care', 'customercare', 'customerservice',
+  'custserv', 'service', 'services', 'billing', 'accounts', 'accounting',
+  'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'feedback', 'abuse',
+  'postmaster', 'webmaster', 'hostmaster', 'mailerdaemon', 'mailer-daemon',
+  'mailer', 'bounce', 'bounces', 'notifications', 'notification', 'notify',
+  'alerts', 'alert', 'security', 'privacy', 'legal', 'compliance', 'dpo',
+  'gdpr', 'unsubscribe', 'newsletter', 'newsletters', 'subscribe', 'updates',
+  'root', 'sysadmin',
+]);
+
+// Free webmail providers. An address on one of these is never "on-domain" for a
+// creator's own site, so when enrichment finds one on a FOLLOWED site that isn't
+// tied to the creator's name, it's almost always the site owner's (a third-party
+// brand's) address rather than the creator's — e.g. pxvbusiness@gmail.com sitting
+// in a promoted brand's page footer.
+const FREE_MAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in',
+  'ymail.com', 'rocketmail.com', 'outlook.com', 'outlook.co.uk', 'hotmail.com',
+  'hotmail.co.uk', 'live.com', 'msn.com', 'icloud.com', 'me.com', 'mac.com',
+  'aol.com', 'aim.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com',
+  'gmx.net', 'zoho.com', 'zohomail.com', 'mail.com', 'yandex.com', 'yandex.ru',
+  'fastmail.com', 'hey.com', 'tutanota.com', 'tuta.com', 'hushmail.com',
+  'qq.com', '163.com', '126.com', 'naver.com', 'hotmail.fr', 'orange.fr',
+]);
+
+// Query params / path segments that mark a link as an affiliate / referral /
+// promo link — i.e. a sponsored third-party brand the creator is promoting, not
+// their own site. We skip these entirely for enrichment. Kept deliberately tight
+// (no bare `ref`/`utm_*`, which appear on plenty of creators' own links) so a
+// legitimate own-site link isn't misread as sponsored.
+const SPONSORED_PARAMS = [
+  'aff', 'affid', 'affiliate', 'afmc', 'coupon', 'promo', 'promocode',
+  'promo_code', 'discount', 'voucher', 'referral', 'sponsor', 'sponsored',
+  'irclickid', 'cjevent', 'clickid', 'fpr',
+];
+const SPONSORED_PATH = /\/(?:aff|affiliate|referral)(?:\/|$)/i;
+
 function hostOf(url) {
   try {
     return new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
@@ -178,6 +224,85 @@ function pickBestEmail(emails, siteHost) {
   return emails[0];
 }
 
+// Identity tokens for the creator (name words + collapsed handle), used to tell
+// an email that's plausibly theirs from a third-party brand's. Words shorter
+// than 3 chars are dropped as too generic to match on.
+function creatorTokens(context = {}) {
+  const words = new Set();
+  const add = (s) => {
+    if (!s) return;
+    for (const w of String(s).toLowerCase().split(/[^a-z0-9]+/)) {
+      if (w.length >= 3) words.add(w);
+    }
+  };
+  add(context.fullName);
+  add(context.instagramUsername);
+  const handle = String(context.instagramUsername || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  return { words: [...words], handle };
+}
+
+// True when the creator's own name/handle shows up in an email's local part or
+// domain — e.g. yushika@birdsofparadyes.com for @yushikajolly. This is what lets
+// a creator's OWN site under a DIFFERENT brand name be trusted, while a
+// third-party brand's address (support@higgsfield.ai) is not. Matching is by
+// exact token or shared prefix (min 4 chars) so "arch" doesn't spuriously match
+// "research".
+function relatesToCreator(local, domain, tokens) {
+  if (!tokens) return false;
+  const localNorm = local.replace(/[^a-z0-9]/g, '');
+  const domainRoot = (domain.split('.').slice(-2, -1)[0] || '').replace(/[^a-z0-9]/g, '');
+  const hay = [localNorm, domainRoot].filter(Boolean);
+  const overlaps = (a, b) => {
+    if (!a || !b) return false;
+    if (a === b && a.length >= 3) return true;
+    if (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a))) return true;
+    return false;
+  };
+  for (const w of tokens.words) if (hay.some((h) => overlaps(h, w))) return true;
+  if (tokens.handle && hay.some((h) => overlaps(h, tokens.handle))) return true;
+  return false;
+}
+
+// The gate for an enrichment-scraped email. Enrichment follows a creator's
+// OFF-Instagram links, some of which are sponsored third-party brands, so a
+// followed page's email is kept only when it's plausibly the creator's (or their
+// manager's) real contact — not the promoted brand's support desk. Order:
+//   1. drop operational/support/no-reply mailboxes outright;
+//   2. keep anything carrying the creator's own name/handle (own-brand site);
+//   3. drop an unrelated free-mail address found off a followed site;
+//   4. otherwise keep it (a business-domain inbox — the site's own, a booking or
+//      management domain, etc.).
+// Applied ONLY to enrichment-scraped emails. Addresses the creator wrote into
+// their Instagram bio (incl. a manager's) are trusted as-is on the IG path and
+// never reach here.
+function isCreatorContactEmail(email, { tokens = null } = {}) {
+  if (!isUsableEmail(email)) return false;
+  const at = email.indexOf('@');
+  const local = email.slice(0, at).toLowerCase();
+  const domain = email.slice(at + 1).toLowerCase();
+  const localKey = local.replace(/\+.*$/, '').replace(/\d+$/, '');
+  if (ROLE_LOCAL_PARTS.has(local) || ROLE_LOCAL_PARTS.has(localKey)) return false;
+  if (relatesToCreator(local, domain, tokens)) return true;
+  if (FREE_MAIL_DOMAINS.has(domain)) return false;
+  return true;
+}
+
+// A bio link that carries affiliate / referral / promo markers is a sponsored
+// third-party product the creator is promoting, not their own site — skip it so
+// enrichment never scrapes the brand's contact email off it.
+function isSponsoredLink(url) {
+  try {
+    const u = new URL(url);
+    for (const key of SPONSORED_PARAMS) if (u.searchParams.has(key)) return true;
+    if (SPONSORED_PATH.test(u.pathname)) return true;
+  } catch {
+    /* unparseable -> not classified as sponsored */
+  }
+  return false;
+}
+
 // ---- Network (best-effort, timeout-guarded) -------------------------------
 
 const FETCH_UA =
@@ -234,6 +359,10 @@ async function enrichEmail(context = {}, options = {}) {
     verify = true,
   } = options;
 
+  // Who the creator is — used to keep only emails plausibly theirs (own-brand
+  // site under a different name) and drop third-party brand / support addresses.
+  const tokens = creatorTokens(context);
+
   // 1) Seed candidate URLs.
   const seeds = [];
   const pushSeed = (u) => {
@@ -258,13 +387,19 @@ async function enrichEmail(context = {}, options = {}) {
   };
   for (const seed of dedupe(seeds)) {
     if (sites.length >= maxSites) break;
+    // A sponsored / affiliate / promo link points at a brand the creator is
+    // promoting, not their own site — never enrich from it.
+    if (isSponsoredLink(seed)) continue;
     if (isLinkHub(seed)) {
       const html = await fetchImpl(seed, timeoutMs);
       // A hub page can itself carry a contact email (some creators paste it there).
       for (const e of extractEmailsFromHtml(html)) {
+        if (!isCreatorContactEmail(e, { tokens })) continue;
         if (verify ? (await verifyEmail(e)).valid : true) return { email: e, source: seed };
       }
-      for (const dest of extractLinksFromHtml(html, seed)) addSite(dest);
+      for (const dest of extractLinksFromHtml(html, seed)) {
+        if (!isSponsoredLink(dest)) addSite(dest);
+      }
     } else {
       addSite(seed);
     }
@@ -282,6 +417,7 @@ async function enrichEmail(context = {}, options = {}) {
       const html = await fetchImpl(page, timeoutMs);
       if (!html) continue;
       for (const e of extractEmailsFromHtml(html)) {
+        if (!isCreatorContactEmail(e, { tokens })) continue;
         if (!found.some((f) => f.email === e)) found.push({ email: e, url: page });
       }
       // Home page already yielded an on-domain address? Stop early.
@@ -364,4 +500,8 @@ module.exports = {
   extractLinksFromHtml,
   pickBestEmail,
   contactPagesFor,
+  creatorTokens,
+  relatesToCreator,
+  isCreatorContactEmail,
+  isSponsoredLink,
 };

@@ -13,6 +13,10 @@ const {
   extractLinksFromHtml,
   pickBestEmail,
   contactPagesFor,
+  creatorTokens,
+  relatesToCreator,
+  isCreatorContactEmail,
+  isSponsoredLink,
 } = require('./emailEnrich');
 
 test('normalizeUrl adds https, rejects non-URLs', () => {
@@ -164,4 +168,100 @@ test('enrichEmail picks a URL out of the biography text', async () => {
     { fetchHtml, verify: false },
   );
   assert.deepStrictEqual(res, { email: 'me@portfolio.me', source: 'https://portfolio.me/' });
+});
+
+// ---- Third-party brand / sponsored-link filtering -------------------------
+
+test('creatorTokens splits name + handle into matchable tokens', () => {
+  const t = creatorTokens({ fullName: 'Yushika Jolly', instagramUsername: 'yushikajolly' });
+  assert.ok(t.words.includes('yushika'));
+  assert.ok(t.words.includes('jolly'));
+  assert.strictEqual(t.handle, 'yushikajolly');
+});
+
+test('relatesToCreator matches a name in the local part but not a coincidental substring', () => {
+  const t = creatorTokens({ fullName: 'Yushika Jolly', instagramUsername: 'yushikajolly' });
+  assert.strictEqual(relatesToCreator('yushika', 'birdsofparadyes.com', t), true);
+  const arch = creatorTokens({ fullName: 'Arch Apollo', instagramUsername: 'architect.apollo' });
+  // "research@..." must not be treated as related to the token "arch".
+  assert.strictEqual(relatesToCreator('research', 'somesite.com', arch), false);
+  assert.strictEqual(relatesToCreator('pxvbusiness', 'gmail.com', arch), false);
+});
+
+test('isCreatorContactEmail drops support/role mailboxes', () => {
+  assert.strictEqual(isCreatorContactEmail('support@higgsfield.ai'), false);
+  assert.strictEqual(isCreatorContactEmail('support@mail.pippit.ai'), false);
+  assert.strictEqual(isCreatorContactEmail('no-reply@brand.com'), false);
+  assert.strictEqual(isCreatorContactEmail('support+creator@brand.com'), false);
+  // …but keeps legitimate creator / manager inboxes.
+  assert.strictEqual(isCreatorContactEmail('hello@brand.com'), true);
+  assert.strictEqual(isCreatorContactEmail('bookings@studio.co'), true);
+  assert.strictEqual(isCreatorContactEmail('management@agency.com'), true);
+});
+
+test('isCreatorContactEmail drops unrelated free-mail but keeps creator-named free-mail', () => {
+  const arch = creatorTokens({ fullName: 'Arch Apollo', instagramUsername: 'architect.apollo' });
+  assert.strictEqual(isCreatorContactEmail('pxvbusiness@gmail.com', { tokens: arch }), false);
+  const yush = creatorTokens({ fullName: 'Yushika Jolly', instagramUsername: 'yushikajolly' });
+  // A creator's own name on a free-mail address is still theirs.
+  assert.strictEqual(isCreatorContactEmail('yushikajolly@gmail.com', { tokens: yush }), true);
+  // On-domain address on the creator's own brand site (different name) is kept.
+  assert.strictEqual(isCreatorContactEmail('yushika@birdsofparadyes.com', { tokens: yush }), true);
+});
+
+test('isSponsoredLink flags affiliate/promo links, not plain ones', () => {
+  assert.strictEqual(isSponsoredLink('https://brand.com/product?aff=123'), true);
+  assert.strictEqual(isSponsoredLink('https://brand.com/?coupon=SAVE20'), true);
+  assert.strictEqual(isSponsoredLink('https://brand.com/affiliate/xyz'), true);
+  assert.strictEqual(isSponsoredLink('https://mysite.com/'), false);
+  assert.strictEqual(isSponsoredLink('https://mysite.com/?ref=instagram'), false); // bare ref is not enough
+});
+
+test('enrichEmail ignores a third-party brand support address (higgsfield case)', async () => {
+  const fetchHtml = fakeFetcher({
+    'https://higgsfield.ai/': '<a href="mailto:support@higgsfield.ai">support</a>',
+  });
+  const res = await enrichEmail(
+    { fullName: 'Akshay Bhatti', instagramUsername: 'ai.akshu', bioLinks: ['https://higgsfield.ai'] },
+    { fetchHtml, verify: false },
+  );
+  assert.strictEqual(res, null);
+});
+
+test('enrichEmail ignores an unrelated free-mail on a promoted brand site (morphix case)', async () => {
+  const fetchHtml = fakeFetcher({
+    'https://morphix.pro/': '<p>business enquiries pxvbusiness@gmail.com</p>',
+  });
+  const res = await enrichEmail(
+    { fullName: 'Arch Apollo', instagramUsername: 'architect.apollo', bioLinks: ['https://morphix.pro'] },
+    { fetchHtml, verify: false },
+  );
+  assert.strictEqual(res, null);
+});
+
+test('enrichEmail keeps a creator-named email on their own differently-named brand site', async () => {
+  const fetchHtml = fakeFetcher({
+    'https://birdsofparadyes.com/': '<a href="mailto:yushika@birdsofparadyes.com">email us</a>',
+  });
+  const res = await enrichEmail(
+    { fullName: 'Yushika Jolly', instagramUsername: 'yushikajolly', externalUrl: 'birdsofparadyes.com' },
+    { fetchHtml, verify: false },
+  );
+  assert.deepStrictEqual(res, {
+    email: 'yushika@birdsofparadyes.com',
+    source: 'https://birdsofparadyes.com/',
+  });
+});
+
+test('enrichEmail skips a sponsored bio link and enriches from the creator own site', async () => {
+  const fetchHtml = fakeFetcher({
+    // Sponsored link — must never be fetched/scraped.
+    'https://brand.com/?aff=abc': '<a href="mailto:support@brand.com">support</a>',
+    'https://mysite.com/': '<a href="mailto:hello@mysite.com">say hi</a>',
+  });
+  const res = await enrichEmail(
+    { instagramUsername: 'creator', bioLinks: ['https://brand.com/?aff=abc', 'https://mysite.com'] },
+    { fetchHtml, verify: false },
+  );
+  assert.deepStrictEqual(res, { email: 'hello@mysite.com', source: 'https://mysite.com/' });
 });
