@@ -282,16 +282,26 @@ function isCreatorContactEmail(email, { tokens = null } = {}) {
   return true;
 }
 
+// True when a link's own domain carries the creator's name/handle — i.e. it's
+// their site (yushika-studio.com for @yushikajolly), so a tracking tail on it is
+// their own UTM, not a sponsored brand's referral.
+function hostRelatesToCreator(host, tokens) {
+  return relatesToCreator('', String(host || '').replace(/^www\./i, ''), tokens);
+}
+
 // A bio link that points at a sponsored third-party product the creator is
 // promoting (not their own site) — skip it so enrichment never scrapes the
 // brand's contact email off it. The main tell is a query string: creators' OWN
 // links are almost always clean bare domains (birdsofparadyes.com), whereas
 // promoted brand links carry a tracking / referral / promo tail after "?"
 // (?via=, ?ref=, ?utm_source=, discount codes, …). So any query string, plus an
-// affiliate/referral path segment, marks the link as sponsored.
-function isSponsoredLink(url) {
+// affiliate/referral path segment, marks the link as sponsored — UNLESS the
+// link's own domain carries the creator's name/handle, in which case it's their
+// site and the tail is their own tracking, so we still follow it.
+function isSponsoredLink(url, tokens = null) {
   try {
     const u = new URL(url);
+    if (tokens && hostRelatesToCreator(u.hostname, tokens)) return false;
     if (u.search) return true; // any "?…" tracking/referral/promo tail
     if (SPONSORED_PATH.test(u.pathname)) return true;
   } catch {
@@ -385,8 +395,9 @@ async function enrichEmail(context = {}, options = {}) {
   for (const seed of dedupe(seeds)) {
     if (sites.length >= maxSites) break;
     // A sponsored / affiliate / promo link points at a brand the creator is
-    // promoting, not their own site — never enrich from it.
-    if (isSponsoredLink(seed)) continue;
+    // promoting, not their own site — never enrich from it (unless the domain is
+    // the creator's own, in which case a tracking tail doesn't disqualify it).
+    if (isSponsoredLink(seed, tokens)) continue;
     if (isLinkHub(seed)) {
       const html = await fetchImpl(seed, timeoutMs);
       // A hub page can itself carry a contact email (some creators paste it there).
@@ -395,7 +406,7 @@ async function enrichEmail(context = {}, options = {}) {
         if (verify ? (await verifyEmail(e)).valid : true) return { email: e, source: seed };
       }
       for (const dest of extractLinksFromHtml(html, seed)) {
-        if (!isSponsoredLink(dest)) addSite(dest);
+        if (!isSponsoredLink(dest, tokens)) addSite(dest);
       }
     } else {
       addSite(seed);

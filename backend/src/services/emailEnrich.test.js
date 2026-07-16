@@ -225,6 +225,17 @@ test('isSponsoredLink flags any query string + affiliate paths, keeps clean link
   assert.strictEqual(isSponsoredLink('https://mysite.com/#contact'), false);
 });
 
+test('isSponsoredLink carves out a tracked link on the creator own-name domain', () => {
+  const yush = creatorTokens({ fullName: 'Yushika Jolly', instagramUsername: 'yushikajolly' });
+  // Query tail on the creator's own-name domain -> still followed.
+  assert.strictEqual(isSponsoredLink('https://yushika-studio.com/?utm_source=ig', yush), false);
+  assert.strictEqual(isSponsoredLink('https://www.yushikajolly.com/?ref=x', yush), false);
+  // Same tail on an unrelated brand domain -> still sponsored.
+  assert.strictEqual(isSponsoredLink('https://higgsfield.ai/?ref=creator', yush), true);
+  // Without tokens, any query tail is sponsored (unchanged behaviour).
+  assert.strictEqual(isSponsoredLink('https://yushika-studio.com/?utm_source=ig'), true);
+});
+
 test('enrichEmail ignores a third-party brand support address (higgsfield case)', async () => {
   const fetchHtml = fakeFetcher({
     'https://higgsfield.ai/': '<a href="mailto:support@higgsfield.ai">support</a>',
@@ -302,4 +313,23 @@ test('enrichEmail returns null when the only bio link is a tracked brand link', 
     { fetchHtml, verify: false },
   );
   assert.strictEqual(res, null);
+});
+
+test('enrichEmail still follows a tracked link when its domain carries the creator name', async () => {
+  const fetchHtml = fakeFetcher({
+    'https://yushika-studio.com/?utm_source=instagram':
+      '<a href="mailto:hi@yushika-studio.com">email</a>',
+  });
+  const res = await enrichEmail(
+    {
+      fullName: 'Yushika Jolly',
+      instagramUsername: 'yushikajolly',
+      externalUrl: 'https://yushika-studio.com/?utm_source=instagram',
+    },
+    { fetchHtml, verify: false },
+  );
+  assert.deepStrictEqual(res, {
+    email: 'hi@yushika-studio.com',
+    source: 'https://yushika-studio.com/?utm_source=instagram',
+  });
 });
