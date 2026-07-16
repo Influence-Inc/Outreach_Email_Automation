@@ -235,6 +235,46 @@
     return [...reels.values()].slice(0, maxReels);
   }
 
+  // ---- web_profile_info API (the Contact-button email) --------------------
+  // Instagram business/professional profiles expose a public contact email
+  // behind the "Contact"/"Email" button. That button is a mobile-app affordance
+  // — it never renders in the profile's web DOM — so scraping the page can't see
+  // the email. Instagram's own web_profile_info endpoint DOES return it as
+  // business_email / public_email. Because this fetch runs inside the logged-in
+  // instagram.com tab it's same-origin and carries the user's session, so it
+  // returns the contact email that a cookie-less server-side scrape usually
+  // can't. Best-effort: any failure returns null and the DOM scrape takes over.
+  const IG_APP_ID = '936619743392459';
+  async function fetchProfileApi(username) {
+    if (!username) return null;
+    try {
+      const resp = await fetch(
+        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+        {
+          headers: { 'X-IG-App-ID': IG_APP_ID },
+          credentials: 'include',
+        },
+      );
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      const user = data && data.data && data.data.user;
+      if (!user) return null;
+      const norm = (v) => {
+        const s = v ? String(v).trim().toLowerCase() : '';
+        return s.includes('@') ? s : null;
+      };
+      return {
+        businessEmail: norm(user.business_email),
+        publicEmail: norm(user.public_email),
+        biography: user.biography || null,
+        fullName: user.full_name || null,
+      };
+    } catch (e) {
+      console.warn('web_profile_info fetch failed (continuing with DOM scrape):', e);
+      return null;
+    }
+  }
+
   async function extractProfileData({ includeReels = true } = {}) {
     const result = {
       email: null,
@@ -334,6 +374,23 @@
         console.log('Using username as fallback:', result.firstName);
       }
 
+      // Pull the profile's web_profile_info FIRST — it carries the contact email
+      // behind the "Contact"/"Email" button (business_email / public_email) that
+      // the web DOM never shows. Prefer it as the authoritative email; the DOM
+      // scrape below only runs when this leaves result.email unset. Also fill the
+      // full name from here if the DOM couldn't find one.
+      const apiData = await fetchProfileApi(result.username);
+      if (apiData) {
+        if (apiData.businessEmail) result.email = apiData.businessEmail;
+        else if (apiData.publicEmail) result.email = apiData.publicEmail;
+        if (result.email) console.log('Found contact email via web_profile_info:', result.email);
+        if (!result.fullName && apiData.fullName) {
+          result.fullName = apiData.fullName;
+          result.firstName = apiData.fullName.split(/\s+/)[0];
+          console.log('Found name via web_profile_info:', apiData.fullName);
+        }
+      }
+
       // Expand a truncated bio FIRST so an email hidden below the "more" fold
       // is present in the DOM before we read it. Best-effort — a profile with a
       // short (un-truncated) bio simply has no "more" toggle to click.
@@ -376,10 +433,21 @@
         if (bioText.length > 0) break;
       }
 
-      // Also check for email in meta tags
-      const metaEmail = document.querySelector('meta[property="og:email"]');
-      if (metaEmail) {
-        result.email = metaEmail.getAttribute('content');
+      // Augment with the API biography (reliable, and present even when the DOM
+      // bio is truncated or rendered oddly) so the regex fallback below can still
+      // find an email written into the bio when business_email/public_email are
+      // unset.
+      if (apiData && apiData.biography) {
+        bioText += ' ' + apiData.biography;
+      }
+
+      // Also check for email in meta tags (only if we still have nothing — never
+      // overwrite the contact email already resolved from web_profile_info).
+      if (!result.email) {
+        const metaEmail = document.querySelector('meta[property="og:email"]');
+        if (metaEmail) {
+          result.email = metaEmail.getAttribute('content');
+        }
       }
 
       // Extract email from bio text using regex
