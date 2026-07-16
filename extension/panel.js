@@ -104,6 +104,95 @@
     return { cls: 'neutral', text: (r.negotiation_status || r.status || 'no reply').replace(/_/g, ' ') };
   }
 
+  // ---- "View full email" affordance (ported from app.js) ------------------
+  // Each message-backed timeline row carries the full email on `entry.email`
+  // (see attachRateLog on the backend). A small envelope button opens that
+  // message verbatim in a modal, so the one-line gist can be checked against
+  // the actual email the creator sent (or the reply we sent).
+  const EMAIL_ICON_SVG =
+    '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg>';
+
+  let _emailModal = null;
+  function ensureEmailModal() {
+    if (_emailModal) return _emailModal;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'email-modal-backdrop';
+    backdrop.hidden = true;
+
+    const dialog = document.createElement('div');
+    dialog.className = 'email-modal';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+
+    const head = document.createElement('div');
+    head.className = 'email-modal-head';
+    const titles = document.createElement('div');
+    titles.className = 'email-modal-titles';
+    const kicker = document.createElement('div');
+    kicker.className = 'email-modal-kicker';
+    const subject = document.createElement('div');
+    subject.className = 'email-modal-subject';
+    const meta = document.createElement('div');
+    meta.className = 'email-modal-meta';
+    titles.append(kicker, subject, meta);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'email-modal-close';
+    close.innerHTML = '✕';
+    close.title = 'Close';
+    close.setAttribute('aria-label', 'Close');
+    head.append(titles, close);
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'email-modal-body';
+
+    dialog.append(head, bodyEl);
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+
+    const hide = () => {
+      backdrop.hidden = true;
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') hide(); };
+    close.addEventListener('click', hide);
+    backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) hide(); });
+
+    _emailModal = {
+      kicker, subject, meta, bodyEl,
+      show() { backdrop.hidden = false; document.addEventListener('keydown', onKey); },
+    };
+    return _emailModal;
+  }
+
+  function openEmailModal(email) {
+    if (!email) return;
+    const m = ensureEmailModal();
+    const inbound = email.direction === 'inbound';
+    m.kicker.textContent = inbound ? 'Email from creator' : 'Reply we sent';
+    const subj = (email.subject || '').trim();
+    m.subject.textContent = subj;
+    m.subject.hidden = !subj;
+    m.meta.textContent = email.at ? fmtDate(email.at) : '';
+    m.meta.hidden = !email.at;
+    m.bodyEl.textContent = String(email.body || '').trim() || '(This email has no text body.)';
+    m.bodyEl.scrollTop = 0;
+    m.show();
+  }
+
+  // stopPropagation keeps a click from also toggling an enclosing expandable
+  // group (rate options / repeat runs).
+  function makeEmailExpandBtn(email) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'timeline-email-btn';
+    btn.title = 'View the full email';
+    btn.setAttribute('aria-label', 'View the full email');
+    btn.innerHTML = EMAIL_ICON_SVG;
+    btn.addEventListener('click', (ev) => { ev.stopPropagation(); openEmailModal(email); });
+    return btn;
+  }
+
   // ---- Timeline (ported from app.js renderTimeline, ticks omitted) --------
   function renderTimeline(log) {
     const wrap = document.createElement('div');
@@ -164,6 +253,9 @@
         chev.className = 'timeline-chevron';
         chev.textContent = '▾';
         head.append(label, count, chev);
+        // One reply backing several rate options → a single expand button on
+        // the head. (Repeated-run groups instead put a button on each substep.)
+        if (rateOptions && newest.email) head.appendChild(makeEmailExpandBtn(newest.email));
 
         const time = document.createElement('div');
         time.className = 'timeline-time num';
@@ -191,10 +283,15 @@
             subs.appendChild(li);
           });
         } else {
+          // Repeated identical-text events: each occurrence's timestamp plus
+          // its own "view email" button (every occurrence is a separate message).
           g.entries.forEach((e) => {
             const li = document.createElement('div');
-            li.className = 'timeline-substep num';
-            li.textContent = fmtDate(e.at);
+            li.className = 'timeline-substep timeline-substep-msg num';
+            const when = document.createElement('span');
+            when.textContent = fmtDate(e.at);
+            li.appendChild(when);
+            if (e.email) li.appendChild(makeEmailExpandBtn(e.email));
             subs.appendChild(li);
           });
         }
@@ -212,6 +309,9 @@
         const label = document.createElement('div');
         label.className = 'timeline-label';
         label.textContent = g.text;
+        // Expand button inline with the summary/quoted-rate label, to read the
+        // actual email this line is summarizing.
+        if (newest.email) label.appendChild(makeEmailExpandBtn(newest.email));
         const time = document.createElement('div');
         time.className = 'timeline-time num';
         time.textContent = fmtAgo(newest.at);
