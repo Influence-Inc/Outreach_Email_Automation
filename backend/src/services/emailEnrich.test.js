@@ -209,12 +209,20 @@ test('isCreatorContactEmail drops unrelated free-mail but keeps creator-named fr
   assert.strictEqual(isCreatorContactEmail('yushika@birdsofparadyes.com', { tokens: yush }), true);
 });
 
-test('isSponsoredLink flags affiliate/promo links, not plain ones', () => {
+test('isSponsoredLink flags any query string + affiliate paths, keeps clean links', () => {
+  // Any "?…" tail is treated as tracking/referral/promo → sponsored.
   assert.strictEqual(isSponsoredLink('https://brand.com/product?aff=123'), true);
   assert.strictEqual(isSponsoredLink('https://brand.com/?coupon=SAVE20'), true);
+  assert.strictEqual(isSponsoredLink('https://brand.com/?ref=instagram'), true);
+  assert.strictEqual(isSponsoredLink('https://brand.com/?utm_source=ig&utm_medium=bio'), true);
+  assert.strictEqual(isSponsoredLink('https://brand.com/?via=creator'), true);
+  // Affiliate/referral path segment, no query string.
   assert.strictEqual(isSponsoredLink('https://brand.com/affiliate/xyz'), true);
+  // A creator's own clean link (bare domain / plain path / fragment) is kept.
   assert.strictEqual(isSponsoredLink('https://mysite.com/'), false);
-  assert.strictEqual(isSponsoredLink('https://mysite.com/?ref=instagram'), false); // bare ref is not enough
+  assert.strictEqual(isSponsoredLink('https://mysite.com'), false);
+  assert.strictEqual(isSponsoredLink('https://mysite.com/about'), false);
+  assert.strictEqual(isSponsoredLink('https://mysite.com/#contact'), false);
 });
 
 test('enrichEmail ignores a third-party brand support address (higgsfield case)', async () => {
@@ -264,4 +272,34 @@ test('enrichEmail skips a sponsored bio link and enriches from the creator own s
     { fetchHtml, verify: false },
   );
   assert.deepStrictEqual(res, { email: 'hello@mysite.com', source: 'https://mysite.com/' });
+});
+
+test('enrichEmail skips a tracked brand link even when its email is a non-role on-domain address', async () => {
+  // The residual case: a promoted brand whose site lists hello@brand.ai (shape-
+  // identical to a creator's own hello@theirbrand.com). The tracking tail on the
+  // link is what marks it sponsored, so we never fetch it — and fall through to
+  // the creator's own clean link instead.
+  const fetchHtml = fakeFetcher({
+    'https://brand.ai/?utm_source=ig': '<a href="mailto:hello@brand.ai">contact</a>',
+    'https://myportfolio.com/': '<a href="mailto:hi@myportfolio.com">reach me</a>',
+  });
+  const res = await enrichEmail(
+    {
+      instagramUsername: 'creator',
+      bioLinks: ['https://brand.ai/?utm_source=ig', 'https://myportfolio.com'],
+    },
+    { fetchHtml, verify: false },
+  );
+  assert.deepStrictEqual(res, { email: 'hi@myportfolio.com', source: 'https://myportfolio.com/' });
+});
+
+test('enrichEmail returns null when the only bio link is a tracked brand link', async () => {
+  const fetchHtml = fakeFetcher({
+    'https://brand.ai/?via=creator': '<a href="mailto:hello@brand.ai">contact</a>',
+  });
+  const res = await enrichEmail(
+    { instagramUsername: 'creator', bioLinks: ['https://brand.ai/?via=creator'] },
+    { fetchHtml, verify: false },
+  );
+  assert.strictEqual(res, null);
 });

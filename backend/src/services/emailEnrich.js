@@ -96,16 +96,9 @@ const FREE_MAIL_DOMAINS = new Set([
   'qq.com', '163.com', '126.com', 'naver.com', 'hotmail.fr', 'orange.fr',
 ]);
 
-// Query params / path segments that mark a link as an affiliate / referral /
-// promo link — i.e. a sponsored third-party brand the creator is promoting, not
-// their own site. We skip these entirely for enrichment. Kept deliberately tight
-// (no bare `ref`/`utm_*`, which appear on plenty of creators' own links) so a
-// legitimate own-site link isn't misread as sponsored.
-const SPONSORED_PARAMS = [
-  'aff', 'affid', 'affiliate', 'afmc', 'coupon', 'promo', 'promocode',
-  'promo_code', 'discount', 'voucher', 'referral', 'sponsor', 'sponsored',
-  'irclickid', 'cjevent', 'clickid', 'fpr',
-];
+// Path segments that mark a link as an affiliate / referral link even without a
+// query string (e.g. brand.com/affiliate/xyz). Query strings are handled
+// separately — see isSponsoredLink.
 const SPONSORED_PATH = /\/(?:aff|affiliate|referral)(?:\/|$)/i;
 
 function hostOf(url) {
@@ -289,13 +282,17 @@ function isCreatorContactEmail(email, { tokens = null } = {}) {
   return true;
 }
 
-// A bio link that carries affiliate / referral / promo markers is a sponsored
-// third-party product the creator is promoting, not their own site — skip it so
-// enrichment never scrapes the brand's contact email off it.
+// A bio link that points at a sponsored third-party product the creator is
+// promoting (not their own site) — skip it so enrichment never scrapes the
+// brand's contact email off it. The main tell is a query string: creators' OWN
+// links are almost always clean bare domains (birdsofparadyes.com), whereas
+// promoted brand links carry a tracking / referral / promo tail after "?"
+// (?via=, ?ref=, ?utm_source=, discount codes, …). So any query string, plus an
+// affiliate/referral path segment, marks the link as sponsored.
 function isSponsoredLink(url) {
   try {
     const u = new URL(url);
-    for (const key of SPONSORED_PARAMS) if (u.searchParams.has(key)) return true;
+    if (u.search) return true; // any "?…" tracking/referral/promo tail
     if (SPONSORED_PATH.test(u.pathname)) return true;
   } catch {
     /* unparseable -> not classified as sponsored */
