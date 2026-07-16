@@ -239,8 +239,14 @@ async function runScrapeQueue(payload, sender) {
       let outcome = 'error';
       if (!error && scraped) {
         const patchBody = {};
-        if (scraped.email) patchBody.email = scraped.email;
-        if (scraped.emailSource) patchBody.email_source = scraped.emailSource;
+        if (scraped.email) {
+          patchBody.email = scraped.email;
+          // The extension only ever reads a profile from Instagram, so a scraped
+          // email is never a hand-typed "manual" entry. Send an explicit source
+          // (contact-button / bio when known, generic 'instagram' otherwise) so
+          // the backend never falls back to labelling it 'manual'.
+          patchBody.email_source = scraped.emailSource || 'instagram';
+        }
         if (scraped.firstName) patchBody.first_name = scraped.firstName;
         if (scraped.fullName) patchBody.full_name = scraped.fullName;
         if (viewCount) patchBody.reel_views = cleanViews;
