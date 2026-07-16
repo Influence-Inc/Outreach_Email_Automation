@@ -249,7 +249,7 @@ async function attachRateLog(rows) {
     // templated outbound sends (outreach, follow-up, offer emails) get their own
     // descriptive labels, so their bodies aren't needed here.
     db.many(
-      `SELECT id, creator_id, direction, body, summary, created_at
+      `SELECT id, creator_id, direction, subject, body, summary, created_at
        FROM email_messages
        WHERE creator_id = ANY($1::int[])
          AND (direction = 'inbound' OR kind IN ('delegate_reply', 'manual_reply'))
@@ -304,6 +304,19 @@ async function attachRateLog(rows) {
     if (!entry) continue;
     entry.at = e.created_at;
     entry.type = e.type;
+    // Attach the full email backing this step (when there is one) so the client
+    // can offer an "expand" affordance to read the ACTUAL message — the creator's
+    // inbound reply, or the reply we sent — not just its one-line summary. Only
+    // the message-backed events (replied / rate_quoted / delegate|manual reply)
+    // resolve a message here; templated sends carry no body.
+    if (m) {
+      entry.email = {
+        body: m.body,
+        subject: m.subject || null,
+        at: m.created_at,
+        direction: m.direction,
+      };
+    }
     // Expose the numeric amount (offer fee / quoted rate) so the client can
     // resolve the "agreed rate" for accepted deals without parsing the label.
     const d = e.detail || {};
