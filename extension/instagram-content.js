@@ -273,6 +273,21 @@
     return null;
   }
 
+  // The creator's off-Instagram links (their website + the link-in-bio hubs
+  // listed under the bio). Handed to the backend so the email-enrichment
+  // fallback can follow them to find a contact email when Instagram has none.
+  function pickLinksFromUser(user) {
+    const links = [];
+    if (user && user.external_url) links.push(String(user.external_url));
+    if (user && Array.isArray(user.bio_links)) {
+      for (const l of user.bio_links) {
+        const u = l && (l.url || l.lynx_url);
+        if (u) links.push(String(u));
+      }
+    }
+    return [...new Set(links.filter(Boolean))];
+  }
+
   // Fetch an Instagram private-API JSON endpoint from the logged-in tab. Mirrors
   // the headers Instagram's own web app sends on these XHRs — X-IG-App-ID alone
   // is usually enough, but X-ASBD-ID / X-IG-WWW-Claim / X-Requested-With make it
@@ -314,6 +329,7 @@
       email: user ? pickEmailFromUser(user) : null,
       biography: (user && user.biography) || null,
       fullName: (user && user.full_name) || null,
+      links: user ? pickLinksFromUser(user) : [],
     };
     const userId = user && (user.id || user.pk);
 
@@ -333,6 +349,7 @@
             out.email = pickEmailFromUser(infoUser);
             if (!out.fullName && infoUser.full_name) out.fullName = infoUser.full_name;
             if (!out.biography && infoUser.biography) out.biography = infoUser.biography;
+            if (!out.links.length) out.links = pickLinksFromUser(infoUser);
           }
         } else {
           console.warn(`[OEA] users/${userId}/info HTTP ${resp.status} for @${username}`);
@@ -358,7 +375,8 @@
       firstName: null,
       fullName: null,
       username: null,
-      reelViews: []
+      reelViews: [],
+      bioLinks: []
     };
 
     try {
@@ -467,6 +485,7 @@
           result.firstName = apiData.fullName.split(/\s+/)[0];
           console.log('Found name via web_profile_info:', apiData.fullName);
         }
+        if (apiData.links && apiData.links.length) result.bioLinks = apiData.links;
       }
 
       // Expand a truncated bio FIRST so an email hidden below the "more" fold

@@ -182,6 +182,10 @@ async function fetchWebProfileInfo(username) {
     username: user.username || username,
     isBusiness: Boolean(user.is_business_account || user.is_professional_account),
     biography: user.biography || null,
+    externalUrl: user.external_url || null,
+    bioLinks: Array.isArray(user.bio_links)
+      ? user.bio_links.map((l) => l && l.url).filter(Boolean)
+      : [],
   };
 }
 
@@ -249,6 +253,12 @@ async function fetchHtmlProfile(username) {
     fullName = name[1].replace(/\\u0026/g, '&').replace(/\\"/g, '"');
   }
 
+  let externalUrl = null;
+  const ext = html.match(/"external_url":"([^"\\]+)"/);
+  if (ext && ext[1]) {
+    externalUrl = ext[1].replace(/\\\//g, '/');
+  }
+
   if (!email) {
     // Last resort: hunt the whole HTML.
     const m = findEmail(html);
@@ -258,7 +268,7 @@ async function fetchHtmlProfile(username) {
     }
   }
 
-  return { email, emailSource, fullName, biography };
+  return { email, emailSource, fullName, biography, externalUrl };
 }
 
 async function scrapeProfile({ instagramUrl, instagramUsername }) {
@@ -273,6 +283,9 @@ async function scrapeProfile({ instagramUrl, instagramUsername }) {
     fullName: null,
     source: null,
     isBusiness: null,
+    biography: null,
+    externalUrl: null,
+    bioLinks: [],
   };
 
   // Strategy 1: JSON endpoint.
@@ -281,6 +294,9 @@ async function scrapeProfile({ instagramUrl, instagramUsername }) {
     if (api) {
       result.isBusiness = api.isBusiness;
       if (api.fullName) result.fullName = api.fullName;
+      if (api.biography) result.biography = api.biography;
+      if (api.externalUrl) result.externalUrl = api.externalUrl;
+      if (Array.isArray(api.bioLinks) && api.bioLinks.length) result.bioLinks = api.bioLinks;
       if (api.email) {
         result.email = api.email;
         result.source = api.emailSource;
@@ -291,7 +307,7 @@ async function scrapeProfile({ instagramUrl, instagramUsername }) {
   }
 
   // Strategy 2: HTML page (fills in whatever JSON couldn't).
-  if (!result.email || !result.fullName) {
+  if (!result.email || !result.fullName || !result.externalUrl) {
     try {
       const html = await fetchHtmlProfile(username);
       if (!result.email && html.email) {
@@ -301,6 +317,8 @@ async function scrapeProfile({ instagramUrl, instagramUsername }) {
       if (!result.fullName && html.fullName) {
         result.fullName = html.fullName;
       }
+      if (!result.biography && html.biography) result.biography = html.biography;
+      if (!result.externalUrl && html.externalUrl) result.externalUrl = html.externalUrl;
     } catch (err) {
       console.warn(`[ig-scraper] html scrape failed for ${username}: ${err.message}`);
     }

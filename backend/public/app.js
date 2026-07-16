@@ -1694,6 +1694,31 @@ el('creator-form').addEventListener('submit', async (e) => {
 
 el('refresh-btn').addEventListener('click', refreshCreators);
 
+// Off-Instagram enrichment: for every creator in this campaign with no email,
+// follow the links captured off their profile (website / Linktree) and scrape a
+// verified contact address. Best-effort and paced server-side.
+el('enrich-emails-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('enrich-emails-btn');
+  const status = el('fetch-status');
+  btn.disabled = true;
+  status.hidden = false;
+  status.textContent = 'Searching linked sites for contact emails… (this can take a minute)';
+  try {
+    const result = await api('/api/creators/bulk/enrich-email', {
+      method: 'POST',
+      body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
+    });
+    status.textContent = `Found ${result.found || 0} email(s) across ${result.processed || 0} creator(s) with none on Instagram.`;
+    await refreshCreators();
+    await refreshCampaigns();
+  } catch (err) {
+    status.textContent = `Enrichment failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 el('remove-all-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
   const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);

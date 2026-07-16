@@ -243,6 +243,9 @@ async function runScrapeQueue(payload, sender) {
         if (scraped.firstName) patchBody.first_name = scraped.firstName;
         if (scraped.fullName) patchBody.full_name = scraped.fullName;
         if (viewCount) patchBody.reel_views = cleanViews;
+        if (Array.isArray(scraped.bioLinks) && scraped.bioLinks.length) {
+          patchBody.bio_links = scraped.bioLinks;
+        }
 
         if (Object.keys(patchBody).length > 0) {
           try {
