@@ -909,6 +909,98 @@ function renderOutreachTicks(r) {
   return span;
 }
 
+// ── "View full email" affordance ──────────────────────────────────────────
+// Every timeline row that summarizes (or quotes a rate from) a real email
+// carries the full message on `entry.email` — see attachRateLog in the backend.
+// A small envelope button next to the summary opens that message verbatim in a
+// modal, so the one-line gist on the timeline can always be checked against the
+// actual email the creator sent (or the reply we sent).
+const EMAIL_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg>';
+
+// Lazily-built singleton modal, reused for every email so the DOM carries one
+// overlay rather than one per timeline row.
+let _emailModal = null;
+function ensureEmailModal() {
+  if (_emailModal) return _emailModal;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'email-modal-backdrop';
+  backdrop.hidden = true;
+
+  const dialog = document.createElement('div');
+  dialog.className = 'email-modal';
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+
+  const head = document.createElement('div');
+  head.className = 'email-modal-head';
+  const titles = document.createElement('div');
+  titles.className = 'email-modal-titles';
+  const kicker = document.createElement('div');
+  kicker.className = 'email-modal-kicker';
+  const subject = document.createElement('div');
+  subject.className = 'email-modal-subject';
+  const meta = document.createElement('div');
+  meta.className = 'email-modal-meta';
+  titles.append(kicker, subject, meta);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'email-modal-close';
+  close.innerHTML = '✕';
+  close.title = 'Close';
+  close.setAttribute('aria-label', 'Close');
+  head.append(titles, close);
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'email-modal-body';
+
+  dialog.append(head, bodyEl);
+  backdrop.appendChild(dialog);
+  document.body.appendChild(backdrop);
+
+  const hide = () => {
+    backdrop.hidden = true;
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (ev) => { if (ev.key === 'Escape') hide(); };
+  close.addEventListener('click', hide);
+  backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) hide(); });
+
+  _emailModal = {
+    kicker, subject, meta, bodyEl,
+    show() { backdrop.hidden = false; document.addEventListener('keydown', onKey); },
+  };
+  return _emailModal;
+}
+
+function openEmailModal(email) {
+  if (!email) return;
+  const m = ensureEmailModal();
+  const inbound = email.direction === 'inbound';
+  m.kicker.textContent = inbound ? 'Email from creator' : 'Reply we sent';
+  const subj = (email.subject || '').trim();
+  m.subject.textContent = subj;
+  m.subject.hidden = !subj;
+  m.meta.textContent = email.at ? fmtDate(email.at) : '';
+  m.meta.hidden = !email.at;
+  m.bodyEl.textContent = String(email.body || '').trim() || '(This email has no text body.)';
+  m.bodyEl.scrollTop = 0;
+  m.show();
+}
+
+// Small envelope button that opens the full email. stopPropagation keeps a click
+// from also toggling an enclosing expandable group (rate options / repeat runs).
+function makeEmailExpandBtn(email) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'timeline-email-btn';
+  btn.title = 'View the full email';
+  btn.setAttribute('aria-label', 'View the full email');
+  btn.innerHTML = EMAIL_ICON_SVG;
+  btn.addEventListener('click', (ev) => { ev.stopPropagation(); openEmailModal(email); });
+  return btn;
+}
+
 // A vertical delivery-tracking timeline, oldest → newest. The newest entry is
 // the "current" step (emphasized); a connecting line joins consecutive steps.
 // Consecutive entries with the same label (e.g. "Creator replied" ×3) collapse
@@ -987,6 +1079,11 @@ function renderTimeline(log, r) {
       chev.className = 'timeline-chevron';
       chev.textContent = '▾';
       head.append(label, count, chev);
+      // A "Creator quoted rates" run is one reply backing several rate options,
+      // so a single expand button on the head opens that email. (Repeated-run
+      // groups instead put a button on each occurrence's substep, below, since
+      // each occurrence is a distinct email.)
+      if (rateOptions && newest.email) head.appendChild(makeEmailExpandBtn(newest.email));
 
       const time = document.createElement('div');
       time.className = 'timeline-time num';
@@ -1017,11 +1114,16 @@ function renderTimeline(log, r) {
           subs.appendChild(li);
         });
       } else {
-        // Repeated identical-text events: show each occurrence's timestamp.
+        // Repeated identical-text events: show each occurrence's timestamp,
+        // each with its own "view email" button (every occurrence is a separate
+        // message).
         g.entries.forEach((e) => {
           const li = document.createElement('div');
-          li.className = 'timeline-substep num';
-          li.textContent = fmtDate(e.at);
+          li.className = 'timeline-substep timeline-substep-msg num';
+          const when = document.createElement('span');
+          when.textContent = fmtDate(e.at);
+          li.appendChild(when);
+          if (e.email) li.appendChild(makeEmailExpandBtn(e.email));
           subs.appendChild(li);
         });
       }
@@ -1048,6 +1150,9 @@ function renderTimeline(log, r) {
         const ticks = renderOutreachTicks(r);
         if (ticks) label.appendChild(ticks);
       }
+      // Expand button, inline with the summary/quoted-rate label, to read the
+      // actual email this line is summarizing.
+      if (newest.email) label.appendChild(makeEmailExpandBtn(newest.email));
       const time = document.createElement('div');
       time.className = 'timeline-time num';
       time.textContent = fmtAgo(newest.at);
