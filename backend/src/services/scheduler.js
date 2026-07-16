@@ -110,12 +110,17 @@ async function pollNegotiations() {
       }
     }
 
-    // 4. Contract backfill: any ACCEPTED creator without a contract yet (e.g. the
-    //    inline acceptance path errored). ensureContractSent is idempotent, so
-    //    this safely retries generation + the signing email once per creator.
+    // 4. Contract backfill: an ACCEPTED creator whose contract was APPROVED in
+    //    the Delegate window (the brand POC's go-ahead, contract_approved) but
+    //    who has no contract yet (e.g. the send at approval time errored).
+    //    Deals still awaiting that approval are deliberately excluded — no
+    //    contract is ever generated or emailed before the go-ahead.
+    //    ensureContractSent is idempotent, so this safely retries generation +
+    //    the signing email once per creator.
     const acceptedNoContract = await db.many(
       `SELECT id FROM creators
        WHERE negotiation_status = 'ACCEPTED'
+         AND contract_approved
          AND status <> 'stopped'
          AND NOT EXISTS (SELECT 1 FROM contracts ct WHERE ct.creator_id = creators.id)`,
     );

@@ -134,13 +134,41 @@ router.post('/:id/delegate-reply', async (req, res, next) => {
   }
 });
 
-// Manually generate + email the contract for a creator. Covers deals accepted
-// by a human in the Delegate window, which don't hit the automatic 'accepted'
-// path. Idempotent — reuses the creator's existing contract if one exists.
+// The brand-POC go-ahead on an accepted deal. Acceptance parks the deal in the
+// Delegate window; once the team has the brand POC's "go", this approves it,
+// which generates the contract and emails its signing link. Contracts never go
+// out before this (or the manual /contract escape hatch below) records the
+// approval.
+router.post('/:id/approve-contract', async (req, res, next) => {
+  try {
+    const result = await negotiation.approveContract(req.params.id);
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, approve_result: result });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Manually generate + email the contract for a creator (API escape hatch, works
+// at any stage). An explicit human "send the contract" counts as the brand
+// go-ahead, so the approval is recorded here before sending — ensureContractSent
+// refuses to send without it. Idempotent — reuses any existing contract.
 router.post('/:id/contract', async (req, res, next) => {
   try {
     const exists = await db.one(`SELECT id FROM creators WHERE id = $1`, [req.params.id]);
     if (!exists) return res.status(404).json({ error: 'not found' });
+    const claimed = await db.one(
+      `UPDATE creators SET contract_approved = TRUE, updated_at = NOW()
+       WHERE id = $1 AND contract_approved = FALSE RETURNING id`,
+      [req.params.id],
+    );
+    if (claimed) {
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_approved', $2)`,
+        [req.params.id, { by: 'admin', via: 'manual_contract' }],
+      );
+    }
     const result = await negotiation.ensureContractSent(req.params.id);
     const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
     res.json({ ...fresh, contract_result: result });
@@ -177,8 +205,9 @@ router.patch('/:id/contract', async (req, res, next) => {
 
 // Admin accepts the creator's quoted rate as-is (instead of shaping a counter
 // offer). We agree to their number: the deal moves to ACCEPTED at that fee and
-// the contract is generated + emailed. Mirrors the offer-approval flow but for
-// the "yes, take their price" decision.
+// parks in the Delegate window for the brand POC's approval — the contract is
+// generated + emailed only once it's approved there. Mirrors the offer-approval
+// flow but for the "yes, take their price" decision.
 router.post('/:id/accept-rate', async (req, res, next) => {
   try {
     const result = await negotiation.acceptQuotedRate(req.params.id);

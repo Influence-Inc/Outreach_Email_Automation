@@ -3,7 +3,8 @@
 // negotiation.acceptQuotedRate — the admin accepting the creator's OWN quoted
 // rate instead of shaping a counter offer. This is the mirror of the creator
 // accepting our offer: WE agree to THEIR number, the deal moves to ACCEPTED at
-// that fee, and the contract is kicked off.
+// that fee, and it parks for the brand POC's contract approval — no contract
+// is generated or emailed until the deal is approved in the Delegate window.
 //
 // The DB layer is a thin singleton (src/db), so we stub db.one/db.query to
 // observe the writes. The contract pipeline is heavy (Claude + PDF + email), so
@@ -83,8 +84,13 @@ test('accepting the creator rate locks the fee, moves to ACCEPTED, and logs an a
     assert.strictEqual(detail.by, 'admin', 'flagged as an admin acceptance');
     assert.strictEqual(detail.source, 'creator_rate', 'source marks it as accepting the creator’s own rate');
 
-    // Contract kickoff fired: a contract_sent event is recorded.
-    assert.ok(findEvent(writes, 'contract_sent'), 'the contract is sent on acceptance');
+    // No contract yet: the acceptance parks the deal for the brand POC's
+    // go-ahead instead of firing the contract email.
+    assert.ok(
+      findEvent(writes, 'contract_approval_requested'),
+      'acceptance requests the brand approval',
+    );
+    assert.ok(!findEvent(writes, 'contract_sent'), 'no contract is sent before the approval');
   } finally {
     process.env.DRY_RUN = prevDryRun;
     restore();

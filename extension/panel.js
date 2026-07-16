@@ -576,7 +576,7 @@
         if (acceptRateBtn.dataset.busy === '1') return;
         const rateStr = `$${fmtNum(r.quoted_rate)}`;
         const who = r.first_name || `@${r.instagram_username || 'this creator'}`;
-        if (!confirm(`Accept ${who}'s rate of ${rateStr}? We'll agree to their number and send the contract for signing.`)) return;
+        if (!confirm(`Accept ${who}'s rate of ${rateStr}? We'll agree to their number — the contract goes out after the deal is approved in Delegate (brand POC go-ahead).`)) return;
         acceptRateBtn.dataset.busy = '1';
         acceptRateBtn.disabled = true;
         approveBtn.disabled = true;
@@ -584,7 +584,7 @@
         statusEl.textContent = 'Accepting…';
         try {
           await api(`/api/creators/${r.id}/accept-rate`, { method: 'POST' });
-          statusEl.textContent = `✓ Accepted ${rateStr} — contract sent.`;
+          statusEl.textContent = `✓ Accepted ${rateStr} — awaiting brand approval in Delegate before the contract goes out.`;
           setTimeout(onRefresh, 1200);
         } catch (err) {
           statusEl.textContent = `Couldn't accept: ${err.message}`;
@@ -717,7 +717,12 @@
     } else if (r.negotiation_status === 'AWAITING_DECISION') {
       subtitleText = 'Offer sent — waiting on the creator to accept or counter.';
     } else if (r.negotiation_status === 'ACCEPTED') {
-      subtitleText = 'Deal accepted. The contract has been generated and sent for signing.';
+      // Until the brand POC's go-ahead is recorded (contract_approved) no
+      // contract exists — it's approved & sent from the dashboard's Delegate.
+      subtitleText =
+        !r.contract_approved && !(r.contract && r.contract.status)
+          ? 'Deal accepted — approve it in the dashboard Delegate window (after the brand POC go-ahead) to generate and send the contract.'
+          : 'Deal accepted. The contract has been generated and sent for signing.';
     }
     if (subtitleText) {
       const sub = document.createElement('div');

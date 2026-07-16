@@ -6,19 +6,22 @@
 // table, replied "Sounds good. Next steps?" and the automation neither advanced
 // the deal nor answered — it later fired follow-up nudges instead. A clear
 // affirmative once an offer is on the table means the creator is saying YES:
-// it must classify as "accepted" and kick off the contract, not sit unhandled.
+// it must classify as "accepted" and park the deal for the brand POC's contract
+// approval, not sit unhandled. Crucially, acceptance must NOT send the contract
+// itself — that only happens after the deal is approved in the Delegate window.
 //
-// Two guards are covered:
-//   1. A clear affirmative at AWAITING_DECISION → accepted (contract workflow),
-//      in BOTH the Claude path and the deterministic heuristic fallback.
-//   2. An acceptance-looking reply at any OTHER stage (no offer on the table) is
-//      delegated, never auto-accepted — accepting fires a contract and must not
-//      happen with nothing to accept.
+// Three guards are covered:
+//   1. A clear affirmative at AWAITING_DECISION → accepted (parked for brand
+//      approval), in BOTH the Claude path and the deterministic heuristic
+//      fallback.
+//   2. An acceptance never sends the contract directly — it logs
+//      contract_approval_requested and no contract_sent.
+//   3. An acceptance-looking reply at any OTHER stage (no offer on the table) is
+//      delegated, never auto-accepted — accepting locks the agreed fee and must
+//      not happen with nothing to accept.
 //
 // The DB layer is a thin singleton (src/db), so we stub db.one/query/many to
-// observe writes. DRY_RUN keeps sendNegotiationEmail off the network; the
-// contract-generation call inside applyReply is best-effort (wrapped), so the
-// ACCEPTED / rate_accepted writes we assert on land regardless.
+// observe writes. DRY_RUN keeps sendNegotiationEmail off the network.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -58,6 +61,8 @@ const has = (writes, re) => writes.some((w) => re.test(w.sql));
 const accepted = (writes) => has(writes, /negotiation_status\s*=\s*'ACCEPTED'/i) && has(writes, /'rate_accepted'/i);
 const delegated = (writes) => has(writes, /needs_human\s*=\s*TRUE/i);
 const consumed = (writes) => has(writes, /latest_inbound_text\s*=\s*NULL/i);
+const approvalRequested = (writes) => has(writes, /'contract_approval_requested'/i);
+const contractSent = (writes) => has(writes, /'contract_sent'/i);
 
 const baseCreator = {
   id: 7,
@@ -93,6 +98,8 @@ test('processReply accepts a "Sounds good. Next steps?" reply at AWAITING_DECISI
     assert.ok(accepted(writes), 'the deal moves to ACCEPTED and logs rate_accepted');
     assert.ok(!delegated(writes), 'a clear acceptance is not punted to a human');
     assert.ok(consumed(writes), 'the inbound is consumed');
+    assert.ok(approvalRequested(writes), 'the deal is parked for the brand POC approval');
+    assert.ok(!contractSent(writes), 'no contract goes out before the Delegate approval');
   } finally {
     process.env.DRY_RUN = prevDryRun;
     restore();
@@ -116,6 +123,8 @@ test('processReply accepts a clear affirmative at AWAITING_DECISION with Claude 
     assert.ok(accepted(writes), 'the heuristic moves the deal to ACCEPTED');
     assert.ok(!delegated(writes), 'not delegated');
     assert.ok(consumed(writes), 'the inbound is consumed');
+    assert.ok(approvalRequested(writes), 'the deal is parked for the brand POC approval');
+    assert.ok(!contractSent(writes), 'no contract goes out before the Delegate approval');
   } finally {
     process.env.DRY_RUN = prevDryRun;
     restore();
@@ -136,7 +145,7 @@ test('heuristic does NOT accept a price-pushback reply at AWAITING_DECISION', as
   try {
     const res = await negotiation.processReply(7);
     assert.notStrictEqual(res.action, 'accepted', 'a price objection is never an acceptance');
-    assert.ok(!accepted(writes), 'no contract is fired on a pushback');
+    assert.ok(!accepted(writes), 'no acceptance is recorded on a pushback');
   } finally {
     process.env.DRY_RUN = prevDryRun;
     restore();

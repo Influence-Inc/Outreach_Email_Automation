@@ -377,7 +377,12 @@ function statusPillFor(r) {
     }[r.contract.status];
     if (contractPill) return contractPill;
   }
-  if (r.negotiation_status === 'ACCEPTED') return { cls: 'accepted', text: 'accepted' };
+  if (r.negotiation_status === 'ACCEPTED') {
+    // Accepted but not yet approved by the brand POC: the deal is parked in
+    // the Delegate window and no contract has gone out yet.
+    if (isContractApprovalPending(r)) return { cls: 'accepted', text: 'awaiting approval' };
+    return { cls: 'accepted', text: 'accepted' };
+  }
   const st = r.status || 'pending_extraction';
   return { cls: st, text: st.replace(/_/g, ' ') };
 }
@@ -1452,7 +1457,7 @@ function buildOfferConfigurator(r, onRefresh) {
       const who = r.first_name || `@${r.instagram_username || 'this creator'}`;
       if (
         !confirm(
-          `Accept ${who}'s rate of ${rateStr}? We'll agree to their number and send the contract for signing.`,
+          `Accept ${who}'s rate of ${rateStr}? We'll agree to their number — the contract goes out after the deal is approved in Delegate (brand POC go-ahead).`,
         )
       )
         return;
@@ -1463,7 +1468,7 @@ function buildOfferConfigurator(r, onRefresh) {
       statusEl.textContent = 'Accepting…';
       try {
         await api(`/api/creators/${r.id}/accept-rate`, { method: 'POST' });
-        statusEl.textContent = `✓ Accepted ${rateStr} — contract sent.`;
+        statusEl.textContent = `✓ Accepted ${rateStr} — awaiting brand approval in Delegate.`;
         setTimeout(onRefresh, 1400);
       } catch (err) {
         statusEl.textContent = `Couldn't accept: ${err.message}`;
@@ -2039,9 +2044,21 @@ function isOfferActionable(r) {
   );
 }
 
-// Shows in the Delegate window: AI hand-offs plus offers awaiting approval.
+// An accepted deal parked for the brand POC's go-ahead: the approval hasn't
+// been recorded and no contract exists yet. Shown in the Delegate window as an
+// "Approve & send contract" card — the contract goes out only from there.
+function isContractApprovalPending(r) {
+  return (
+    r.negotiation_status === 'ACCEPTED' &&
+    !r.contract_approved &&
+    !(r.contract && r.contract.status)
+  );
+}
+
+// Shows in the Delegate window: AI hand-offs, offers awaiting approval, and
+// accepted deals awaiting the brand POC's contract approval.
 function isDelegateActionable(r) {
-  return !!r.needs_human || isOfferActionable(r);
+  return !!r.needs_human || isOfferActionable(r) || isContractApprovalPending(r);
 }
 
 async function renderDelegateList() {
@@ -2058,7 +2075,7 @@ async function renderDelegateList() {
   updateDelegateBadge(pending.length);
   if (!pending.length) {
     root.innerHTML =
-      '<p class="hint">Nothing needs you right now. Replies the AI hands off (or every reply, while &ldquo;Auto-reply with AI&rdquo; is off), plus offers awaiting your approval, will appear here.</p>';
+      '<p class="hint">Nothing needs you right now. Replies the AI hands off (or every reply, while &ldquo;Auto-reply with AI&rdquo; is off), offers awaiting your approval, and accepted deals awaiting the brand&rsquo;s go-ahead on the contract will appear here.</p>';
     return;
   }
   root.innerHTML = '';
@@ -2092,6 +2109,31 @@ function buildDelegateCard(r) {
     return item;
   }
 
+  // Accepted deal awaiting the brand POC's go-ahead: an approval card whose
+  // primary action generates + emails the contract. If the creator also has a
+  // parked message (hand-off), it shows with a reply box beneath the approval.
+  if (isContractApprovalPending(r)) {
+    const card = document.createElement('div');
+    card.className = 'delegate-card';
+    const head = document.createElement('div');
+    head.className = 'delegate-head';
+    head.innerHTML = `
+      <div>
+        <a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || '')}</a>
+        ${r.first_name ? `<span class="meta"> · ${escapeHtml(r.first_name)}</span>` : ''}
+        <div class="meta">${escapeHtml(r.email || 'no email')}</div>
+      </div>
+      <span class="delegate-reason">Deal accepted — awaiting brand approval</span>`;
+    card.appendChild(head);
+    card.appendChild(buildContractApprovalBlock(r));
+    if (isHandoff) {
+      const msg = buildHandoffMessage(r);
+      if (msg) card.appendChild(msg);
+      card.appendChild(buildReplyBlock(r));
+    }
+    return card;
+  }
+
   // Hand-off only: the creator's parked message + a reply box, in a plain card.
   const card = document.createElement('div');
   card.className = 'delegate-card';
@@ -2114,6 +2156,42 @@ function buildDelegateCard(r) {
   }
   card.appendChild(buildReplyBlock(r));
   return card;
+}
+
+// The "Approve & send contract" block on a pending-approval Delegate card.
+// Approving records the brand POC's go-ahead, then generates the contract and
+// emails its signing link — nothing is sent to the creator until this click.
+function buildContractApprovalBlock(r) {
+  const rate = effectiveRate(r);
+  const rateStr = rate != null ? ` at $${fmtNum(rate)}` : '';
+  const block = document.createElement('div');
+  block.className = 'delegate-approval-block';
+  block.innerHTML = `
+    <div class="delegate-question">Deal agreed${rateStr}. Get the brand POC's go-ahead, then approve — the contract is generated and emailed for signing only after that.</div>
+    <div class="delegate-reply-foot">
+      <span class="delegate-status hint"></span>
+      <button class="btn-primary delegate-approve-contract" type="button">Approve &amp; send contract</button>
+    </div>`;
+  const statusEl = block.querySelector('.delegate-status');
+  const approveBtn = block.querySelector('.delegate-approve-contract');
+  approveBtn.onclick = async () => {
+    if (
+      !confirm(
+        `Approve this deal${rateStr}? The contract will be generated and emailed to the creator for signing.`,
+      )
+    )
+      return;
+    approveBtn.disabled = true;
+    statusEl.textContent = 'Approving & sending contract…';
+    try {
+      await api(`/api/creators/${r.id}/approve-contract`, { method: 'POST' });
+      await refreshDelegateAndCampaigns();
+    } catch (err) {
+      statusEl.textContent = `Failed: ${err.message}`;
+      approveBtn.disabled = false;
+    }
+  };
+  return block;
 }
 
 // The creator's parked message (+ the hand-off reason) shown above the reply
