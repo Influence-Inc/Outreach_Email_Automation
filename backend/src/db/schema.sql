@@ -120,6 +120,11 @@ ALTER TABLE creators  ADD COLUMN IF NOT EXISTS quoted_rate NUMERIC(10,2);
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS quoted_rate_options JSONB;
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS ig_scraped_data JSONB;
   -- {p10,p25,p50,p75,reel_count,min_views,views_raw:[...]}
+-- Off-Instagram links captured off the profile (external_url + link-in-bio hub
+-- links). Consumed by the email-enrichment fallback (services/emailEnrich.js) to
+-- find a contact email on the creator's own site / Linktree when Instagram has
+-- none. Array of URL strings; [] = captured-and-empty, NULL = never captured.
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS bio_links JSONB;
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS suggested_offers JSONB;
   -- array of offer objects (shape in pricing.js)
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS selected_offer_id TEXT;

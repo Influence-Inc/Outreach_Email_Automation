@@ -3,10 +3,47 @@ const db = require('../db');
 const { sendOutreach } = require('../services/outreach');
 const instantly = require('../services/instantly');
 const { scrapeProfile } = require('../services/igScraper');
+const { enrichEmail } = require('../services/emailEnrich');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const contracts = require('../services/contracts');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
+
+// Assemble the off-Instagram email-enrichment context for a creator: the links
+// captured by the extension (creators.bio_links) plus anything a fresh scrape
+// surfaced (external_url / bio links / biography). Deduped.
+function buildEnrichContext(creator, scraped) {
+  const links = [];
+  if (scraped && scraped.externalUrl) links.push(scraped.externalUrl);
+  if (scraped && Array.isArray(scraped.bioLinks)) links.push(...scraped.bioLinks);
+  if (Array.isArray(creator.bio_links)) links.push(...creator.bio_links);
+  return {
+    fullName: (scraped && scraped.fullName) || creator.full_name,
+    instagramUsername: creator.instagram_username,
+    externalUrl: null,
+    bioLinks: [...new Set(links.filter(Boolean))],
+    biography: (scraped && scraped.biography) || null,
+  };
+}
+
+// Run off-Instagram enrichment for one creator: prefer the links the extension
+// captured (creators.bio_links); if none, try a server-side scrape to obtain
+// them (which may itself surface the IG email). Then follow the links to a
+// verified contact email. Returns { email, source } — both null when nothing
+// is found. Scrape failures are swallowed (best-effort).
+async function enrichCreator(creator) {
+  let scraped = null;
+  if (!Array.isArray(creator.bio_links) || !creator.bio_links.length) {
+    scraped = await scrapeProfile({
+      instagramUrl: creator.instagram_url,
+      instagramUsername: creator.instagram_username,
+    }).catch(() => null);
+  }
+  if (scraped && scraped.email) return { email: scraped.email, source: scraped.source };
+  const enriched = await enrichEmail(buildEnrichContext(creator, scraped));
+  if (enriched && enriched.email) return { email: enriched.email, source: enriched.source };
+  return { email: null, source: null };
+}
 
 // Event types that make up the per-creator "Rate" timeline (delivery-tracking
 // style). A curated subset of email_events — the offer email's own
@@ -487,6 +524,18 @@ router.patch('/:id', async (req, res, next) => {
       }
     }
 
+    // Off-Instagram links from the extension scrape (external_url + bio-hub
+    // links). Stored so the email-enrichment fallback can follow them later
+    // without re-reading Instagram (which the backend's IP can't do reliably).
+    if (Array.isArray(body.bio_links)) {
+      const links = body.bio_links
+        .map((l) => (typeof l === 'string' ? l : l && l.url))
+        .filter((s) => typeof s === 'string' && s.trim())
+        .slice(0, 25);
+      params.push(JSON.stringify(links));
+      updates.push(`bio_links = $${params.length}::jsonb`);
+    }
+
     if (!updates.length) return res.status(400).json({ error: 'no fields to update' });
     if (body.email) {
       // Setting/fixing the email re-arms a creator that had no usable address
@@ -552,6 +601,58 @@ router.post('/bulk/fetch-email', async (req, res) => {
     res.json({ ok: true, processed: results.length, results });
   } catch (err) {
     console.error('bulk fetch-email failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch off-Instagram enrichment for every emailless creator in a campaign.
+// Uses the links the extension captured (creators.bio_links); for rows without
+// captured links it also tries a server-side scrape. Paced so a run doesn't
+// hammer external sites. Registered before /:id/enrich-email so "bulk" isn't
+// swallowed as an :id.
+router.post('/bulk/enrich-email', async (req, res) => {
+  try {
+    const { campaign_id } = req.body || {};
+    if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+    const targets = await db.many(
+      `SELECT id FROM creators
+       WHERE campaign_id = $1
+         AND (email IS NULL OR email = '')
+         AND status IN ('no_email','pending_extraction','invalid_email')
+       ORDER BY created_at ASC`,
+      [campaign_id],
+    );
+    const results = [];
+    let found = 0;
+    for (const t of targets) {
+      const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [t.id]);
+      if (!creator || creator.email) continue;
+      try {
+        const { email, source } = await enrichCreator(creator);
+        const updates = [`updated_at = NOW()`];
+        const params = [creator.id];
+        if (email) {
+          params.push(email);
+          updates.push(`email = $${params.length}`);
+          updates.push(
+            `status = CASE WHEN status IN ('pending_extraction','no_email','invalid_email') THEN 'email_found' ELSE status END`,
+          );
+          found += 1;
+        }
+        await db.query(`UPDATE creators SET ${updates.join(', ')} WHERE id = $1`, params);
+        await db.query(
+          `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, $2, $3)`,
+          [creator.id, email ? 'email_enriched' : 'enrich_no_email', { source }],
+        );
+        results.push({ id: creator.id, email, source });
+      } catch (err) {
+        results.push({ id: creator.id, error: err.message });
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    res.json({ ok: true, processed: results.length, found, results });
+  } catch (err) {
+    console.error('bulk enrich-email failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -629,6 +730,19 @@ router.post('/:id/fetch-email', async (req, res) => {
       instagramUsername: creator.instagram_username,
     });
 
+    // Off-Instagram fallback: when the profile has no email, follow the
+    // creator's own links (site / Linktree) to find a contact address. Free +
+    // best-effort; gate off with EMAIL_ENRICH=0.
+    let email = scraped.email;
+    let source = scraped.source;
+    if (!email && process.env.EMAIL_ENRICH !== '0') {
+      const enriched = await enrichEmail(buildEnrichContext(creator, scraped));
+      if (enriched && enriched.email) {
+        email = enriched.email;
+        source = enriched.source;
+      }
+    }
+
     const updates = [
       `instagram_username = COALESCE(creators.instagram_username, $2)`,
       `full_name = COALESCE($3, full_name)`,
@@ -639,8 +753,8 @@ router.post('/:id/fetch-email', async (req, res) => {
 
     // status is guaranteed 'pending_extraction' here (guarded above), so the
     // transition is unconditional: found → email_found, nothing → no_email.
-    if (scraped.email) {
-      params.push(scraped.email);
+    if (email) {
+      params.push(email);
       updates.push(`email = $${params.length}`);
       updates.push(`status = 'email_found'`);
     } else {
@@ -657,16 +771,55 @@ router.post('/:id/fetch-email', async (req, res) => {
        VALUES ($1, $2, $3)`,
       [
         creator.id,
-        scraped.email ? 'email_found' : 'no_email',
-        { source: scraped.source, isBusiness: scraped.isBusiness },
+        email ? 'email_found' : 'no_email',
+        { source, isBusiness: scraped.isBusiness, enriched: source ? /^web:|^provider:/.test(source) : false },
       ],
     );
 
-    res.json({ ok: true, creator: updated, source: scraped.source });
+    res.json({ ok: true, creator: updated, source });
   } catch (err) {
     console.error('fetch-email failed:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Off-Instagram email discovery for a single creator who has no email. Explicit
+// endpoint — always runs regardless of the EMAIL_ENRICH flag (that flag only
+// gates the automatic fallback during a normal scrape). Refuses a creator that
+// already has an email so it can't overwrite good data.
+router.post('/:id/enrich-email', async (req, res, next) => {
+  try {
+    const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    if (!creator) return res.status(404).json({ error: 'not found' });
+    if (creator.email) {
+      return res.status(409).json({ error: `creator ${creator.id} already has an email` });
+    }
+
+    const { email, source } = await enrichCreator(creator);
+
+    const updates = [`updated_at = NOW()`];
+    const params = [creator.id];
+    if (email) {
+      params.push(email);
+      updates.push(`email = $${params.length}`);
+      updates.push(
+        `status = CASE WHEN status IN ('pending_extraction','no_email','invalid_email') THEN 'email_found' ELSE status END`,
+      );
+    } else {
+      updates.push(`status = CASE WHEN status = 'pending_extraction' THEN 'no_email' ELSE status END`);
+    }
+    const updated = await db.one(
+      `UPDATE creators SET ${updates.join(', ')} WHERE id = $1 RETURNING *`,
+      params,
+    );
+
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, $2, $3)`,
+      [creator.id, email ? 'email_enriched' : 'enrich_no_email', { source }],
+    );
+
+    res.json({ ok: true, creator: updated, email, source });
+  } catch (err) { next(err); }
 });
 
 router.post('/:id/send-outreach', async (req, res, next) => {
