@@ -536,6 +536,25 @@ router.patch('/:id', async (req, res, next) => {
       updates.push(`bio_links = $${params.length}::jsonb`);
     }
 
+    // email_source travels with the email: an explicit source from the scrape
+    // (e.g. 'instagram_contact') is stored; a manual email edit with no source
+    // is marked 'manual'; clearing the email clears the source.
+    if (Object.prototype.hasOwnProperty.call(body, 'email')) {
+      let src;
+      if (body.email === '' || body.email == null) src = null;
+      else if (body.email_source) src = String(body.email_source);
+      else src = 'manual';
+      params.push(src);
+      updates.push(`email_source = $${params.length}`);
+    }
+
+    // A completed extension scrape that found no email marks a still-pending
+    // creator 'no_email' (the automatic enrichment pass runs next and can still
+    // fill it). `scraped: true` distinguishes this from an ordinary field edit.
+    if (!Object.prototype.hasOwnProperty.call(body, 'email') && body.scraped === true) {
+      updates.push(`status = CASE WHEN status = 'pending_extraction' THEN 'no_email' ELSE status END`);
+    }
+
     if (!updates.length) return res.status(400).json({ error: 'no fields to update' });
     if (body.email) {
       // Setting/fixing the email re-arms a creator that had no usable address
@@ -634,6 +653,8 @@ router.post('/bulk/enrich-email', async (req, res) => {
         if (email) {
           params.push(email);
           updates.push(`email = $${params.length}`);
+          params.push(source || null);
+          updates.push(`email_source = $${params.length}`);
           updates.push(
             `status = CASE WHEN status IN ('pending_extraction','no_email','invalid_email') THEN 'email_found' ELSE status END`,
           );
@@ -756,6 +777,8 @@ router.post('/:id/fetch-email', async (req, res) => {
     if (email) {
       params.push(email);
       updates.push(`email = $${params.length}`);
+      params.push(source || null);
+      updates.push(`email_source = $${params.length}`);
       updates.push(`status = 'email_found'`);
     } else {
       updates.push(`status = 'no_email'`);
@@ -802,6 +825,8 @@ router.post('/:id/enrich-email', async (req, res, next) => {
     if (email) {
       params.push(email);
       updates.push(`email = $${params.length}`);
+      params.push(source || null);
+      updates.push(`email_source = $${params.length}`);
       updates.push(
         `status = CASE WHEN status IN ('pending_extraction','no_email','invalid_email') THEN 'email_found' ELSE status END`,
       );

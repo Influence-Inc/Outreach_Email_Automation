@@ -357,8 +357,11 @@ button:disabled { opacity: 0.5; cursor: default; }
 .cr-name-value.empty { color: var(--faint-2); }
 
 /* Email cell */
-.cr-email { display: flex; align-items: center; font-size: 12.5px; color: var(--ink-2); word-break: break-all; }
+.cr-email { display: flex; flex-direction: column; justify-content: center; gap: 3px; font-size: 12.5px; color: var(--ink-2); word-break: break-all; }
 .cr-email .empty { color: var(--faint-2); }
+.cr-email-src { font-size: 11px; color: var(--faint); }
+.cr-email-src a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+.cr-email-src a:hover { color: var(--ink-2); }
 
 /* Reach cell */
 .cr-reach { display: flex; flex-direction: column; justify-content: center; gap: 3px; }

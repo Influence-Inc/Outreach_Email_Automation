@@ -110,7 +110,7 @@ test('enrichEmail finds an on-domain email on the creator site', async () => {
   );
   assert.deepStrictEqual(res, {
     email: 'yushika@birdsofparadyes.com',
-    source: 'web:birdsofparadyes.com',
+    source: 'https://birdsofparadyes.com/',
   });
 });
 
@@ -124,7 +124,7 @@ test('enrichEmail expands a Linktree hub to the real site', async () => {
     { bioLinks: ['https://linktr.ee/yushika'] },
     { fetchHtml, verify: false },
   );
-  assert.deepStrictEqual(res, { email: 'hello@mybrand.com', source: 'web:mybrand.com' });
+  assert.deepStrictEqual(res, { email: 'hello@mybrand.com', source: 'https://mybrand.com/' });
 });
 
 test('enrichEmail reads an email pasted on the hub page itself', async () => {
@@ -132,7 +132,7 @@ test('enrichEmail reads an email pasted on the hub page itself', async () => {
     'https://linktr.ee/u': '<p>bookings: bookme@studio.co</p>',
   });
   const res = await enrichEmail({ bioLinks: ['https://linktr.ee/u'] }, { fetchHtml, verify: false });
-  assert.deepStrictEqual(res, { email: 'bookme@studio.co', source: 'web:linktr.ee' });
+  assert.deepStrictEqual(res, { email: 'bookme@studio.co', source: 'https://linktr.ee/u' });
 });
 
 test('enrichEmail falls to a /contact page when the home page has none', async () => {
@@ -141,7 +141,7 @@ test('enrichEmail falls to a /contact page when the home page has none', async (
     'https://brand.com/contact': '<a href="mailto:hi@brand.com">reach us</a>',
   });
   const res = await enrichEmail({ externalUrl: 'https://brand.com/' }, { fetchHtml, verify: false });
-  assert.deepStrictEqual(res, { email: 'hi@brand.com', source: 'web:brand.com' });
+  assert.deepStrictEqual(res, { email: 'hi@brand.com', source: 'https://brand.com/contact' });
 });
 
 test('enrichEmail returns null when there are no links or no email', async () => {
@@ -163,5 +163,5 @@ test('enrichEmail picks a URL out of the biography text', async () => {
     { biography: 'photographer · portfolio: https://portfolio.me/ · dm for rates' },
     { fetchHtml, verify: false },
   );
-  assert.deepStrictEqual(res, { email: 'me@portfolio.me', source: 'web:portfolio.me' });
+  assert.deepStrictEqual(res, { email: 'me@portfolio.me', source: 'https://portfolio.me/' });
 });

@@ -125,6 +125,12 @@ ALTER TABLE creators  ADD COLUMN IF NOT EXISTS ig_scraped_data JSONB;
 -- find a contact email on the creator's own site / Linktree when Instagram has
 -- none. Array of URL strings; [] = captured-and-empty, NULL = never captured.
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS bio_links JSONB;
+-- Where the current email came from, shown in the dashboard. For Instagram:
+-- 'instagram_contact' (Email/Contact button) or 'instagram_bio'. For the
+-- off-Instagram enrichment: the EXACT page URL it was scraped from
+-- (e.g. https://brand.com/contact). Also 'provider:<name>' for a paid lookup,
+-- or 'manual' for a hand-typed address. NULL when unknown.
+ALTER TABLE creators  ADD COLUMN IF NOT EXISTS email_source TEXT;
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS suggested_offers JSONB;
   -- array of offer objects (shape in pricing.js)
 ALTER TABLE creators  ADD COLUMN IF NOT EXISTS selected_offer_id TEXT;

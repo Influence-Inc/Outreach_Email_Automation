@@ -262,7 +262,7 @@ async function enrichEmail(context = {}, options = {}) {
       const html = await fetchImpl(seed, timeoutMs);
       // A hub page can itself carry a contact email (some creators paste it there).
       for (const e of extractEmailsFromHtml(html)) {
-        if (verify ? (await verifyEmail(e)).valid : true) return { email: e, source: `web:${hostOf(seed)}` };
+        if (verify ? (await verifyEmail(e)).valid : true) return { email: e, source: seed };
       }
       for (const dest of extractLinksFromHtml(html, seed)) addSite(dest);
     } else {
@@ -270,25 +270,36 @@ async function enrichEmail(context = {}, options = {}) {
     }
   }
 
-  // 3+4) Fetch each site (and its contact/about) and pick the best verified email.
+  // 3+4) Fetch each site (and its contact/about) and pick the best verified
+  // email. `source` is the EXACT page URL the address was scraped from so the
+  // dashboard can show (and link to) where an off-Instagram email came from.
   for (const site of sites.slice(0, maxSites)) {
     const host = hostOf(site);
+    const root = host.split('.').slice(-2).join('.');
     const pages = [site, ...contactPagesFor(site)];
-    const found = [];
+    const found = []; // [{ email, url }]
     for (const page of pages) {
       const html = await fetchImpl(page, timeoutMs);
       if (!html) continue;
-      for (const e of extractEmailsFromHtml(html)) if (!found.includes(e)) found.push(e);
+      for (const e of extractEmailsFromHtml(html)) {
+        if (!found.some((f) => f.email === e)) found.push({ email: e, url: page });
+      }
       // Home page already yielded an on-domain address? Stop early.
-      if (pickBestEmail(found, host) && found.some((e) => e.split('@')[1].endsWith(host.split('.').slice(-2).join('.')))) break;
+      const emails = found.map((f) => f.email);
+      if (pickBestEmail(emails, host) && emails.some((e) => e.split('@')[1].endsWith(root))) break;
     }
+    if (!found.length) continue;
     // Verify in preference order (on-domain first).
+    const emails = found.map((f) => f.email);
     const ordered = [];
-    const best = pickBestEmail(found, host);
+    const best = pickBestEmail(emails, host);
     if (best) ordered.push(best);
-    for (const e of found) if (!ordered.includes(e)) ordered.push(e);
+    for (const e of emails) if (!ordered.includes(e)) ordered.push(e);
     for (const e of ordered) {
-      if (!verify || (await verifyEmail(e)).valid) return { email: e, source: `web:${host}` };
+      if (!verify || (await verifyEmail(e)).valid) {
+        const hit = found.find((f) => f.email === e);
+        return { email: e, source: (hit && hit.url) || site };
+      }
     }
   }
 
