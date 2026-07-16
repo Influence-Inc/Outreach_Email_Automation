@@ -177,6 +177,64 @@ test('draftOfferEmail (revised) falls back to the concise template when Claude i
   }
 });
 
+test('draftOfferEmail feeds the view-range opener into the prompt for a wide-spread creator', async () => {
+  db.many = async () => [];
+  const client = capturingClient(JSON.stringify({ subject: 'Re: deal', body: 'Hi Dua, ... - Jennifer' }));
+  negotiation._setClient(client);
+  try {
+    const creator = {
+      ...baseCtxCreator,
+      latest_inbound_text: 'My rate is $1500.',
+      ig_scraped_data: { views_raw: [60000, 150000, 400000], min_views: 60000 },
+    };
+    const offer = { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 400000, label: 'View-Based Offer' };
+    const ctx = negotiation.ctxFor(creator, { approvedOffer: offer });
+    await negotiation.draftOfferEmail(creator, offer, ctx, { combine: false });
+    const { system } = client.calls[0];
+    assert.ok(/OPENING LINE/.test(system), 'the verbatim opener instruction is present');
+    assert.ok(system.includes('your views can range anywhere from 60k to 400k+'), 'range opener given to Claude');
+  } finally {
+    restore();
+  }
+});
+
+test('draftOfferEmail (view-based, wide spread) fallback opens with the view range', async () => {
+  db.many = async () => [];
+  negotiation._setClient(null);
+  try {
+    const creator = {
+      ...baseCtxCreator,
+      latest_inbound_text: 'My rate is $1500.',
+      ig_scraped_data: { views_raw: [60000, 150000, 400000], min_views: 60000 },
+    };
+    const offer = { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 400000, label: 'View-Based Offer' };
+    const ctx = negotiation.ctxFor(creator, { approvedOffer: offer });
+    const email = await negotiation.draftOfferEmail(creator, offer, ctx, { combine: false });
+    assert.ok(email.body.includes('your views can range anywhere from 60k to 400k+'), 'range opener in the fallback body');
+  } finally {
+    restore();
+  }
+});
+
+test('draftOfferEmail (view-based, narrow spread) fallback uses the standard opener', async () => {
+  db.many = async () => [];
+  negotiation._setClient(null);
+  try {
+    const creator = {
+      ...baseCtxCreator,
+      latest_inbound_text: 'My rate is $1500.',
+      ig_scraped_data: { views_raw: [26000, 35000, 49000], min_views: 26000 },
+    };
+    const offer = { offer_type: 'view_based', flat_fee: 1500, view_guarantee: 50000, label: 'View-Based Offer' };
+    const ctx = negotiation.ctxFor(creator, { approvedOffer: offer });
+    const email = await negotiation.draftOfferEmail(creator, offer, ctx, { combine: false });
+    assert.ok(/performance-based deals/i.test(email.body), 'standard opener for a narrow spread');
+    assert.ok(!/range anywhere from/i.test(email.body), 'no range line');
+  } finally {
+    restore();
+  }
+});
+
 test('draftOfferEmail falls back to the template when Claude is unavailable', async () => {
   db.many = async () => [];
   negotiation._setClient(null);

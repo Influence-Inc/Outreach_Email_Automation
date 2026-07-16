@@ -616,9 +616,12 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false, revised =
   const v = templateVars(ctx);
   // A revised counter never combines REPLY 1 — the creator is well past the intro.
   if (revised) combine = false;
+  // The creator's recent view spread (lowest → highest reel). A view-based first
+  // offer leads with this range when it's wide enough to be worth calling out.
+  const viewRange = templates.viewRangeFromStats(creator.ig_scraped_data);
   const fallback = revised
     ? templates.revisedOfferEmail(offer, v)
-    : templates.offerEmail(offer, v, { combine });
+    : templates.offerEmail(offer, v, { combine, viewRange });
   // The creator's own words, so the offer opens by acknowledging what they said
   // (their rate, a preference) instead of a cold "Thanks for sharing your rates".
   const lastCreatorMsg = await latestCreatorMessage(creator);
@@ -642,6 +645,14 @@ async function draftOfferEmail(creator, offer, ctx, { combine = false, revised =
     // posts when it isn't. Framing is per-view, not per-video.
     isViewBased
       ? 'HARD RULE: This is a VIEW-BASED offer — do NOT mention a number of videos or posts anywhere in the email. No "N-video package", no "the first video", no "further videos", no "N posts". Talk only about the guaranteed VIEW TOTAL and let the creator decide the post count.'
+      : '',
+    // Lead line for a view-based first offer: if the creator's own views swing
+    // widely, open the pitch with that range; otherwise use the standard opener.
+    // Given verbatim so Claude doesn't paraphrase the numbers or the framing.
+    isViewBased && !revised
+      ? `OPENING LINE — introduce the view-based offer with EXACTLY this sentence (verbatim, do not reword or change the numbers), placed right before the offer details and after your one-sentence acknowledgment${
+          combine ? ' and the REPLY 1 collaboration details' : ''
+        }: "${templates.viewBasedOpener(viewRange)}"`
       : '',
     `Today's date is ${todayStr()}. Desired posting cadence: "${v.cadence}". If you mention timelines, give an approximate posted-by date computed from today for this ${
       isViewBased ? 'view-based' : `${offer.num_videos}-video`
