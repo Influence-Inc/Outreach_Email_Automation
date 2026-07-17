@@ -128,7 +128,10 @@ function buildPayload(contract, creator) {
     compensation: numOrUndef(d.compensation),
     currency: /^[A-Z]{3}$/.test(String(d.currency || '')) ? d.currency : 'USD',
     paymentTerms: d.paymentTerms,
-    guaranteedViews: intOrUndef(d.guaranteedViews),
+    // A view floor is a view-based term — never sync one for a flat video-based
+    // deal, even if a stale value lingers on a contract generated before the
+    // deal was correctly classified.
+    guaranteedViews: d.offerType === 'video_based' ? undefined : intOrUndef(d.guaranteedViews),
     specialNotes: d.specialNotes,
     additionalTerms:
       Array.isArray(d.additionalTerms) && d.additionalTerms.length ? d.additionalTerms : undefined,

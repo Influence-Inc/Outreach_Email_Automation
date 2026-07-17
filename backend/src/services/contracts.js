@@ -100,7 +100,11 @@ function numDeliverables(offer) {
 
 function guaranteedViewsOf(offer) {
   if (!offer) return null;
-  if (offer.view_guarantee != null) return Number(offer.view_guarantee);
+  // A flat video-based deal is priced per video, not on a guaranteed view
+  // floor — that floor is a view-based concept. Never surface a min-views
+  // number for a video_based offer, even if one leaked onto the offer object.
+  if (offer.offer_type === 'video_based') return null;
+  if (offer.view_guarantee != null && Number(offer.view_guarantee) > 0) return Number(offer.view_guarantee);
   if (offer.bonus_threshold_views != null) return Number(offer.bonus_threshold_views);
   return null;
 }
@@ -449,6 +453,16 @@ async function extractContractData(creator) {
     merged.deliverables = base.deliverables;
     merged.numberOfDeliverables = null;
     merged.numberOfVideos = null;
+  }
+  // Symmetric to view_based above: a flat video-based deal is priced per video,
+  // NOT on a guaranteed view floor. Never let the extraction stamp a min-views
+  // number onto it — the reported case where a creator rejected performance
+  // terms and explicitly declined to guarantee 160k views, yet the campaign's
+  // default view floor still leaked onto the contract as "Min. guaranteed
+  // views". A view floor belongs only to a view-based deal.
+  if (base.offerType === 'video_based') {
+    merged.minTotalViews = null;
+    merged.guaranteedViews = null;
   }
   // Cadence never applies to a single-video (or view-based) deal, no matter
   // what Claude extracted from the thread — keep it out of the stored contract.
@@ -830,6 +844,12 @@ function coerceContractPatch(patch) {
       out.deliverables = deliverablesFor('video_based', n);
       out.numberOfDeliverables = n;
       out.numberOfVideos = n;
+      // A video-based deal isn't priced on a guaranteed view floor — clear any
+      // min-views number carried over from a prior view-based classification so
+      // the contract doesn't keep showing "Min. guaranteed views" it no longer
+      // promises. An explicit same-patch minTotalViews (below) still wins.
+      out.minTotalViews = null;
+      out.guaranteedViews = null;
     }
   }
   if (has('numberOfVideos')) {

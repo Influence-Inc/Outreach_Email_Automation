@@ -52,8 +52,11 @@ test('baseContractData fills a complete contract from known creator + offer', ()
   // Deliverables
   assert.strictEqual(d.numberOfDeliverables, 3);
   assert.strictEqual(d.numberOfVideos, 3);
-  assert.strictEqual(d.minTotalViews, 100000);
-  assert.strictEqual(d.guaranteedViews, 100000);
+  // A flat video-based deal is priced per video, not on a guaranteed view
+  // floor — so it carries no min-views number, even if the offer object names
+  // one. That floor is a view-based term only (see the view-based test below).
+  assert.strictEqual(d.minTotalViews, null);
+  assert.strictEqual(d.guaranteedViews, null);
   // Compensation — paid in full on completion by default: no upfront split
   // unless the creator demanded one (see the payment-schedule tests below).
   assert.strictEqual(d.compensation, 900);
@@ -210,6 +213,28 @@ test('creatorDb.buildPayload maps a signed contract to the Creator-DB DTO', () =
   assert.strictEqual(p.signedAt, new Date('2026-07-06T12:00:00Z').toISOString());
   // clean() drops empties — no null/'' leaks that would trip forbidNonWhitelisted.
   assert.ok(!Object.values(p).some((v) => v === null || v === '' || v === undefined));
+});
+
+test('creatorDb.buildPayload omits the view floor for a video-based deal', () => {
+  // Defensive against a stale value on a contract generated before the deal
+  // was correctly classified: a flat video-based deal promises no view floor,
+  // so the synced DTO must never carry guaranteedViews for it.
+  const contract = {
+    token: 'tok456',
+    signed_at: '2026-07-06T12:00:00Z',
+    data: {
+      creatorName: 'Alex Lee',
+      email: 'alex@example.com',
+      offerType: 'video_based',
+      deliverables: '1 short-form video',
+      numberOfDeliverables: 1,
+      compensation: 1600,
+      currency: 'USD',
+      guaranteedViews: 160000, // stale leftover — must NOT sync
+    },
+  };
+  const p = creatorDb.buildPayload(contract, { full_name: 'Alex Lee', email: 'alex@example.com' });
+  assert.ok(!('guaranteedViews' in p), 'no view floor is synced for a video-based deal');
 });
 
 test('contractEmail carries the signing link and the expected copy', () => {
@@ -436,6 +461,28 @@ test('coerceContractPatch: offerType flip to view_based clears the video count a
   // A view-based deal has no multi-video rhythm; the cadence field is cleared
   // so the contract page doesn't carry a stale "1-2 videos per week" line.
   assert.strictEqual(toView.timeline, null);
+});
+
+test('coerceContractPatch: offerType flip to video_based drops any leftover min-views floor', () => {
+  // The reported case: a deal mis-shaped as view-based (carrying a 160k view
+  // floor) is flipped to video-based. A flat per-video deal promises no view
+  // floor, so the flip must clear it — otherwise the contract keeps showing
+  // "Min. guaranteed views" it no longer guarantees.
+  const out = contracts.coerceContractPatch({ offerType: 'video_based' });
+  assert.strictEqual(out.minTotalViews, null);
+  assert.strictEqual(out.guaranteedViews, null);
+});
+
+test('baseContractData: a video-based deal carries no guaranteed-view floor', () => {
+  // Even when the offer object names a view_guarantee, a video-based deal is
+  // priced per video — the floor is a view-based-only term.
+  const d = contracts.baseContractData(
+    { full_name: 'Alex' },
+    1600,
+    { offer_type: 'video_based', num_videos: 1, view_guarantee: 160000, flat_fee: 1600 },
+  );
+  assert.strictEqual(d.minTotalViews, null);
+  assert.strictEqual(d.guaranteedViews, null);
 });
 
 test('coerceContractPatch: an unknown offerType value is ignored', () => {
