@@ -48,12 +48,36 @@ async function loadCreatorForContract(creatorId) {
 }
 
 // The offer the creator accepted (custom overrides suggested; selected id wins).
-function resolveOffer(creator) {
+//
+// opts.preferOfferType / preferNumVideos are used ONLY when re-extracting an
+// EXISTING contract (see updateContractTermsFromThread): they let the offer
+// type already committed on that contract win over the weak "first suggested
+// offer" fallback — which is always the view-based "Conservative View Deal".
+// Without this, re-extracting a legacy deal (one accepted before
+// acceptQuotedRate began pinning a video-based custom_offer) would silently
+// re-classify a video-based deal back to view-based, undoing both the shaping
+// and any manual correction. A custom_offer or an explicit selected_offer_id
+// is a stronger, more specific signal, so both still win over the hint.
+function resolveOffer(creator, opts = {}) {
   if (creator.custom_offer && typeof creator.custom_offer === 'object') return creator.custom_offer;
   const offers = Array.isArray(creator.suggested_offers) ? creator.suggested_offers : [];
   if (creator.selected_offer_id) {
     const f = offers.find((o) => o.offer_id === creator.selected_offer_id);
     if (f) return f;
+  }
+  if (opts.preferOfferType) {
+    const match = offers.find((o) => o.offer_type === opts.preferOfferType);
+    if (match) return match;
+    // No stored offer of that type (a legacy deal whose suggested offers
+    // predate the committed type) — synthesise a minimal one so the extraction
+    // keeps the committed shape instead of defaulting to the view-based first
+    // offer. The fee is resolved separately (agreedFeeFor), so the offer only
+    // needs to carry the type and, when known, the committed video count.
+    const n = Number(opts.preferNumVideos);
+    return {
+      offer_type: opts.preferOfferType,
+      num_videos: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined,
+    };
   }
   return offers[0] || null;
 }
@@ -392,9 +416,15 @@ Rules:
 // Extract the campaign-specific contract fields. Merges Claude's structured JSON
 // over the deterministic base so the result is always complete, and never lets a
 // bad extraction wipe a known value.
-async function extractContractData(creator) {
+async function extractContractData(creator, opts = {}) {
   const fee = await agreedFeeFor(creator);
-  const offer = resolveOffer(creator);
+  // When re-extracting an existing contract, honour the offer type already
+  // committed on it (opts.preferOfferType) so a legacy deal with no pinned
+  // custom_offer isn't silently re-classified back to the view-based default.
+  const offer = resolveOffer(creator, {
+    preferOfferType: opts.preferOfferType || null,
+    preferNumVideos: opts.preferNumVideos,
+  });
   const base = baseContractData(creator, fee, offer);
 
   const events = await db.many(
@@ -989,7 +1019,18 @@ async function updateContractTermsFromThread(creatorId) {
   const creator = await loadCreatorForContract(creatorId);
   if (!creator) return { updated: false, signed: false, row: existing };
 
-  const data = await extractContractData(creator);
+  // Preserve the offer type already committed on this contract (including a
+  // manual view↔video correction) so a re-extraction of a legacy deal — one
+  // with no pinned custom_offer — can't fall back to the view-based default
+  // and undo it. The video count on the existing contract seeds the synthetic
+  // offer when no stored offer of that type exists.
+  const priorData = existing.data || {};
+  const priorCount =
+    priorData.numberOfVideos != null ? priorData.numberOfVideos : priorData.numberOfDeliverables;
+  const data = await extractContractData(creator, {
+    preferOfferType: priorData.offerType || null,
+    preferNumVideos: priorCount,
+  });
   const row = await db.one(
     `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
     [existing.id, JSON.stringify(data)],

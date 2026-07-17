@@ -150,6 +150,49 @@ test('agreedFeeFor: without an accepted-creator-rate event, the last offer we se
   }
 });
 
+// ── resolveOffer: honouring an existing contract's committed offer type ─────
+// On a re-extraction we pass the offer type already committed on the contract
+// so a legacy deal (no pinned custom_offer / selected_offer_id) can't fall
+// back to the view-based first suggested offer and get re-classified.
+
+test('resolveOffer: without a hint, falls back to the first suggested offer (unchanged)', () => {
+  const creator = {
+    suggested_offers: [
+      { offer_id: 'view_1', offer_type: 'view_based' },
+      { offer_id: 'video_1', offer_type: 'video_based', num_videos: 1 },
+    ],
+  };
+  assert.strictEqual(contracts.resolveOffer(creator).offer_id, 'view_1');
+});
+
+test('resolveOffer: preferOfferType picks a matching suggested offer over the first one', () => {
+  const creator = {
+    suggested_offers: [
+      { offer_id: 'view_1', offer_type: 'view_based' },
+      { offer_id: 'video_1', offer_type: 'video_based', num_videos: 1 },
+    ],
+  };
+  const o = contracts.resolveOffer(creator, { preferOfferType: 'video_based' });
+  assert.strictEqual(o.offer_id, 'video_1', 'the video-based suggested offer wins over the view-based first offer');
+});
+
+test('resolveOffer: preferOfferType synthesises a typed offer when none is stored', () => {
+  // A legacy deal whose suggested offers predate the committed type.
+  const creator = { suggested_offers: [{ offer_id: 'view_1', offer_type: 'view_based' }] };
+  const o = contracts.resolveOffer(creator, { preferOfferType: 'video_based', preferNumVideos: 2 });
+  assert.strictEqual(o.offer_type, 'video_based');
+  assert.strictEqual(o.num_videos, 2, 'the committed video count seeds the synthetic offer');
+});
+
+test('resolveOffer: a pinned custom_offer still wins over the hint', () => {
+  const creator = {
+    custom_offer: { offer_type: 'video_based', num_videos: 1, flat_fee: 1600 },
+    suggested_offers: [{ offer_id: 'view_1', offer_type: 'view_based' }],
+  };
+  const o = contracts.resolveOffer(creator, { preferOfferType: 'view_based' });
+  assert.strictEqual(o.offer_type, 'video_based', 'the custom_offer is authoritative over the hint');
+});
+
 test('mergeContractData: Claude overrides base, but never wipes known values', () => {
   const base = contracts.baseContractData(
     { full_name: 'Alex Lee', email: 'a@b.com' },
