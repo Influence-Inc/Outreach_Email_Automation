@@ -94,12 +94,13 @@
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
     @media (max-width: 560px) { .row-2, .row-3 { grid-template-columns: 1fr; } }
-    /* Phone: country-code select alongside the local-number input. The select
-       is narrow so the input still gets most of the width; on very small
-       screens the select stays inline (only ~150px, still fits with the
-       input). */
+    /* Phone: country-code select alongside the local-number input. The
+       select's COLLAPSED view shows just the dial code (e.g. "+1"), so it
+       only needs room for a short code + the chevron — the full "+1 · United
+       States" label is only visible in the open dropdown. Keeping it narrow
+       gives the number input most of the row. */
     .phone-row { display: flex; gap: 8px; }
-    .phone-row select { flex: 0 0 150px; text-overflow: ellipsis; }
+    .phone-row select { flex: 0 0 110px; text-overflow: ellipsis; }
     .phone-row input { flex: 1 1 auto; min-width: 0; }
     /* "Your details" section uses light tinted background to signal editable */
     .section.editable { background: var(--surface-2); }
