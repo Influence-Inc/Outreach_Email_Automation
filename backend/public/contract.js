@@ -404,14 +404,33 @@
         // creators. The option value is just the dial code (e.g. "+1"), so
         // NANP siblings (US / Canada / Caribbean) all submit the same prefix;
         // showing the country in the label is for the creator's recognition.
+        //
+        // Two labels per option: the compact "dial code only" text shown in
+        // the collapsed select, and the full "+1 · United States" label shown
+        // in the open dropdown. The open-label lives on a data attribute; a
+        // focus/blur handler swaps the option's visible text between the two
+        // (browsers use the selected option's .text for the collapsed view,
+        // so this trick avoids a full custom-dropdown widget).
         var phoneSel = $('phoneCountry');
         phoneSel.innerHTML = DIAL_CODES.map(function (row, i) {
-          // Dial code first so it's still visible when the narrow, collapsed
-          // select truncates the country name with ellipsis (e.g. "+1 United
-          // St…"). The dropdown list shows the full label.
-          var label = row[1] + '  ' + row[0];
-          return '<option value="' + esc(row[1]) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(label) + '</option>';
+          var dial = row[1];
+          var full = dial + ' · ' + row[0];
+          return '<option value="' + esc(dial) + '" data-full="' + esc(full) + '"' +
+            (i === 0 ? ' selected' : '') + '>' + esc(dial) + '</option>';
         }).join('');
+        function setPhoneOptionText(useFull) {
+          for (var i = 0; i < phoneSel.options.length; i += 1) {
+            var opt = phoneSel.options[i];
+            opt.text = useFull ? (opt.getAttribute('data-full') || opt.value) : opt.value;
+          }
+        }
+        // mousedown fires before the dropdown opens, so options are already
+        // expanded to full labels when the list appears. blur/change collapses
+        // them back so the selected option renders as just the dial code.
+        phoneSel.addEventListener('mousedown', function () { setPhoneOptionText(true); });
+        phoneSel.addEventListener('focus', function () { setPhoneOptionText(true); });
+        phoneSel.addEventListener('change', function () { setPhoneOptionText(false); });
+        phoneSel.addEventListener('blur', function () { setPhoneOptionText(false); });
 
         // Payment currency label on page 2.
         $('payCurrency').textContent = d.currency || 'USD';
