@@ -148,10 +148,20 @@ function usageRightsFor(policy) {
 // paymentScheduleFor describes WHEN the pieces are due. Keeping them distinct
 // stopped the reported "Payment terms" / "Payment schedule" duplicate rows,
 // where the extraction had shoved a schedule-like sentence into paymentTerms.
-function paymentTermsFor(days) {
+//
+// When a schedule split is present, the terms line MUST NOT anchor payment to
+// "completing and posting all agreed deliverables" — that would contradict the
+// upfront installment (part of the payment is due before completion). In that
+// case the clause anchors to "each payment milestone" instead, leaving the
+// schedule row to spell out what the milestones are.
+function paymentTermsFor(days, opts) {
   const n = Number(days);
   const d = Number.isFinite(n) && n > 0 ? Math.round(n) : 7;
-  return `Direct bank transfer, initiated within ${d} working days of completing and posting all agreed deliverables`;
+  const hasSchedule = !!(opts && opts.hasSchedule);
+  const anchor = hasSchedule
+    ? 'each payment milestone'
+    : 'completing and posting all agreed deliverables';
+  return `Direct bank transfer, initiated within ${d} working days of ${anchor}`;
 }
 
 // Payment schedule fields for the contract. The upfront/remainder split is
@@ -463,8 +473,12 @@ async function extractContractData(creator) {
   // shoved schedule-like sentences into this field ("50% upfront prior to
   // production; 50% due after publish"), which then duplicated the Payment
   // schedule row on the contract page. Re-pin it deterministically from
-  // paymentTermsDays so the two rows stay distinct.
-  merged.paymentTerms = paymentTermsFor(merged.paymentTermsDays);
+  // paymentTermsDays so the two rows stay distinct. When a split applies,
+  // anchor the net-days to "each payment milestone" so the terms line no
+  // longer contradicts the upfront installment (which is due before
+  // completion).
+  const hasSchedule = merged.upfrontPercent != null && merged.remainderPercent != null;
+  merged.paymentTerms = paymentTermsFor(merged.paymentTermsDays, { hasSchedule });
   return merged;
 }
 
