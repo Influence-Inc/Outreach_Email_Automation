@@ -126,21 +126,27 @@
 
     var compensation = d.totalPayment != null ? d.totalPayment : d.compensation;
     var upPct = d.upfrontPercent, remPct = d.remainderPercent;
+    var hasSchedule = Number(upPct) > 0 && Number(remPct) > 0;
     // Payment terms is a boilerplate payment-METHOD clause (bank transfer, net-N
     // days) — it describes how the money moves, not the upfront/remainder split
     // shown below. Derived from the numeric paymentTermsDays (not the stored
     // prose) so it stays correct for every contract, old or new — the stored
     // string could carry a schedule-like phrasing from an earlier extraction and
-    // would otherwise duplicate the Payment schedule row.
+    // would otherwise duplicate the Payment schedule row. When a split applies,
+    // anchor the net-days to "each payment milestone" instead of "completing
+    // and posting all agreed deliverables" — the upfront installment is due
+    // BEFORE completion, so the completion phrasing would contradict it.
     var days = Number(d.paymentTermsDays);
-    var termsText = 'Direct bank transfer, initiated within ' +
-      (Number.isFinite(days) && days > 0 ? days : 7) +
-      ' working days of completing and posting all agreed deliverables';
+    var daysN = Number.isFinite(days) && days > 0 ? days : 7;
+    var termsAnchor = hasSchedule
+      ? 'each payment milestone'
+      : 'completing and posting all agreed deliverables';
+    var termsText = 'Direct bank transfer, initiated within ' + daysN + ' working days of ' + termsAnchor;
     html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(compensation, d.currency), { big: true }) +
       row('Currency', d.currency) +
       row('Payment terms', termsText) +
-      (upPct && remPct
+      (hasSchedule
         ? row('Payment schedule', upPct + '% upfront, ' + remPct + '% ' + (d.remainderTrigger || 'on completion'))
         : '')
     ));

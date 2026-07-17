@@ -493,6 +493,19 @@ test('paymentTermsFor: standard bank-transfer clause with the given net days', (
   assert.match(contracts.paymentTermsFor('nonsense'), /within 7 working days/);
 });
 
+test('paymentTermsFor: with a schedule split, anchors to milestones (not completion)', () => {
+  // The upfront installment is due BEFORE completion, so the "on completion"
+  // phrasing would flatly contradict the split — anchor to milestones instead.
+  const withSplit = contracts.paymentTermsFor(7, { hasSchedule: true });
+  assert.match(withSplit, /each payment milestone/);
+  assert.doesNotMatch(withSplit, /completing and posting/);
+  // No-split path is unchanged.
+  assert.match(
+    contracts.paymentTermsFor(7, { hasSchedule: false }),
+    /completing and posting all agreed deliverables/,
+  );
+});
+
 test('mergeContractData does not let a schedule-like extraction bleed into paymentTerms via merge', () => {
   // The reported bug: the extraction pushed "50% upfront prior to production;
   // 50% due immediately after the video is published" into paymentTerms, which
