@@ -1626,6 +1626,52 @@ async function surfaceApprovalReply(creatorId) {
   return { action: 'surfaced' };
 }
 
+// A creator we'd already closed out replies again. Three ways a conversation
+// reaches a terminal stage: the admin dismissed a pending offer in the Deal
+// Studio (dismiss-offer → CLOSED), the creator declined (DECLINED), or the idle
+// follow-ups ran out and auto-closed the thread (→ CLOSED). None of the other
+// scheduler steps look at CLOSED / DECLINED, so a fresh reply — most importantly
+// a creator coming back with an offer after being dismissed from Delegate — used
+// to sit unseen in latest_inbound_text forever and never reached a human.
+//
+// Re-open the conversation and SURFACE the reply in the Delegate window as a
+// hand-off. We deliberately do NOT auto-reply: a person (or the creator's own
+// "no") closed this deal, so a person decides whether and how to re-engage.
+// Reopening to AWAITING_RATE also makes the deal live again, so a manual offer
+// the admin types from the Delegate card advances it normally (sendDelegateReply
+// only moves NULL / AWAITING_RATE / AWAITING_APPROVAL forward), and any further
+// creator replies are processed by the main loop instead of being dropped again.
+// Idempotent per message: we consume the inbound we surfaced, guarding on the
+// exact text so a newer reply that landed mid-run is left for the next tick.
+async function surfaceReopenedReply(creatorId) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) return { skipped: 'no creator' };
+  if (!['CLOSED', 'DECLINED'].includes(creator.negotiation_status)) return { skipped: 'stage' };
+  const inbound = creator.latest_inbound_text;
+  if (!inbound) return { skipped: 'no inbound text' };
+
+  // Re-open to an active stage so the deal is live again. needs_human (set by
+  // delegate() below) keeps the idle follow-up nudger off it, so reopening
+  // never fires an unwanted "did you get a chance to look?" at the creator.
+  await db.query(
+    `UPDATE creators SET negotiation_status = 'AWAITING_RATE', updated_at = NOW() WHERE id = $1`,
+    [creatorId],
+  );
+  await delegate(
+    creator,
+    { text: inbound },
+    'Creator replied after this conversation was closed (offer dismissed, declined, or timed out) — read their message, then respond or re-price an offer.',
+  );
+  // Consume the message we surfaced (guard on the exact text so a newer reply
+  // that arrived mid-run is left for the next tick).
+  await db.query(
+    `UPDATE creators SET latest_inbound_text = NULL, updated_at = NOW()
+     WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $2`,
+    [creatorId, inbound],
+  );
+  return { action: 'reopened' };
+}
+
 async function applyReply(creator, ctx, result) {
   const v = templateVars(ctx);
   switch (result.action) {
@@ -1987,6 +2033,7 @@ module.exports = {
   acceptQuotedRate,
   handleAcceptedReply,
   surfaceApprovalReply,
+  surfaceReopenedReply,
   runNegotiationFollowup,
   resolveApprovedOffer,
   aiRepliesEnabledForCreator,

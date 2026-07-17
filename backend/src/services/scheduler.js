@@ -151,6 +151,27 @@ async function pollNegotiations() {
         console.error(`post-acceptance reply handling failed for creator ${c.id}:`, err.message);
       }
     }
+
+    // 6. Reopened replies: a creator we'd closed out — the admin dismissed their
+    //    pending offer in the Deal Studio (→ CLOSED), the creator declined
+    //    (DECLINED), or the idle follow-ups auto-closed the thread (→ CLOSED) —
+    //    replied again. Steps 1–5 only cover NULL / AWAITING_* / ACCEPTED, so a
+    //    new reply on a terminal stage would sit unseen in latest_inbound_text
+    //    forever. surfaceReopenedReply re-opens the deal and surfaces the message
+    //    in the Delegate window, so a dismissed creator's fresh offer reaches a
+    //    human instead of being dropped.
+    const reopenedReplies = await db.many(
+      `SELECT id FROM creators
+       WHERE negotiation_status IN ('CLOSED', 'DECLINED') AND latest_inbound_text IS NOT NULL
+         AND status <> 'stopped'`,
+    );
+    for (const c of reopenedReplies) {
+      try {
+        await negotiation.surfaceReopenedReply(c.id);
+      } catch (err) {
+        console.error(`reopened reply surfacing failed for creator ${c.id}:`, err.message);
+      }
+    }
   } finally {
     negRunning = false;
   }
