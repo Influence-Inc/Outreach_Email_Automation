@@ -80,9 +80,26 @@ const isoOrUndef = (v) => {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 };
 
+// Keep only the non-empty string values of a nested object (address / bank
+// details). Returns undefined when nothing is left so we don't send an object
+// full of nulls (and so `clean` drops the key entirely).
+const cleanNested = (o) => {
+  if (!o || typeof o !== 'object') return undefined;
+  const out = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (v === undefined || v === null || v === '') continue;
+    out[k] = typeof v === 'string' ? v : String(v);
+  }
+  return Object.keys(out).length ? out : undefined;
+};
+
 // Map a signed contract row + its creator into the Creator-DB CreateContractDto.
 function buildPayload(contract, creator) {
   const d = (contract && contract.data) || {};
+  // The creator's signing submission (address, phone, signature, bank details).
+  const sub = (contract && contract.submission && contract.submission.fields) || {};
+  const addr = sub.address || {};
+  const bank = sub.bankAccount || {};
   const platforms = Array.isArray(d.platforms) ? d.platforms : d.platforms ? [d.platforms] : [];
   const igHandle =
     String(d.instagramUsername || creator.instagram_username || '').replace(/^@/, '') || undefined;
@@ -121,6 +138,34 @@ function buildPayload(contract, creator) {
     signerName: contract.signer_name,
     signedAt: isoOrUndef(contract.signed_at) || new Date().toISOString(),
     status: 'COMPLETED',
+    // Signer submission captured on the signing page.
+    signerEmail: contract.signer_email || d.email || creator.email || undefined,
+    signerPhone: sub.phone || undefined,
+    signerGender: sub.gender || undefined,
+    signerSignedDate: isoOrUndef(sub.signedDate),
+    signatureImage:
+      typeof sub.signatureDataUrl === 'string' && sub.signatureDataUrl.startsWith('data:image/')
+        ? sub.signatureDataUrl
+        : undefined,
+    address: cleanNested({
+      line1: addr.line1,
+      line2: addr.line2,
+      city: addr.city,
+      state: addr.state,
+      zip: addr.zip,
+      country: addr.country,
+    }),
+    paymentDetails: cleanNested({
+      accountHolderName: bank.accountHolderName,
+      bankName: bank.bankName,
+      accountNumber: bank.accountNumber,
+      iban: bank.iban,
+      routingNumber: bank.routingNumber,
+      ifscCode: bank.ifscCode,
+      panNumber: bank.panNumber,
+      swiftCode: bank.swiftCode,
+      taxIdNumber: bank.taxIdNumber,
+    }),
   });
 }
 
