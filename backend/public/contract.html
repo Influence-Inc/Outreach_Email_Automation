@@ -94,6 +94,13 @@
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
     @media (max-width: 560px) { .row-2, .row-3 { grid-template-columns: 1fr; } }
+    /* Phone: country-code select alongside the local-number input. The select
+       is narrow so the input still gets most of the width; on very small
+       screens the select stays inline (only ~150px, still fits with the
+       input). */
+    .phone-row { display: flex; gap: 8px; }
+    .phone-row select { flex: 0 0 150px; text-overflow: ellipsis; }
+    .phone-row input { flex: 1 1 auto; min-width: 0; }
     /* "Your details" section uses light tinted background to signal editable */
     .section.editable { background: var(--surface-2); }
 
@@ -200,7 +207,10 @@
             </div>
             <div class="field">
               <label class="field-label" for="phone">Phone number</label>
-              <input id="phone" type="tel" placeholder="+1 (555) 123-4567" autocomplete="tel" />
+              <div class="phone-row">
+                <select id="phoneCountry" autocomplete="tel-country-code" aria-label="Country code"></select>
+                <input id="phone" type="tel" placeholder="(555) 123-4567" autocomplete="tel-national" />
+              </div>
             </div>
           </div>
           <div class="field">
