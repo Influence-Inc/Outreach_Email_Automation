@@ -174,6 +174,7 @@
     // video count — showing "Number of deliverables" there is misleading
     // (it's just "at least 1 post"), so omit it entirely for view_based.
     var isViewBased = d.offerType === 'view_based';
+    var isVideoBased = d.offerType === 'video_based';
     // For flat video-based deals the base extraction always writes the count
     // into the deliverables string itself ("1 short-form video", "3 short-form
     // videos"), so a separate "Number of deliverables: N" row just repeats
@@ -190,7 +191,9 @@
       (isViewBased || deliverablesHasCount
         ? ''
         : row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos))) +
-      (minViews ? row('Min. guaranteed views', fmtNum(minViews)) : '') +
+      // Min. guaranteed views is a view-based term — a flat video-based deal is
+      // priced per video and promises no view floor, so never show it there.
+      (!isVideoBased && minViews ? row('Min. guaranteed views', fmtNum(minViews)) : '') +
       (d.bonusAmount && d.bonusThresholdViews
         ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
         : '')

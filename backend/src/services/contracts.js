@@ -48,12 +48,36 @@ async function loadCreatorForContract(creatorId) {
 }
 
 // The offer the creator accepted (custom overrides suggested; selected id wins).
-function resolveOffer(creator) {
+//
+// opts.preferOfferType / preferNumVideos are used ONLY when re-extracting an
+// EXISTING contract (see updateContractTermsFromThread): they let the offer
+// type already committed on that contract win over the weak "first suggested
+// offer" fallback — which is always the view-based "Conservative View Deal".
+// Without this, re-extracting a legacy deal (one accepted before
+// acceptQuotedRate began pinning a video-based custom_offer) would silently
+// re-classify a video-based deal back to view-based, undoing both the shaping
+// and any manual correction. A custom_offer or an explicit selected_offer_id
+// is a stronger, more specific signal, so both still win over the hint.
+function resolveOffer(creator, opts = {}) {
   if (creator.custom_offer && typeof creator.custom_offer === 'object') return creator.custom_offer;
   const offers = Array.isArray(creator.suggested_offers) ? creator.suggested_offers : [];
   if (creator.selected_offer_id) {
     const f = offers.find((o) => o.offer_id === creator.selected_offer_id);
     if (f) return f;
+  }
+  if (opts.preferOfferType) {
+    const match = offers.find((o) => o.offer_type === opts.preferOfferType);
+    if (match) return match;
+    // No stored offer of that type (a legacy deal whose suggested offers
+    // predate the committed type) — synthesise a minimal one so the extraction
+    // keeps the committed shape instead of defaulting to the view-based first
+    // offer. The fee is resolved separately (agreedFeeFor), so the offer only
+    // needs to carry the type and, when known, the committed video count.
+    const n = Number(opts.preferNumVideos);
+    return {
+      offer_type: opts.preferOfferType,
+      num_videos: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined,
+    };
   }
   return offers[0] || null;
 }
@@ -100,7 +124,11 @@ function numDeliverables(offer) {
 
 function guaranteedViewsOf(offer) {
   if (!offer) return null;
-  if (offer.view_guarantee != null) return Number(offer.view_guarantee);
+  // A flat video-based deal is priced per video, not on a guaranteed view
+  // floor — that floor is a view-based concept. Never surface a min-views
+  // number for a video_based offer, even if one leaked onto the offer object.
+  if (offer.offer_type === 'video_based') return null;
+  if (offer.view_guarantee != null && Number(offer.view_guarantee) > 0) return Number(offer.view_guarantee);
   if (offer.bonus_threshold_views != null) return Number(offer.bonus_threshold_views);
   return null;
 }
@@ -388,9 +416,15 @@ Rules:
 // Extract the campaign-specific contract fields. Merges Claude's structured JSON
 // over the deterministic base so the result is always complete, and never lets a
 // bad extraction wipe a known value.
-async function extractContractData(creator) {
+async function extractContractData(creator, opts = {}) {
   const fee = await agreedFeeFor(creator);
-  const offer = resolveOffer(creator);
+  // When re-extracting an existing contract, honour the offer type already
+  // committed on it (opts.preferOfferType) so a legacy deal with no pinned
+  // custom_offer isn't silently re-classified back to the view-based default.
+  const offer = resolveOffer(creator, {
+    preferOfferType: opts.preferOfferType || null,
+    preferNumVideos: opts.preferNumVideos,
+  });
   const base = baseContractData(creator, fee, offer);
 
   const events = await db.many(
@@ -449,6 +483,16 @@ async function extractContractData(creator) {
     merged.deliverables = base.deliverables;
     merged.numberOfDeliverables = null;
     merged.numberOfVideos = null;
+  }
+  // Symmetric to view_based above: a flat video-based deal is priced per video,
+  // NOT on a guaranteed view floor. Never let the extraction stamp a min-views
+  // number onto it — the reported case where a creator rejected performance
+  // terms and explicitly declined to guarantee 160k views, yet the campaign's
+  // default view floor still leaked onto the contract as "Min. guaranteed
+  // views". A view floor belongs only to a view-based deal.
+  if (base.offerType === 'video_based') {
+    merged.minTotalViews = null;
+    merged.guaranteedViews = null;
   }
   // Cadence never applies to a single-video (or view-based) deal, no matter
   // what Claude extracted from the thread — keep it out of the stored contract.
@@ -830,6 +874,12 @@ function coerceContractPatch(patch) {
       out.deliverables = deliverablesFor('video_based', n);
       out.numberOfDeliverables = n;
       out.numberOfVideos = n;
+      // A video-based deal isn't priced on a guaranteed view floor — clear any
+      // min-views number carried over from a prior view-based classification so
+      // the contract doesn't keep showing "Min. guaranteed views" it no longer
+      // promises. An explicit same-patch minTotalViews (below) still wins.
+      out.minTotalViews = null;
+      out.guaranteedViews = null;
     }
   }
   if (has('numberOfVideos')) {
@@ -969,7 +1019,18 @@ async function updateContractTermsFromThread(creatorId) {
   const creator = await loadCreatorForContract(creatorId);
   if (!creator) return { updated: false, signed: false, row: existing };
 
-  const data = await extractContractData(creator);
+  // Preserve the offer type already committed on this contract (including a
+  // manual view↔video correction) so a re-extraction of a legacy deal — one
+  // with no pinned custom_offer — can't fall back to the view-based default
+  // and undo it. The video count on the existing contract seeds the synthetic
+  // offer when no stored offer of that type exists.
+  const priorData = existing.data || {};
+  const priorCount =
+    priorData.numberOfVideos != null ? priorData.numberOfVideos : priorData.numberOfDeliverables;
+  const data = await extractContractData(creator, {
+    preferOfferType: priorData.offerType || null,
+    preferNumVideos: priorCount,
+  });
   const row = await db.one(
     `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
     [existing.id, JSON.stringify(data)],

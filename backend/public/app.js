@@ -451,6 +451,7 @@ function dealSummaryItems(data) {
   if (data.offerLabel) items.push({ kind: 'badge', text: data.offerLabel });
 
   const isViewBased = data.offerType === 'view_based';
+  const isVideoBased = data.offerType === 'video_based';
   const n = data.numberOfVideos != null ? Number(data.numberOfVideos) : null;
   const minViews = data.minTotalViews != null ? Number(data.minTotalViews) : null;
 
@@ -459,7 +460,9 @@ function dealSummaryItems(data) {
   if (!isViewBased && n && Number.isFinite(n)) {
     items.push({ label: 'VIDEOS', value: String(n) });
   }
-  if (minViews && Number.isFinite(minViews) && minViews > 0) {
+  // Min views — a view-based term; a flat video-based deal promises no view
+  // floor, so never surface it there.
+  if (!isVideoBased && minViews && Number.isFinite(minViews) && minViews > 0) {
     items.push({ label: 'MIN VIEWS', value: fmtViews(minViews) });
   }
 
@@ -581,12 +584,17 @@ function renderEditableDeal(cell, r, data) {
       onSave: (v) => saveContractField(r, { numberOfVideos: v === '' ? null : Number(v) }),
     });
   }
-  appendEditableDealLine(cell, r, {
-    label: 'MIN VIEWS',
-    value: data.minTotalViews > 0 ? fmtViews(data.minTotalViews) : '',
-    placeholder: 'e.g. 100k',
-    onSave: (v) => saveContractField(r, { minTotalViews: parseViewsInput(v) }),
-  });
+  // Min views is a view-based term — a flat video-based deal promises no view
+  // floor, so the field is only editable on a view-based deal. Flipping the
+  // TYPE toggle to video-based clears any leftover number server-side.
+  if (isViewBased) {
+    appendEditableDealLine(cell, r, {
+      label: 'MIN VIEWS',
+      value: data.minTotalViews > 0 ? fmtViews(data.minTotalViews) : '',
+      placeholder: 'e.g. 100k',
+      onSave: (v) => saveContractField(r, { minTotalViews: parseViewsInput(v) }),
+    });
+  }
   appendEditableDealLine(cell, r, {
     label: 'PLATFORMS',
     value: Array.isArray(data.platforms) ? data.platforms.join(', ') : '',
