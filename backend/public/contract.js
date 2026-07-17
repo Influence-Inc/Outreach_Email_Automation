@@ -174,11 +174,22 @@
     // video count — showing "Number of deliverables" there is misleading
     // (it's just "at least 1 post"), so omit it entirely for view_based.
     var isViewBased = d.offerType === 'view_based';
+    // For flat video-based deals the base extraction always writes the count
+    // into the deliverables string itself ("1 short-form video", "3 short-form
+    // videos"), so a separate "Number of deliverables: N" row just repeats
+    // what's directly above it. Only show the row when the deliverables text
+    // doesn't already carry a number — the edge case where a Claude
+    // extraction produced a count-less description like "Instagram Reel and
+    // TikTok short" and the numeric count is genuinely extra information.
+    var deliverablesText = String(d.deliverables || '');
+    var deliverablesHasCount = /\d/.test(deliverablesText);
     html += section('Campaign & Deliverables', rowsWrap(
       row('Campaign', d.campaignName) +
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
       row('Deliverables', d.deliverables) +
-      (isViewBased ? '' : row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos))) +
+      (isViewBased || deliverablesHasCount
+        ? ''
+        : row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos))) +
       (minViews ? row('Min. guaranteed views', fmtNum(minViews)) : '') +
       (d.bonusAmount && d.bonusThresholdViews
         ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
