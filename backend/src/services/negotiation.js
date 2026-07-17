@@ -1626,6 +1626,12 @@ async function surfaceApprovalReply(creatorId) {
   return { action: 'surfaced' };
 }
 
+// The hand-off reason stamped on a reopened conversation that lands as a plain
+// reply box (a question / objection, not an offer). Exported so a one-off
+// recovery can find creators an older build stranded here.
+const REOPENED_HANDOFF_REASON =
+  'Creator replied after this conversation was closed (offer dismissed, declined, or timed out) — read their message, then respond or re-price an offer.';
+
 // A creator we'd already closed out replies again. Three ways a conversation
 // reaches a terminal stage: the admin dismissed a pending offer in the Deal
 // Studio (dismiss-offer → CLOSED), the creator declined (DECLINED), or the idle
@@ -1634,15 +1640,19 @@ async function surfaceApprovalReply(creatorId) {
 // a creator coming back with an offer after being dismissed from Delegate — used
 // to sit unseen in latest_inbound_text forever and never reached a human.
 //
-// Re-open the conversation and SURFACE the reply in the Delegate window as a
-// hand-off. We deliberately do NOT auto-reply: a person (or the creator's own
-// "no") closed this deal, so a person decides whether and how to re-engage.
-// Reopening to AWAITING_RATE also makes the deal live again, so a manual offer
-// the admin types from the Delegate card advances it normally (sendDelegateReply
-// only moves NULL / AWAITING_RATE / AWAITING_APPROVAL forward), and any further
-// creator replies are processed by the main loop instead of being dropped again.
-// Idempotent per message: we consume the inbound we surfaced, guarding on the
-// exact text so a newer reply that landed mid-run is left for the next tick.
+// Re-open the conversation and route it into the Delegate window. Where it lands
+// depends on what the creator said:
+//   • They named a rate, countered with a number, or asked US to price it
+//     ("we can do 300k for $2,200", "make me an offer") → the OFFER CONFIGURATOR
+//     (a priced offer to approve & send), exactly as the live negotiation loop
+//     would surface it. That's the point of re-opening a dismissed deal: the
+//     admin re-prices and sends, not writes a freeform reply.
+//   • Anything else (a question, an objection, an escalation) → a plain hand-off
+//     reply box for a human to answer.
+// We never auto-SEND here: the offer paths only STAGE an offer for the admin to
+// approve, so a person is still in the loop on a deal we'd closed. Idempotent per
+// message: we consume the inbound we handled, guarding on the exact text so a
+// newer reply that landed mid-run is left for the next tick.
 async function surfaceReopenedReply(creatorId) {
   const creator = await loadCreator(creatorId);
   if (!creator) return { skipped: 'no creator' };
@@ -1650,25 +1660,82 @@ async function surfaceReopenedReply(creatorId) {
   const inbound = creator.latest_inbound_text;
   if (!inbound) return { skipped: 'no inbound text' };
 
-  // Re-open to an active stage so the deal is live again. needs_human (set by
-  // delegate() below) keeps the idle follow-up nudger off it, so reopening
-  // never fires an unwanted "did you get a chance to look?" at the creator.
+  const markHandled = () =>
+    db.query(
+      `UPDATE creators SET latest_inbound_text = NULL, updated_at = NOW()
+       WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $2`,
+      [creatorId, inbound],
+    );
+
+  // Classify the reopened reply so an offer lands in the configurator, not a
+  // reply box. Skipped when AI replies are off for the template (everything then
+  // goes to a human) or if classification errors out (fall through to hand-off).
+  if (await aiRepliesEnabledForCreator(creator)) {
+    const guidelines = await getGuidelines();
+    const ctx = ctxFor(creator, {
+      guidelines,
+      salutation: salutationFor(creator.first_name, inbound),
+      includeRefs: askedForReferences(inbound),
+    });
+    let result = null;
+    try {
+      result = await handleCreatorReply(creator, inbound, ctx);
+    } catch (err) {
+      console.warn(
+        `[negotiation] reopened reply classify failed for creator ${creator.id}: ${err.message}`,
+      );
+    }
+    const action = result && result.action;
+
+    // Creator asked US to name a price → offer configurator. routeCreatorToOffer
+    // self-guards: with no view stats it delegates as a hand-off instead.
+    if (action === 'request_our_offer') {
+      const routed = await routeCreatorToOffer(creator, { text: inbound });
+      await markHandled();
+      console.log(
+        `[negotiation] reopened creator ${creator.id}: request_our_offer -> ${routed.action}`,
+      );
+      return { action: 'reopened_offer', reason: 'request_our_offer' };
+    }
+
+    // Creator named a rate / countered with a number → stage a priced offer so
+    // the configurator appears. Needs something to price with: fresh view stats
+    // (applyReply computes offers) or offers already on the row (kept through the
+    // dismiss). Without either there's nothing to configure — fall through to the
+    // hand-off so the message is never dropped.
+    const canPrice =
+      !!creator.ig_scraped_data ||
+      (Array.isArray(creator.suggested_offers) && creator.suggested_offers.length > 0);
+    if ((action === 'shared_rate' || action === 'counter') && result.quoted_rate != null && canPrice) {
+      // applyReply's shared_rate/counter branch computes the offers and moves the
+      // creator to AWAITING_APPROVAL — and never sends an email.
+      await applyReply(creator, ctx, result);
+      // Clear any stale hand-off flag so the card is the clean offer configurator.
+      await db.query(
+        `UPDATE creators
+           SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL, updated_at = NOW()
+         WHERE id = $1`,
+        [creator.id],
+      );
+      await markHandled();
+      console.log(
+        `[negotiation] reopened creator ${creator.id}: ${action} -> offer configurator`,
+      );
+      return { action: 'reopened_offer', reason: action };
+    }
+  }
+
+  // Non-offer reply (a question, an objection, an escalation), AI off, or nothing
+  // to price with: re-open to an active stage and surface the message as a plain
+  // hand-off so a human decides how to re-engage. needs_human (set by delegate())
+  // keeps the idle follow-up nudger off it, so reopening never fires an unwanted
+  // "did you get a chance to look?" at the creator.
   await db.query(
     `UPDATE creators SET negotiation_status = 'AWAITING_RATE', updated_at = NOW() WHERE id = $1`,
     [creatorId],
   );
-  await delegate(
-    creator,
-    { text: inbound },
-    'Creator replied after this conversation was closed (offer dismissed, declined, or timed out) — read their message, then respond or re-price an offer.',
-  );
-  // Consume the message we surfaced (guard on the exact text so a newer reply
-  // that arrived mid-run is left for the next tick).
-  await db.query(
-    `UPDATE creators SET latest_inbound_text = NULL, updated_at = NOW()
-     WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $2`,
-    [creatorId, inbound],
-  );
+  await delegate(creator, { text: inbound }, REOPENED_HANDOFF_REASON);
+  await markHandled();
   return { action: 'reopened' };
 }
 
@@ -2034,6 +2101,7 @@ module.exports = {
   handleAcceptedReply,
   surfaceApprovalReply,
   surfaceReopenedReply,
+  REOPENED_HANDOFF_REASON,
   runNegotiationFollowup,
   resolveApprovedOffer,
   aiRepliesEnabledForCreator,
