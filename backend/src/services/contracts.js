@@ -781,6 +781,7 @@ async function syncPaymentScheduleForContract(token) {
 // the existing flows. Coerce each field to its stored shape and keep the
 // paired fields consistent (paid ads ↔ usage-rights wording, deadline aliases).
 const EDITABLE_CONTRACT_FIELDS = [
+  'offerType',
   'numberOfVideos',
   'minTotalViews',
   'platforms',
@@ -790,15 +791,60 @@ const EDITABLE_CONTRACT_FIELDS = [
   'upfrontPayment',
 ];
 
+// Deliverables strings the base extraction uses; kept identical here so a
+// toggle-fix produces the same wording the contract page and Deals column
+// already render for freshly-generated view/video contracts.
+function deliverablesFor(offerType, num) {
+  if (offerType === 'view_based') return 'Short-form video content';
+  const n = Number.isFinite(Number(num)) && Number(num) > 0 ? Math.round(Number(num)) : 1;
+  return `${n} short-form video${n === 1 ? '' : 's'}`;
+}
+
 function coerceContractPatch(patch) {
   const out = {};
   const has = (k) => Object.prototype.hasOwnProperty.call(patch, k);
+  // Offer type is a manual repair for a contract the extraction misclassified
+  // — the reported case: admin accepted the creator's per-video rate, but the
+  // pre-fix pipeline stamped the contract as "View-based deal" with no video
+  // count. Flipping it here re-shapes the paired fields the contract page and
+  // Deals column read: label, deliverables text, video count, and (for
+  // view_based) the cadence, which is a multi-video rhythm that doesn't
+  // apply. When switching TO video_based we honour a same-patch numberOfVideos
+  // if one was sent, else default to 1 — the admin can bump it inline after.
+  if (has('offerType')) {
+    const raw = String(patch.offerType || '').trim().toLowerCase();
+    if (raw === 'view_based') {
+      out.offerType = 'view_based';
+      out.offerLabel = 'View-based deal';
+      out.deliverables = deliverablesFor('view_based');
+      out.numberOfDeliverables = null;
+      out.numberOfVideos = null;
+      // Cadence is a multi-video rhythm; a view-based deal has none.
+      out.timeline = null;
+    } else if (raw === 'video_based') {
+      const nRaw = has('numberOfVideos') ? patch.numberOfVideos : null;
+      const nParsed = nRaw == null || nRaw === '' ? null : Math.round(Number(nRaw));
+      const n = Number.isFinite(nParsed) && nParsed > 0 ? nParsed : 1;
+      out.offerType = 'video_based';
+      out.offerLabel = 'Video-based deal';
+      out.deliverables = deliverablesFor('video_based', n);
+      out.numberOfDeliverables = n;
+      out.numberOfVideos = n;
+    }
+  }
   if (has('numberOfVideos')) {
     const raw = patch.numberOfVideos;
     const n = raw == null || raw === '' ? null : Math.round(Number(raw));
     const val = Number.isFinite(n) && n >= 0 ? n : null;
     out.numberOfVideos = val;
     out.numberOfDeliverables = val;
+    // When the caller is flipping the deal to video_based in the same patch,
+    // keep the "N short-form videos" wording in sync with the new count.
+    // Pre-existing edits that only change the count on an already-video-based
+    // deal leave the deliverables text as-is (the same behaviour as before).
+    if (val != null && out.offerType === 'video_based') {
+      out.deliverables = deliverablesFor('video_based', val);
+    }
   }
   if (has('minTotalViews')) {
     const raw = patch.minTotalViews;

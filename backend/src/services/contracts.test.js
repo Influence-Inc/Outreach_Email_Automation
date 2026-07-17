@@ -408,6 +408,42 @@ test('coerceContractPatch: empty patch yields no changes', () => {
   assert.deepStrictEqual(contracts.coerceContractPatch({}), {});
 });
 
+test('coerceContractPatch: offerType flip to video_based rewrites label, deliverables, and video count', () => {
+  // The Deals-column repair for a contract the extraction misclassified as
+  // view-based (the reported bug). Flipping the type re-shapes every paired
+  // field the contract page and Deals column read.
+  const toVideo = contracts.coerceContractPatch({ offerType: 'video_based' });
+  assert.strictEqual(toVideo.offerType, 'video_based');
+  assert.strictEqual(toVideo.offerLabel, 'Video-based deal');
+  assert.strictEqual(toVideo.numberOfVideos, 1, 'defaults to 1 video when no count is supplied');
+  assert.strictEqual(toVideo.numberOfDeliverables, 1);
+  assert.match(toVideo.deliverables, /1 short-form video\b/);
+
+  // Same-patch numberOfVideos wins over the 1 default, and the deliverables
+  // text is rewritten to match.
+  const toVideoThree = contracts.coerceContractPatch({ offerType: 'video_based', numberOfVideos: 3 });
+  assert.strictEqual(toVideoThree.numberOfVideos, 3);
+  assert.match(toVideoThree.deliverables, /3 short-form videos/);
+});
+
+test('coerceContractPatch: offerType flip to view_based clears the video count and cadence', () => {
+  const toView = contracts.coerceContractPatch({ offerType: 'view_based' });
+  assert.strictEqual(toView.offerType, 'view_based');
+  assert.strictEqual(toView.offerLabel, 'View-based deal');
+  assert.strictEqual(toView.deliverables, 'Short-form video content');
+  assert.strictEqual(toView.numberOfVideos, null);
+  assert.strictEqual(toView.numberOfDeliverables, null);
+  // A view-based deal has no multi-video rhythm; the cadence field is cleared
+  // so the contract page doesn't carry a stale "1-2 videos per week" line.
+  assert.strictEqual(toView.timeline, null);
+});
+
+test('coerceContractPatch: an unknown offerType value is ignored', () => {
+  const out = contracts.coerceContractPatch({ offerType: 'bogus' });
+  assert.ok(!('offerType' in out), 'no offerType coercion for an unknown value');
+  assert.ok(!('deliverables' in out), 'no paired-field rewrite either');
+});
+
 // ── Post-acceptance term-change detection ───────────────────────────────────
 // No ANTHROPIC_API_KEY in the test env, so changesContractTerms exercises its
 // deterministic keyword fallback here — the same path production falls back to.
