@@ -97,10 +97,15 @@
     /* Phone: country-code select alongside the local-number input. The
        select's COLLAPSED view shows just the dial code (e.g. "+1"), so it
        only needs room for a short code + the chevron — the full "+1 · United
-       States" label is only visible in the open dropdown. Keeping it narrow
-       gives the number input most of the row. */
+       States" label is only visible in the open dropdown. Tighter padding +
+       chevron position than the generic select rule so "+1" isn't swimming
+       in whitespace; still fits the longest 4-char code (e.g. "+998"). */
     .phone-row { display: flex; gap: 8px; }
-    .phone-row select { flex: 0 0 110px; text-overflow: ellipsis; }
+    .phone-row select {
+      flex: 0 0 82px;
+      padding-right: 26px;
+      background-position: right 8px center;
+    }
     .phone-row input { flex: 1 1 auto; min-width: 0; }
     /* "Your details" section uses light tinted background to signal editable */
     .section.editable { background: var(--surface-2); }
