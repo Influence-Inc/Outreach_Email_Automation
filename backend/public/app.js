@@ -1958,10 +1958,14 @@ el('creator-form').addEventListener('submit', async (e) => {
   submitBtn.disabled = true;
   let added = 0;
   let failed = 0;
+  // The rows returned by each POST — exactly the creators this add produced.
+  // The scrape below is scoped to these so it never sweeps in the campaign's
+  // OTHER pending-extraction creators.
+  const addedRows = [];
   for (let i = 0; i < urls.length; i++) {
     status.textContent = `Adding ${i + 1}/${urls.length}…`;
     try {
-      await api('/api/creators', {
+      const row = await api('/api/creators', {
         method: 'POST',
         body: JSON.stringify({
           campaign_id: state.selectedCampaignId,
@@ -1969,6 +1973,7 @@ el('creator-form').addEventListener('submit', async (e) => {
         }),
       });
       added += 1;
+      if (row && row.id) addedRows.push(row);
     } catch (err) {
       failed += 1;
       console.warn(`Failed to add ${urls[i]}: ${err.message}`);
@@ -1979,25 +1984,36 @@ el('creator-form').addEventListener('submit', async (e) => {
   submitBtn.disabled = false;
   await refreshCreators();
   await refreshCampaigns();
-  // Automatically scrape the freshly-added (still-pending) creators via the
-  // extension. When that finishes, off-Instagram enrichment runs on its own for
-  // anyone still without an email (see the 'done' handler).
-  if (added) startExtensionScrape({ onlyPending: true });
+  // Automatically scrape ONLY the creators just added here (the ones still
+  // needing extraction). When that finishes, off-Instagram enrichment runs on
+  // its own for anyone still without an email (see the 'done' handler).
+  if (addedRows.length) startExtensionScrape({ creators: addedRows });
 });
 
 el('refresh-btn').addEventListener('click', refreshCreators);
 
-// Off-Instagram enrichment: for every creator in this campaign still without an
-// email, follow the links captured off their profile (website / Linktree) and
-// scrape a verified contact address. Runs automatically after a scrape finishes
-// (no manual button). Best-effort and paced server-side.
-async function autoEnrichCampaign() {
+// Off-Instagram enrichment: for the creators still without an email, follow the
+// links captured off their profile (website / Linktree) and scrape a verified
+// contact address. Runs automatically after a scrape finishes (no manual
+// button). Best-effort and paced server-side.
+//
+// `creatorIds` scopes the pass to the rows just scraped so it stays on the
+// creators the operator added — never fanning out (and re-scraping) the
+// campaign's other emailless rows. Omit for a campaign-wide sweep.
+async function autoEnrichCampaign(creatorIds = null) {
   if (!state.selectedCampaignId) return;
+  // A scoped run with an empty set has nothing to enrich — skip the round-trip.
+  if (Array.isArray(creatorIds) && !creatorIds.length) {
+    el('scrape-cancel-btn').textContent = 'Hide';
+    return;
+  }
   try {
     showScrapeProgress('Scrape done — searching linked sites for any missing emails…');
+    const body = { campaign_id: state.selectedCampaignId };
+    if (Array.isArray(creatorIds)) body.creator_ids = creatorIds;
     const result = await api('/api/creators/bulk/enrich-email', {
       method: 'POST',
-      body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
+      body: JSON.stringify(body),
     });
     if (result.processed) {
       showScrapeProgress(
@@ -2187,9 +2203,10 @@ function handleScrapeProgress(msg) {
       `Done. ${s.processed || 0} processed · ${s.emailFound || 0} found · ${s.noEmail || 0} no email · ` +
       `${s.withViews || 0} with views · ${s.errors || 0} errors.`,
     );
-    // Automatically follow up: find emails off-Instagram for anyone the scrape
-    // left without one. autoEnrichCampaign refreshes the table when it's done.
-    autoEnrichCampaign();
+    // Automatically follow up: find emails off-Instagram for anyone THIS scrape
+    // left without one. Scoped to the rows we just scraped so it stays on the
+    // creators just added. autoEnrichCampaign refreshes the table when it's done.
+    autoEnrichCampaign([...scrapeAffectedRowIds]);
   } else if (msg.event === 'aborted') {
     scrapeInFlight = false;
     showScrapeProgress(`Aborted at ${msg.index}/${msg.total}.`);
@@ -2213,10 +2230,16 @@ el('scrape-cancel-btn').addEventListener('click', () => {
   showScrapeProgress('Cancelling after current creator…');
 });
 
-// Kick off the extension scrape queue for this campaign. Runs automatically
-// when creators are added (onlyPending: true → just the freshly-added,
-// still-unscraped rows) and after the offer panel; there's no manual button.
-async function startExtensionScrape({ onlyPending = false } = {}) {
+// Kick off the extension scrape queue for this campaign.
+//
+// Scoping:
+//   • creators: [rows]  → scrape exactly these rows (the ones just added). Only
+//     those still needing extraction are kept, so the queue stops after this
+//     batch and never touches the campaign's other pending creators.
+//   • onlyPending: true → every still-unscraped row in the campaign.
+//   • (neither)         → an explicit full re-scrape of the whole campaign.
+// Runs automatically when creators are added; there's no manual button.
+async function startExtensionScrape({ onlyPending = false, creators: explicitRows = null } = {}) {
   if (!state.selectedCampaignId) return;
   if (scrapeInFlight) return; // don't stack queues over one another
   el('scrape-cancel-btn').textContent = 'Cancel';
@@ -2224,13 +2247,21 @@ async function startExtensionScrape({ onlyPending = false } = {}) {
   // the "not detected" check below a false positive.
   window.postMessage({ type: 'OEA_PING' }, window.location.origin);
   try {
-    const rows = await api(
-      `/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`,
-    );
-    const list = onlyPending ? rows.filter((r) => r.status === 'pending_extraction') : rows;
+    let list;
+    if (explicitRows) {
+      // Scoped run: scrape only the given rows (e.g. the just-added creators),
+      // still skipping any that don't need extraction — a duplicate, or a row
+      // that already resolved an email on insert.
+      list = explicitRows.filter((r) => r.status === 'pending_extraction');
+    } else {
+      const rows = await api(
+        `/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`,
+      );
+      list = onlyPending ? rows.filter((r) => r.status === 'pending_extraction') : rows;
+    }
     if (!list.length) {
       // Nothing to do. Only surface a message for an explicit full run.
-      if (!onlyPending) {
+      if (!onlyPending && !explicitRows) {
         showScrapeProgress('No creators in this campaign.');
         el('scrape-cancel-btn').textContent = 'Hide';
       }

@@ -648,15 +648,32 @@ router.post('/bulk/fetch-email', async (req, res) => {
 // swallowed as an :id.
 router.post('/bulk/enrich-email', async (req, res) => {
   try {
-    const { campaign_id } = req.body || {};
+    const { campaign_id, creator_ids } = req.body || {};
     if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
-    const targets = await db.many(
-      `SELECT id FROM creators
-       WHERE campaign_id = $1
+
+    // Optional scope. When creator_ids is provided, enrichment is limited to
+    // those rows (used by the post-add flow so it stays on the creators just
+    // added and never touches the campaign's other emailless rows). A given-
+    // but-empty/invalid list means "nothing to enrich" rather than "everyone".
+    let scoped = null;
+    if (creator_ids !== undefined) {
+      scoped = (Array.isArray(creator_ids) ? creator_ids : [])
+        .map((n) => Number(n))
+        .filter((n) => Number.isInteger(n));
+      if (!scoped.length) return res.json({ ok: true, processed: 0, found: 0, results: [] });
+    }
+
+    const params = [campaign_id];
+    let where = `campaign_id = $1
          AND (email IS NULL OR email = '')
-         AND status IN ('no_email','pending_extraction','invalid_email')
-       ORDER BY created_at ASC`,
-      [campaign_id],
+         AND status IN ('no_email','pending_extraction','invalid_email')`;
+    if (scoped) {
+      params.push(scoped);
+      where += ` AND id = ANY($${params.length}::int[])`;
+    }
+    const targets = await db.many(
+      `SELECT id FROM creators WHERE ${where} ORDER BY created_at ASC`,
+      params,
     );
     const results = [];
     let found = 0;
