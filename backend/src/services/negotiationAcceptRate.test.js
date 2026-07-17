@@ -37,10 +37,13 @@ const baseCreator = {
 
 // stageClaimable: when true the atomic UPDATE ... RETURNING returns a row (the
 // stage matched); when false it returns null (stage already changed / closed).
+// The atomic UPDATE goes through db.one (RETURNING *), so we capture its params
+// too — tests need to inspect what custom_offer got written on the accept.
 function install(creator, { stageClaimable = true } = {}) {
   const writes = [];
-  db.one = async (sql) => {
+  db.one = async (sql, params) => {
     if (/UPDATE creators/i.test(sql) && /RETURNING \*/i.test(sql)) {
+      writes.push({ sql, params });
       return stageClaimable
         ? { ...creator, negotiation_status: 'ACCEPTED', quoted_rate: Number(creator.quoted_rate) }
         : null;
@@ -91,6 +94,33 @@ test('accepting the creator rate locks the fee, moves to ACCEPTED, and logs an a
       'acceptance requests the brand approval',
     );
     assert.ok(!findEvent(writes, 'contract_sent'), 'no contract is sent before the approval');
+  } finally {
+    process.env.DRY_RUN = prevDryRun;
+    restore();
+  }
+});
+
+test('accepting the creator rate pins a video-based custom_offer so the contract is not misrendered as view-based', async () => {
+  // Without this pin the generated contract falls back to suggested_offers[0]
+  // — the "Conservative View Deal" (view_based) that computeOffers always
+  // emits first — and the contract silently renders as a view-based deal with
+  // no video count. A creator quoting their own rate is a flat/video-based
+  // deal, so acceptQuotedRate writes an explicit custom_offer of that shape.
+  const prevDryRun = process.env.DRY_RUN;
+  process.env.DRY_RUN = '1';
+  const writes = install(baseCreator);
+  try {
+    await negotiation.acceptQuotedRate(42);
+    const claim = writes.find(
+      (w) => /UPDATE creators/i.test(w.sql) && /custom_offer\s*=/i.test(w.sql) && /RETURNING \*/i.test(w.sql),
+    );
+    assert.ok(claim, 'the atomic ACCEPTED claim writes a custom_offer');
+    const raw = claim.params[3];
+    assert.ok(typeof raw === 'string', 'custom_offer is JSON-serialised for the jsonb cast');
+    const offer = JSON.parse(raw);
+    assert.strictEqual(offer.offer_type, 'video_based', 'the deal is pinned as video-based, not view-based');
+    assert.strictEqual(offer.flat_fee, 3500, 'the pinned fee is the accepted creator rate');
+    assert.ok(Number(offer.num_videos) >= 1, 'a positive video count is set so the contract lists deliverables');
   } finally {
     process.env.DRY_RUN = prevDryRun;
     restore();
