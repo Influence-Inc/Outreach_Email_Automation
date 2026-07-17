@@ -475,6 +475,38 @@ test('baseContractData: no upfront split by default (paid in full on completion)
   assert.match(d.paymentTerms, /completing and posting all agreed deliverables/i);
 });
 
+// ── Payment terms (standard method clause) ─────────────────────────────────
+// paymentTerms is the boilerplate "how payment moves" line (bank transfer,
+// net-N days). Separate from the upfront/remainder SCHEDULE. Kept pinned so
+// the free-form extraction can't shove schedule-like text into it and
+// duplicate the Payment schedule row on the contract page.
+
+test('paymentTermsFor: standard bank-transfer clause with the given net days', () => {
+  assert.strictEqual(
+    contracts.paymentTermsFor(7),
+    'Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables',
+  );
+  assert.match(contracts.paymentTermsFor(14), /within 14 working days/);
+  // Junk / missing days -> defaults to 7 so the clause is never broken.
+  assert.match(contracts.paymentTermsFor(null), /within 7 working days/);
+  assert.match(contracts.paymentTermsFor(0), /within 7 working days/);
+  assert.match(contracts.paymentTermsFor('nonsense'), /within 7 working days/);
+});
+
+test('mergeContractData does not let a schedule-like extraction bleed into paymentTerms via merge', () => {
+  // The reported bug: the extraction pushed "50% upfront prior to production;
+  // 50% due immediately after the video is published" into paymentTerms, which
+  // then duplicated the Payment schedule row. The final pin happens in
+  // extractContractData (after merge), but the merge itself must at minimum
+  // accept the base standard clause as authoritative when the extraction is
+  // absent — this locks in the "base is a clean method clause" invariant.
+  const base = contracts.baseContractData({ full_name: 'Alex' }, 900, { num_videos: 2 });
+  assert.doesNotMatch(base.paymentTerms, /%/, 'base clause must not contain any percent split');
+  assert.doesNotMatch(base.paymentTerms, /upfront/i, 'base clause must not mention upfront');
+  const out = contracts.mergeContractData(base, {});
+  assert.strictEqual(out.paymentTerms, base.paymentTerms);
+});
+
 // No ANTHROPIC_API_KEY in the test env, so requestedUpfrontPayment exercises
 // its deterministic keyword fallback — the same path production falls back to.
 test('requestedUpfrontPayment: empty/blank thread -> no upfront', async () => {

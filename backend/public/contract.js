@@ -126,12 +126,20 @@
 
     var compensation = d.totalPayment != null ? d.totalPayment : d.compensation;
     var upPct = d.upfrontPercent, remPct = d.remainderPercent;
+    // Payment terms is a boilerplate payment-METHOD clause (bank transfer, net-N
+    // days) — it describes how the money moves, not the upfront/remainder split
+    // shown below. Derived from the numeric paymentTermsDays (not the stored
+    // prose) so it stays correct for every contract, old or new — the stored
+    // string could carry a schedule-like phrasing from an earlier extraction and
+    // would otherwise duplicate the Payment schedule row.
+    var days = Number(d.paymentTermsDays);
+    var termsText = 'Direct bank transfer, initiated within ' +
+      (Number.isFinite(days) && days > 0 ? days : 7) +
+      ' working days of completing and posting all agreed deliverables';
     html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(compensation, d.currency), { big: true }) +
       row('Currency', d.currency) +
-      // Payment terms is a standard clause on every contract — always shown,
-      // even when the upfront/remainder split below is also present.
-      row('Payment terms', d.paymentTerms || 'Direct bank transfer upon completion of all agreed deliverables') +
+      row('Payment terms', termsText) +
       (upPct && remPct
         ? row('Payment schedule', upPct + '% upfront, ' + remPct + '% ' + (d.remainderTrigger || 'on completion'))
         : '')

@@ -143,6 +143,17 @@ function usageRightsFor(policy) {
   };
 }
 
+// Standard payment-METHOD clause (bank transfer, net-N days). Separate from the
+// upfront/remainder SCHEDULE below: paymentTerms describes HOW the money moves,
+// paymentScheduleFor describes WHEN the pieces are due. Keeping them distinct
+// stopped the reported "Payment terms" / "Payment schedule" duplicate rows,
+// where the extraction had shoved a schedule-like sentence into paymentTerms.
+function paymentTermsFor(days) {
+  const n = Number(days);
+  const d = Number.isFinite(n) && n > 0 ? Math.round(n) : 7;
+  return `Direct bank transfer, initiated within ${d} working days of completing and posting all agreed deliverables`;
+}
+
 // Payment schedule fields for the contract. The upfront/remainder split is
 // conditional — see resolvePaymentSchedule / requestedUpfrontPayment — so this
 // returns the split ONLY when `upfront` is true, and an all-null "no schedule"
@@ -277,8 +288,7 @@ function baseContractData(creator, fee, offer) {
     totalPayment: fee,
     currency: 'USD',
     paymentTermsDays: 7,
-    paymentTerms:
-      'Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables',
+    paymentTerms: paymentTermsFor(7),
     // Payment schedule: paid in full on completion by DEFAULT. The upfront /
     // remainder split ("30% upfront, 70% on completion") is NOT a standard
     // clause — it is only added when the creator explicitly demanded an
@@ -361,6 +371,7 @@ Rules:
   - "required" — paidAdsIncluded is ALWAYS true. usageRights should state paid ad rights ARE included.
   - "free_only" — paidAdsIncluded is true UNLESS the negotiation timeline shows the creator explicitly asked for SEPARATE or ADDITIONAL payment specifically in exchange for granting paid-ad/usage rights (e.g. "I'd need extra for ad rights", "that's a separate fee", "usage rights cost more on top"). Only in that specific case, set it to false and write usageRights as "Organic only — no paid ad rights required". Otherwise (not mentioned, or the creator agreed to include them), paidAdsIncluded is true and usageRights should state paid ad rights are included.
 - "upfrontPercent" / "remainderPercent": leave BOTH null unless the CREATOR explicitly demanded an upfront / advance / deposit payment in the thread. Payment is made in full on completion by default — do NOT invent an upfront split. When the creator did demand it, "upfrontPercent" is the portion up front and "remainderPercent" is the balance, and the two sum to 100. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
+- "paymentTerms" is the standard payment-METHOD clause only (e.g. "Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables"). It is NOT the upfront/remainder SCHEDULE — never describe a split here ("50% upfront…", "half now, half on delivery"): the split lives in upfrontPercent/remainderPercent. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
 - If a field is genuinely unknown, use null (or [] for array fields).
 - Put any extra negotiated terms (whitelisting, exclusivity windows, special timelines) into "additionalTerms" as short strings.`;
 
@@ -447,6 +458,13 @@ async function extractContractData(creator) {
   // when the creator demanded upfront payment; otherwise paid in full on
   // completion. See resolvePaymentSchedule().
   Object.assign(merged, await resolvePaymentSchedule(transcript));
+  // paymentTerms is the standard payment-METHOD clause (bank transfer, net-N
+  // days), NOT the upfront/remainder split. The extraction has previously
+  // shoved schedule-like sentences into this field ("50% upfront prior to
+  // production; 50% due after publish"), which then duplicated the Payment
+  // schedule row on the contract page. Re-pin it deterministically from
+  // paymentTermsDays so the two rows stay distinct.
+  merged.paymentTerms = paymentTermsFor(merged.paymentTermsDays);
   return merged;
 }
 
@@ -991,6 +1009,7 @@ module.exports = {
   agreedFeeFor,
   mergeContractData,
   usageRightsFor,
+  paymentTermsFor,
   paymentScheduleFor,
   negotiatedSeparateUsageRightsPayment,
   requestedUpfrontPayment,
