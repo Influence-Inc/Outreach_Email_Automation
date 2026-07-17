@@ -1416,12 +1416,32 @@ async function acceptQuotedRate(creatorId) {
   }
   // Only accept from stages where a creator rate is genuinely on the table.
   const acceptable = ['AWAITING_APPROVAL', 'AWAITING_RATE', 'AWAITING_DECISION'];
+  // Pin the accepted deal to a video-based custom_offer at the creator's rate.
+  // Without this the contract falls back to suggested_offers[0] — which is the
+  // "Conservative View Deal" (view_based) that computeOffers always emits
+  // first — and the generated contract silently misrenders as a view-based
+  // deal with no video count. A creator quoting their own rate is always a
+  // flat/video-based deal (their per-video price at their number); default
+  // num_videos=1 and the admin can raise it from the Deals column.
+  const acceptedOffer = {
+    offer_id: 'creator_rate',
+    offer_type: 'video_based',
+    label: "Creator's rate",
+    num_videos: 1,
+    flat_fee: Math.round(rate),
+    flat_per_video: Math.round(rate),
+    view_guarantee: 0,
+    cpm_applied: null,
+    satisfies_creator_rate: true,
+    notes: "Accepted the creator's own quoted rate",
+  };
   // Atomic claim: the first accept wins and an already-ACCEPTED creator can't
   // be re-accepted, so a double-click can't park two approvals.
   const claim = await db.one(
     `UPDATE creators
        SET negotiation_status = 'ACCEPTED',
            quoted_rate = $2,
+           custom_offer = $4::jsonb,
            offer_approved = FALSE,
            contract_approved = FALSE,
            needs_human = FALSE,
@@ -1430,7 +1450,7 @@ async function acceptQuotedRate(creatorId) {
            updated_at = NOW()
      WHERE id = $1 AND negotiation_status = ANY($3::text[])
      RETURNING *`,
-    [creator.id, rate, acceptable],
+    [creator.id, rate, acceptable, JSON.stringify(acceptedOffer)],
   );
   if (!claim) {
     const err = new Error(
