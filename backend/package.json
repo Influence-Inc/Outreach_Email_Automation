@@ -13,7 +13,8 @@
     "reset-db": "node src/db/reset.js",
     "test": "node --test",
     "learn:harvest": "node scripts/harvest-inbox.js",
-    "learn:eval": "RUN_LIVE_CLAUDE=1 node --test src/services/negotiation.examples.test.js"
+    "learn:eval": "RUN_LIVE_CLAUDE=1 node --test src/services/negotiation.examples.test.js",
+    "sync:contracts": "node scripts/sync-contracts-to-creator-db.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.102.0",
