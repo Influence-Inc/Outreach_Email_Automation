@@ -545,6 +545,34 @@ function renderEditableDeal(cell, r, data) {
   cell.appendChild(hint);
 
   const isViewBased = data.offerType === 'view_based';
+  // Offer-type toggle: flips View-based ↔ Video-based when the extraction
+  // shaped the wrong kind of deal. Also rewrites the deliverables text, the
+  // label chip, and the video count in a single PATCH — the paired fields
+  // stay consistent so the contract page and the Deals column re-render as
+  // one shape.
+  const typeLine = document.createElement('div');
+  typeLine.className = 'deal-line';
+  const typeTag = document.createElement('span');
+  typeTag.className = 'deal-tag';
+  typeTag.textContent = 'TYPE';
+  const typeVal = document.createElement('span');
+  typeVal.className = 'deal-val deal-toggle';
+  typeVal.textContent = isViewBased ? 'View-based' : 'Video-based';
+  typeVal.classList.toggle('on', !isViewBased);
+  typeVal.title = 'Click to switch the deal shape (view-based ↔ video-based)';
+  typeVal.onclick = async () => {
+    try {
+      await saveContractField(r, { offerType: isViewBased ? 'video_based' : 'view_based' });
+    } catch (err) {
+      alert(err.message);
+    }
+    await refreshCreators();
+    await refreshCampaigns();
+  };
+  typeLine.appendChild(typeTag);
+  typeLine.appendChild(typeVal);
+  cell.appendChild(typeLine);
+
   if (!isViewBased) {
     appendEditableDealLine(cell, r, {
       label: 'VIDEOS',
