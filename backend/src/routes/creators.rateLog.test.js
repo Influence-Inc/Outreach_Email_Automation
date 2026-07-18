@@ -52,6 +52,62 @@ test('a sent delegate / manual reply quotes what we sent', () => {
   );
 });
 
+// ── our own auto-replies (sent_negotiation) surface as "Sent: …" ────────────
+
+test('a conversational auto-reply quotes what we sent', () => {
+  assert.strictEqual(
+    rateLogEntry('sent_negotiation', { kind: 'reply_qa' }, 'Absolutely — the video can go live the first week of August.').text,
+    'Sent: “Absolutely — the video can go live the first week of August.”',
+  );
+  assert.strictEqual(
+    rateLogEntry('sent_negotiation', { kind: 'reply1' }, 'Hi Sam! Thanks for the media kit — could you share your rate?').text,
+    'Sent: “Thanks for the media kit — could you share your rate?”',
+  );
+});
+
+test('a conversational auto-reply prefers the Claude summary', () => {
+  assert.strictEqual(
+    rateLogEntry(
+      'sent_negotiation',
+      { kind: 'reply_qa' },
+      'Great question — we cross-post to Instagram, TikTok and YouTube Shorts, and yes you keep full creative control.',
+      'confirmed cross-posting to IG/TikTok/Shorts and full creative control',
+    ).text,
+    'Sent: “confirmed cross-posting to IG/TikTok/Shorts and full creative control”',
+  );
+});
+
+test('a conversational auto-reply falls back to a plain label with no message on file', () => {
+  assert.strictEqual(rateLogEntry('sent_negotiation', { kind: 'reply' }, null).text, 'Reply sent');
+  assert.strictEqual(rateLogEntry('sent_negotiation', { kind: 'reply_qa' }, '   ').text, 'Reply sent');
+});
+
+test('a sent_negotiation with no kind is still treated as a conversational reply', () => {
+  assert.strictEqual(
+    rateLogEntry('sent_negotiation', {}, 'Sounds good, sending the agreement over now.').text,
+    'Sent: “Sounds good, sending the agreement over now.”',
+  );
+});
+
+test('milestone sends are skipped so they never double their dedicated step', () => {
+  // offer → rate_offer_sent, contract → contract_sent, decline → rate_declined,
+  // request_counter_rate → rate_counter_requested, delegate_reply →
+  // sent_delegate_reply/rate_offer_sent. Each already logs its own richer event.
+  for (const kind of ['offer', 'contract', 'decline', 'request_counter_rate', 'delegate_reply']) {
+    assert.strictEqual(
+      rateLogEntry('sent_negotiation', { kind }, 'body text here'),
+      null,
+      `${kind} should be suppressed`,
+    );
+  }
+});
+
+test('the idle negotiation nudges render as a plain "Follow-up sent" step', () => {
+  assert.strictEqual(rateLogEntry('sent_negotiation', { kind: 'followup1' }, 'just checking in!').text, 'Follow-up sent');
+  assert.strictEqual(rateLogEntry('sent_negotiation', { kind: 'followup2' }, 'still keen?').text, 'Follow-up sent');
+  assert.strictEqual(rateLogEntry('sent_negotiation', { kind: 'followup1' }, null).tone, 'done');
+});
+
 // ── quoted rates spell out the deliverable ──────────────────────────────────
 
 test('a single quoted rate names the deliverable it covers', () => {
