@@ -582,27 +582,51 @@ button:disabled { opacity: 0.5; cursor: default; }
   border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface);
 }
 
-/* --- Delegate window ----------------------------------------------------- */
-.delegate-card {
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 20px 22px; margin-bottom: 16px; box-shadow: var(--shadow-card);
+/* --- Campaign-page delegations + intervention pop-up --------------------- */
+/* Banner above the creator table: how many creators need a human right now.
+   Clicking it clears any stage filter and scrolls to the flagged rows. */
+.attention-banner {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  margin: 4px 0 2px; padding: 11px 15px; cursor: pointer; font: inherit;
+  background: #fdf3ef; border: 1px solid #f2d4c7; border-radius: var(--radius-sm);
+  color: var(--ink-2);
 }
-.delegate-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.delegate-head a { font-weight: 600; color: var(--ink); text-decoration: none; }
-.delegate-head a:hover { text-decoration: underline; }
-.delegate-head .meta { font-size: 12.5px; margin-top: 2px; }
-.delegate-reason {
-  flex: 0 0 auto; font-size: 11px; font-weight: 600; color: var(--ink-2);
-  background: var(--surface-3); padding: 4px 10px; border-radius: 999px; max-width: 55%;
+.attention-banner:hover { background: #fbeade; border-color: #ecc3b1; }
+.attention-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--danger);
+  flex-shrink: 0; box-shadow: 0 0 0 4px rgba(197, 49, 39, 0.12);
 }
-.delegate-reason.offer { color: #fff; background: var(--accent); }
+.attention-text { font-size: 13px; color: var(--ink); }
+.attention-text b { font-weight: 700; }
+.attention-hint { font-size: 12px; color: var(--muted); margin-left: 2px; }
+
+/* Rows needing a human float to the top of the table and carry a warm accent
+   rail so the intervention reads at a glance. */
+.creator-row.needs-attention {
+  background: #fdf7f4;
+  box-shadow: inset 3px 0 0 var(--warn);
+  border-radius: 0 8px 8px 0;
+}
+
+/* The in-table hand-off / approval launcher — same footprint as "Decide offer"
+   but accented so a pending intervention stands out from a plain ghost button. */
+.cr-intervene-btn { align-self: flex-start; }
+.ghost.small.cr-intervene-btn {
+  color: var(--warn); background: #fdf0ea; border-color: #f2d4c7; font-weight: 600;
+}
+.ghost.small.cr-intervene-btn:hover { background: #fbe4d9; border-color: #ecc3b1; }
+
+/* The pop-up reuses the email-modal shell; its body holds the reply/approval
+   blocks below and scrolls as normal flow rather than pre-wrapped email text. */
+.intervene-modal-body { padding: 18px 20px 20px; overflow-y: auto; min-height: 0; }
+
+/* The creator's parked message shown in the intervention pop-up. */
 .delegate-question {
   margin-top: 12px; padding: 12px 14px; background: var(--surface-2);
   border-left: 3px solid var(--accent); border-radius: var(--radius-xs);
   font-size: 13px; color: var(--ink); white-space: pre-wrap; word-break: break-word;
 }
-.delegate-subtitle { margin-top: 12px; }
-/* A mid-approval reply surfaced beneath the offer configurator. */
+/* The reply/approval blocks (reused verbatim from the old Delegate window). */
 .delegate-handoff-msg { margin-top: 20px; }
 .delegate-handoff-label { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
 .delegate-handoff-msg .delegate-question { margin-top: 8px; }
@@ -621,167 +645,6 @@ button:disabled { opacity: 0.5; cursor: default; }
   display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 10px;
 }
 .delegate-status { margin-right: auto; }
-
-/* --- Offer configurator (delegate page) ---------------------------------- */
-/* Offer items render directly on the app background so their white sub-cards
-   pop, matching the redesign. */
-.delegate-offer-item { margin-bottom: 34px; }
-.delegate-offer-item + .delegate-offer-item,
-.delegate-offer-item + .delegate-card,
-.delegate-card + .delegate-offer-item {
-  padding-top: 30px; border-top: 1px solid var(--line);
-}
-.offer-config { display: flex; flex-direction: column; gap: 16px; }
-
-.oc-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.oc-id { display: flex; align-items: center; gap: 14px; }
-.oc-avatar {
-  width: 46px; height: 46px; border-radius: 50%; flex-shrink: 0;
-  background: linear-gradient(135deg, #111, #3a3a3a); color: #fff;
-  display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700;
-}
-.oc-handle { font-size: 19px; font-weight: 700; }
-.oc-handle a { color: var(--ink); text-decoration: none; }
-.oc-handle a:hover { text-decoration: underline; }
-.oc-handle .oc-name { color: var(--faint-2); font-weight: 500; }
-.oc-email { font-size: 13.5px; color: var(--muted); margin-top: 2px; }
-.oc-badge {
-  font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  padding: 7px 12px; border-radius: 9px; white-space: nowrap;
-}
-.oc-badge.pending { color: #b45309; background: #fef3e2; border: 1px solid #fbe0ba; }
-.oc-badge.sent { color: var(--green); background: #e7f6ec; border: 1px solid #c5e9cf; }
-.oc-subtitle { font-size: 14px; color: var(--muted); margin-top: -4px; }
-
-/* Safe-floor card */
-.oc-floor {
-  display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 22px 24px; box-shadow: var(--shadow-card);
-}
-.oc-floor-main { flex: 0 0 auto; }
-.oc-floor-label {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 7px;
-  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
-}
-.oc-scraped { font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; color: #2563eb; background: #eaf0fe; padding: 3px 7px; border-radius: 6px; }
-.oc-floor-input { width: 220px; font-size: 18px; font-weight: 700; }
-.oc-floor-desc { flex: 1; min-width: 220px; font-size: 13px; color: var(--muted); line-height: 1.5; padding-bottom: 2px; }
-.oc-sub { font-size: 12px; color: var(--faint); margin-top: 6px; }
-
-/* Deal cards */
-.oc-deals { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
-.oc-deal {
-  position: relative; background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 22px; display: flex; flex-direction: column; gap: 16px;
-  box-shadow: var(--shadow-card);
-}
-.oc-deal.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.oc-deal-head { display: flex; align-items: center; gap: 12px; }
-.oc-deal-icon {
-  width: 38px; height: 38px; border-radius: 11px; color: #fff; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-}
-.oc-deal-icon.view { background: #2563eb; }
-.oc-deal-icon.video { background: #16a34a; }
-.oc-deal-icon.bonus { background: #f59e0b; }
-.oc-deal-kicker { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--faint); }
-.oc-deal-title { font-size: 17px; font-weight: 700; }
-.oc-deal-desc { font-size: 13px; color: var(--muted); line-height: 1.45; margin-top: -6px; }
-
-.oc-fields { display: flex; flex-direction: column; gap: 14px; }
-.oc-field-pair { display: flex; gap: 10px; }
-.oc-field-pair .oc-field { flex: 1; }
-.oc-field-label {
-  display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
-}
-.oc-input {
-  width: 100%; font-size: 15px; font-weight: 600; color: var(--ink);
-  background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px;
-}
-.oc-money { display: flex; align-items: center; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); overflow: hidden; }
-.oc-money:focus-within { border-color: var(--accent); box-shadow: var(--ring); }
-.oc-money-prefix { padding: 10px 4px 10px 12px; color: var(--faint); font-size: 15px; font-weight: 600; }
-.oc-money-input { border: none !important; border-radius: 0; padding-left: 2px; }
-.oc-money-input:focus { box-shadow: none; }
-
-.oc-divider { height: 1px; background: var(--line-3); }
-.oc-rows { display: flex; flex-direction: column; gap: 10px; }
-.oc-row { display: flex; justify-content: space-between; align-items: baseline; }
-.oc-row span { font-size: 13px; color: var(--muted); }
-.oc-row b { font-size: 14px; font-weight: 600; color: var(--ink); }
-.oc-row .oc-plus { color: var(--green); }
-.oc-row-inset { background: var(--surface-2); border: 1px solid var(--line-3); border-radius: 9px; padding: 9px 11px; }
-.oc-row-inset b { font-size: 15px; font-weight: 800; }
-.oc-row-total { margin-top: 4px; }
-.oc-row-total span:first-child {
-  font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
-}
-/* .oc-row-total prefix bumps specificity above ".oc-row span" (which also
-   matches this element, being both a class+type selector) so the intended
-   white text isn't silently overridden by the muted gray meant for the other
-   row labels. */
-.oc-row-total .oc-fee {
-  display: inline-flex; align-items: center; background: var(--accent); color: #fff;
-  padding: 9px 15px; border-radius: 11px; font-size: 20px; font-weight: 700; letter-spacing: -0.01em;
-}
-.oc-choose {
-  width: 100%; margin-top: auto; padding: 12px; border: 1px solid var(--accent);
-  background: var(--surface); color: var(--accent); border-radius: 11px; font-size: 14px; font-weight: 700;
-}
-.oc-choose:hover { background: var(--surface-3); }
-.oc-choose.is-selected { background: var(--accent); color: #fff; }
-.oc-choose.is-selected:hover { background: var(--accent-strong); }
-
-/* Send bar */
-.oc-sendbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 20px 24px; box-shadow: var(--shadow-card);
-}
-.oc-sendbar-label { font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint); }
-.oc-sendbar-headline { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; margin-top: 5px; }
-.oc-sendbar-headline .oc-dash { color: var(--faint-2); }
-.oc-sendbar-meta { font-size: 13px; color: var(--muted); margin-top: 3px; }
-.oc-sendbar-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.oc-approve { padding: 14px 26px; font-size: 15px; border-radius: 12px; }
-/* Dismiss sits next to Approve. Ghost-styled and slightly muted so Approve
-   still reads as the primary CTA — but tall enough to be an equal click
-   target. */
-.oc-dismiss { padding: 12px 20px; font-size: 14px; border-radius: 12px; }
-/* Accept-the-creator's-rate: an alternative to sending a counter. Green so it
-   reads as the "agree & close" path, distinct from the near-black counter CTA. */
-.btn-accept {
-  padding: 13px 22px; font-size: 14px; font-weight: 600; border-radius: 12px;
-  color: #fff; background: var(--green); border: 1px solid var(--green);
-}
-.btn-accept:hover { background: #0f5f40; border-color: #0f5f40; }
-.oc-send-status { font-size: 13px; }
-.oc-ai-toggle.is-open { background: var(--line); border-color: var(--ink-2); }
-
-/* Draft with AI — describe the message, review the AI draft, then send */
-.oc-ai {
-  margin-top: 14px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow-card);
-}
-.oc-ai[hidden] { display: none; }
-.oc-ai-title { font-size: 14px; font-weight: 700; }
-.oc-ai-desc { font-size: 12.5px; color: var(--muted); margin: 4px 0 12px; max-width: 64ch; }
-.oc-ai-note, .oc-ai-body {
-  width: 100%; font: inherit; font-size: 14px; line-height: 1.5;
-  border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface-2);
-  padding: 11px 13px; color: var(--ink); resize: vertical;
-}
-.oc-ai-note:focus, .oc-ai-body:focus { outline: none; border-color: var(--ink); box-shadow: var(--ring); }
-.oc-ai-body { min-height: 260px; white-space: pre-wrap; }
-.oc-ai-bar { display: flex; align-items: center; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
-.oc-ai-preview { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 14px; }
-.oc-ai-preview[hidden] { display: none; }
-.oc-ai-label {
-  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--faint); margin-bottom: 6px;
-}
 
 /* --- Responsive ---------------------------------------------------------- */
 @media (max-width: 900px) {

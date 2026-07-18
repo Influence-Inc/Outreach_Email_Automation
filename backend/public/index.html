@@ -76,10 +76,6 @@
               <h2>Creators</h2>
               <div class="actions">
                 <button id="send-emails-btn" class="btn-primary" title="Add pending creators to Instantly.ai for outreach + automated follow-ups">Send emails</button>
-                <button id="open-delegate-btn" class="ghost has-badge" title="Replies the AI handed off for a human to answer">
-                  <span>Delegate</span>
-                  <span id="delegate-count" class="count-badge" hidden>0</span>
-                </button>
                 <button id="refresh-btn" class="ghost">Refresh</button>
                 <button id="remove-all-btn" class="ghost danger" title="Delete every creator in this campaign">Remove all</button>
               </div>
@@ -109,6 +105,11 @@
               <button id="scrape-cancel-btn" class="ghost small" type="button">Cancel</button>
             </div>
 
+            <!-- Surfaces creators that need a human right now (AI hand-offs, offers
+                 awaiting approval, accepted deals awaiting the brand's go-ahead).
+                 Those rows are also sorted to the top of the table below. -->
+            <button id="attention-banner" class="attention-banner" type="button" hidden></button>
+
             <div class="table-scroll">
               <div id="creator-table" class="creator-grid">
                 <div class="grid-head">
@@ -136,13 +137,13 @@
 
           <div class="card">
             <div class="toggle-row">
-              <label class="checkbox-label" title="Master kill-switch. When off, every creator reply goes straight to the Delegate window — the AI never auto-replies.">
+              <label class="checkbox-label" title="Master kill-switch. When off, every creator reply is flagged for a human at the top of the campaign — the AI never auto-replies.">
                 <input id="ai-replies-toggle" type="checkbox" />
                 <b>Auto-reply with AI</b>
               </label>
               <span id="ai-replies-status" class="hint"></span>
             </div>
-            <p class="hint subhead">When this is off, every creator reply is routed to the Delegate window for a human to handle. When on, the AI uses the Guidelines below + few-shot examples to draft replies automatically.</p>
+            <p class="hint subhead">When this is off, every creator reply is flagged for a human at the top of the campaign activity list. When on, the AI uses the Guidelines below + few-shot examples to draft replies automatically.</p>
           </div>
 
           <div class="card">
@@ -153,18 +154,6 @@
               <button id="save-guidelines-btn" class="btn-primary" type="button">Save guidelines</button>
             </div>
           </div>
-        </div>
-
-        <!-- Delegate view -->
-        <div id="delegate-view" hidden>
-          <div class="main-header">
-            <div class="main-heading">
-              <button id="delegate-back-btn" class="ghost small back-btn" type="button">&larr; Back to campaign</button>
-              <h1 id="delegate-title">Delegate</h1>
-              <p class="hint subhead">Replies the AI handed off &mdash; questions/situations it couldn&rsquo;t confidently handle, plus everything routed here while &ldquo;Auto-reply with AI&rdquo; is off. Your reply sends from the same email thread.</p>
-            </div>
-          </div>
-          <div id="delegate-list"></div>
         </div>
 
       </div>
