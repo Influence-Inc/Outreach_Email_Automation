@@ -46,10 +46,18 @@ async function enrichCreator(creator) {
 }
 
 // Event types that make up the per-creator "Rate" timeline (delivery-tracking
-// style). A curated subset of email_events — the offer email's own
-// 'sent_negotiation' event is intentionally excluded; we log a dedicated
-// 'rate_offer_sent' carrying the fee/CPM instead so the timeline can describe
-// the offer without the email body.
+// style). A curated subset of email_events.
+//
+// Every negotiation email we send also logs a generic 'sent_negotiation' event
+// carrying its `kind`. The milestone kinds (offer / contract / decline /
+// counter-request / delegate reply) each ALSO log a dedicated, richer event
+// (rate_offer_sent, contract_sent, …), so for those the 'sent_negotiation' row
+// is suppressed to avoid a duplicate step (see rateLogEntry). The remaining
+// kinds — our conversational auto-replies (reply1 / reply_qa / reply) and the
+// idle negotiation nudges (followup1 / followup2) — have no dedicated event, so
+// 'sent_negotiation' is what surfaces them here. Without it, every email Claude
+// sends to answer a question or acknowledge a reply is invisible on the
+// timeline even though the creator's replies to it show.
 const RATE_LOG_TYPES = [
   'outreach_queued',
   'sent_outreach',
@@ -60,6 +68,7 @@ const RATE_LOG_TYPES = [
   'rate_counter_requested',
   'rate_accepted',
   'rate_declined',
+  'sent_negotiation',
   'sent_delegate_reply',
   'sent_manual_reply',
   'contract_approval_requested',
@@ -69,6 +78,31 @@ const RATE_LOG_TYPES = [
   'contract_synced',
   'outreach_stopped',
 ];
+
+// sendNegotiationEmail stamps each outbound email with a `kind` on its
+// 'sent_negotiation' event. These kinds already emit their own dedicated
+// timeline step, so a 'sent_negotiation' row for them would duplicate it.
+const NEGOTIATION_KINDS_WITH_OWN_EVENT = new Set([
+  'offer',
+  'contract',
+  'decline',
+  'request_counter_rate',
+  'delegate_reply',
+]);
+// Our templated idle nudges — rendered as a plain "Follow-up sent" step (like
+// the Instantly sequence follow-ups), not a quoted conversational reply.
+const NEGOTIATION_FOLLOWUP_KINDS = new Set(['followup1', 'followup2']);
+
+// Is this 'sent_negotiation' event one of our conversational replies — an auto-
+// reply that answered / acknowledged the creator (reply1 / reply_qa / reply, or
+// any future conversational kind)? Those render a quoted "Sent: …" gist backed
+// by the stored outbound message. Milestone kinds (their own event) and the
+// templated nudges are not.
+function isConversationalSend(type, detail) {
+  if (type !== 'sent_negotiation') return false;
+  const kind = (detail && detail.kind) || '';
+  return !NEGOTIATION_KINDS_WITH_OWN_EVENT.has(kind) && !NEGOTIATION_FOLLOWUP_KINDS.has(kind);
+}
 
 const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
 
@@ -165,6 +199,18 @@ function rateLogEntry(type, detail, msg, summary) {
     }
     case 'rate_declined':
       return { text: 'Creator declined', tone: 'muted' };
+    case 'sent_negotiation': {
+      const kind = d.kind || '';
+      // Milestone sends (offer / contract / decline / counter-request / delegate
+      // reply) already have their own dedicated step — don't render a second row.
+      if (NEGOTIATION_KINDS_WITH_OWN_EVENT.has(kind)) return null;
+      // Idle negotiation nudges are templated pings, not a content reply.
+      if (NEGOTIATION_FOLLOWUP_KINDS.has(kind)) return { text: 'Follow-up sent', tone: 'done' };
+      // A conversational auto-reply we sent (answered a question, acknowledged a
+      // reply, asked for details). Quote what we said, same as delegate / manual.
+      const gist = summary || summarizeMessage(msg);
+      return { text: gist ? `Sent: “${gist}”` : 'Reply sent', tone: 'done' };
+    }
     case 'sent_delegate_reply': {
       const gist = summary || summarizeMessage(msg);
       return { text: gist ? `Sent: “${gist}”` : 'Reply sent (from delegate)', tone: 'done' };
@@ -214,7 +260,10 @@ const OUTBOUND_MSG_EVENTS = new Set(['sent_delegate_reply', 'sent_manual_reply']
 // The events whose timeline label is a free-text recap of an email (as opposed
 // to a mined "Creator quoted $X" label). Only these warrant a Claude summary —
 // 'rate_quoted' is excluded because its label comes from the raw text, not a
-// free-form gist.
+// free-form gist. Conversational 'sent_negotiation' sends are gist-worthy too;
+// they're detected dynamically (by kind) via isConversationalSend rather than
+// listed here, since the same event type also covers non-gist milestone/nudge
+// kinds.
 const GIST_MSG_EVENTS = new Set(['replied', 'sent_delegate_reply', 'sent_manual_reply']);
 
 // Safety net for un-summarized gist messages. Summaries are normally generated
@@ -245,14 +294,15 @@ async function attachRateLog(rows) {
       [ids, RATE_LOG_TYPES],
     ),
     // The conversation turns a timeline label can quote: every inbound reply,
-    // plus the outbound replies we log a step for (delegate / manual). The
-    // templated outbound sends (outreach, follow-up, offer emails) get their own
-    // descriptive labels, so their bodies aren't needed here.
+    // and every outbound reply we sent — the delegate / manual replies plus the
+    // conversational auto-replies surfaced from 'sent_negotiation'. Loading the
+    // whole outbound side keeps the event→message pairing correct regardless of
+    // kind; the templated sends (outreach, follow-up, offer, contract) that have
+    // their own descriptive labels simply go unpaired.
     db.many(
       `SELECT id, creator_id, direction, subject, body, summary, created_at
        FROM email_messages
        WHERE creator_id = ANY($1::int[])
-         AND (direction = 'inbound' OR kind IN ('delegate_reply', 'manual_reply'))
        ORDER BY creator_id, created_at ASC`,
       [ids],
     ),
@@ -273,10 +323,10 @@ async function attachRateLog(rows) {
   // just before the event's time. A small forward slack absorbs the sub-second
   // gap when the message row is written just after the event row. Returns the
   // full row (id, body, summary) so the caller can both render and cache.
-  const msgForEvent = (creatorId, type, at) => {
+  const msgForEvent = (creatorId, type, detail, at) => {
     const map = INBOUND_MSG_EVENTS.has(type)
       ? inboundByCreator
-      : OUTBOUND_MSG_EVENTS.has(type)
+      : OUTBOUND_MSG_EVENTS.has(type) || isConversationalSend(type, detail)
         ? outboundByCreator
         : null;
     if (!map) return null;
@@ -296,12 +346,17 @@ async function attachRateLog(rows) {
   // deduped by id — handed to Claude in the background after this response.
   const pendingSummaries = new Map();
   for (const e of events) {
-    const m = msgForEvent(e.creator_id, e.type, e.created_at);
+    const m = msgForEvent(e.creator_id, e.type, e.detail, e.created_at);
     const entry = rateLogEntry(e.type, e.detail, m ? m.body : null, m ? m.summary : null);
-    if (m && GIST_MSG_EVENTS.has(e.type) && m.summary == null && !pendingSummaries.has(m.id)) {
+    if (!entry) continue;
+    if (
+      m &&
+      (GIST_MSG_EVENTS.has(e.type) || isConversationalSend(e.type, e.detail)) &&
+      m.summary == null &&
+      !pendingSummaries.has(m.id)
+    ) {
       pendingSummaries.set(m.id, { id: m.id, body: m.body });
     }
-    if (!entry) continue;
     entry.at = e.created_at;
     entry.type = e.type;
     // Attach the full email backing this step (when there is one) so the client

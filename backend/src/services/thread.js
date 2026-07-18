@@ -15,11 +15,21 @@
 const db = require('../db');
 
 // Messages that get a free-text row in the dashboard's Rate-column timeline:
-// the creator's inbound replies, plus the manual / delegate replies we send.
-// These are the ones worth an LLM summary; templated sends (outreach, offer,
-// contract) get their own descriptive labels and are skipped.
+// the creator's inbound replies, the manual / delegate replies we send, and our
+// conversational auto-replies (reply1 / reply_qa / reply — the emails Claude
+// sends to acknowledge a reply, answer a question, or ask for details). These
+// are the ones worth an LLM summary so the timeline can quote what was said;
+// templated sends (outreach, follow-up, offer, contract) get their own
+// descriptive labels and are skipped.
+const GIST_WORTHY_OUTBOUND_KINDS = new Set([
+  'manual_reply',
+  'delegate_reply',
+  'reply1',
+  'reply_qa',
+  'reply',
+]);
 function isGistWorthy(dir, kind) {
-  return dir === 'inbound' || kind === 'manual_reply' || kind === 'delegate_reply';
+  return dir === 'inbound' || GIST_WORTHY_OUTBOUND_KINDS.has(kind);
 }
 
 // Persist one message of the conversation. Best-effort: callers wrap this so a
