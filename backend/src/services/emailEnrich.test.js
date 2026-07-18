@@ -17,6 +17,7 @@ const {
   relatesToCreator,
   isCreatorContactEmail,
   isSponsoredLink,
+  pickApolloEmail,
 } = require('./emailEnrich');
 
 test('normalizeUrl adds https, rejects non-URLs', () => {
@@ -332,4 +333,26 @@ test('enrichEmail still follows a tracked link when its domain carries the creat
     email: 'hi@yushika-studio.com',
     source: 'https://yushika-studio.com/?utm_source=instagram',
   });
+});
+
+test('pickApolloEmail prefers the professional email, skips locked placeholders', () => {
+  assert.strictEqual(
+    pickApolloEmail({ email: 'jane@brand.com', personal_emails: ['jane@gmail.com'] }),
+    'jane@brand.com',
+  );
+  // Professional email locked behind credits -> fall through to a personal one.
+  assert.strictEqual(
+    pickApolloEmail({ email: 'email_not_unlocked@domain.com', personal_emails: ['jane@gmail.com'] }),
+    'jane@gmail.com',
+  );
+  // Only contact_emails present.
+  assert.strictEqual(
+    pickApolloEmail({ contact_emails: [{ email: 'hi@studio.co' }] }),
+    'hi@studio.co',
+  );
+  // Nothing usable / no person.
+  assert.strictEqual(pickApolloEmail({ email: 'email_not_unlocked@domain.com' }), null);
+  assert.strictEqual(pickApolloEmail({ email: 'you@example.com' }), null); // junk filtered
+  assert.strictEqual(pickApolloEmail(null), null);
+  assert.strictEqual(pickApolloEmail({}), null);
 });
