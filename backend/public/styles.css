@@ -582,27 +582,51 @@ button:disabled { opacity: 0.5; cursor: default; }
   border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface);
 }
 
-/* --- Delegate window ----------------------------------------------------- */
-.delegate-card {
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 20px 22px; margin-bottom: 16px; box-shadow: var(--shadow-card);
+/* --- Campaign-page delegations + intervention pop-up --------------------- */
+/* Banner above the creator table: how many creators need a human right now.
+   Clicking it clears any stage filter and scrolls to the flagged rows. */
+.attention-banner {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  margin: 4px 0 2px; padding: 11px 15px; cursor: pointer; font: inherit;
+  background: #fdf3ef; border: 1px solid #f2d4c7; border-radius: var(--radius-sm);
+  color: var(--ink-2);
 }
-.delegate-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.delegate-head a { font-weight: 600; color: var(--ink); text-decoration: none; }
-.delegate-head a:hover { text-decoration: underline; }
-.delegate-head .meta { font-size: 12.5px; margin-top: 2px; }
-.delegate-reason {
-  flex: 0 0 auto; font-size: 11px; font-weight: 600; color: var(--ink-2);
-  background: var(--surface-3); padding: 4px 10px; border-radius: 999px; max-width: 55%;
+.attention-banner:hover { background: #fbeade; border-color: #ecc3b1; }
+.attention-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--danger);
+  flex-shrink: 0; box-shadow: 0 0 0 4px rgba(197, 49, 39, 0.12);
 }
-.delegate-reason.offer { color: #fff; background: var(--accent); }
+.attention-text { font-size: 13px; color: var(--ink); }
+.attention-text b { font-weight: 700; }
+.attention-hint { font-size: 12px; color: var(--muted); margin-left: 2px; }
+
+/* Rows needing a human float to the top of the table and carry a warm accent
+   rail so the intervention reads at a glance. */
+.creator-row.needs-attention {
+  background: #fdf7f4;
+  box-shadow: inset 3px 0 0 var(--warn);
+  border-radius: 0 8px 8px 0;
+}
+
+/* The in-table hand-off / approval launcher — same footprint as "Decide offer"
+   but accented so a pending intervention stands out from a plain ghost button. */
+.cr-intervene-btn { align-self: flex-start; }
+.ghost.small.cr-intervene-btn {
+  color: var(--warn); background: #fdf0ea; border-color: #f2d4c7; font-weight: 600;
+}
+.ghost.small.cr-intervene-btn:hover { background: #fbe4d9; border-color: #ecc3b1; }
+
+/* The pop-up reuses the email-modal shell; its body holds the reply/approval
+   blocks below and scrolls as normal flow rather than pre-wrapped email text. */
+.intervene-modal-body { padding: 18px 20px 20px; overflow-y: auto; min-height: 0; }
+
+/* The creator's parked message shown in the intervention pop-up. */
 .delegate-question {
   margin-top: 12px; padding: 12px 14px; background: var(--surface-2);
   border-left: 3px solid var(--accent); border-radius: var(--radius-xs);
   font-size: 13px; color: var(--ink); white-space: pre-wrap; word-break: break-word;
 }
-.delegate-subtitle { margin-top: 12px; }
-/* A mid-approval reply surfaced beneath the offer configurator. */
+/* The reply/approval blocks (reused verbatim from the old Delegate window). */
 .delegate-handoff-msg { margin-top: 20px; }
 .delegate-handoff-label { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
 .delegate-handoff-msg .delegate-question { margin-top: 8px; }
@@ -622,15 +646,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .delegate-status { margin-right: auto; }
 
-/* --- Offer configurator (delegate page) ---------------------------------- */
-/* Offer items render directly on the app background so their white sub-cards
-   pop, matching the redesign. */
-.delegate-offer-item { margin-bottom: 34px; }
-.delegate-offer-item + .delegate-offer-item,
-.delegate-offer-item + .delegate-card,
-.delegate-card + .delegate-offer-item {
-  padding-top: 30px; border-top: 1px solid var(--line);
-}
+/* --- Offer configurator (dashboard fallback, inside the pop-up) ---------- */
+/* Widen the intervention pop-up for the offer configurator's three-card
+   layout, and give its body a faint background so the white deal cards pop
+   the way they did on the old full-page layout. */
+.intervene-modal.wide { width: min(960px, 100%); }
+.intervene-modal.wide .intervene-modal-body { background: var(--surface-2); }
+
 .offer-config { display: flex; flex-direction: column; gap: 16px; }
 
 .oc-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }

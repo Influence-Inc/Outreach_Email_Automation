@@ -108,7 +108,6 @@ async function refreshCampaigns() {
 function showView(name) {
   el('campaign-view').hidden = name !== 'campaign';
   el('guidelines-view').hidden = name !== 'guidelines';
-  el('delegate-view').hidden = name !== 'delegate';
   closeSidebarOnMobile();
 }
 
@@ -116,12 +115,16 @@ function showView(name) {
 // Each view has its own path URL so a refresh (or a shared/bookmarked link)
 // lands back on the same campaign instead of the empty picker. Routes:
 //   /campaign/<id>            → a campaign's creators
-//   /campaign/<id>/delegate   → that campaign's Delegate window
 //   /guidelines               → the global Guidelines page
 //   /                         → empty picker
 // The server serves the app shell for all of these (see the SPA fallback in
 // server.js); navigation goes through navigate() and handleRoute() is the
 // single place that renders a view, keeping the URL and the UI in sync.
+//
+// The old `/campaign/<id>/delegate` route is gone — delegations (AI hand-offs,
+// offers awaiting approval, accepted deals awaiting the brand's go-ahead) now
+// surface at the top of the campaign activity list itself. A bookmarked delegate
+// URL falls back to the campaign view below.
 function routePath(parts) {
   return parts.length ? `/${parts.map(encodeURIComponent).join('/')}` : '/';
 }
@@ -164,11 +167,12 @@ async function handleRoute() {
       }
       await selectCampaign(id);
     }
+    // A stale `/delegate` deep link drops the trailing segment and lands on the
+    // campaign, where the delegations are now surfaced inline.
     if (parts[2] === 'delegate') {
-      await openDelegate();
-    } else {
-      showView('campaign');
+      history.replaceState({}, '', routePath(['campaign', id]));
     }
+    showView('campaign');
     return;
   }
 
@@ -240,7 +244,6 @@ async function selectCampaign(id) {
   statsEl.querySelectorAll('.stat-cell').forEach((cell) => {
     cell.addEventListener('click', () => setStageFilter(cell.dataset.stage));
   });
-  updateDelegateBadge(c.action_count || 0);
   el('creator-form').hidden = false;
   el('creator-table-wrap').hidden = false;
   setUsageRightsToggle(c.usage_rights_policy || 'no_rights');
@@ -779,6 +782,26 @@ function makeDecideOfferButton(r, { label = 'Decide offer' } = {}) {
   return btn;
 }
 
+// "Reply hand-off" / "Approve deal" / "Configure here": open the intervention
+// pop-up right here on the campaign page — the creator's parked message + reply
+// box (hand-off), the approve-&-send-contract action (accepted deal), or the
+// offer configurator (offer awaiting approval), rendered in a modal like the
+// "view full email" one. Replaces the old separate Delegate window.
+//   plain — render as a neutral ghost button rather than the accented one, used
+//   for the "Configure here" fallback that sits beside the primary "Decide
+//   offer" launcher.
+function makeInterveneButton(r, { label = 'Reply hand-off', plain = false } = {}) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = plain ? 'ghost small cr-decide-btn' : 'ghost small cr-intervene-btn';
+  btn.textContent = `${label} ▸`;
+  btn.title = plain
+    ? 'Configure and send this offer from the dashboard (fallback for the extension)'
+    : 'Handle this hand-off without leaving the campaign';
+  btn.onclick = () => openInterventionModal(r);
+  return btn;
+}
+
 // Status column: pill + delete + (send-outreach when pending) + timeline.
 function renderStatusCell(r, cell) {
   const top = document.createElement('div');
@@ -884,11 +907,22 @@ function renderStatusCell(r, cell) {
     cell.appendChild(send);
   }
 
-  // On a creator awaiting our offer, surface "Decide offer" right by the
-  // timeline — one click opens their Instagram profile with the offer panel
-  // (rate, counters, safe floor, accept/counter) latched to the side.
+  // Each delegation type gets an inline launcher, right by the timeline — no
+  // separate Delegate view.
+  //   • offer awaiting approval → "Decide offer" (IG + Chrome-extension panel)
+  //     plus "Configure here", the in-dashboard fallback pop-up for when the
+  //     extension isn't loaded
+  //   • accepted deal           → "Approve deal" pop-up
+  //   • AI hand-off             → "Reply hand-off" pop-up
+  // The pop-up (openInterventionModal) also folds in the reply box whenever the
+  // same creator has a parked message, so at most one intervene button is shown.
   if (isOfferActionable(r)) {
     cell.appendChild(makeDecideOfferButton(r));
+    cell.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+  } else if (isContractApprovalPending(r)) {
+    cell.appendChild(makeInterveneButton(r, { label: 'Approve deal' }));
+  } else if (r.needs_human) {
+    cell.appendChild(makeInterveneButton(r, { label: 'Reply hand-off' }));
   }
 
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
@@ -1035,6 +1069,124 @@ function makeEmailExpandBtn(email) {
   btn.innerHTML = EMAIL_ICON_SVG;
   btn.addEventListener('click', (ev) => { ev.stopPropagation(); openEmailModal(email); });
   return btn;
+}
+
+// ── Intervention pop-up ────────────────────────────────────────────────────
+// A modal — built and styled like the "view full email" one — that lets a
+// hand-off be actioned right on the campaign page. Two shapes:
+//   • AI hand-off        → the creator's parked message + a reply box
+//   • accepted deal      → the "Approve & send contract" action (with the reply
+//                          box appended when the creator also has a parked message)
+// Replaces the standalone Delegate window; the offer-approval flow keeps using
+// the Chrome extension via the "Decide offer" launcher.
+let _interveneModal = null;
+function ensureInterventionModal() {
+  if (_interveneModal) return _interveneModal;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'email-modal-backdrop intervene-modal-backdrop';
+  backdrop.hidden = true;
+
+  const dialog = document.createElement('div');
+  dialog.className = 'email-modal intervene-modal';
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+
+  const head = document.createElement('div');
+  head.className = 'email-modal-head';
+  const titles = document.createElement('div');
+  titles.className = 'email-modal-titles';
+  const kicker = document.createElement('div');
+  kicker.className = 'email-modal-kicker';
+  const subject = document.createElement('div');
+  subject.className = 'email-modal-subject';
+  const meta = document.createElement('div');
+  meta.className = 'email-modal-meta';
+  titles.append(kicker, subject, meta);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'email-modal-close';
+  close.innerHTML = '✕';
+  close.title = 'Close';
+  close.setAttribute('aria-label', 'Close');
+  head.append(titles, close);
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'intervene-modal-body io-scroll';
+
+  dialog.append(head, bodyEl);
+  backdrop.appendChild(dialog);
+  document.body.appendChild(backdrop);
+
+  const hide = () => {
+    backdrop.hidden = true;
+    bodyEl.innerHTML = ''; // drop the per-creator blocks so nothing lingers
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (ev) => { if (ev.key === 'Escape') hide(); };
+  close.addEventListener('click', hide);
+  backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) hide(); });
+
+  _interveneModal = {
+    dialog, kicker, subject, meta, bodyEl,
+    show() { backdrop.hidden = false; document.addEventListener('keydown', onKey); },
+    hide,
+  };
+  return _interveneModal;
+}
+
+function closeInterventionModal() {
+  if (_interveneModal) _interveneModal.hide();
+}
+
+function openInterventionModal(r) {
+  const m = ensureInterventionModal();
+  m.bodyEl.innerHTML = '';
+  const handle = r.instagram_username ? `@${r.instagram_username}` : r.full_name || 'Creator';
+  const offer = isOfferActionable(r);
+  const contract = isContractApprovalPending(r);
+  m.kicker.textContent = offer ? 'Configure offer' : contract ? 'Approve deal' : 'Reply hand-off';
+  m.subject.textContent = r.first_name ? `${handle} · ${r.first_name}` : handle;
+  m.subject.hidden = false;
+  m.meta.textContent = r.email || 'no email';
+  m.meta.hidden = false;
+  // The offer configurator is a wide three-card layout — give it room.
+  m.dialog.classList.toggle('wide', offer);
+
+  if (offer) {
+    // Dashboard fallback for the extension: the full offer configurator, sending
+    // through the exact same approve→send path.
+    m.bodyEl.appendChild(buildOfferConfigurator(r, refreshAfterIntervention));
+    // If the creator also has a parked reply, surface it beneath the offer.
+    if (r.needs_human) {
+      const msg = buildHandoffMessage(r);
+      if (msg) m.bodyEl.appendChild(msg);
+      m.bodyEl.appendChild(buildReplyBlock(r));
+    }
+  } else if (contract) {
+    m.bodyEl.appendChild(buildContractApprovalBlock(r));
+    // An accepted deal can also carry a parked reply — surface it beneath the
+    // approval so it isn't missed.
+    if (r.needs_human) {
+      const msg = buildHandoffMessage(r);
+      if (msg) m.bodyEl.appendChild(msg);
+      m.bodyEl.appendChild(buildReplyBlock(r));
+    }
+  } else {
+    const msg = buildHandoffMessage(r);
+    if (msg) m.bodyEl.appendChild(msg);
+    m.bodyEl.appendChild(buildReplyBlock(r));
+  }
+  m.bodyEl.scrollTop = 0;
+  m.show();
+}
+
+// After a delegate action (reply sent, contract approved, dismissed) the pop-up
+// closes and the campaign table + sidebar counts refresh, so the handled row
+// leaves the "needs you" group at the top.
+async function refreshAfterIntervention() {
+  closeInterventionModal();
+  await refreshCreators();
+  await refreshCampaigns();
 }
 
 // A vertical delivery-tracking timeline, oldest → newest. The newest entry is
@@ -1209,6 +1361,11 @@ function renderTimeline(log, r) {
 // structure is serialized into the `custom_offer` shape the backend already
 // understands (offer_type view_based | video_based | video_bonus) and POSTed
 // to the same /offer endpoint. Replaces the old dropdown + CPM slider.
+//
+// Primary offer flow is the Chrome extension (opened via "Decide offer"); this
+// is the in-dashboard fallback, rendered inside the intervention pop-up via the
+// "Configure here" button so an offer can still be sent when the extension
+// isn't loaded.
 
 const money = (n) => '$' + fmtNum(Math.round(Number(n) || 0));
 const numOr = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -1617,7 +1774,7 @@ function buildOfferConfigurator(r, onRefresh) {
       const who = r.first_name || `@${r.instagram_username || 'this creator'}`;
       if (
         !confirm(
-          `Accept ${who}'s rate of ${rateStr}? We'll agree to their number — the contract goes out after the deal is approved in Delegate (brand POC go-ahead).`,
+          `Accept ${who}'s rate of ${rateStr}? We'll agree to their number — the contract goes out once the accepted deal is approved (brand POC go-ahead), flagged at the top of the campaign.`,
         )
       )
         return;
@@ -1628,7 +1785,7 @@ function buildOfferConfigurator(r, onRefresh) {
       statusEl.textContent = 'Accepting…';
       try {
         await api(`/api/creators/${r.id}/accept-rate`, { method: 'POST' });
-        statusEl.textContent = `✓ Accepted ${rateStr} — awaiting brand approval in Delegate.`;
+        statusEl.textContent = `✓ Accepted ${rateStr} — awaiting brand approval, flagged at the top of the campaign.`;
         setTimeout(onRefresh, 1400);
       } catch (err) {
         statusEl.textContent = `Couldn't accept: ${err.message}`;
@@ -1641,7 +1798,7 @@ function buildOfferConfigurator(r, onRefresh) {
   }
 
   dismissBtn.onclick = async () => {
-    if (!confirm('Dismiss this offer without sending? The creator will be removed from Delegate.')) return;
+    if (!confirm('Dismiss this offer without sending? The creator will no longer be flagged for you.')) return;
     approveBtn.disabled = true;
     dismissBtn.disabled = true;
     statusEl.textContent = 'Dismissing…';
@@ -1781,7 +1938,7 @@ function buildOfferConfigurator(r, onRefresh) {
   });
 
   // Let the admin jump to the creator's Instagram profile with this same offer
-  // panel latched to the side, straight from the Delegate card.
+  // panel latched to the side, straight from the offer pop-up.
   const sendbarActions = root.querySelector('.oc-sendbar-actions');
   if (sendbarActions && r.instagram_username) {
     sendbarActions.insertBefore(makeDecideOfferButton(r, { label: 'Open on IG' }), sendbarActions.firstChild);
@@ -1796,14 +1953,17 @@ async function refreshCreators() {
   const allRows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
   const container = el('creator-rows');
   container.innerHTML = '';
+  // Campaign-wide count of creators needing a human right now, surfaced in the
+  // banner above the table (replaces the old Delegate button's badge).
+  updateAttentionBanner(allRows.filter(isDelegateActionable).length);
   if (!allRows.length) {
     container.innerHTML =
       '<div class="hint" style="padding:26px 6px;">No creators yet. Paste Instagram links above to add some.</div>';
     return;
   }
   const predicate = (state.stageFilter && STAGE_FILTERS[state.stageFilter]) || null;
-  const rows = predicate ? allRows.filter(predicate) : allRows;
-  if (!rows.length) {
+  const filtered = predicate ? allRows.filter(predicate) : allRows.slice();
+  if (!filtered.length) {
     const label = {
       pending: 'pending',
       outreach: 'in outreach',
@@ -1818,9 +1978,18 @@ async function refreshCreators() {
     });
     return;
   }
+  // Stable partition — creators that need a human (AI hand-offs, offers awaiting
+  // approval, accepted deals awaiting the brand's go-ahead) float to the top so
+  // an intervention is the first thing seen, while recency order is preserved
+  // within each group.
+  const rows = [
+    ...filtered.filter(isDelegateActionable),
+    ...filtered.filter((r) => !isDelegateActionable(r)),
+  ];
   rows.forEach((r, idx) => {
     const row = document.createElement('div');
     row.className = 'creator-row';
+    if (isDelegateActionable(r)) row.classList.add('needs-attention');
     row.dataset.creatorId = r.id;
 
     // --- Creator (avatar + handle link + editable account name) ---
@@ -2404,7 +2573,9 @@ el('ai-replies-toggle').addEventListener('change', async (ev) => {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     });
-    status.textContent = enabled ? 'On — AI will auto-reply.' : 'Off — all replies go to Delegate.';
+    status.textContent = enabled
+      ? 'On — AI will auto-reply.'
+      : 'Off — every reply is flagged for you at the top of the campaign.';
   } catch (err) {
     // Roll the checkbox back so the UI matches the server state.
     toggle.checked = !enabled;
@@ -2414,36 +2585,38 @@ el('ai-replies-toggle').addEventListener('change', async (ev) => {
   }
 });
 
-// --- Delegate window (per campaign) --------------------------------------
+// --- Intervention surfacing (per campaign) -------------------------------
+// Delegations no longer live on a separate page — they're flagged at the top of
+// the campaign activity list and actioned via the "Reply hand-off" / "Approve
+// deal" pop-ups (see makeInterveneButton / openInterventionModal). The banner
+// above the table is the campaign-level notification; the sidebar pending-dots
+// stay the cross-campaign one.
 
-function updateDelegateBadge(n) {
-  const badge = el('delegate-count');
-  if (!badge) return;
-  badge.textContent = String(n);
-  badge.hidden = !(n > 0);
+function updateAttentionBanner(n) {
+  const banner = el('attention-banner');
+  if (!banner) return;
+  if (!(n > 0)) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  banner.hidden = false;
+  banner.innerHTML =
+    '<span class="attention-dot"></span>' +
+    `<span class="attention-text"><b>${n}</b> creator${n > 1 ? 's' : ''} need${n > 1 ? '' : 's'} you</span>` +
+    '<span class="attention-hint">Flagged at the top — hand-offs, offers to decide, and deals to approve</span>';
 }
 
-async function openDelegate() {
-  if (!state.selectedCampaignId) return;
-  showView('delegate');
-  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
-  el('delegate-title').textContent = c ? `Delegate · ${c.brand_name} · ${c.name}` : 'Delegate';
-  await renderDelegateList();
-}
-
-el('open-delegate-btn').addEventListener('click', () => {
-  if (!state.selectedCampaignId) return;
-  navigate('campaign', state.selectedCampaignId, 'delegate');
-});
-
-el('delegate-back-btn').addEventListener('click', () => {
-  if (state.selectedCampaignId) { navigate('campaign', state.selectedCampaignId); }
-  else { navigate(); }
+// Clicking the banner clears any stage filter so every flagged creator shows at
+// the top, then scrolls the table into view.
+el('attention-banner').addEventListener('click', () => {
+  if (state.stageFilter) setStageFilter(null);
+  el('creator-table-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
 // A creator has an offer the admin can act on: priced offers exist and we're
 // waiting on internal approval. Mirrors the send gate (AWAITING_APPROVAL) and
-// the server-side action_count used for the badge.
+// the server-side action_count used for the sidebar pending-dot.
 function isOfferActionable(r) {
   return (
     Array.isArray(r.suggested_offers) &&
@@ -2453,8 +2626,8 @@ function isOfferActionable(r) {
 }
 
 // An accepted deal parked for the brand POC's go-ahead: the approval hasn't
-// been recorded and no contract exists yet. Shown in the Delegate window as an
-// "Approve & send contract" card — the contract goes out only from there.
+// been recorded and no contract exists yet. Surfaced as an "Approve & send
+// contract" pop-up — the contract goes out only from there.
 function isContractApprovalPending(r) {
   return (
     r.negotiation_status === 'ACCEPTED' &&
@@ -2463,110 +2636,14 @@ function isContractApprovalPending(r) {
   );
 }
 
-// Shows in the Delegate window: AI hand-offs, offers awaiting approval, and
-// accepted deals awaiting the brand POC's contract approval.
+// Needs a human right now: an AI hand-off, an offer awaiting approval, or an
+// accepted deal awaiting the brand POC's contract approval. Drives the top-of-
+// table sort, the row highlight, and the banner count.
 function isDelegateActionable(r) {
   return !!r.needs_human || isOfferActionable(r) || isContractApprovalPending(r);
 }
 
-async function renderDelegateList() {
-  const root = el('delegate-list');
-  root.innerHTML = '<p class="hint">Loading…</p>';
-  let rows;
-  try {
-    rows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
-  } catch (err) {
-    root.innerHTML = `<p class="hint">Failed to load: ${escapeHtml(err.message)}</p>`;
-    return;
-  }
-  const pending = rows.filter(isDelegateActionable);
-  updateDelegateBadge(pending.length);
-  if (!pending.length) {
-    root.innerHTML =
-      '<p class="hint">Nothing needs you right now. Replies the AI hands off (or every reply, while &ldquo;Auto-reply with AI&rdquo; is off), offers awaiting your approval, and accepted deals awaiting the brand&rsquo;s go-ahead on the contract will appear here.</p>';
-    return;
-  }
-  root.innerHTML = '';
-  for (const r of pending) root.appendChild(buildDelegateCard(r));
-}
-
-const refreshDelegateAndCampaigns = async () => {
-  await renderDelegateList();
-  await refreshCampaigns();
-};
-
-function buildDelegateCard(r) {
-  const isHandoff = !!r.needs_human;
-  const offerActionable = isOfferActionable(r);
-
-  // Offer-actionable creators get the full offer configurator, rendered on the
-  // app background so its white deal cards read as the redesign intends. If the
-  // same creator is also an AI hand-off, the reply block is appended below.
-  if (offerActionable) {
-    const item = document.createElement('div');
-    item.className = 'delegate-offer-item';
-    item.appendChild(buildOfferConfigurator(r, refreshDelegateAndCampaigns));
-    // If the creator also has a hand-off (e.g. they replied while the offer was
-    // awaiting approval), show their message + a reply box beneath the offer so
-    // it isn't missed. The admin can answer it, or just send the offer.
-    if (isHandoff) {
-      const msg = buildHandoffMessage(r);
-      if (msg) item.appendChild(msg);
-      item.appendChild(buildReplyBlock(r));
-    }
-    return item;
-  }
-
-  // Accepted deal awaiting the brand POC's go-ahead: an approval card whose
-  // primary action generates + emails the contract. If the creator also has a
-  // parked message (hand-off), it shows with a reply box beneath the approval.
-  if (isContractApprovalPending(r)) {
-    const card = document.createElement('div');
-    card.className = 'delegate-card';
-    const head = document.createElement('div');
-    head.className = 'delegate-head';
-    head.innerHTML = `
-      <div>
-        <a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || '')}</a>
-        ${r.first_name ? `<span class="meta"> · ${escapeHtml(r.first_name)}</span>` : ''}
-        <div class="meta">${escapeHtml(r.email || 'no email')}</div>
-      </div>
-      <span class="delegate-reason">Deal accepted — awaiting brand approval</span>`;
-    card.appendChild(head);
-    card.appendChild(buildContractApprovalBlock(r));
-    if (isHandoff) {
-      const msg = buildHandoffMessage(r);
-      if (msg) card.appendChild(msg);
-      card.appendChild(buildReplyBlock(r));
-    }
-    return card;
-  }
-
-  // Hand-off only: the creator's parked message + a reply box, in a plain card.
-  const card = document.createElement('div');
-  card.className = 'delegate-card';
-  const head = document.createElement('div');
-  head.className = 'delegate-head';
-  head.innerHTML = `
-    <div>
-      <a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || '')}</a>
-      ${r.first_name ? `<span class="meta"> · ${escapeHtml(r.first_name)}</span>` : ''}
-      <div class="meta">${escapeHtml(r.email || 'no email')}</div>
-    </div>
-    ${r.delegate_reason ? `<span class="delegate-reason">${escapeHtml(r.delegate_reason)}</span>` : ''}`;
-  card.appendChild(head);
-
-  if (r.delegate_question) {
-    const q = document.createElement('div');
-    q.className = 'delegate-question';
-    q.textContent = r.delegate_question;
-    card.appendChild(q);
-  }
-  card.appendChild(buildReplyBlock(r));
-  return card;
-}
-
-// The "Approve & send contract" block on a pending-approval Delegate card.
+// The "Approve & send contract" block on a pending-approval intervention pop-up.
 // Approving records the brand POC's go-ahead, then generates the contract and
 // emails its signing link — nothing is sent to the creator until this click.
 function buildContractApprovalBlock(r) {
@@ -2593,7 +2670,7 @@ function buildContractApprovalBlock(r) {
     statusEl.textContent = 'Approving & sending contract…';
     try {
       await api(`/api/creators/${r.id}/approve-contract`, { method: 'POST' });
-      await refreshDelegateAndCampaigns();
+      await refreshAfterIntervention();
     } catch (err) {
       statusEl.textContent = `Failed: ${err.message}`;
       approveBtn.disabled = false;
@@ -2602,11 +2679,9 @@ function buildContractApprovalBlock(r) {
   return block;
 }
 
-// The creator's parked message (+ the hand-off reason) shown above the reply
-// box on an offer-configurator card, so a reply that arrived while the offer was
-// awaiting approval is visible instead of silent. The plain hand-off card
-// renders the reason in its own header, so this helper is only used on the offer
-// card. Returns null when there's nothing to show.
+// The creator's parked message (+ the hand-off reason), shown above the reply
+// box in the intervention pop-up so the message being answered is visible.
+// Returns null when there's nothing to show.
 function buildHandoffMessage(r) {
   if (!r.delegate_reason && !r.delegate_question) return null;
   const wrap = document.createElement('div');
@@ -2687,7 +2762,7 @@ function buildReplyBlock(r) {
         method: 'POST',
         body: JSON.stringify({ body }),
       });
-      await refreshDelegateAndCampaigns();
+      await refreshAfterIntervention();
     } catch (err) {
       statusEl.textContent = `Failed: ${err.message}`;
       sendBtn.disabled = false; dismissBtn.disabled = false;
@@ -2699,7 +2774,7 @@ function buildReplyBlock(r) {
     sendBtn.disabled = true; dismissBtn.disabled = true;
     try {
       await api(`/api/creators/${r.id}/dismiss-delegate`, { method: 'POST' });
-      await refreshDelegateAndCampaigns();
+      await refreshAfterIntervention();
     } catch (err) {
       statusEl.textContent = `Failed: ${err.message}`;
       sendBtn.disabled = false; dismissBtn.disabled = false;
