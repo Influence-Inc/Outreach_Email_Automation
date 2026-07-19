@@ -102,22 +102,34 @@
     return anyEditable || null;
   }
 
-  // Type the message body into the composer. Instagram's DM composer is a
-  // Lexical-based contenteditable (Meta's editor), and its beforeinput handler
-  // silently strips '\n' characters from a single execCommand('insertText',
-  // whole-body) call — the result is a run-on paragraph with all newlines
-  // collapsed, which is what we saw in QA.
+  // Type the message body into the composer.
   //
-  // The reliable fix is to feed the composer one line at a time, inserting a
-  // real line break between lines with execCommand('insertLineBreak'). That
-  // yields the exact DOM shape Lexical produces for a user's Shift+Enter, so
-  // the sent message preserves the paragraph breaks the template was written
-  // with. Empty lines still trigger a break (they're the blank paragraphs
-  // between sentences), and a single-line body degrades to a single insertText
-  // call — same as before.
-  function typeIntoField(field, text) {
+  // Instagram's DM composer is a Lexical editor (Meta's). Both of the paths
+  // I tried previously — execCommand('insertText', wholeBody) AND per-line
+  // insertText with execCommand('insertLineBreak') between chunks — end up
+  // stripping every newline before the model sees it. The commands return
+  // `true` (they're valid execCommand invocations) so the code has no way to
+  // notice; the DM just ships as one run-on paragraph.
+  //
+  // The path that survives Lexical intact is a synthesized `paste` event
+  // carrying a DataTransfer with the full multi-line body as `text/plain`.
+  // Lexical's PASTE_COMMAND handler reads clipboardData.getData('text/plain'),
+  // splits on '\n', and inserts the corresponding paragraph / line-break
+  // nodes into the model — the same code path a real Cmd/Ctrl-V paste hits.
+  // Every other approach in a content script is either isTrusted-gated or
+  // filtered by Lexical's beforeinput handler.
+  //
+  // Fallbacks kick in only when the paste path leaves the field empty
+  // (composer isn't Lexical, or a future rebuild breaks the paste command):
+  // then we degrade to a single execCommand('insertText') that at least gets
+  // the words across, even if the paragraph breaks are lost — better than a
+  // "Send button disabled" failure.
+  async function typeIntoField(field, text) {
+    const normalized = String(text).replace(/\r\n?/g, '\n');
     field.focus();
-    // Clear existing content first.
+    await sleep(60);
+
+    // Clear existing content first (in case a previous attempt left junk).
     try {
       const range = document.createRange();
       range.selectNodeContents(field);
@@ -128,45 +140,63 @@
     } catch {
       field.textContent = '';
     }
+
     if (field.tagName === 'TEXTAREA') {
-      field.value = text;
+      field.value = normalized;
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.dispatchEvent(new Event('change', { bubbles: true }));
       return;
     }
 
-    // Normalize any \r\n line endings so the split below yields the same
-    // number of lines regardless of the template's source OS.
-    const normalized = String(text).replace(/\r\n?/g, '\n');
-    const lines = normalized.split('\n');
-
-    // Line-by-line contenteditable insertion path. insertLineBreak is what
-    // Lexical uses internally for a soft newline; it emits the same
-    // beforeinput/input event shape Instagram's React state listener
-    // consumes, so the Send button stays enabled and the DOM matches what a
-    // human typing Shift+Enter would produce.
-    let allOk = true;
-    for (let i = 0; i < lines.length; i++) {
-      if (i > 0) {
-        let brOk = false;
-        try { brOk = document.execCommand('insertLineBreak'); } catch { brOk = false; }
-        if (!brOk) {
-          // Older/quirky builds: fall back to a literal <br>. Same visible
-          // outcome — a hard line break in the paragraph.
-          try { brOk = document.execCommand('insertHTML', false, '<br>'); } catch { brOk = false; }
-        }
-        if (!brOk) allOk = false;
+    // Primary path: synthesize a paste event that Lexical's PASTE_COMMAND
+    // handler will consume. Content-script events are `isTrusted:false`, but
+    // Lexical does not gate on that — its paste handler only checks that
+    // clipboardData is present and calls getData('text/plain') on it.
+    let pastedOk = false;
+    try {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', normalized);
+      const pasteEvent = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dt,
+      });
+      field.dispatchEvent(pasteEvent);
+      // Give Lexical a moment to reconcile its model → DOM after the paste.
+      await sleep(350);
+      // Success check: the tail of the body (usually a distinctive signature
+      // like "Head of Partnerships") should be visible in the field.
+      const current = (field.innerText || field.textContent || '').trim();
+      const trail =
+        normalized.trim().split('\n').filter(Boolean).pop() || normalized.trim();
+      // Compare on a slice of the tail to tolerate trailing punctuation
+      // Lexical may render slightly differently.
+      const needle = trail.slice(0, Math.min(24, trail.length)).toLowerCase();
+      if (needle && current.toLowerCase().includes(needle)) {
+        pastedOk = true;
       }
-      if (lines[i].length) {
-        let txtOk = false;
-        try { txtOk = document.execCommand('insertText', false, lines[i]); } catch { txtOk = false; }
-        if (!txtOk) allOk = false;
-      }
+    } catch (err) {
+      console.warn('[Influence DM] paste-event insertion failed:', err && err.message);
     }
 
-    if (!allOk) {
-      // Ultimate fallback: replace the whole field's text and dispatch input.
-      // Loses paragraph structure but at least gets the body across.
+    if (pastedOk) {
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+
+    // Fallback path: single execCommand('insertText'). Lexical strips the
+    // newlines here, so the paragraph structure is lost — but the words go
+    // through and the Send button enables, which is strictly better than
+    // failing the whole DM. Logged as a warning so recurring fallbacks show
+    // up in the extension console.
+    console.warn('[Influence DM] paste path did not populate composer; falling back to insertText (paragraphs will be lost)');
+    let inserted = false;
+    try {
+      inserted = document.execCommand('insertText', false, normalized);
+    } catch {
+      inserted = false;
+    }
+    if (!inserted) {
       field.textContent = normalized;
       field.dispatchEvent(new InputEvent('input', {
         bubbles: true,
@@ -303,9 +333,12 @@
       );
     }
 
-    // 4. Type the body.
-    typeIntoField(field, String(body));
-    // Small settle: React needs a tick to enable the Send button.
+    // 4. Type the body. typeIntoField is async — it synthesizes a paste
+    //    event and waits for Lexical to reconcile before verifying the tail
+    //    of the body is present. See the comment on the function.
+    await typeIntoField(field, String(body));
+    // Small settle: React needs a tick after the last input event for the
+    // Send button to enable.
     await sleep(600);
 
     // 5. Click Send. Poll — React can take a moment to enable the button after
