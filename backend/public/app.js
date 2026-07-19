@@ -419,7 +419,23 @@ function statusPillFor(r) {
     if (isContractApprovalPending(r)) return { cls: 'accepted', text: 'awaiting approval' };
     return { cls: 'accepted', text: 'accepted' };
   }
+  // IG DM lifecycle. The DM columns are timestamps (creators.ig_dm_sent_at /
+  // ig_dm_queued_at), not additions to the `status` enum, so they're checked
+  // separately. Placed BEFORE the status→pill fallback so a 'no_email' row
+  // that we've since DM'd stops advertising "no email" and shows "IG DM sent"
+  // instead. Reuses the outreach_* pill styles — same visual weight, same
+  // meaning to the operator (queued → sent).
+  if (r.ig_dm_sent_at) return { cls: 'outreach_sent', text: 'IG DM sent' };
+  if (r.ig_dm_queued_at) return { cls: 'outreach_queued', text: 'IG DM queued' };
   const st = r.status || 'pending_extraction';
+  // 'no_email' isn't a dead end when we have an IG handle — it's just the
+  // signal that the next outreach path is a Priority IG DM. Reuse the
+  // email_found pill styling so the row still reads as "ready to reach out"
+  // rather than muted/failed. The Send IG DM button below carries the actual
+  // action; this pill just names the state so it lines up with the button.
+  if (st === 'no_email' && (r.instagram_username || r.instagram_url)) {
+    return { cls: 'email_found', text: 'IG DM' };
+  }
   return { cls: st, text: st.replace(/_/g, ' ') };
 }
 
