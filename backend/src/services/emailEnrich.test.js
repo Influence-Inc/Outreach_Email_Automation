@@ -379,7 +379,29 @@ test('findViaWebSearch ignores emails that are not plausibly the creator’s', a
 test('findViaWebSearch returns null with no key and no injected search', async () => {
   const prev = process.env.SERPER_API_KEY;
   delete process.env.SERPER_API_KEY;
-  const res = await findViaWebSearch(ctx, { fetchHtml: async () => null });
+  const res = await findViaWebSearch(ctx, { fetchImpl: async () => null });
   assert.strictEqual(res, null);
   if (prev !== undefined) process.env.SERPER_API_KEY = prev;
+});
+
+test('findViaWebSearch checks YouTube first and reads the channel /about page', async () => {
+  const searchImpl = async () => ({
+    organic: [
+      // A non-YouTube result appears first, but YouTube is opened first, and its
+      // /about tab is fetched even though the channel home page has no email.
+      { title: 'Some blog', link: 'https://blog.example/post', snippet: 'no email' },
+      { title: 'Prashant Sachan - YouTube', link: 'https://www.youtube.com/@prashantsachan', snippet: '' },
+    ],
+  });
+  const fetchImpl = async (url) => {
+    if (url === 'https://www.youtube.com/@prashantsachan/about')
+      return '<span>For business inquiries: prashant@appsforbharat.com</span>';
+    if (url === 'https://www.youtube.com/@prashantsachan') return '<p>channel home</p>';
+    return '<p>should not be reached first</p>';
+  };
+  const res = await findViaWebSearch(ctx, { searchImpl, fetchImpl });
+  assert.deepStrictEqual(res, {
+    email: 'prashant@appsforbharat.com',
+    source: 'https://www.youtube.com/@prashantsachan/about',
+  });
 });
