@@ -837,3 +837,41 @@ button:disabled { opacity: 0.5; cursor: default; }
   .setting-chip.grow { min-width: 100%; }
   .btn-lg { padding: 12px 24px; }
 }
+
+/* ── New-vs-old segment chip (creator cell) ─────────────────────────────── */
+.cr-segment {
+  display: inline-block; margin-left: 7px; vertical-align: middle;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  border-radius: 6px; padding: 2px 6px; line-height: 1.4;
+}
+.cr-segment.old { background: #efe7d6; color: #855a1a; }   /* Returning */
+.cr-segment.new { background: #e6efe9; color: #2f7d57; }   /* New */
+
+/* ── Offer-portal status block (Status column, old creators) ────────────── */
+.portal-offer {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 9px 10px; border: 1px solid var(--line);
+  border-radius: 9px; background: var(--surface-2);
+}
+.po-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.po-pill {
+  display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; border-radius: 7px;
+  padding: 4px 9px; white-space: nowrap;
+}
+.po-pill.sent     { background: #eef2f7; color: #5a6b86; }
+.po-pill.viewed   { background: #dde7f7; color: #2952a3; }
+.po-pill.accepted { background: #e1f1e9; color: #147a52; }
+.po-pill.declined { background: #f1e7e6; color: #9a5b53; }
+.po-rate { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.po-copy { flex-shrink: 0; margin-left: auto; }
+.po-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.po-chip {
+  display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 500;
+  border-radius: 999px; padding: 2px 8px; white-space: nowrap;
+  border: 1px solid var(--line-2);
+}
+.po-chip.on       { background: var(--surface); color: var(--ink-2); }
+.po-chip.replied  { background: #dde7f7; color: #2952a3; border-color: #c4d4ee; }
+.po-chip.off      { background: transparent; color: var(--faint); border-style: dashed; }
+.po-review { font-size: 11.5px; font-weight: 500; color: var(--danger); }

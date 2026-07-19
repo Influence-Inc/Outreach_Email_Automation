@@ -197,4 +197,17 @@ async function syncSignedCreator(contract, creator) {
   return request('POST', '/contracts', buildPayload(contract, creator));
 }
 
-module.exports = { syncSignedCreator, buildPayload, isConfigured };
+// New-vs-old segmentation lookup. Batch-asks the Creator Database which of the
+// given Instagram handles have already participated in a campaign OTHER than
+// `excludeCampaign` (the current campaign's name). Returns { results: [...] }
+// in the same order as the handles passed in — see the Creator-DB
+// CreatorsService.checkParticipation for the result shape.
+async function lookupParticipation(instagramUsernames, excludeCampaign) {
+  const handles = (instagramUsernames || []).map((h) => String(h || '').trim()).filter(Boolean);
+  if (!handles.length) return { results: [] };
+  const body = { instagramUsernames: handles };
+  if (excludeCampaign) body.excludeCampaign = excludeCampaign;
+  return request('POST', '/creators/participation', body);
+}
+
+module.exports = { syncSignedCreator, buildPayload, isConfigured, lookupParticipation };

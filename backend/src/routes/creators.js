@@ -6,6 +6,8 @@ const { scrapeProfile } = require('../services/igScraper');
 const { enrichEmail } = require('../services/emailEnrich');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const contracts = require('../services/contracts');
+const offerPortal = require('../services/offers');
+const segmentation = require('../services/segmentation');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 
@@ -417,7 +419,26 @@ router.get('/', async (req, res, next) => {
     );
     await attachRateLog(rows);
     await contracts.attachContracts(rows);
+    await offerPortal.attachOffers(rows);
     res.json(rows);
+
+    // Refresh new-vs-old segmentation in the background (best-effort). Any row
+    // whose segment is stale/unknown is (re)checked against the Creator Database
+    // off the response path, so the dashboard never blocks on that lookup.
+    segmentation
+      .segmentCampaign(campaign_id)
+      .catch((err) => console.error('[segmentation] background refresh failed:', err.message));
+  } catch (err) { next(err); }
+});
+
+// Force a new-vs-old segmentation refresh for a whole campaign (the dashboard's
+// manual "re-check" action). Returns how many rows were checked/updated.
+router.post('/segment', async (req, res, next) => {
+  try {
+    const { campaign_id } = req.body || {};
+    if (!campaign_id) return res.status(400).json({ error: 'campaign_id is required' });
+    const result = await segmentation.segmentCampaign(campaign_id, { force: true });
+    res.json(result);
   } catch (err) { next(err); }
 });
 

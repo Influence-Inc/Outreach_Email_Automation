@@ -803,6 +803,88 @@ function makeInterveneButton(r, { label = 'Reply hand-off', plain = false } = {}
 }
 
 // Status column: pill + delete + (send-outreach when pending) + timeline.
+// Offer-portal status pill (old creators): reflects the current offer's state
+// across the portal + messaging channels.
+function portalPillFor(p) {
+  if (p.status === 'accepted') return { cls: 'accepted', text: 'offer accepted' };
+  if (p.status === 'declined') return { cls: 'declined', text: 'offer declined' };
+  const kind = p.isCounter ? 'counter' : 'offer';
+  if (p.viewed) return { cls: 'viewed', text: kind + ' viewed' };
+  return { cls: 'sent', text: kind + ' sent' };
+}
+
+// The Offer-portal block shown in the Status column for old creators: a portal
+// status pill + rate + copy-link, and a row of per-channel chips (Email /
+// WhatsApp / iMessage sent+replied, plus whether the offer page was viewed).
+function renderPortalOfferBlock(r) {
+  const p = r.portal_offer;
+  const box = document.createElement('div');
+  box.className = 'portal-offer';
+
+  const head = document.createElement('div');
+  head.className = 'po-head';
+  const pill = portalPillFor(p);
+  const pillEl = document.createElement('span');
+  pillEl.className = 'po-pill ' + pill.cls;
+  pillEl.textContent = pill.text;
+  head.appendChild(pillEl);
+
+  if (p.rateFormatted) {
+    const rate = document.createElement('span');
+    rate.className = 'po-rate num';
+    rate.textContent = p.rateFormatted;
+    head.appendChild(rate);
+  }
+
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'ghost small po-copy';
+  copy.textContent = 'Copy link';
+  copy.title = p.url;
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(p.url);
+      const prev = copy.textContent;
+      copy.textContent = 'Copied ✓';
+      setTimeout(() => { copy.textContent = prev; }, 1400);
+    } catch (e) {
+      window.prompt('Offer link', p.url);
+    }
+  };
+  head.appendChild(copy);
+  box.appendChild(head);
+
+  const chips = document.createElement('div');
+  chips.className = 'po-chips';
+  const chan = p.channels || {};
+  const addChip = (label, sent, replied) => {
+    const c = document.createElement('span');
+    c.className = 'po-chip' + (sent ? ' on' : ' off') + (replied ? ' replied' : '');
+    c.textContent = label + (sent ? (replied ? ' ↩' : ' ✓') : ' —');
+    c.title = sent
+      ? (replied ? label + ' — sent · creator replied' : label + ' — sent')
+      : label + ' — not sent';
+    chips.appendChild(c);
+  };
+  if (chan.email) addChip('Email', chan.email.sent, false);
+  if (chan.whatsapp) addChip('WhatsApp', chan.whatsapp.sent, chan.whatsapp.replied);
+  if (chan.imessage) addChip('iMessage', chan.imessage.sent, chan.imessage.replied);
+  const viewed = document.createElement('span');
+  viewed.className = 'po-chip' + (p.viewed ? ' on' : ' off');
+  viewed.textContent = 'Portal' + (p.viewed ? ' viewed' : ' —');
+  viewed.title = p.viewed ? 'Creator opened the offer page' : 'Offer page not opened yet';
+  chips.appendChild(viewed);
+  box.appendChild(chips);
+
+  if (p.needsReview) {
+    const nr = document.createElement('div');
+    nr.className = 'po-review';
+    nr.textContent = '⚠ Reply needs review';
+    box.appendChild(nr);
+  }
+  return box;
+}
+
 function renderStatusCell(r, cell) {
   const top = document.createElement('div');
   top.className = 'cr-status-top';
@@ -887,6 +969,10 @@ function renderStatusCell(r, cell) {
   };
   top.appendChild(del);
   cell.appendChild(top);
+
+  // Offer-portal negotiation status (old creators) — portal + WhatsApp/iMessage
+  // updates, shown right under the main status pill.
+  if (r.portal_offer) cell.appendChild(renderPortalOfferBlock(r));
 
   if (r.status === 'email_found') {
     const send = document.createElement('button');
@@ -2004,6 +2090,26 @@ async function refreshCreators() {
     const handle = document.createElement('div');
     handle.className = 'cr-handle';
     handle.innerHTML = `<a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || r.instagram_url)}</a>`;
+    // New-vs-old segment chip (from the Creator Database). "Returning" = the
+    // creator has worked with us on a prior campaign, so they negotiate on the
+    // offer portal; "New" = first-timer, unchanged outreach flow.
+    if (r.creator_segment === 'old' || r.creator_segment === 'new') {
+      const seg = document.createElement('span');
+      seg.className = 'cr-segment ' + r.creator_segment;
+      seg.textContent = r.creator_segment === 'old' ? 'Returning' : 'New';
+      if (r.creator_segment === 'old' && Array.isArray(r.prior_campaigns) && r.prior_campaigns.length) {
+        const names = r.prior_campaigns
+          .map((c) => (c && c.brandName ? `${c.name} · ${c.brandName}` : c && c.name))
+          .filter(Boolean);
+        seg.title = 'Worked with us before: ' + names.join(', ');
+      } else {
+        seg.title =
+          r.creator_segment === 'old'
+            ? 'Returning creator — worked with us on a previous campaign'
+            : 'New creator — no prior campaign on record';
+      }
+      handle.appendChild(seg);
+    }
     identity.appendChild(handle);
 
     // First name and full name are separate, independently editable fields —

@@ -8,7 +8,9 @@ const creators = require('./routes/creators');
 const negotiation = require('./routes/negotiation');
 const settings = require('./routes/settings');
 const webhook = require('./routes/webhook');
+const offerWebhook = require('./routes/offerWebhook');
 const { api: contractsApi, page: contractPage } = require('./routes/contracts');
+const { api: offersApi, page: offerPage } = require('./routes/offers');
 const bot = require('./routes/bot');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
@@ -48,7 +50,12 @@ app.use('/api/creators', creators);
 app.use('/api/creators', negotiation);
 app.use('/api/settings', settings);
 app.use('/webhook', webhook);
+// Inbound WhatsApp + iMessage for the offer portal (old-creator negotiation).
+app.use('/webhook', offerWebhook);
 app.use('/api/contracts', contractsApi);
+// Offer-portal API — the public offer page fetches data + posts accept/decline/
+// counter here (resolved by unguessable token only).
+app.use('/api/offers', offersApi);
 // Bot API for the campaigns dashboard (influence-stats) to fetch per-creator
 // contract URLs so it can render the "Contract submission" column.
 app.use('/api/bot', bot);
@@ -62,6 +69,10 @@ app.use('/api/bot', bot);
 app.get('/contract/:token', contractPage);
 app.get('/contracts/:token', contractPage);
 
+// Public offer page (old-creator negotiation). Registered before the SPA static
+// handler so /o/:token serves the offer shell, not the dashboard.
+app.get('/o/:token', offerPage);
+
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
 // SPA fallback: the dashboard uses real path URLs (e.g. /campaign/:id) so each
@@ -73,6 +84,7 @@ app.get('*', (req, res, next) => {
     req.path.startsWith('/api/') ||
     req.path.startsWith('/webhook') ||
     req.path.startsWith('/contract') ||
+    req.path.startsWith('/o/') ||
     req.path === '/health'
   ) {
     return next();
