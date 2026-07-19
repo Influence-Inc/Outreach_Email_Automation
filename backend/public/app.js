@@ -977,7 +977,13 @@ function renderStatusCell(r, cell) {
   top.appendChild(del);
   cell.appendChild(top);
 
-  if (r.status === 'email_found') {
+  // Guard on r.email as well as the status. If a stale row is still tagged
+  // 'email_found' but its address has since been cleared (e.g. the operator
+  // rejected an incorrect email but the row hasn't reloaded yet), showing
+  // Send outreach anyway would 400 the moment it's clicked. The row instead
+  // falls through to the IG DM affordance, which is the right path when
+  // there's no address to email.
+  if (r.status === 'email_found' && r.email) {
     const send = document.createElement('button');
     send.type = 'button';
     send.className = 'ghost small cr-send-btn';
