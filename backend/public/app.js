@@ -925,20 +925,23 @@ function makeSendIgDmButton(r) {
   return btn;
 }
 
-// "Dismiss" — snooze THIS flag from the "needs you" list without opening the
-// configurator. Records the current flag on the server (see dismissFlag) so the
-// creator drops out of the banner, the top-of-table sort, the row highlight and
-// the inline launchers — but the offer is untouched (still awaiting approval,
-// nothing closed or sent). The dismissal is stored server-side: it syncs across
-// devices, is reflected in the sidebar pending-dot, and stays put until there's
-// genuinely new activity that needs a human — a fresh hand-off, a re-priced
-// offer, or a status move — at which point the flag re-surfaces on its own.
-function makeDismissOfferButton(r) {
+// "Dismiss" — snooze THIS flag from the "needs you" list without opening its
+// pop-up/configurator. Works for any flagged row (offer awaiting approval,
+// accepted deal awaiting contract approval, or an AI hand-off). Records the
+// current flag on the server (see dismissFlag) so the creator drops out of the
+// banner, the top-of-table sort, the row highlight and the inline launchers —
+// but nothing about the underlying state changes: the offer stays open, the
+// deal stays unapproved, the hand-off message stays parked. The dismissal is
+// stored server-side: it syncs across devices, is reflected in the sidebar
+// pending-dot, and stays put until there's genuinely new activity that needs a
+// human — a fresh hand-off, a re-priced offer, or a status move — at which
+// point the flag re-surfaces on its own.
+function makeDismissFlagButton(r) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'ghost small cr-dismiss-btn';
   btn.textContent = 'Dismiss';
-  btn.title = 'Hide this from your flagged list for now — the offer stays open and re-surfaces on any new activity';
+  btn.title = 'Hide this from your flagged list for now — it re-surfaces on any new activity';
   btn.onclick = async () => {
     btn.disabled = true;
     try {
@@ -1038,11 +1041,14 @@ function renderStatusCell(r, cell) {
   };
   top.appendChild(del);
 
-  // Dismiss sits beside delete (rather than down with "Decide offer") so the
-  // two dismissive actions on a flagged row — snooze the flag vs. remove the
-  // creator outright — read as a pair.
-  if (isOfferActionable(r) && !isFlagDismissed(r)) {
-    top.appendChild(makeDismissOfferButton(r));
+  // Dismiss sits beside delete (rather than down with the type-specific
+  // launcher) so the two dismissive actions on a flagged row — snooze the flag
+  // vs. remove the creator outright — read as a pair. Shown for every flagged
+  // row (offer to decide, deal to approve, or hand-off), matching the same
+  // isDelegateActionable check that puts the row in the "needs you" set in the
+  // first place (it already excludes an already-dismissed flag).
+  if (isDelegateActionable(r)) {
+    top.appendChild(makeDismissFlagButton(r));
   }
 
   cell.appendChild(top);
@@ -1079,16 +1085,16 @@ function renderStatusCell(r, cell) {
   }
 
   // Each delegation type gets an inline launcher, right by the timeline — no
-  // separate Delegate view.
+  // separate Delegate view. "Dismiss" (up by delete) snoozes any of the three.
   //   • offer awaiting approval → "Decide offer" (IG + Chrome-extension panel)
   //     plus "Configure here", the in-dashboard fallback pop-up for when the
-  //     extension isn't loaded ("Dismiss" to snooze the flag sits up by delete)
+  //     extension isn't loaded
   //   • accepted deal           → "Approve deal" pop-up
   //   • AI hand-off             → "Reply hand-off" pop-up
   // The pop-up (openInterventionModal) also folds in the reply box whenever the
   // same creator has a parked message, so at most one intervene button is shown.
-  // A temporarily dismissed flag (Dismiss button) hides the launcher too — the
-  // row reads as normal until the flag re-surfaces.
+  // A dismissed flag hides the launcher too — the row reads as normal until the
+  // flag re-surfaces.
   if (isFlagDismissed(r)) {
     // no launcher while snoozed
   } else if (isOfferActionable(r)) {
