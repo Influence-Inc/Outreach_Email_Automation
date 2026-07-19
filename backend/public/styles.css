@@ -28,8 +28,8 @@
 
   --green: #147a52;        /* positive terminal state / rate */
   --green-live: #3fae74;   /* live indicator */
-  --danger: #c53127;       /* delegate badge / destructive */
-  --danger-live: #e0463f;  /* pending dot */
+  --danger: #FF3140;       /* delegate badge / destructive */
+  --danger-live: #FF3140;  /* pending dot */
   --warn: #b4471f;         /* remove-all / warnings */
 
   --radius: 16px;
@@ -145,7 +145,7 @@ a { color: var(--ink); }
 .tree .campaign-item.has-pending .campaign-name { margin-right: 0; }
 .tree .pending-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--danger-live);
-  box-shadow: 0 0 0 3px rgba(224, 70, 63, 0.18);
+  box-shadow: 0 0 0 3px rgba(255, 49, 64, 0.18);
   margin-left: auto; margin-right: 2px; flex-shrink: 0;
 }
 .tree .count-pill {
@@ -468,7 +468,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status-pill.followup_sent      { background: #f3e4cb; color: #855a1a; }
 .status-pill.replied            { background: #dde7f7; color: #2952a3; }
 .status-pill.accepted           { background: #e1f1e9; color: #147a52; }
-.status-pill.failed             { background: #fbe6e3; color: #c53127; }
+.status-pill.failed             { background: #fbe6e3; color: #FF3140; }
 .status-pill.invalid_email      { background: #fbe6e3; color: #b4471f; }
 .status-pill.duplicate          { background: #ece9f5; color: #6b5aa8; }
 .status-pill.stopped            { background: #eceff3; color: #5b6472; }
@@ -612,7 +612,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .attention-banner:hover { background: #fbeade; border-color: #ecc3b1; }
 .attention-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--danger);
-  flex-shrink: 0; box-shadow: 0 0 0 4px rgba(197, 49, 39, 0.12);
+  flex-shrink: 0; box-shadow: 0 0 0 4px rgba(255, 49, 64, 0.12);
 }
 .attention-text { font-size: 13px; color: var(--ink); }
 .attention-text b { font-weight: 700; }
