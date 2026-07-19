@@ -6,6 +6,7 @@ const db = require('../db');
 const negotiation = require('../services/negotiation');
 const contracts = require('../services/contracts');
 const { computeOffers } = require('../services/pricing');
+const { flagFingerprintSql } = require('../db/flagFingerprint');
 
 const router = express.Router();
 
@@ -310,6 +311,33 @@ router.post('/:id/dismiss-delegate', async (req, res, next) => {
     await db.query(
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'delegate_dismissed', $2)`,
       [req.params.id, {}],
+    );
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// "Dismiss" a creator's current flag: snooze it out of the flagged / "needs
+// you" list without touching the negotiation state — nothing is closed or sent.
+// (Distinct from dismiss-offer, which declines the offer to CLOSED, and from
+// dismiss-delegate, which clears the hand-off flag outright.) We stamp the
+// fingerprint of the CURRENT flag, so the dismissal holds only until genuinely
+// new activity shifts that fingerprint and the creator re-flags on its own.
+// Stored server-side so it syncs across devices and the campaigns action_count
+// (sidebar pending-dot) honors it.
+router.post('/:id/dismiss-flag', async (req, res, next) => {
+  try {
+    const row = await db.one(
+      `UPDATE creators
+       SET flag_dismissed_fp = ${flagFingerprintSql()}, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id],
+    );
+    if (!row) return res.status(404).json({ error: 'not found' });
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'flag_dismissed', $2)`,
+      [req.params.id, { by: 'admin' }],
     );
     res.json(row);
   } catch (err) {

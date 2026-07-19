@@ -9,6 +9,7 @@ const contracts = require('../services/contracts');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
+const { flagDismissedSql } = require('../db/flagFingerprint');
 
 // Assemble the off-Instagram email-enrichment context for a creator: the links
 // captured by the extension (creators.bio_links) plus anything a fresh scrape
@@ -428,8 +429,13 @@ router.get('/', async (req, res, next) => {
       params.push(status);
       where += ` AND status = $${params.length}`;
     }
+    // `flag_dismissed` is derived, not stored: TRUE only while the stored
+    // dismissal fingerprint still matches the creator's current flag. New
+    // activity shifts the fingerprint and the row re-flags on its own. The
+    // dashboard reads this boolean directly (see isFlagDismissed in app.js).
     const rows = await db.many(
-      `SELECT * FROM creators ${where} ORDER BY created_at DESC`,
+      `SELECT *, ${flagDismissedSql()} AS flag_dismissed
+         FROM creators ${where} ORDER BY created_at DESC`,
       params,
     );
     await attachRateLog(rows);

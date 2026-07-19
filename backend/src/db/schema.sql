@@ -167,6 +167,16 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegate_question TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegated_at      TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_creators_needs_human ON creators(needs_human) WHERE needs_human;
 
+-- "Dismiss" snoozes a creator out of the flagged / "needs you" list from the
+-- dashboard without touching the negotiation state. We store the fingerprint of
+-- the flag that was dismissed (an md5 over the flag-raising columns, see
+-- db/flagFingerprint.js) rather than a plain boolean, so the dismissal holds
+-- only while the flag is unchanged: genuinely new activity that needs a human
+-- shifts the fingerprint, the stored value no longer matches, and the creator
+-- re-flags on its own. Server-side so a dismissal syncs across devices and the
+-- campaigns action_count (sidebar pending-dot) can honor it.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS flag_dismissed_fp TEXT;
+
 -- Instantly.ai hybrid integration. reply_to_uuid is Instantly's thread handle,
 -- used to send threaded negotiation replies via POST /api/v2/emails/reply.
 -- latest_inbound_text holds the creator's most recent reply text, written by
