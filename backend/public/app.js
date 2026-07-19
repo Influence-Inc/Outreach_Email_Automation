@@ -907,6 +907,32 @@ function makeSendIgDmButton(r) {
   return btn;
 }
 
+// "Dismiss" — clear this offer from the flagged list without opening the
+// configurator. Hits the same dismiss-offer endpoint as the pop-up's Dismiss
+// (moves the deal to CLOSED, drops the offer_approved flag / custom draft), so
+// the creator falls out of the "needs you" banner and the top-of-table sort.
+// Sits beside "Configure here" as the quick, no-modal way to remove a flag.
+function makeDismissOfferButton(r) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small danger cr-dismiss-btn';
+  btn.textContent = 'Dismiss';
+  btn.title = 'Remove from flagged — dismiss this offer without sending (moves the deal to closed)';
+  btn.onclick = async () => {
+    if (!confirm('Dismiss this offer without sending? The creator will no longer be flagged for you.')) return;
+    btn.disabled = true;
+    try {
+      await api(`/api/creators/${r.id}/dismiss-offer`, { method: 'POST' });
+      await refreshCreators();
+      await refreshCampaigns();
+    } catch (err) {
+      alert(err.message);
+      btn.disabled = false;
+    }
+  };
+  return btn;
+}
+
 // Status column: pill + delete + (send-outreach when pending) + timeline.
 function renderStatusCell(r, cell) {
   const top = document.createElement('div');
@@ -1028,14 +1054,18 @@ function renderStatusCell(r, cell) {
   // separate Delegate view.
   //   • offer awaiting approval → "Decide offer" (IG + Chrome-extension panel)
   //     plus "Configure here", the in-dashboard fallback pop-up for when the
-  //     extension isn't loaded
+  //     extension isn't loaded, plus "Dismiss" to clear the flag outright
   //   • accepted deal           → "Approve deal" pop-up
   //   • AI hand-off             → "Reply hand-off" pop-up
   // The pop-up (openInterventionModal) also folds in the reply box whenever the
   // same creator has a parked message, so at most one intervene button is shown.
   if (isOfferActionable(r)) {
-    cell.appendChild(makeDecideOfferButton(r));
-    cell.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+    const offerActions = document.createElement('div');
+    offerActions.className = 'cr-offer-actions';
+    offerActions.appendChild(makeDecideOfferButton(r));
+    offerActions.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+    offerActions.appendChild(makeDismissOfferButton(r));
+    cell.appendChild(offerActions);
   } else if (isContractApprovalPending(r)) {
     cell.appendChild(makeInterveneButton(r, { label: 'Approve deal' }));
   } else if (r.needs_human) {
