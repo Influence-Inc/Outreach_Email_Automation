@@ -2484,6 +2484,7 @@ function emailSourceLabel(src) {
     const p = src.slice(src.indexOf(':') + 1);
     return p ? p[0].toUpperCase() + p.slice(1) : 'provider';
   }
+  if (src === 'web-search') return 'web search';
   if (src === 'manual') return 'manual entry';
   return src;
 }

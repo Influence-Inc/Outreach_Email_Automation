@@ -448,7 +448,7 @@ async function enrichEmail(context = {}, options = {}) {
   }
 
   // 5) Paid provider fallback (env-gated; off unless configured).
-  const viaProvider = await findViaProvider(context, { sites, timeoutMs });
+  const viaProvider = await findViaProvider(context, { sites, timeoutMs, fetchImpl, tokens });
   if (viaProvider && viaProvider.email) {
     if (!verify || (await verifyEmail(viaProvider.email)).valid) return viaProvider;
   }
@@ -456,102 +456,137 @@ async function enrichEmail(context = {}, options = {}) {
   return null;
 }
 
-// Pull the best usable email out of an Apollo /people/match `person` object.
-// Prefers the professional email, then any revealed personal email, then any
-// contact_emails entry. Apollo returns locked addresses as the placeholder
-// "email_not_unlocked@domain.com" (no credits/permission) — those are skipped.
-function pickApolloEmail(person) {
-  if (!person) return null;
-  const candidates = [];
-  if (person.email) candidates.push(person.email);
-  if (Array.isArray(person.personal_emails)) candidates.push(...person.personal_emails);
-  if (Array.isArray(person.contact_emails)) {
-    for (const c of person.contact_emails) if (c && c.email) candidates.push(c.email);
+// ---- Web search (Serper) --------------------------------------------------
+// Google search via serper.dev: POST https://google.serper.dev/search with an
+// X-API-KEY header and { q }. Returns { organic: [{title, link, snippet}], ...}.
+// Timeout-guarded; any failure resolves to null.
+async function serperSearch(query, key, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch('https://google.serper.dev/search', {
+      method: 'POST',
+      headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: query, num: 10 }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
-  for (const raw of candidates) {
-    const e = String(raw || '').toLowerCase().trim();
-    if (/email_not_unlocked/i.test(e)) continue;
-    if (isUsableEmail(e)) return e;
+}
+
+// Web-search discovery: for a creator with no email on Instagram and nothing on
+// their linked sites, search the web for their name/handle + "email"/"contact",
+// then (a) read an address straight out of the search snippets, and (b) open the
+// top result pages (their company site, YouTube "About", press, etc.) and scrape
+// one. Every candidate is filtered through isCreatorContactEmail so only an
+// address plausibly the creator's (their name/handle, or a business inbox — not
+// a random third party's) is kept. Returns { email, source } with the exact page
+// URL as source, or null. `searchImpl`/`fetchImpl` are injectable for tests.
+async function findViaWebSearch(context, options = {}) {
+  const {
+    fetchImpl = fetchHtml,
+    timeoutMs = 8000,
+    tokens = null,
+    maxPagesPerQuery = 4,
+  } = options;
+  const key = process.env.SERPER_API_KEY || process.env.EMAIL_ENRICH_API_KEY;
+  const searchImpl = options.searchImpl || ((q) => serperSearch(q, key, timeoutMs));
+  if (!options.searchImpl && !key) return null;
+
+  const name = (context.fullName || '').trim();
+  const handle = String(context.instagramUsername || '').trim().replace(/^@/, '');
+  const tok = tokens || creatorTokens(context);
+
+  // Search results are arbitrary pages, so the bar is higher than for a
+  // creator's OWN linked site: keep an address only when it actually carries the
+  // creator's name/handle in its local part or domain (prashant@…, …@prashant-
+  // sachan.com). This is stricter than isCreatorContactEmail (which also keeps
+  // any business inbox) so a random third party's address on a result page isn't
+  // mistaken for the creator's.
+  const emailRelates = (e) => {
+    if (!isUsableEmail(e)) return false;
+    const at = e.indexOf('@');
+    return relatesToCreator(e.slice(0, at).toLowerCase(), e.slice(at + 1).toLowerCase(), tok);
+  };
+
+  // A couple of intent-loaded queries. Process one fully before the next and
+  // return on the first hit, so we spend as few searches as possible.
+  const queries = [];
+  if (name) queries.push(`"${name}" email`, `"${name}" contact`);
+  if (handle) queries.push(`${handle} instagram email`);
+  if (!queries.length) return null;
+
+  const triedPages = new Set();
+  for (const q of queries) {
+    const data = await searchImpl(q);
+    if (!data) continue;
+    const organic = Array.isArray(data.organic) ? data.organic : [];
+
+    // (a) Email printed right in a result's title/snippet — attribute it to that
+    //     result's page. Also scan answer/knowledge boxes (no single URL).
+    for (const item of organic) {
+      const text = `${item.title || ''} ${item.snippet || ''}`;
+      for (const e of extractEmailsFromHtml(text)) {
+        if (emailRelates(e)) return { email: e, source: item.link || 'web-search' };
+      }
+    }
+    for (const box of [data.answerBox, data.knowledgeGraph]) {
+      if (!box) continue;
+      for (const e of extractEmailsFromHtml(JSON.stringify(box))) {
+        if (emailRelates(e)) return { email: e, source: 'web-search' };
+      }
+    }
+
+    // (b) Open the top result pages and scrape.
+    let opened = 0;
+    for (const item of organic) {
+      if (opened >= maxPagesPerQuery) break;
+      const url = item.link;
+      if (!url || triedPages.has(url) || isLinkHub(url)) continue;
+      triedPages.add(url);
+      opened += 1;
+      const html = await fetchImpl(url, timeoutMs);
+      if (!html) continue;
+      const emails = extractEmailsFromHtml(html).filter(emailRelates);
+      const best = pickBestEmail(emails, hostOf(url)) || emails[0];
+      if (best) return { email: best, source: url };
+    }
   }
   return null;
 }
 
-// True when an Apollo-returned person's name shares a name word with the
-// creator's (name words + collapsed handle). Used to guard a name-only match
-// (no domain to disambiguate) so Apollo can't hand back a loosely-related
-// person — the returned name must actually line up with who we asked for.
-function apolloPersonMatchesCreator(person, context) {
-  if (!person) return false;
-  const { words } = creatorTokens(context);
-  if (!words.length) return false;
-  const personName = [person.name, person.first_name, person.last_name]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-  const pWords = new Set(personName.split(/[^a-z0-9]+/).filter((w) => w.length >= 3));
-  return words.some((w) => pWords.has(w));
-}
-
 // ---- Paid provider slot ---------------------------------------------------
 // Off by default. Pick one with EMAIL_ENRICH_PROVIDER and set its key:
-//   • apollo  — POST api.apollo.io/api/v1/people/match (X-Api-Key: APOLLO_API_KEY).
-//               Apollo is a people-finder, so it matches on NAME; the creator's
-//               own site domain is passed when we have one to sharpen the match,
-//               but it isn't required (most creators have no site). A domain-less
-//               match is only trusted when Apollo's returned name matches the
-//               creator's (apolloPersonMatchesCreator).
-//   • hunter  — api.hunter.io email-finder (HUNTER_API_KEY). Hunter looks up a
-//               mailbox on a specific domain, so a domain IS required here.
-// Other providers (influencers.club, Prospeo, …) can be added as extra branches
-// with the same { email, source } return shape.
-async function findViaProvider(context, { sites = [] } = {}) {
+//   • serper  — web search via serper.dev (SERPER_API_KEY). Finds the creator's
+//               email anywhere online (company site, YouTube "About", press, …)
+//               by searching their name/handle, then scraping the top results.
+//               Works even when the creator has no site of their own.
+//   • hunter  — api.hunter.io email-finder (HUNTER_API_KEY). Looks up a mailbox
+//               on a specific domain, so a domain (the creator's own site) IS
+//               required — skipped when there's none.
+// Other providers can be added as extra branches with the same { email, source }
+// return shape.
+async function findViaProvider(context, { sites = [], fetchImpl = fetchHtml, timeoutMs = 8000, tokens = null } = {}) {
   const provider = (process.env.EMAIL_ENRICH_PROVIDER || '').trim().toLowerCase();
   if (!provider) return null;
 
-  const name = (context.fullName || '').trim();
-  if (!name) return null; // a name is the minimum identifier for any provider
-  // The creator's own site domain, when we have one, sharpens the match.
-  const domain = sites.map(hostOf).find(Boolean) || null;
-  const [firstName, ...rest] = name.split(/\s+/);
-  const lastName = rest.join(' ');
-
-  if (provider === 'apollo') {
-    const key = process.env.APOLLO_API_KEY || process.env.EMAIL_ENRICH_API_KEY;
-    if (!key) return null;
-    // reveal_personal_emails surfaces the gmail-style addresses most creators use
-    // (Apollo omits them by default). Consumes an Apollo credit per match.
-    const payload = { name, first_name: firstName, reveal_personal_emails: true };
-    if (lastName) payload.last_name = lastName;
-    if (domain) payload.domain = domain;
-    try {
-      const resp = await fetch('https://api.apollo.io/api/v1/people/match', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache',
-          'X-Api-Key': key,
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      const person = data && data.person;
-      if (!person) return null;
-      // Without a domain to disambiguate, only trust the match if the returned
-      // person's name matches the creator's — a same-name-different-person guard.
-      if (!domain && !apolloPersonMatchesCreator(person, context)) return null;
-      const email = pickApolloEmail(person);
-      if (email) return { email, source: 'provider:apollo' };
-    } catch {
-      /* provider failure -> no enrichment, never throws */
-    }
-    return null;
+  if (provider === 'serper') {
+    return findViaWebSearch(context, { fetchImpl, timeoutMs, tokens });
   }
 
   if (provider === 'hunter') {
     const key = process.env.HUNTER_API_KEY || process.env.EMAIL_ENRICH_API_KEY;
     if (!key) return null;
-    if (!domain) return null; // Hunter's email-finder needs a domain to search
+    const domain = sites.map(hostOf).find(Boolean) || null;
+    const name = (context.fullName || '').trim();
+    if (!domain || !name) return null; // Hunter's email-finder needs a domain
+    const [firstName, ...rest] = name.split(/\s+/);
+    const lastName = rest.join(' ');
     const params = new URLSearchParams({ domain, first_name: firstName, api_key: key });
     if (lastName) params.set('last_name', lastName);
     try {
@@ -590,6 +625,5 @@ module.exports = {
   relatesToCreator,
   isCreatorContactEmail,
   isSponsoredLink,
-  pickApolloEmail,
-  apolloPersonMatchesCreator,
+  findViaWebSearch,
 };
