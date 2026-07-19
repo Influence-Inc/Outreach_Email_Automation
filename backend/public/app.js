@@ -835,6 +835,62 @@ function makeInterveneButton(r, { label = 'Reply hand-off', plain = false } = {}
   return btn;
 }
 
+// Is this creator a candidate for a per-row "Send IG DM" button? Mirrors the
+// backend's IG_DM_ELIGIBLE_STATUSES + prerequisite checks (no email, not
+// already DM'd, has an IG handle we can resolve). The campaign's own template
+// still has to exist for the button to fire — that's enforced on the server
+// and surfaced as a tooltip below rather than hiding the button, so operators
+// discover the "set a DM template first" requirement in situ.
+function isIgDmEligible(r) {
+  if (!r) return false;
+  if (r.email) return false;
+  if (r.ig_dm_sent_at) return false;
+  if (!r.instagram_username && !r.instagram_url) return false;
+  const st = r.status || 'pending_extraction';
+  return st === 'no_email' || st === 'pending_extraction' || st === 'invalid_email';
+}
+
+// Per-creator "Send IG DM" button. POSTs to the same /:id/queue-ig-dm endpoint
+// the bulk sender uses; on success it hands the returned single-job array to
+// the extension via the shared OEA_RUN_IG_DM_QUEUE bridge so the send drives
+// through the exact same Instagram flow as the bulk button.
+function makeSendIgDmButton(r) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small cr-send-btn';
+  btn.textContent = 'Send IG DM';
+  // Cache the current campaign's template state so the button self-explains
+  // when it can't send — no template = disabled with a clear tooltip that
+  // points at the template card above.
+  const campaign = state.campaigns.find((c) => c.id === state.selectedCampaignId);
+  const hasTemplate = !!(campaign && campaign.ig_dm_body && String(campaign.ig_dm_body).trim());
+  if (!hasTemplate) {
+    btn.disabled = true;
+    btn.title = 'Set an Instagram DM template for this campaign first (card above).';
+  } else {
+    btn.title = 'Send this creator the campaign\'s IG DM as a Priority Message Request.';
+  }
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const result = await api(`/api/creators/${r.id}/queue-ig-dm`, { method: 'POST' });
+      if (!result || !result.job) {
+        alert('Server returned no job payload — nothing to send.');
+        return;
+      }
+      // Refresh eagerly so the row already reflects "IG DM queued" while the
+      // extension starts driving Instagram in the background.
+      await refreshCreators();
+      await refreshCampaigns();
+      startExtensionIgDmSend([result.job]);
+    } catch (err) {
+      alert(err.message);
+      btn.disabled = false;
+    }
+  };
+  return btn;
+}
+
 // Status column: pill + delete + (send-outreach when pending) + timeline.
 function renderStatusCell(r, cell) {
   const top = document.createElement('div');
@@ -938,6 +994,12 @@ function renderStatusCell(r, cell) {
       }
     };
     cell.appendChild(send);
+  } else if (isIgDmEligible(r)) {
+    // Per-row fallback for the bulk "Send Instagram DMs" button: any single
+    // creator whose email we couldn't find can be DM'd on the spot without
+    // sweeping the whole campaign. Same code path — queue-ig-dm renders the
+    // template and hands the job to the extension for a Priority send.
+    cell.appendChild(makeSendIgDmButton(r));
   }
 
   // Each delegation type gets an inline launcher, right by the timeline — no
