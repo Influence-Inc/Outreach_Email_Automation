@@ -164,3 +164,43 @@ test('collapsing keeps every later step and returns a fresh array', () => {
   assert.deepStrictEqual(collapsed.map((e) => e.type), ['sent_outreach', 'sent_followup', 'replied']);
   assert.notStrictEqual(collapsed, log);
 });
+
+// ── Instagram DM timeline entries ───────────────────────────────────────────
+
+test('ig_dm_queued renders an active "Instagram DM queued" step', () => {
+  const entry = rateLogEntry('ig_dm_queued', {});
+  assert.strictEqual(entry.text, 'Instagram DM queued');
+  assert.strictEqual(entry.tone, 'active');
+});
+
+test('ig_dm_sent labels the priority send explicitly', () => {
+  const entry = rateLogEntry('ig_dm_sent', {});
+  assert.strictEqual(entry.text, 'Instagram DM sent (priority)');
+  assert.strictEqual(entry.tone, 'done');
+});
+
+test('ig_dm_failed surfaces the extension error when known', () => {
+  const entry = rateLogEntry('ig_dm_failed', { error: 'Message button not found' });
+  assert.strictEqual(entry.text, 'Instagram DM failed — Message button not found');
+  assert.strictEqual(entry.tone, 'muted');
+});
+
+test('ig_dm_failed falls back to a plain label with no detail', () => {
+  const entry = rateLogEntry('ig_dm_failed', null);
+  assert.strictEqual(entry.text, 'Instagram DM failed');
+});
+
+test('the ig_dm_queued step is dropped once the DM has been sent', () => {
+  const log = [
+    { type: 'ig_dm_queued', text: 'Instagram DM queued' },
+    { type: 'ig_dm_sent', text: 'Instagram DM sent (priority)' },
+  ];
+  const collapsed = collapseSupersededSteps(log);
+  assert.deepStrictEqual(collapsed.map((e) => e.type), ['ig_dm_sent']);
+});
+
+test('the ig_dm_queued step stays while the extension is still driving', () => {
+  const log = [{ type: 'ig_dm_queued', text: 'Instagram DM queued' }];
+  const collapsed = collapseSupersededSteps(log);
+  assert.deepStrictEqual(collapsed.map((e) => e.type), ['ig_dm_queued']);
+});

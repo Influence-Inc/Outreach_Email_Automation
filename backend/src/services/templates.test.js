@@ -3,7 +3,7 @@
 // Run with: npm test  (node --test)
 const test = require('node:test');
 const assert = require('node:assert');
-const { renderOutreach, renderFollowup, getHardcodedDefaults } = require('./templates');
+const { renderOutreach, renderFollowup, renderIgDm, getHardcodedDefaults } = require('./templates');
 
 test('renderOutreach personalizes the subject with firstName', () => {
   const { subject } = renderOutreach(null, { firstName: 'Alex', brandName: 'Nike' });
@@ -34,4 +34,27 @@ test('getHardcodedDefaults returns a usable seed shape', () => {
   assert.ok(d.outreach.body);
   assert.ok(d.followup.subject);
   assert.ok(d.followup.body);
+});
+
+test('renderIgDm substitutes the same placeholders as the email templates', () => {
+  const body = renderIgDm(
+    'Hi {firstName}, we\'re running a {brandName} campaign — {campaignName}. Interested?',
+    { firstName: 'Sam', brandName: 'Nike', campaignName: 'Summer Push' },
+  );
+  assert.strictEqual(
+    body,
+    'Hi Sam, we\'re running a Nike campaign — Summer Push. Interested?',
+  );
+});
+
+test('renderIgDm returns null when the campaign has no template configured', () => {
+  assert.strictEqual(renderIgDm(null, { firstName: 'Sam' }), null);
+  assert.strictEqual(renderIgDm('', { firstName: 'Sam' }), null);
+  assert.strictEqual(renderIgDm('   ', { firstName: 'Sam' }), null);
+});
+
+test('renderIgDm leaves unknown placeholders intact', () => {
+  const body = renderIgDm('Hey {firstName} {unknownKey}', { firstName: 'Sam' });
+  // {firstName} filled, {unknownKey} left as-is (matches renderOutreach behavior).
+  assert.strictEqual(body, 'Hey Sam {unknownKey}');
 });

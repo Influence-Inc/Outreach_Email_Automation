@@ -216,6 +216,24 @@ a { color: var(--ink); }
   padding: 24px; margin-bottom: 22px; box-shadow: var(--shadow-card);
 }
 .card h2 { font-weight: 600; font-size: 18px; letter-spacing: -0.01em; margin: 0 0 16px; }
+
+/* Collapsible IG DM template card. Uses <details><summary> so it stays closed
+   by default (once a template is set) but pops open when it's empty. The
+   summary lays out like a card-header with a status hint on the right. */
+details.card summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin: 0;
+}
+details.card summary::-webkit-details-marker { display: none; }
+details.card summary h2 { margin: 0; }
+details.card[open] summary { margin-bottom: 8px; }
+details.card summary::after {
+  content: '▸'; color: var(--ink-2); font-size: 12px; transition: transform 0.15s;
+  margin-left: 4px;
+}
+details.card[open] summary::after { transform: rotate(90deg); }
+details.card .subhead { margin: 6px 0 12px; }
 .card-header {
   display: flex; align-items: center; justify-content: space-between;
   gap: 16px; flex-wrap: wrap; margin-bottom: 20px;

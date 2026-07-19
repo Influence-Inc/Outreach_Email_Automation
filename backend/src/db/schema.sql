@@ -320,3 +320,25 @@ CREATE INDEX IF NOT EXISTS idx_email_messages_creator ON email_messages(creator_
 -- LLM runs at most once per message, never on every dashboard read. NULL until
 -- generated; the timeline falls back to the deterministic gist meanwhile.
 ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS summary TEXT;
+
+-- Per-campaign Instagram DM template. Renders through the same {firstName}/
+-- {brandName}/{campaignName} placeholders as the email templates. Used by the
+-- Chrome extension's IG DM sender when a creator has no email — the message is
+-- typed into Instagram's Direct composer as a Priority message request so it
+-- lands in the recipient's main inbox instead of the general Requests queue.
+-- NULL / empty = IG DM sending is disabled for this campaign (the Send IG DMs
+-- button on the dashboard is disabled until an admin fills a template in).
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS ig_dm_body TEXT;
+
+-- IG DM send tracking on creators. Distinct from the email fields so the
+-- outreach lifecycle stays uncontaminated — a creator can have BOTH an email
+-- outreach and an IG DM sent (rare, but possible if we later discover an email).
+--   ig_dm_queued_at   — dashboard queued the DM for the extension to send
+--   ig_dm_sent_at     — extension confirmed the DM went out
+--   ig_dm_body        — the exact rendered body sent (audit)
+--   ig_dm_error       — extension's last failure reason
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_queued_at TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_sent_at   TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_body      TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_error     TEXT;
+CREATE INDEX IF NOT EXISTS idx_creators_ig_dm_sent_at ON creators(ig_dm_sent_at);

@@ -1,9 +1,16 @@
 # Influence Outreach Automator
 
-A Chrome extension for the Influence Deal Studio. It has two jobs:
+A Chrome extension for the Influence Deal Studio. It has three jobs:
 
 1. **Scrape** Instagram profiles into the dashboard (email, name, recent reel views) — driven from the dashboard's "Scrape Via Extension" button.
 2. **Decide offers on Instagram** — a vertical offer panel that latches to the right of a creator's Instagram profile so you can settle their rate without tab-hopping to the dashboard.
+3. **Send Priority DM outreach** — for creators the dashboard couldn't find an email for, sends the campaign's Instagram DM template as a Priority Message Request so it lands in the recipient's main inbox instead of the general Requests queue. Driven from the "Send Instagram DMs" button on the campaign page.
+
+## Priority DM sender
+
+Set the per-campaign IG DM template on the dashboard's campaign page (the "Instagram DM template" card). Clicking **Send Instagram DMs** then hands the queue to the extension: it opens each creator's profile in a foreground tab, clicks Message, types the rendered body, flips on the Priority option (if Instagram offers it — creators you already follow won't see it), and clicks Send. Each result is POSTed back to the dashboard as an audit event.
+
+Keep the browser window focused during a run: Instagram throttles hidden tabs, and its DM composer will not hydrate when the tab is occluded.
 
 ## Decide-offer panel
 

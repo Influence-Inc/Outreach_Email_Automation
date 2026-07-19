@@ -250,8 +250,41 @@ async function selectCampaign(id) {
   el('usage-rights-status').textContent = '';
   el('campaign-instantly-id').value = c.instantly_campaign_id || '';
   el('instantly-status').textContent = '';
+  syncIgDmTemplateUI(c);
   syncStageFilterUI();
   await refreshCreators();
+}
+
+// Render the IG DM template card + Send-IG-DMs button state for a campaign.
+// The button hides entirely when the campaign has no template (there is
+// nothing to send yet); the card's summary hint also swaps between "not set"
+// and "N queued" so the operator sees at a glance whether it's ready.
+function syncIgDmTemplateUI(c) {
+  const card = el('ig-dm-template-card');
+  const text = el('ig-dm-template-text');
+  const hint = el('ig-dm-template-hint');
+  const btn = el('send-ig-dms-btn');
+  card.hidden = false;
+  text.value = c.ig_dm_body || '';
+  el('ig-dm-template-status').textContent = '';
+  const queueCount = c.ig_dm_queue_count || 0;
+  const sentCount = c.ig_dm_sent_count || 0;
+  if (!c.ig_dm_body) {
+    hint.textContent = 'not set';
+    // Open the card automatically when the template is empty so the operator
+    // sees the empty textarea instead of having to expand it themselves.
+    card.open = true;
+    btn.hidden = true;
+  } else {
+    const bits = [];
+    if (queueCount) bits.push(`${queueCount} to DM`);
+    if (sentCount) bits.push(`${sentCount} sent`);
+    hint.textContent = bits.join(' · ') || 'ready';
+    card.open = false;
+    btn.hidden = queueCount === 0;
+    btn.textContent = `Send Instagram DMs (${queueCount})`;
+    btn.disabled = false;
+  }
 }
 
 // Toggle the creator table's stage filter. Clicking the active stage (or the
@@ -2307,6 +2340,65 @@ el('send-emails-btn').addEventListener('click', async () => {
   }
 });
 
+// --- Instagram DM template + Send-IG-DMs ---------------------------------
+// The per-campaign IG DM template is edited on the campaign page. Saving it
+// enables the "Send Instagram DMs" button as soon as there is at least one
+// eligible creator (no email + IG handle) waiting.
+el('save-ig-dm-template-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('save-ig-dm-template-btn');
+  const status = el('ig-dm-template-status');
+  const body = el('ig-dm-template-text').value;
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ig_dm_body: body }),
+    });
+    status.textContent = body.trim() ? 'Saved.' : 'Cleared.';
+    await refreshCampaigns();
+    const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+    if (c) syncIgDmTemplateUI(c);
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el('send-ig-dms-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+  const queueCount = c ? c.ig_dm_queue_count : 0;
+  if (!queueCount) { alert('Nothing to send — every creator either has an email or has already been DM’d.'); return; }
+  if (!confirm(
+    `Send Instagram DMs to ${queueCount} creator(s) as Priority Message Requests?\n\n` +
+    `The Chrome extension will drive Instagram — keep the browser window focused ` +
+    `and don't switch away while it runs.`,
+  )) return;
+  const btn = el('send-ig-dms-btn');
+  btn.disabled = true;
+  try {
+    const result = await api('/api/creators/bulk/queue-ig-dm', {
+      method: 'POST',
+      body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
+    });
+    if (!result.queued) {
+      showIgDmProgress(`Nothing to send (${result.skipped || 0} skipped — no IG handle).`);
+      el('ig-dm-cancel-btn').textContent = 'Hide';
+      await refreshCreators();
+      await refreshCampaigns();
+      return;
+    }
+    startExtensionIgDmSend(result.jobs);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // --- Extension bridge ----------------------------------------------------
 // The Chrome extension content script announces itself on load with a
 // window.postMessage({type: 'OEA_EXTENSION_READY'}). Track that so we can
@@ -2325,7 +2417,101 @@ window.addEventListener('message', (event) => {
   if (msg.type === 'OEA_SCRAPE_PROGRESS') {
     handleScrapeProgress(msg);
   }
+  if (msg.type === 'OEA_IG_DM_PROGRESS') {
+    handleIgDmProgress(msg);
+  }
 });
+
+// --- IG DM queue progress (mirrors scrape-progress UX) --------------------
+let igDmInFlight = false;
+
+function showIgDmProgress(text) {
+  el('ig-dm-progress').hidden = false;
+  el('ig-dm-progress-text').textContent = text;
+  el('ig-dm-cancel-btn').textContent = 'Cancel';
+}
+function hideIgDmProgress() {
+  el('ig-dm-progress').hidden = true;
+  el('ig-dm-progress-text').textContent = '';
+}
+
+el('ig-dm-cancel-btn').addEventListener('click', () => {
+  if (el('ig-dm-cancel-btn').textContent === 'Hide') {
+    hideIgDmProgress();
+    return;
+  }
+  window.postMessage({ type: 'OEA_ABORT_IG_DM_QUEUE' }, window.location.origin);
+  showIgDmProgress('Cancelling after current DM…');
+});
+
+function handleIgDmProgress(msg) {
+  if (msg.event === 'start') {
+    showIgDmProgress(`Sending 0/${msg.total} Instagram DMs…`);
+  } else if (msg.event === 'creator-start') {
+    showIgDmProgress(
+      `DM ${msg.index}/${msg.total} — @${msg.username || msg.creatorId}…`,
+    );
+  } else if (msg.event === 'creator-done') {
+    let tail;
+    if (msg.outcome === 'sent') {
+      tail = `sent to @${msg.username || msg.creatorId}`;
+    } else {
+      tail = `failed on @${msg.username || msg.creatorId}: ${msg.error || 'unknown'}`;
+    }
+    showIgDmProgress(`DM ${msg.index}/${msg.total} — ${tail}`);
+    refreshCreators();
+  } else if (msg.event === 'done') {
+    igDmInFlight = false;
+    const s = msg.summary || {};
+    showIgDmProgress(
+      `Done. ${s.processed || 0} processed · ${s.sent || 0} sent · ${s.errors || 0} failed.`,
+    );
+    el('ig-dm-cancel-btn').textContent = 'Hide';
+    refreshCreators();
+    refreshCampaigns();
+  } else if (msg.event === 'aborted') {
+    igDmInFlight = false;
+    showIgDmProgress(`Aborted at ${msg.index}/${msg.total}.`);
+    el('ig-dm-cancel-btn').textContent = 'Hide';
+    refreshCreators();
+    refreshCampaigns();
+  } else if (msg.event === 'error') {
+    igDmInFlight = false;
+    showIgDmProgress(`Extension error: ${msg.error}`);
+    el('ig-dm-cancel-btn').textContent = 'Hide';
+  }
+}
+
+// Hand the pre-rendered IG DM jobs off to the extension. The extension drives
+// Instagram — navigates each profile, opens the DM composer, types the body,
+// flips it to a Priority Message Request, and reports each result back via
+// /api/creators/:id/ig-dm-result (the backend already logs those events).
+function startExtensionIgDmSend(jobs) {
+  if (!jobs || !jobs.length) return;
+  window.postMessage({ type: 'OEA_PING' }, window.location.origin);
+  igDmInFlight = true;
+  showIgDmProgress(`Starting ${jobs.length} Instagram DM(s)…`);
+  window.postMessage(
+    {
+      type: 'OEA_RUN_IG_DM_QUEUE',
+      payload: {
+        apiBase: window.location.origin,
+        jobs,
+        pacingMs: 8000,
+      },
+    },
+    window.location.origin,
+  );
+  setTimeout(() => {
+    if (!extensionBridge.ready) {
+      igDmInFlight = false;
+      showIgDmProgress(
+        'Extension not detected. Load the unpacked extension at chrome://extensions then reload this page.',
+      );
+      el('ig-dm-cancel-btn').textContent = 'Hide';
+    }
+  }, 2000);
+}
 
 function showScrapeProgress(text) {
   el('scrape-progress').hidden = false;
