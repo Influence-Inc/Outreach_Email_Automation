@@ -8,7 +8,7 @@ A Chrome extension for the Influence Deal Studio. It has three jobs:
 
 ## Priority DM sender
 
-Set the per-campaign IG DM template on the dashboard's campaign page (the "Instagram DM template" card). Clicking **Send Instagram DMs** then hands the queue to the extension: it opens each creator's profile in a foreground tab, clicks Message, types the rendered body, flips on the Priority option (if Instagram offers it — creators you already follow won't see it), and clicks Send. Each result is POSTed back to the dashboard as an audit event.
+Set the per-campaign IG DM template on the dashboard's campaign page (the "Instagram DM template" card). Clicking **Send Instagram DMs** then hands the queue to the extension: it opens each creator's profile in a foreground tab, clicks **Message**, clicks **Send prioritized message** in the modal Instagram shows for cold profiles (so the DM lands in the recipient's main inbox as a Partnership message instead of the general Requests folder), then types the rendered body into the composer and clicks Send. Warm profiles (mutual follow / existing thread) skip the modal automatically — the composer opens directly and the send proceeds. Each result is POSTed back to the dashboard as an audit event.
 
 Keep the browser window focused during a run: Instagram throttles hidden tabs, and its DM composer will not hydrate when the tab is occluded.
 
