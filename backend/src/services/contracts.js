@@ -1084,6 +1084,26 @@ async function markSynced(token, ok, detail = {}) {
   return row;
 }
 
+// Record the outcome of the campaign-dashboard sync. Independent of
+// markSynced/status — a dashboard-sync failure never blocks the contract
+// from reaching 'completed' via the Creator-DB sync, and vice versa. Always
+// audited so a backfill can find contracts to retry.
+async function markDashboardSynced(token, ok, detail = {}) {
+  const row = await db.one(
+    `UPDATE contracts SET synced_to_dashboard = $2, updated_at = NOW()
+     WHERE token = $1
+     RETURNING *`,
+    [token, !!ok],
+  );
+  if (row) {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_dashboard_synced', $2)`,
+      [row.creator_id, { token, ok: !!ok, ...detail }],
+    );
+  }
+  return row;
+}
+
 // Hang the latest contract summary on each creator row (mirrors attachRateLog in
 // routes/creators.js) so the dashboard Status column can show stage + copy-link,
 // and the Deals column can show the accepted deliverables (videos, min views,
@@ -1116,6 +1136,7 @@ module.exports = {
   getByToken,
   recordSubmission,
   markSynced,
+  markDashboardSynced,
   attachContracts,
   disputesUsageRights,
   removeUsageRightsFromContract,

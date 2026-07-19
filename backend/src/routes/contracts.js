@@ -9,6 +9,7 @@ const express = require('express');
 const db = require('../db');
 const contracts = require('../services/contracts');
 const creatorDb = require('../services/creatorDb');
+const campaignDashboard = require('../services/campaignDashboard');
 
 const api = express.Router();
 
@@ -70,11 +71,12 @@ api.post('/:token/submit', async (req, res, next) => {
     // Touch the creator so the dashboard re-renders the Status column promptly.
     await db.query(`UPDATE creators SET updated_at = NOW() WHERE id = $1`, [row.creator_id]);
 
+    const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [row.creator_id]);
+
     // Sync into the Creator Database (best-effort — the signature already stuck).
     let synced = false;
     if (creatorDb.isConfigured()) {
       try {
-        const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [row.creator_id]);
         await creatorDb.syncSignedCreator(row, creator);
         synced = true;
       } catch (err) {
@@ -85,6 +87,20 @@ api.post('/:token/submit', async (req, res, next) => {
       console.warn('[contracts] CREATOR_DB_URL not set — skipping Creator-DB sync');
     }
     if (synced) await contracts.markSynced(token, true);
+
+    // Push the signed creator + deliverables/deadline into the campaign
+    // dashboard (best-effort — independent of the Creator-DB sync above).
+    if (campaignDashboard.isConfigured()) {
+      try {
+        await campaignDashboard.syncSignedCreator(row, creator);
+        await contracts.markDashboardSynced(token, true);
+      } catch (err) {
+        console.error(`[contracts] Campaign-dashboard sync failed for token ${token}:`, err.message);
+        await contracts.markDashboardSynced(token, false, { error: err.message });
+      }
+    } else {
+      console.warn('[contracts] CAMPAIGN_DASHBOARD_URL not set — skipping dashboard sync');
+    }
 
     res.json({ status: synced ? 'completed' : 'signed', synced });
   } catch (err) {
