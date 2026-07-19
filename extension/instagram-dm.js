@@ -140,33 +140,39 @@
     field.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // Instagram surfaces the "Send priority message request" affordance
-  // differently depending on whether the recipient follows the sender. For
-  // creators we've cold-messaged, the message drawer shows a small "Send as
-  // Priority" (or "Priority Message Request") button/checkbox next to Send.
-  // We look for anything whose accessible name mentions "priority" and click
-  // it if present. Absent = the send is already going to the main inbox (we
-  // follow each other, or the account has already accepted a prior request),
-  // so we skip silently. Never a hard error.
-  async function togglePriorityIfOffered() {
-    // Give Instagram a moment to render the priority option (it usually
-    // appears right after focusing the composer).
-    for (let attempt = 0; attempt < 6; attempt++) {
-      const el = findClickableByAria(['priority', 'send priority', 'send as priority', 'priority message']);
-      if (el) {
-        // Some builds render this as a checkbox; others as a toggle button.
-        // Clicking it activates it; if it was already active we would toggle
-        // it OFF — mitigate by checking aria-pressed / aria-checked.
-        const pressed =
-          el.getAttribute('aria-pressed') === 'true' ||
-          el.getAttribute('aria-checked') === 'true';
-        if (!pressed) {
-          try { el.click(); } catch { /* keep going */ }
-          await sleep(300);
-        }
+  // Immediately after clicking Message on a cold profile, Instagram opens a
+  // modal dialog with two buttons:
+  //   • "Send prioritized message" (primary) — lands in the recipient's main
+  //     inbox as a Partnership / Priority message.
+  //   • "Send message request" (secondary) — the ordinary Requests-folder flow.
+  // The composer does not open until one of them is clicked, so we have to
+  // click "Send prioritized message" HERE before waiting for the message field.
+  // On a warm profile (mutual follow, or an already-open thread) the modal is
+  // skipped and the composer opens directly — so returning `null` after a
+  // short poll is a normal path, not a failure.
+  async function clickPrioritizedMessageIfOffered() {
+    // Support both American ("prioritized") and British ("prioritised")
+    // spellings — Instagram's UI localizes and either can appear.
+    const wanted = ['send prioritized message', 'send prioritised message', 'prioritized message', 'prioritised message'];
+    // Poll for ~4s. When the modal never appears, that's the warm-profile path
+    // and we skip silently.
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      // Scoped to a role="dialog" when possible so we don't misfire on some
+      // other on-page element that happens to contain the word "prioritized".
+      const dialog = document.querySelector('div[role="dialog"]');
+      const scope = dialog || document.body;
+      // Match the exact button text first — this is the primary CTA in the
+      // modal — then fall back to any clickable with a matching aria label.
+      const exact = findElByText(scope, 'button, div[role="button"], span', wanted);
+      const target = exact
+        ? (exact.closest('button, div[role="button"], a') || exact)
+        : findClickableByAria(wanted);
+      if (target) {
+        try { target.click(); } catch { /* fall through */ }
         return true;
       }
-      await sleep(400);
+      await sleep(200);
     }
     return false;
   }
@@ -197,10 +203,25 @@
     return false;
   }
 
-  // Opens the DM composer for the profile currently loaded in the tab, types
-  // the templated body, flips on the Priority option if offered, and clicks
-  // Send. Throws with a specific reason on each failure mode so the dashboard
-  // shows the operator which step failed.
+  // Drives Instagram's DM flow end-to-end for a cold-profile Priority Message
+  // Request. The order matters and is different from what a normal DM to a
+  // mutual would look like:
+  //
+  //   1. click Message on the profile
+  //   2. Instagram opens a "Messaging <handle>" modal with two buttons:
+  //        "Send prioritized message" (primary)  ← we click this
+  //        "Send message request"    (secondary)
+  //      Clicking either dismisses the modal; ONLY THEN does the composer open.
+  //   3. wait for the composer text field
+  //   4. type the templated body
+  //   5. click Send
+  //
+  // A warm profile (mutual follow, or an existing thread) skips step 2 — the
+  // composer opens directly. We handle that transparently by treating the
+  // priority-modal wait as best-effort and moving on when it never appears.
+  //
+  // Throws with a specific reason on each failure mode so the dashboard
+  // timeline shows the operator which step broke.
   async function sendPriorityDm({ body, username }) {
     if (!body || !String(body).trim()) throw new Error('empty body');
     // Sanity check: we should already be on the correct profile page (background
@@ -227,22 +248,31 @@
     const clickTarget = msgBtn.closest('button, a, div[role="button"]') || msgBtn;
     clickTarget.click();
 
-    // 2. Wait for the composer text field to appear. Instagram either navigates
-    //    to /direct/t/<thread> (full DM view) or opens an in-page drawer.
-    const field = await waitFor(findMessageField, { timeout: 20000 });
-    if (!field) throw new Error('Message composer never opened');
+    // 2. Click "Send prioritized message" in the modal that IG shows for cold
+    //    profiles. When the modal never appears (warm profile / open thread)
+    //    this returns false and we fall straight through to the composer wait.
+    const clickedPriority = await clickPrioritizedMessageIfOffered();
 
-    // 3. Type the body.
+    // 3. Wait for the composer text field to appear. Instagram either opens an
+    //    in-page drawer or navigates to /direct/t/<thread>. Give the priority
+    //    click a bit longer to unwind since it kicks off a network round-trip.
+    const composerTimeout = clickedPriority ? 25000 : 20000;
+    const field = await waitFor(findMessageField, { timeout: composerTimeout });
+    if (!field) {
+      throw new Error(
+        clickedPriority
+          ? 'Message composer never opened after Send prioritized message'
+          : 'Message composer never opened',
+      );
+    }
+
+    // 4. Type the body.
     typeIntoField(field, String(body));
     // Small settle: React needs a tick to enable the Send button.
-    await sleep(500);
+    await sleep(600);
 
-    // 4. Toggle Priority Message Request if Instagram offers it. Silent no-op
-    //    when the option isn't shown (mutual follow, or already an open thread).
-    await togglePriorityIfOffered();
-
-    // 5. Click Send. Give React a moment to update the button state after the
-    //    priority toggle.
+    // 5. Click Send. Poll — React can take a moment to enable the button after
+    //    the input event.
     const sent = await waitFor(async () => {
       const ok = await clickSend();
       return ok || null;
@@ -253,7 +283,7 @@
     //    appears in the thread or the drawer closes.
     await sleep(1500);
 
-    return { ok: true };
+    return { ok: true, prioritized: clickedPriority };
   }
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
