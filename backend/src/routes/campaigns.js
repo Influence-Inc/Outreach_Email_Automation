@@ -26,17 +26,27 @@ router.get('/', async (_req, res, next) => {
               -- email_found_count feeds the "Send outreach" confirmation dialog
               -- (creators with an email but no outreach yet); not shown as a stat.
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
-              -- Outreach: creators the outreach email has actually gone out to,
-              -- regardless of any later follow-ups/replies. outreach_sent_at is
-              -- stamped only once Instantly CONFIRMS the send (not at enrollment),
-              -- so a queued-but-not-yet-sent creator is deliberately not counted
-              -- here — it still reads as pending until the email truly sends.
-              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS outreach_sent_count,
-              -- Pending: creators still awaiting their outreach email to actually
-              -- go out — this includes 'outreach_queued' leads (enrolled in
-              -- Instantly, send not yet confirmed). Excludes duplicates
-              -- (auto-rejected) and stopped creators, which never send.
-              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NULL AND cr.status NOT IN ('duplicate', 'stopped'))::int AS pending_count,
+              -- Outreach: creators we've actually reached, on ANY channel —
+              -- outreach_sent_at (email, stamped when Instantly confirms) OR
+              -- ig_dm_sent_at (Instagram Priority DM, stamped when the extension
+              -- confirms). Includes both so the "how many reached?" number is
+              -- honest regardless of the channel used. A queued-but-not-yet-sent
+              -- creator is deliberately not counted here — it still reads as
+              -- pending until the send truly lands.
+              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL OR cr.ig_dm_sent_at IS NOT NULL)::int AS outreach_sent_count,
+              -- Pending: creators we haven't reached yet on any channel — no
+              -- email sent AND no IG DM sent. This includes 'outreach_queued'
+              -- leads (enrolled in Instantly, email not yet confirmed) and
+              -- 'ig_dm_queued' rows (DM handed to the extension, not yet
+              -- confirmed). Excludes duplicates (auto-rejected) and stopped
+              -- creators, which never send. Without the ig_dm_sent_at guard,
+              -- DM'd creators showed up under Pending even after we'd already
+              -- reached them.
+              COUNT(cr.id) FILTER (
+                WHERE cr.outreach_sent_at IS NULL
+                  AND cr.ig_dm_sent_at IS NULL
+                  AND cr.status NOT IN ('duplicate', 'stopped')
+              )::int AS pending_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
               -- Removed: creators whose outreach was explicitly stopped (removed
               -- from the campaign). The automated follow-up steps skip these.
