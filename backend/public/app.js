@@ -1,39 +1,101 @@
 const API = '';
 
+// localStorage key for dismissed flags — persisted so a dismissal survives a
+// page reload. It stays dismissed until genuinely new activity requires a human
+// again (see flagFingerprint), NOT merely until the next refresh.
+const DISMISSED_FLAGS_KEY = 'oea_dismissed_flags';
+
+// Load the persisted dismissals into a Map<creatorId(string), fingerprint>.
+// Best-effort: any parse/storage error just starts from an empty set.
+function loadDismissedFlags() {
+  try {
+    const raw = localStorage.getItem(DISMISSED_FLAGS_KEY);
+    if (!raw) return new Map();
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch (e) {
+    return new Map();
+  }
+}
+
+function saveDismissedFlags() {
+  try {
+    localStorage.setItem(
+      DISMISSED_FLAGS_KEY,
+      JSON.stringify(Object.fromEntries(state.dismissedFlags)),
+    );
+  } catch (e) {
+    /* storage unavailable — dismissal is best-effort */
+  }
+}
+
 const state = {
   campaigns: [],
   selectedCampaignId: null,
   // Which stage stat the creator table is filtered by (null = show all).
   stageFilter: null,
-  // Creators whose CURRENT flag the admin has temporarily dismissed from the
-  // "needs you" list, keyed by creator id → the flag fingerprint that was
-  // dismissed. Purely client-side and in-memory: it snoozes this one flag for
-  // the session, survives the refreshes that follow other actions, and is
-  // deliberately NOT persisted — a page reload brings the flag back, as does
-  // any fresh server-side change to the row (which shifts the fingerprint).
-  // Never touches the negotiation state, so nothing is closed or sent.
-  dismissedFlags: new Map(),
+  // Creators whose CURRENT flag the admin has dismissed from the "needs you"
+  // list, keyed by creator id → the flag fingerprint that was dismissed.
+  // Persisted to localStorage (see above): the row stays out of the flagged
+  // treatment until the flag fingerprint changes — i.e. until genuinely new
+  // activity that needs a human (a fresh hand-off, a re-priced offer, a status
+  // move to a deal-to-approve). Never touches the negotiation state, so nothing
+  // is closed or sent; the offer/hand-off simply isn't nagging you meanwhile.
+  dismissedFlags: loadDismissedFlags(),
 };
 
-// Fingerprint of a creator's current flag — what a dismissal is pinned to.
-// updated_at moves on every server-side change to the row, so a dismissal only
-// holds until something new happens (a reply, a re-priced offer, a status
-// move), at which point the creator re-flags on its own.
+// Fingerprint of a creator's CURRENT flag — the identity a dismissal is pinned
+// to. Built only from the fields that raise a flag (isDelegateActionable), so
+// it stays stable across cosmetic row updates (email opens, timeline writes)
+// but shifts the moment there's new activity that needs a human:
+//   • a fresh hand-off        → delegated_at bumps (delegate() sets it = NOW())
+//   • a re-priced/new offer   → suggested_offers / selected_offer_id change
+//   • a status move           → negotiation_status changes
+//   • a deal reaching approval → contract_approved / negotiation_status change
+// When the fingerprint moves, the stored dismissal no longer matches and the
+// creator re-flags on its own.
 function flagFingerprint(r) {
-  return String(r.updated_at || '');
+  const offers = Array.isArray(r.suggested_offers)
+    ? r.suggested_offers.map((o) => (o && (o.id ?? o.fee ?? o.amount)) || '').join(',')
+    : '';
+  return JSON.stringify([
+    !!r.needs_human,
+    r.delegated_at || null,
+    r.negotiation_status || null,
+    !!r.contract_approved,
+    offers,
+    r.selected_offer_id || null,
+    r.replied_at || null,
+  ]);
 }
 
-// True when the admin has temporarily dismissed THIS exact flag (matching
-// fingerprint). A changed fingerprint means it's a fresh flag → not dismissed.
+// True when the admin has dismissed THIS exact flag (matching fingerprint). A
+// changed fingerprint means it's a fresh flag → not dismissed.
 function isFlagDismissed(r) {
-  return state.dismissedFlags.get(r.id) === flagFingerprint(r);
+  return state.dismissedFlags.get(String(r.id)) === flagFingerprint(r);
 }
 
-// Snooze the creator's current flag: record the fingerprint, then re-render so
-// it drops out of the banner / top-of-table sort / highlight and the inline
-// launchers. Re-flags automatically on the next server-side change or reload.
+// Dismiss the creator's current flag: record the fingerprint (persisted), so it
+// drops out of the banner / top-of-table sort / highlight and the inline
+// launchers. Re-flags on its own once the flag fingerprint next changes.
 function dismissFlag(r) {
-  state.dismissedFlags.set(r.id, flagFingerprint(r));
+  state.dismissedFlags.set(String(r.id), flagFingerprint(r));
+  saveDismissedFlags();
+}
+
+// Housekeeping: drop stored dismissals whose flag has since changed (they've
+// already re-surfaced), so the persisted set doesn't accumulate stale entries.
+// Only touches creators present in `rows` — other campaigns' dismissals stay.
+function pruneDismissedFlags(rows) {
+  if (!state.dismissedFlags.size) return;
+  let changed = false;
+  for (const r of rows) {
+    const key = String(r.id);
+    if (state.dismissedFlags.has(key) && state.dismissedFlags.get(key) !== flagFingerprint(r)) {
+      state.dismissedFlags.delete(key);
+      changed = true;
+    }
+  }
+  if (changed) saveDismissedFlags();
 }
 
 // Predicate for each clickable stat, mirroring the FILTER (...) definitions the
@@ -936,12 +998,14 @@ function makeSendIgDmButton(r) {
   return btn;
 }
 
-// "Dismiss" — temporarily snooze THIS flag from the "needs you" list without
-// opening the configurator. Client-side only: it records the current flag
-// fingerprint (see dismissFlag) so the creator drops out of the banner, the
-// top-of-table sort, the row highlight, and the inline launchers — but the
-// offer is untouched (still awaiting approval, nothing closed or sent). The
-// flag comes back on the next server-side change to the row or on a reload.
+// "Dismiss" — snooze THIS flag from the "needs you" list without opening the
+// configurator. Client-side only: it records the current flag fingerprint (see
+// dismissFlag) so the creator drops out of the banner, the top-of-table sort,
+// the row highlight, and the inline launchers — but the offer is untouched
+// (still awaiting approval, nothing closed or sent). The dismissal is persisted
+// (survives a reload) and stays put until there's genuinely new activity that
+// needs a human — a fresh hand-off, a re-priced offer, or a status move — at
+// which point the flag re-surfaces on its own.
 function makeDismissOfferButton(r) {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -2133,6 +2197,9 @@ async function refreshCreators() {
   const allRows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
   const container = el('creator-rows');
   container.innerHTML = '';
+  // Expire any dismissals whose flag has since changed, so a creator with new
+  // activity re-flags (and stale entries don't pile up in storage).
+  pruneDismissedFlags(allRows);
   // Campaign-wide count of creators needing a human right now, surfaced in the
   // banner above the table (replaces the old Delegate button's badge).
   updateAttentionBanner(allRows.filter(isDelegateActionable).length);
