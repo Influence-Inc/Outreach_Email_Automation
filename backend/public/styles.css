@@ -622,8 +622,9 @@ button:disabled { opacity: 0.5; cursor: default; }
    rail so the intervention reads at a glance. */
 .creator-row.needs-attention {
   background: #fdf7f4;
-  box-shadow: inset 3px 0 0 var(--warn);
+  box-shadow: inset 3px 0 0 var(--danger);
   border-radius: 0 8px 8px 0;
+  padding-left: 18px;
 }
 
 /* The in-table hand-off / approval launcher — same footprint as "Decide offer"
