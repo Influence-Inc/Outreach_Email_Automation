@@ -102,10 +102,19 @@
     return anyEditable || null;
   }
 
-  // Type the message body into the composer. Uses execCommand('insertText')
-  // which is what Instagram's own paste path fires, so its React state
-  // controller registers the change and enables the Send button. Falls back
-  // to setting textContent + dispatching an input event for older builds.
+  // Type the message body into the composer. Instagram's DM composer is a
+  // Lexical-based contenteditable (Meta's editor), and its beforeinput handler
+  // silently strips '\n' characters from a single execCommand('insertText',
+  // whole-body) call — the result is a run-on paragraph with all newlines
+  // collapsed, which is what we saw in QA.
+  //
+  // The reliable fix is to feed the composer one line at a time, inserting a
+  // real line break between lines with execCommand('insertLineBreak'). That
+  // yields the exact DOM shape Lexical produces for a user's Shift+Enter, so
+  // the sent message preserves the paragraph breaks the template was written
+  // with. Empty lines still trigger a break (they're the blank paragraphs
+  // between sentences), and a single-line body degrades to a single insertText
+  // call — same as before.
   function typeIntoField(field, text) {
     field.focus();
     // Clear existing content first.
@@ -125,17 +134,45 @@
       field.dispatchEvent(new Event('change', { bubbles: true }));
       return;
     }
-    // contenteditable path — insertText fires the beforeinput + input events
-    // that React's onChange listener consumes.
-    let inserted = false;
-    try {
-      inserted = document.execCommand('insertText', false, text);
-    } catch {
-      inserted = false;
+
+    // Normalize any \r\n line endings so the split below yields the same
+    // number of lines regardless of the template's source OS.
+    const normalized = String(text).replace(/\r\n?/g, '\n');
+    const lines = normalized.split('\n');
+
+    // Line-by-line contenteditable insertion path. insertLineBreak is what
+    // Lexical uses internally for a soft newline; it emits the same
+    // beforeinput/input event shape Instagram's React state listener
+    // consumes, so the Send button stays enabled and the DOM matches what a
+    // human typing Shift+Enter would produce.
+    let allOk = true;
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) {
+        let brOk = false;
+        try { brOk = document.execCommand('insertLineBreak'); } catch { brOk = false; }
+        if (!brOk) {
+          // Older/quirky builds: fall back to a literal <br>. Same visible
+          // outcome — a hard line break in the paragraph.
+          try { brOk = document.execCommand('insertHTML', false, '<br>'); } catch { brOk = false; }
+        }
+        if (!brOk) allOk = false;
+      }
+      if (lines[i].length) {
+        let txtOk = false;
+        try { txtOk = document.execCommand('insertText', false, lines[i]); } catch { txtOk = false; }
+        if (!txtOk) allOk = false;
+      }
     }
-    if (!inserted) {
-      field.textContent = text;
-      field.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+
+    if (!allOk) {
+      // Ultimate fallback: replace the whole field's text and dispatch input.
+      // Loses paragraph structure but at least gets the body across.
+      field.textContent = normalized;
+      field.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: normalized,
+        inputType: 'insertText',
+      }));
     }
     field.dispatchEvent(new Event('change', { bubbles: true }));
   }
