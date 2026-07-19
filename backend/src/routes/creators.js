@@ -651,6 +651,22 @@ router.patch('/:id', async (req, res, next) => {
       updates.push(
         `status = CASE WHEN status IN ('pending_extraction','no_email','invalid_email') THEN 'email_found' ELSE status END`,
       );
+    } else if (
+      Object.prototype.hasOwnProperty.call(body, 'email') &&
+      (body.email === '' || body.email == null)
+    ) {
+      // Clearing the email (e.g. the operator rejected an incorrect address
+      // and blanked the cell). Roll back an 'email_found' / 'invalid_email'
+      // status to 'no_email' so the row's status pill and its per-row action
+      // buttons stop advertising a send path we no longer have an address
+      // for — otherwise the Send outreach button (gated on status ===
+      // 'email_found') sticks around after the address is gone. Post-send
+      // statuses (outreach_queued, outreach_sent, followup_sent, replied,
+      // duplicate, stopped) are left alone: the outreach did happen and its
+      // history shouldn't be rewritten by a later edit to the address column.
+      updates.push(
+        `status = CASE WHEN status IN ('email_found','invalid_email') THEN 'no_email' ELSE status END`,
+      );
     }
     updates.push('updated_at = NOW()');
     const row = await db.one(
