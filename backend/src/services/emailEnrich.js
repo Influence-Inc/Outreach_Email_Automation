@@ -479,14 +479,35 @@ async function serperSearch(query, key, timeoutMs) {
   }
 }
 
+function isYouTube(url) {
+  const h = hostOf(url);
+  return h ? /(^|\.)youtube\.com$/.test(h) || h === 'youtu.be' : false;
+}
+
+// For a YouTube CHANNEL url (/@handle, /c/Name, /channel/ID, /user/Name) return
+// its /about tab, where the channel description (and any email a creator pasted
+// there) lives. Returns null for non-channel / already-/about / non-YouTube URLs.
+function youtubeAboutUrl(url) {
+  try {
+    const u = new URL(url);
+    if (!/(^|\.)youtube\.com$/.test(u.hostname.replace(/^www\./i, ''))) return null;
+    const m = u.pathname.match(/^\/((?:@|c\/|channel\/|user\/)[^/]+)/);
+    if (!m || /\/about\/?$/.test(u.pathname)) return null;
+    return `https://www.youtube.com/${m[1]}/about`;
+  } catch {
+    return null;
+  }
+}
+
 // Web-search discovery: for a creator with no email on Instagram and nothing on
-// their linked sites, search the web for their name/handle + "email"/"contact",
-// then (a) read an address straight out of the search snippets, and (b) open the
-// top result pages (their company site, YouTube "About", press, etc.) and scrape
-// one. Every candidate is filtered through isCreatorContactEmail so only an
-// address plausibly the creator's (their name/handle, or a business inbox — not
-// a random third party's) is kept. Returns { email, source } with the exact page
-// URL as source, or null. `searchImpl`/`fetchImpl` are injectable for tests.
+// their linked sites, search the web (YouTube first — that's where most creators
+// publish a business email) for their name/handle + "email"/"contact", then
+// (a) read an address straight out of the search snippets, and (b) open the top
+// result pages (YouTube channel/About, company site, press, etc.) and scrape
+// one. Every candidate is filtered so only an address that carries the creator's
+// own name/handle is kept — not a random third party's. Returns { email, source }
+// with the exact page URL as source, or null. `searchImpl`/`fetchImpl` are
+// injectable for tests.
 async function findViaWebSearch(context, options = {}) {
   const {
     fetchImpl = fetchHtml,
@@ -514,9 +535,12 @@ async function findViaWebSearch(context, options = {}) {
     return relatesToCreator(e.slice(0, at).toLowerCase(), e.slice(at + 1).toLowerCase(), tok);
   };
 
-  // A couple of intent-loaded queries. Process one fully before the next and
+  // Intent-loaded queries, YouTube first (creators most often publish a business
+  // email on their channel About page). Process one fully before the next and
   // return on the first hit, so we spend as few searches as possible.
   const queries = [];
+  if (name) queries.push(`"${name}" youtube email`);
+  if (handle) queries.push(`${handle} youtube`);
   if (name) queries.push(`"${name}" email`, `"${name}" contact`);
   if (handle) queries.push(`${handle} instagram email`);
   if (!queries.length) return null;
@@ -542,19 +566,32 @@ async function findViaWebSearch(context, options = {}) {
       }
     }
 
-    // (b) Open the top result pages and scrape.
+    // (b) Open the top result pages and scrape — YouTube results first (their
+    //     About page / channel description usually holds the business email),
+    //     then the rest. For a YouTube channel we also fetch its /about tab.
+    const ordered = [...organic].sort(
+      (a, b) => (isYouTube(b.link) ? 1 : 0) - (isYouTube(a.link) ? 1 : 0),
+    );
     let opened = 0;
-    for (const item of organic) {
+    for (const item of ordered) {
       if (opened >= maxPagesPerQuery) break;
       const url = item.link;
       if (!url || triedPages.has(url) || isLinkHub(url)) continue;
       triedPages.add(url);
       opened += 1;
-      const html = await fetchImpl(url, timeoutMs);
-      if (!html) continue;
-      const emails = extractEmailsFromHtml(html).filter(emailRelates);
-      const best = pickBestEmail(emails, hostOf(url)) || emails[0];
-      if (best) return { email: best, source: url };
+      const pages = [url];
+      const about = youtubeAboutUrl(url);
+      if (about && !triedPages.has(about)) {
+        triedPages.add(about);
+        pages.push(about);
+      }
+      for (const page of pages) {
+        const html = await fetchImpl(page, timeoutMs);
+        if (!html) continue;
+        const emails = extractEmailsFromHtml(html).filter(emailRelates);
+        const best = pickBestEmail(emails, hostOf(page)) || emails[0];
+        if (best) return { email: best, source: page };
+      }
     }
   }
   return null;
