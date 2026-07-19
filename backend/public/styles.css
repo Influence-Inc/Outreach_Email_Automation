@@ -634,6 +634,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .ghost.small.cr-intervene-btn:hover { background: #fbe4d9; border-color: #ecc3b1; }
 
+/* Offer-actionable row: "Decide offer" + "Configure here" + "Dismiss" sit
+   side by side under the status pill, wrapping if the column gets narrow. */
+.cr-offer-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
 /* The pop-up reuses the email-modal shell; its body holds the reply/approval
    blocks below and scrolls as normal flow rather than pre-wrapped email text. */
 .intervene-modal-body { padding: 18px 20px 20px; overflow-y: auto; min-height: 0; }

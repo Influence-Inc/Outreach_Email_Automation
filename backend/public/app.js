@@ -5,7 +5,36 @@ const state = {
   selectedCampaignId: null,
   // Which stage stat the creator table is filtered by (null = show all).
   stageFilter: null,
+  // Creators whose CURRENT flag the admin has temporarily dismissed from the
+  // "needs you" list, keyed by creator id → the flag fingerprint that was
+  // dismissed. Purely client-side and in-memory: it snoozes this one flag for
+  // the session, survives the refreshes that follow other actions, and is
+  // deliberately NOT persisted — a page reload brings the flag back, as does
+  // any fresh server-side change to the row (which shifts the fingerprint).
+  // Never touches the negotiation state, so nothing is closed or sent.
+  dismissedFlags: new Map(),
 };
+
+// Fingerprint of a creator's current flag — what a dismissal is pinned to.
+// updated_at moves on every server-side change to the row, so a dismissal only
+// holds until something new happens (a reply, a re-priced offer, a status
+// move), at which point the creator re-flags on its own.
+function flagFingerprint(r) {
+  return String(r.updated_at || '');
+}
+
+// True when the admin has temporarily dismissed THIS exact flag (matching
+// fingerprint). A changed fingerprint means it's a fresh flag → not dismissed.
+function isFlagDismissed(r) {
+  return state.dismissedFlags.get(r.id) === flagFingerprint(r);
+}
+
+// Snooze the creator's current flag: record the fingerprint, then re-render so
+// it drops out of the banner / top-of-table sort / highlight and the inline
+// launchers. Re-flags automatically on the next server-side change or reload.
+function dismissFlag(r) {
+  state.dismissedFlags.set(r.id, flagFingerprint(r));
+}
 
 // Predicate for each clickable stat, mirroring the FILTER (...) definitions the
 // backend uses to compute the counts in the stats bar (see routes/campaigns.js).
@@ -907,6 +936,25 @@ function makeSendIgDmButton(r) {
   return btn;
 }
 
+// "Dismiss" — temporarily snooze THIS flag from the "needs you" list without
+// opening the configurator. Client-side only: it records the current flag
+// fingerprint (see dismissFlag) so the creator drops out of the banner, the
+// top-of-table sort, the row highlight, and the inline launchers — but the
+// offer is untouched (still awaiting approval, nothing closed or sent). The
+// flag comes back on the next server-side change to the row or on a reload.
+function makeDismissOfferButton(r) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small cr-dismiss-btn';
+  btn.textContent = 'Dismiss';
+  btn.title = 'Hide this from your flagged list for now — the offer stays open and re-surfaces on any new activity';
+  btn.onclick = async () => {
+    dismissFlag(r);
+    await refreshCreators();
+  };
+  return btn;
+}
+
 // Status column: pill + delete + (send-outreach when pending) + timeline.
 function renderStatusCell(r, cell) {
   const top = document.createElement('div');
@@ -1028,14 +1076,22 @@ function renderStatusCell(r, cell) {
   // separate Delegate view.
   //   • offer awaiting approval → "Decide offer" (IG + Chrome-extension panel)
   //     plus "Configure here", the in-dashboard fallback pop-up for when the
-  //     extension isn't loaded
+  //     extension isn't loaded, plus "Dismiss" to clear the flag outright
   //   • accepted deal           → "Approve deal" pop-up
   //   • AI hand-off             → "Reply hand-off" pop-up
   // The pop-up (openInterventionModal) also folds in the reply box whenever the
   // same creator has a parked message, so at most one intervene button is shown.
-  if (isOfferActionable(r)) {
-    cell.appendChild(makeDecideOfferButton(r));
-    cell.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+  // A temporarily dismissed flag (Dismiss button) hides the launcher too — the
+  // row reads as normal until the flag re-surfaces.
+  if (isFlagDismissed(r)) {
+    // no launcher while snoozed
+  } else if (isOfferActionable(r)) {
+    const offerActions = document.createElement('div');
+    offerActions.className = 'cr-offer-actions';
+    offerActions.appendChild(makeDecideOfferButton(r));
+    offerActions.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+    offerActions.appendChild(makeDismissOfferButton(r));
+    cell.appendChild(offerActions);
   } else if (isContractApprovalPending(r)) {
     cell.appendChild(makeInterveneButton(r, { label: 'Approve deal' }));
   } else if (r.needs_human) {
@@ -2909,8 +2965,10 @@ function isContractApprovalPending(r) {
 
 // Needs a human right now: an AI hand-off, an offer awaiting approval, or an
 // accepted deal awaiting the brand POC's contract approval. Drives the top-of-
-// table sort, the row highlight, and the banner count.
+// table sort, the row highlight, and the banner count. A flag the admin has
+// temporarily dismissed (Dismiss button) is suppressed until it re-surfaces.
 function isDelegateActionable(r) {
+  if (isFlagDismissed(r)) return false;
   return !!r.needs_human || isOfferActionable(r) || isContractApprovalPending(r);
 }
 
