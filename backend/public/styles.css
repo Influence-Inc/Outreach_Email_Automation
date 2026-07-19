@@ -635,8 +635,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .ghost.small.cr-intervene-btn:hover { background: #fbe4d9; border-color: #ecc3b1; }
 
-/* Offer-actionable row: "Decide offer" + "Configure here" + "Dismiss" sit
-   side by side under the status pill, wrapping if the column gets narrow. */
+/* Offer-actionable row: "Decide offer" + "Configure here" sit side by side
+   under the status pill, wrapping if the column gets narrow. ("Dismiss" lives
+   up in .cr-status-top, next to the delete icon.) */
 .cr-offer-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* The pop-up reuses the email-modal shell; its body holds the reply/approval

@@ -1039,6 +1039,14 @@ function renderStatusCell(r, cell) {
     await refreshCampaigns();
   };
   top.appendChild(del);
+
+  // Dismiss sits beside delete (rather than down with "Decide offer") so the
+  // two dismissive actions on a flagged row — snooze the flag vs. remove the
+  // creator outright — read as a pair.
+  if (isOfferActionable(r) && !isFlagDismissed(r)) {
+    top.appendChild(makeDismissOfferButton(r));
+  }
+
   cell.appendChild(top);
 
   // Guard on r.email as well as the status. If a stale row is still tagged
@@ -1076,7 +1084,7 @@ function renderStatusCell(r, cell) {
   // separate Delegate view.
   //   • offer awaiting approval → "Decide offer" (IG + Chrome-extension panel)
   //     plus "Configure here", the in-dashboard fallback pop-up for when the
-  //     extension isn't loaded, plus "Dismiss" to clear the flag outright
+  //     extension isn't loaded ("Dismiss" to snooze the flag sits up by delete)
   //   • accepted deal           → "Approve deal" pop-up
   //   • AI hand-off             → "Reply hand-off" pop-up
   // The pop-up (openInterventionModal) also folds in the reply box whenever the
@@ -1090,7 +1098,6 @@ function renderStatusCell(r, cell) {
     offerActions.className = 'cr-offer-actions';
     offerActions.appendChild(makeDecideOfferButton(r));
     offerActions.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
-    offerActions.appendChild(makeDismissOfferButton(r));
     cell.appendChild(offerActions);
   } else if (isContractApprovalPending(r)) {
     cell.appendChild(makeInterveneButton(r, { label: 'Approve deal' }));
