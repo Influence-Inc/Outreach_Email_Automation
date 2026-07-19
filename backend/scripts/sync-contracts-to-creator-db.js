@@ -23,8 +23,7 @@
 
 require('dotenv').config();
 const db = require('../src/db');
-const creatorDb = require('../src/services/creatorDb');
-const contracts = require('../src/services/contracts');
+const { runBackfill } = require('../src/services/contractBackfill');
 
 function parseArgs(argv) {
   const args = { dryRun: false, limit: null, only: null };
@@ -40,63 +39,31 @@ function parseArgs(argv) {
 async function main() {
   const { dryRun, limit, only } = parseArgs(process.argv.slice(2));
 
-  if (!creatorDb.isConfigured()) {
-    console.error(
-      'CREATOR_DB_URL is not set. Set CREATOR_DB_URL (+ CREATOR_DB_API_KEY) before running.',
-    );
-    process.exit(1);
-  }
-
-  // Signed + completed contracts carry the full signing submission we forward.
-  const rows = only
-    ? await db.many(`SELECT * FROM contracts WHERE token = $1`, [only])
-    : await db.many(
-        `SELECT * FROM contracts
-          WHERE status IN ('signed', 'completed')
-          ORDER BY signed_at ASC NULLS LAST${limit ? ` LIMIT ${limit}` : ''}`,
+  let result;
+  try {
+    result = await runBackfill({ dryRun, limit, only });
+  } catch (err) {
+    if (err.code === 'NOT_CONFIGURED') {
+      console.error(
+        'CREATOR_DB_URL is not set. Set CREATOR_DB_URL (+ CREATOR_DB_API_KEY) before running.',
       );
-
-  console.log(`Found ${rows.length} contract(s) to sync${dryRun ? ' (dry run)' : ''}.`);
-
-  let created = 0;
-  let updated = 0;
-  let failed = 0;
-
-  for (const contract of rows) {
-    let creator;
-    try {
-      creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [contract.creator_id]);
-    } catch (err) {
-      failed += 1;
-      console.error(`  ✗ ${contract.token}: creator ${contract.creator_id} not found`);
-      continue;
+      process.exit(1);
     }
-
-    const who = creator.email || creator.instagram_username || creator.full_name || contract.token;
-
-    if (dryRun) {
-      console.log(`  • would sync ${contract.token} (${who}, status=${contract.status})`);
-      continue;
-    }
-
-    try {
-      const res = await creatorDb.syncSignedCreator(contract, creator);
-      await contracts.markSynced(contract.token, true);
-      if (res && res.created) created += 1;
-      else updated += 1;
-      console.log(`  ✓ ${contract.token} (${who}) → creator ${res && res.creatorId}`);
-    } catch (err) {
-      failed += 1;
-      await contracts.markSynced(contract.token, false, { error: err.message }).catch(() => {});
-      console.error(`  ✗ ${contract.token} (${who}): ${err.message}`);
-    }
+    throw err;
   }
 
+  console.log(`Found ${result.total} contract(s) to sync${dryRun ? ' (dry run)' : ''}.`);
+  for (const item of result.items) {
+    if (item.wouldSync) console.log(`  • would sync ${item.token} (${item.who}, status=${item.status})`);
+    else if (item.ok) console.log(`  ✓ ${item.token} (${item.who}) → creator ${item.creatorId}`);
+    else console.error(`  ✗ ${item.token} (${item.who || ''}): ${item.error}`);
+  }
   if (!dryRun) {
-    console.log(`\nDone. created=${created} updated=${updated} failed=${failed}`);
+    console.log(`\nDone. created=${result.created} updated=${result.updated} failed=${result.failed}`);
   }
+
   await db.pool.end();
-  process.exit(failed > 0 ? 1 : 0);
+  process.exit(result.failed > 0 ? 1 : 0);
 }
 
 main().catch((err) => {
