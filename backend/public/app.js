@@ -30,10 +30,20 @@ async function dismissFlag(r) {
 // Keeping these in sync means clicking a stat shows exactly that many rows.
 const STAGE_FILTERS = {
   creators: () => true,
-  // Awaiting outreach: not yet sent, and not an auto-rejected duplicate/stopped.
-  pending: (r) => !r.outreach_sent_at && r.status !== 'duplicate' && r.status !== 'stopped',
-  // Outreach email confirmed sent.
-  outreach: (r) => r.outreach_sent_at != null,
+  // Awaiting outreach: we haven't reached them on any channel yet, and the
+  // row isn't an auto-rejected duplicate / stopped one. "Reached them" covers
+  // both email outreach (outreach_sent_at stamped when Instantly confirms) and
+  // an Instagram Priority DM (ig_dm_sent_at stamped when the extension confirms).
+  // Without the ig_dm_sent_at guard, DM'd creators kept showing up under
+  // Pending even though they'd already been contacted.
+  pending: (r) =>
+    !r.outreach_sent_at &&
+    !r.ig_dm_sent_at &&
+    r.status !== 'duplicate' &&
+    r.status !== 'stopped',
+  // Outreach confirmed sent, on any channel — email OR Instagram DM. Keeps the
+  // "how many creators have we actually reached out to?" number honest.
+  outreach: (r) => r.outreach_sent_at != null || r.ig_dm_sent_at != null,
   replied: (r) => r.status === 'replied',
   // Contract signed or completed (a merely-sent 'pending' contract doesn't count).
   contracted: (r) => r.contract && (r.contract.status === 'signed' || r.contract.status === 'completed'),
