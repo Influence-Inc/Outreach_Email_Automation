@@ -476,24 +476,42 @@ function pickApolloEmail(person) {
   return null;
 }
 
+// True when an Apollo-returned person's name shares a name word with the
+// creator's (name words + collapsed handle). Used to guard a name-only match
+// (no domain to disambiguate) so Apollo can't hand back a loosely-related
+// person — the returned name must actually line up with who we asked for.
+function apolloPersonMatchesCreator(person, context) {
+  if (!person) return false;
+  const { words } = creatorTokens(context);
+  if (!words.length) return false;
+  const personName = [person.name, person.first_name, person.last_name]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  const pWords = new Set(personName.split(/[^a-z0-9]+/).filter((w) => w.length >= 3));
+  return words.some((w) => pWords.has(w));
+}
+
 // ---- Paid provider slot ---------------------------------------------------
 // Off by default. Pick one with EMAIL_ENRICH_PROVIDER and set its key:
-//   • apollo  — POST api.apollo.io/api/v1/people/match (X-Api-Key: APOLLO_API_KEY),
-//               matched on the creator's name + their own site domain.
-//   • hunter  — api.hunter.io email-finder (HUNTER_API_KEY), name + domain.
-// Both match on name + domain (the creator's own site): a name-only lookup can
-// return the wrong person, so we require a domain to keep results accurate.
+//   • apollo  — POST api.apollo.io/api/v1/people/match (X-Api-Key: APOLLO_API_KEY).
+//               Apollo is a people-finder, so it matches on NAME; the creator's
+//               own site domain is passed when we have one to sharpen the match,
+//               but it isn't required (most creators have no site). A domain-less
+//               match is only trusted when Apollo's returned name matches the
+//               creator's (apolloPersonMatchesCreator).
+//   • hunter  — api.hunter.io email-finder (HUNTER_API_KEY). Hunter looks up a
+//               mailbox on a specific domain, so a domain IS required here.
 // Other providers (influencers.club, Prospeo, …) can be added as extra branches
 // with the same { email, source } return shape.
 async function findViaProvider(context, { sites = [] } = {}) {
   const provider = (process.env.EMAIL_ENRICH_PROVIDER || '').trim().toLowerCase();
   if (!provider) return null;
 
-  // Use the creator's own site domain (their brand mailbox is what we want);
-  // skip if we have neither name nor domain.
-  const domain = sites.map(hostOf).find(Boolean);
   const name = (context.fullName || '').trim();
-  if (!domain || !name) return null;
+  if (!name) return null; // a name is the minimum identifier for any provider
+  // The creator's own site domain, when we have one, sharpens the match.
+  const domain = sites.map(hostOf).find(Boolean) || null;
   const [firstName, ...rest] = name.split(/\s+/);
   const lastName = rest.join(' ');
 
@@ -502,8 +520,9 @@ async function findViaProvider(context, { sites = [] } = {}) {
     if (!key) return null;
     // reveal_personal_emails surfaces the gmail-style addresses most creators use
     // (Apollo omits them by default). Consumes an Apollo credit per match.
-    const payload = { name, first_name: firstName, domain, reveal_personal_emails: true };
+    const payload = { name, first_name: firstName, reveal_personal_emails: true };
     if (lastName) payload.last_name = lastName;
+    if (domain) payload.domain = domain;
     try {
       const resp = await fetch('https://api.apollo.io/api/v1/people/match', {
         method: 'POST',
@@ -516,7 +535,12 @@ async function findViaProvider(context, { sites = [] } = {}) {
       });
       if (!resp.ok) return null;
       const data = await resp.json();
-      const email = pickApolloEmail(data && data.person);
+      const person = data && data.person;
+      if (!person) return null;
+      // Without a domain to disambiguate, only trust the match if the returned
+      // person's name matches the creator's — a same-name-different-person guard.
+      if (!domain && !apolloPersonMatchesCreator(person, context)) return null;
+      const email = pickApolloEmail(person);
       if (email) return { email, source: 'provider:apollo' };
     } catch {
       /* provider failure -> no enrichment, never throws */
@@ -527,6 +551,7 @@ async function findViaProvider(context, { sites = [] } = {}) {
   if (provider === 'hunter') {
     const key = process.env.HUNTER_API_KEY || process.env.EMAIL_ENRICH_API_KEY;
     if (!key) return null;
+    if (!domain) return null; // Hunter's email-finder needs a domain to search
     const params = new URLSearchParams({ domain, first_name: firstName, api_key: key });
     if (lastName) params.set('last_name', lastName);
     try {
@@ -566,4 +591,5 @@ module.exports = {
   isCreatorContactEmail,
   isSponsoredLink,
   pickApolloEmail,
+  apolloPersonMatchesCreator,
 };
