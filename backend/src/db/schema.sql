@@ -342,3 +342,16 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_sent_at   TIMESTAMPTZ;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_body      TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_error     TEXT;
 CREATE INDEX IF NOT EXISTS idx_creators_ig_dm_sent_at ON creators(ig_dm_sent_at);
+
+-- Backfill for rows that landed in a `status='email_found'` state without an
+-- actual email (rejected addresses cleared on the dashboard before the PATCH
+-- handler learned to roll status back to 'no_email'). Without this cleanup
+-- these rows keep advertising "EMAIL FOUND" + "Send outreach" indefinitely.
+-- Idempotent — a no-op once every stuck row has been rewritten. Post-send
+-- statuses (outreach_queued/sent, followup_sent, replied, duplicate, stopped)
+-- are deliberately excluded: the outreach did happen and its history should
+-- stand even if the address column has since been blanked.
+UPDATE creators
+   SET status = 'no_email'
+ WHERE status = 'email_found'
+   AND (email IS NULL OR email = '');

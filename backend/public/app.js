@@ -427,7 +427,13 @@ function statusPillFor(r) {
   // meaning to the operator (queued → sent).
   if (r.ig_dm_sent_at) return { cls: 'outreach_sent', text: 'IG DM sent' };
   if (r.ig_dm_queued_at) return { cls: 'outreach_queued', text: 'IG DM queued' };
-  const st = r.status || 'pending_extraction';
+  // Normalize the effective status so a legacy stuck row — one where status
+  // is still 'email_found' but the email column has been blanked — reads as
+  // 'no_email' here. The schema.sql cleanup rewrites those rows on boot, but
+  // this backstop keeps the pill honest until the operator refreshes. The
+  // ground-truth signal is r.email, not the status enum.
+  let st = r.status || 'pending_extraction';
+  if (st === 'email_found' && !r.email) st = 'no_email';
   // 'no_email' isn't a dead end when we have an IG handle — it's just the
   // signal that the next outreach path is a Priority IG DM. Reuse the
   // email_found pill styling so the row still reads as "ready to reach out"
@@ -857,13 +863,25 @@ function makeInterveneButton(r, { label = 'Reply hand-off', plain = false } = {}
 // still has to exist for the button to fire — that's enforced on the server
 // and surfaced as a tooltip below rather than hiding the button, so operators
 // discover the "set a DM template first" requirement in situ.
+//
+// Legacy-row defensiveness: rows that landed in `status='email_found'` with
+// no actual email (rejected addresses cleared on the dashboard before the
+// PATCH handler learned to roll status back) are also eligible — the
+// authoritative signal is r.email being empty. The schema.sql cleanup
+// rewrites those rows on boot, but this covers them until the next server
+// restart and any row we miss.
 function isIgDmEligible(r) {
   if (!r) return false;
   if (r.email) return false;
   if (r.ig_dm_sent_at) return false;
   if (!r.instagram_username && !r.instagram_url) return false;
   const st = r.status || 'pending_extraction';
-  return st === 'no_email' || st === 'pending_extraction' || st === 'invalid_email';
+  return (
+    st === 'no_email' ||
+    st === 'pending_extraction' ||
+    st === 'invalid_email' ||
+    st === 'email_found' // stale-status backstop; !r.email above already guarded
+  );
 }
 
 // Per-creator "Send IG DM" button. POSTs to the same /:id/queue-ig-dm endpoint
