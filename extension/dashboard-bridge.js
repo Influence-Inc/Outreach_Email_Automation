@@ -21,6 +21,8 @@
     OEA_RUN_SCRAPE_QUEUE: 'runScrapeQueue',
     OEA_ABORT_SCRAPE_QUEUE: 'abortScrapeQueue',
     OEA_OPEN_DECIDE_OFFER: 'openDecideOffer',
+    OEA_RUN_IG_DM_QUEUE: 'runIgDmQueue',
+    OEA_ABORT_IG_DM_QUEUE: 'abortIgDmQueue',
   };
 
   // Remember this dashboard's origin as the API base so the Instagram side
@@ -74,6 +76,12 @@
     if (msg.action === 'scrapeQueueProgress') {
       window.postMessage(
         { type: 'OEA_SCRAPE_PROGRESS', ...msg.payload },
+        window.location.origin,
+      );
+    }
+    if (msg.action === 'igDmQueueProgress') {
+      window.postMessage(
+        { type: 'OEA_IG_DM_PROGRESS', ...msg.payload },
         window.location.origin,
       );
     }

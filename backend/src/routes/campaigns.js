@@ -12,7 +12,16 @@ router.get('/', async (_req, res, next) => {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
+              c.ig_dm_body,
               COUNT(cr.id)::int AS creator_count,
+              -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
+              -- creators without an email who haven't been DM'd yet.
+              COUNT(cr.id) FILTER (
+                WHERE (cr.email IS NULL OR cr.email = '')
+                  AND cr.ig_dm_sent_at IS NULL
+                  AND cr.status IN ('no_email','pending_extraction','invalid_email')
+              )::int AS ig_dm_queue_count,
+              COUNT(cr.id) FILTER (WHERE cr.ig_dm_sent_at IS NOT NULL)::int AS ig_dm_sent_count,
               -- email_found_count feeds the "Send outreach" confirmation dialog
               -- (creators with an email but no outreach yet); not shown as a stat.
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
@@ -87,9 +96,10 @@ router.patch('/:id', async (req, res, next) => {
     const hasMaxCpm = Object.prototype.hasOwnProperty.call(body, 'max_cpm');
     const hasInstantly = Object.prototype.hasOwnProperty.call(body, 'instantly_campaign_id');
     const hasUsageRights = Object.prototype.hasOwnProperty.call(body, 'usage_rights_policy');
-    if (!hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights) {
+    const hasIgDm = Object.prototype.hasOwnProperty.call(body, 'ig_dm_body');
+    if (!hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm) {
       return res.status(400).json({
-        error: 'template_id, max_cpm, instantly_campaign_id or usage_rights_policy is required',
+        error: 'template_id, max_cpm, instantly_campaign_id, usage_rights_policy or ig_dm_body is required',
       });
     }
 
@@ -133,6 +143,17 @@ router.patch('/:id', async (req, res, next) => {
       }
       params.push(policy);
       sets.push(`usage_rights_policy = $${params.length}`);
+    }
+
+    if (hasIgDm) {
+      const raw = body.ig_dm_body;
+      if (raw != null && typeof raw !== 'string') {
+        return res.status(400).json({ error: 'ig_dm_body must be a string or null' });
+      }
+      // Trim; empty string clears the template so the Send-IG-DMs button disables.
+      const value = raw == null ? null : String(raw).trim() || null;
+      params.push(value);
+      sets.push(`ig_dm_body = $${params.length}`);
     }
 
     const row = await db.one(

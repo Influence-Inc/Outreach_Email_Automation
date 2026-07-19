@@ -71,11 +71,38 @@
             </div>
           </form>
 
+          <!-- Instagram DM template (per campaign). Rendered above the creator
+               table because it gates the "Send Instagram DMs" button in the
+               table header — no template = disabled button. -->
+          <details id="ig-dm-template-card" class="card" hidden>
+            <summary class="ig-dm-summary">
+              <h2>Instagram DM template</h2>
+              <span id="ig-dm-template-hint" class="hint"></span>
+            </summary>
+            <p class="hint subhead">
+              Sent as a Priority Message Request to creators without an email so
+              it lands in the recipient&rsquo;s main inbox instead of the general
+              Requests folder. Supports the same
+              <code>{firstName}</code>, <code>{brandName}</code>,
+              <code>{campaignName}</code> placeholders as the email templates.
+            </p>
+            <textarea
+              id="ig-dm-template-text"
+              class="io-scroll"
+              rows="6"
+              placeholder="Hi {firstName}, this is Jennifer from Influence. We&#39;re running a paid {brandName} campaign and thought you&#39;d be a great fit — okay if I send over the brief and rates?"></textarea>
+            <div class="form-foot end">
+              <span id="ig-dm-template-status" class="hint push"></span>
+              <button id="save-ig-dm-template-btn" class="btn-primary" type="button">Save DM template</button>
+            </div>
+          </details>
+
           <div id="creator-table-wrap" class="card" hidden>
             <div class="card-header">
               <h2>Creators</h2>
               <div class="actions">
                 <button id="send-emails-btn" class="btn-primary" title="Add pending creators to Instantly.ai for outreach + automated follow-ups">Send emails</button>
+                <button id="send-ig-dms-btn" class="btn-primary" title="For every creator without an email, send the IG DM template as a Priority Message Request via the Chrome extension" hidden>Send Instagram DMs</button>
                 <button id="refresh-btn" class="ghost">Refresh</button>
                 <button id="remove-all-btn" class="ghost danger" title="Delete every creator in this campaign">Remove all</button>
               </div>
@@ -103,6 +130,10 @@
             <div id="scrape-progress" class="hint scrape-progress" hidden>
               <span id="scrape-progress-text"></span>
               <button id="scrape-cancel-btn" class="ghost small" type="button">Cancel</button>
+            </div>
+            <div id="ig-dm-progress" class="hint scrape-progress" hidden>
+              <span id="ig-dm-progress-text"></span>
+              <button id="ig-dm-cancel-btn" class="ghost small" type="button">Cancel</button>
             </div>
 
             <!-- Surfaces creators that need a human right now (AI hand-offs, offers
