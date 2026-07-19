@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { syncCampaigns } = require('../services/campaignsApi');
 const { computeOffers } = require('../services/pricing');
+const { flagDismissedSql } = require('../db/flagFingerprint');
 
 const router = express.Router();
 
@@ -54,11 +55,16 @@ router.get('/', async (_req, res, next) => {
               -- action_count also includes accepted deals parked for the brand
               -- POC's go-ahead (no approval recorded, no contract yet) — they
               -- render as approval cards in the Delegate window.
+              -- A creator the admin has dismissed (flag snoozed from the
+              -- dashboard) drops out of the count until new activity re-flags it
+              -- (flagDismissedSql), so the sidebar pending-dot matches the table.
               COUNT(cr.id) FILTER (
-                WHERE cr.needs_human
+                WHERE (
+                     cr.needs_human
                    OR (cr.suggested_offers IS NOT NULL AND cr.negotiation_status = 'AWAITING_APPROVAL')
                    OR (cr.negotiation_status = 'ACCEPTED' AND NOT cr.contract_approved
                        AND NOT EXISTS (SELECT 1 FROM contracts ct2 WHERE ct2.creator_id = cr.id))
+                ) AND NOT ${flagDismissedSql('cr.')}
               )::int AS action_count
        FROM campaigns c
        LEFT JOIN creators cr ON cr.campaign_id = c.id
