@@ -17,8 +17,7 @@ const {
   relatesToCreator,
   isCreatorContactEmail,
   isSponsoredLink,
-  pickApolloEmail,
-  apolloPersonMatchesCreator,
+  findViaWebSearch,
 } = require('./emailEnrich');
 
 test('normalizeUrl adds https, rejects non-URLs', () => {
@@ -336,38 +335,51 @@ test('enrichEmail still follows a tracked link when its domain carries the creat
   });
 });
 
-test('pickApolloEmail prefers the professional email, skips locked placeholders', () => {
-  assert.strictEqual(
-    pickApolloEmail({ email: 'jane@brand.com', personal_emails: ['jane@gmail.com'] }),
-    'jane@brand.com',
-  );
-  // Professional email locked behind credits -> fall through to a personal one.
-  assert.strictEqual(
-    pickApolloEmail({ email: 'email_not_unlocked@domain.com', personal_emails: ['jane@gmail.com'] }),
-    'jane@gmail.com',
-  );
-  // Only contact_emails present.
-  assert.strictEqual(
-    pickApolloEmail({ contact_emails: [{ email: 'hi@studio.co' }] }),
-    'hi@studio.co',
-  );
-  // Nothing usable / no person.
-  assert.strictEqual(pickApolloEmail({ email: 'email_not_unlocked@domain.com' }), null);
-  assert.strictEqual(pickApolloEmail({ email: 'you@example.com' }), null); // junk filtered
-  assert.strictEqual(pickApolloEmail(null), null);
-  assert.strictEqual(pickApolloEmail({}), null);
+// ---- Web-search discovery (injected search + fetch, no network) -----------
+
+const ctx = { fullName: 'Prashant Sachan', instagramUsername: 'prashantxsachan' };
+
+test('findViaWebSearch reads a creator email out of a result snippet', async () => {
+  const searchImpl = async () => ({
+    organic: [
+      { title: 'Prashant Sachan', link: 'https://example.com/about', snippet: 'Reach me at prashant@appsforbharat.com' },
+    ],
+  });
+  const res = await findViaWebSearch(ctx, { searchImpl, fetchImpl: async () => null });
+  assert.deepStrictEqual(res, { email: 'prashant@appsforbharat.com', source: 'https://example.com/about' });
 });
 
-test('apolloPersonMatchesCreator guards a name-only match against the wrong person', () => {
-  const ctx = { fullName: 'Prashant Sachan', instagramUsername: 'prashantxsachan' };
-  // Same person -> matches (shares "prashant" / "sachan").
-  assert.strictEqual(
-    apolloPersonMatchesCreator({ first_name: 'Prashant', last_name: 'Sachan' }, ctx),
-    true,
-  );
-  assert.strictEqual(apolloPersonMatchesCreator({ name: 'Prashant Sachan' }, ctx), true);
-  // A different person Apollo might return -> rejected.
-  assert.strictEqual(apolloPersonMatchesCreator({ name: 'John Smith' }, ctx), false);
-  assert.strictEqual(apolloPersonMatchesCreator(null, ctx), false);
-  assert.strictEqual(apolloPersonMatchesCreator({ name: 'Prashant Sachan' }, {}), false);
+test('findViaWebSearch scrapes the top result page when the snippet has none', async () => {
+  const searchImpl = async () => ({
+    organic: [{ title: 'Prashant Sachan — Contact', link: 'https://appsforbharat.com/contact', snippet: 'get in touch' }],
+  });
+  const fetchImpl = async (url) =>
+    url === 'https://appsforbharat.com/contact'
+      ? '<a href="mailto:prashant@appsforbharat.com">email</a>'
+      : null;
+  const res = await findViaWebSearch(ctx, { searchImpl, fetchImpl: fetchImpl });
+  assert.deepStrictEqual(res, {
+    email: 'prashant@appsforbharat.com',
+    source: 'https://appsforbharat.com/contact',
+  });
+});
+
+test('findViaWebSearch ignores emails that are not plausibly the creator’s', async () => {
+  const searchImpl = async () => ({
+    organic: [
+      // A random third party's support address on some page — not the creator's.
+      { title: 'Some SaaS', link: 'https://saas.com', snippet: 'support@saas.com' },
+    ],
+  });
+  const fetchImpl = async () => '<p>support@saas.com and hello@otherco.com</p>';
+  const res = await findViaWebSearch(ctx, { searchImpl, fetchImpl: fetchImpl });
+  assert.strictEqual(res, null);
+});
+
+test('findViaWebSearch returns null with no key and no injected search', async () => {
+  const prev = process.env.SERPER_API_KEY;
+  delete process.env.SERPER_API_KEY;
+  const res = await findViaWebSearch(ctx, { fetchHtml: async () => null });
+  assert.strictEqual(res, null);
+  if (prev !== undefined) process.env.SERPER_API_KEY = prev;
 });
