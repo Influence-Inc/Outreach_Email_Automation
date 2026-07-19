@@ -9,6 +9,7 @@
 const express = require('express');
 const db = require('../db');
 const contracts = require('../services/contracts');
+const { runBackfill } = require('../services/contractBackfill');
 
 const router = express.Router();
 
@@ -59,6 +60,25 @@ router.get('/contracts', requireBotToken, async (req, res, next) => {
       })),
     );
   } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/bot/sync-contracts[?dryRun=true][&limit=N]
+// One-shot backfill trigger: push already-signed contracts to the Creator-DB
+// (same logic as `npm run sync:contracts`), so it can be run with a single curl
+// instead of an SSH session. Guarded by OUTREACH_BOT_TOKEN like the rest of the
+// bot API. Idempotent.
+router.post('/sync-contracts', requireBotToken, async (req, res, next) => {
+  try {
+    const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : null;
+    const result = await runBackfill({ dryRun, limit });
+    res.json(result);
+  } catch (err) {
+    if (err.code === 'NOT_CONFIGURED') {
+      return res.status(400).json({ error: 'CREATOR_DB_URL is not set on this service' });
+    }
     next(err);
   }
 });
