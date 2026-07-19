@@ -365,3 +365,9 @@ UPDATE creators
    SET status = 'no_email'
  WHERE status = 'email_found'
    AND (email IS NULL OR email = '');
+
+-- Campaign-dashboard (influence-stats) sync tracking on contracts, mirroring
+-- synced_to_creator_db. Tracked independently: the two integrations succeed
+-- or fail independently, and neither affects the contract's own
+-- pending/signed/completed status (that stays tied to Creator-DB sync only).
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS synced_to_dashboard BOOLEAN NOT NULL DEFAULT FALSE;
