@@ -8,6 +8,28 @@
 // creator's signing.
 
 const contracts = require('./contracts');
+const { parseUsername } = require('./igScraper');
+
+// Instagram URL path segments that are NOT a profile handle (post/reel/etc.),
+// so we never sync one of these as the creator's @handle.
+const IG_NON_HANDLE = new Set(['p', 'reel', 'reels', 'explore', 'stories', 'tv', 's']);
+
+// Resolve the creator's Instagram handle. Prefer the extracted username, but
+// fall back to parsing it out of instagram_url (which is always set on an
+// Outreach creator) so the Creator-DB always gets the handle — that's what the
+// dashboard shows as the creator's profile id, and what it derives the profile
+// link from.
+function resolveHandle(d, creator) {
+  let handle = d.instagramUsername || creator.instagram_username || null;
+  if (!handle && creator.instagram_url) {
+    const parsed = parseUsername(creator.instagram_url);
+    if (parsed && !IG_NON_HANDLE.has(parsed.toLowerCase())) handle = parsed;
+  }
+  handle = String(handle || '')
+    .replace(/^@/, '')
+    .trim();
+  return handle || undefined;
+}
 
 const TIMEOUT_MS = Number(process.env.CREATOR_DB_TIMEOUT_MS || 15000);
 const MAX_ATTEMPTS = 3;
@@ -101,8 +123,7 @@ function buildPayload(contract, creator) {
   const addr = sub.address || {};
   const bank = sub.bankAccount || {};
   const platforms = Array.isArray(d.platforms) ? d.platforms : d.platforms ? [d.platforms] : [];
-  const igHandle =
-    String(d.instagramUsername || creator.instagram_username || '').replace(/^@/, '') || undefined;
+  const igHandle = resolveHandle(d, creator);
   const deliverables =
     typeof d.deliverables === 'string'
       ? d.deliverables
