@@ -18,6 +18,7 @@ const {
   isCreatorContactEmail,
   isSponsoredLink,
   pickApolloEmail,
+  apolloPersonMatchesCreator,
 } = require('./emailEnrich');
 
 test('normalizeUrl adds https, rejects non-URLs', () => {
@@ -355,4 +356,18 @@ test('pickApolloEmail prefers the professional email, skips locked placeholders'
   assert.strictEqual(pickApolloEmail({ email: 'you@example.com' }), null); // junk filtered
   assert.strictEqual(pickApolloEmail(null), null);
   assert.strictEqual(pickApolloEmail({}), null);
+});
+
+test('apolloPersonMatchesCreator guards a name-only match against the wrong person', () => {
+  const ctx = { fullName: 'Prashant Sachan', instagramUsername: 'prashantxsachan' };
+  // Same person -> matches (shares "prashant" / "sachan").
+  assert.strictEqual(
+    apolloPersonMatchesCreator({ first_name: 'Prashant', last_name: 'Sachan' }, ctx),
+    true,
+  );
+  assert.strictEqual(apolloPersonMatchesCreator({ name: 'Prashant Sachan' }, ctx), true);
+  // A different person Apollo might return -> rejected.
+  assert.strictEqual(apolloPersonMatchesCreator({ name: 'John Smith' }, ctx), false);
+  assert.strictEqual(apolloPersonMatchesCreator(null, ctx), false);
+  assert.strictEqual(apolloPersonMatchesCreator({ name: 'Prashant Sachan' }, {}), false);
 });
