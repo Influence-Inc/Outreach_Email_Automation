@@ -389,7 +389,62 @@
     var sign = page1.querySelector('.sign');
     if (details) details.hidden = true;
     if (sign) sign.hidden = true;
+
+    // Show what the creator actually submitted (signature, contact, bank), so
+    // the executed contract is complete rather than terms-only.
+    renderSubmitted(c);
+
     page1.hidden = false;
+  }
+
+  // Read-only render of the signing submission on an already-signed contract.
+  function renderSubmitted(c) {
+    var sub = (c.submission && c.submission.fields) || null;
+    if (!sub) return;
+    if (document.getElementById('submitted-details')) return; // idempotent
+    var addr = sub.address || {};
+    var bank = sub.bankAccount || {};
+    var addrStr = [addr.line1, addr.line2, addr.city, addr.state, addr.zip, addr.country]
+      .filter(Boolean)
+      .join(', ');
+    function row(k, v) {
+      return v ? '<div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div>' : '';
+    }
+    var contactRows =
+      row('Full legal name', sub.legalName) +
+      row('Gender', sub.gender) +
+      row('Phone', sub.phone) +
+      row('Email', c.signerEmail) +
+      row('Address', addrStr);
+    var bankRows =
+      row('Account holder', bank.accountHolderName) +
+      row('Bank name', bank.bankName) +
+      row('Account number', bank.accountNumber) +
+      row('IBAN', bank.iban) +
+      row('Routing number', bank.routingNumber) +
+      row('IFSC code', bank.ifscCode) +
+      row('SWIFT / BIC', bank.swiftCode) +
+      row('PAN number', bank.panNumber) +
+      row('Tax ID number', bank.taxIdNumber);
+    var sig = sub.signatureDataUrl
+      ? '<div style="border:1px solid var(--line-2);border-radius:var(--radius-sm);background:#ffffff;padding:14px;display:flex;align-items:center;justify-content:center;min-height:90px">' +
+        '<img src="' + esc(sub.signatureDataUrl) + '" alt="Signature" style="max-width:100%;max-height:190px;object-fit:contain"></div>'
+      : '<div class="prose">No signature captured.</div>';
+
+    var html =
+      '<div class="section"><h2>Signature</h2>' + sig + '</div>' +
+      '<div class="section"><h2>Contact &amp; identity</h2><div class="rows">' +
+      (contactRows || '<div class="v">—</div>') +
+      '</div></div>' +
+      (bankRows
+        ? '<div class="section"><h2>Payment / bank details</h2><div class="rows">' + bankRows + '</div></div>'
+        : '');
+
+    var wrap = document.createElement('div');
+    wrap.id = 'submitted-details';
+    wrap.innerHTML = html;
+    var sections = $('sections');
+    sections.parentNode.insertBefore(wrap, sections.nextSibling);
   }
 
   // ── Load contract ──────────────────────────────────────────────────────
