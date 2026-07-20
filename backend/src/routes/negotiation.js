@@ -218,15 +218,16 @@ router.post('/:id/contract', async (req, res, next) => {
   }
 });
 
-// Edit a pending contract's deal terms straight from the dashboard Deals
-// column (videos, min views, platforms, deadline, paid-ad rights, exclusivity).
-// A signed contract is executed and can't be edited here (409) — that needs a
-// human amendment. Returns the refreshed contract so the row re-renders.
+// Edit a contract's deal terms straight from the dashboard Deals column
+// (videos, min views, platforms, deadline, paid-ad rights, exclusivity).
+// By default a signed contract returns 409; pass ?force=1 to update a signed
+// contract in place without re-triggering signing or notifying the creator.
 router.patch('/:id/contract', async (req, res, next) => {
   try {
     const exists = await db.one(`SELECT id FROM creators WHERE id = $1`, [req.params.id]);
     if (!exists) return res.status(404).json({ error: 'not found' });
-    const result = await contracts.updateContractFields(req.params.id, req.body || {});
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const result = await contracts.updateContractFields(req.params.id, req.body || {}, { force });
     if (result.missing) {
       return res.status(404).json({ error: 'No contract for this creator yet.' });
     }
