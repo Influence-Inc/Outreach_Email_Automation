@@ -334,6 +334,17 @@ button:disabled { opacity: 0.5; cursor: default; }
 #scrape-progress-text { flex: 1; }
 #fetch-status { margin-top: 12px; }
 
+/* Client-side search over the current campaign's rows. Rendered above the
+   table, stacks with the stat-pill stage filter. */
+.creator-search { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.creator-search input {
+  flex: 1; min-width: 0;
+  padding: 10px 14px; font-size: 13.5px;
+}
+.creator-search input::placeholder { color: var(--faint); }
+.creator-search .hint { flex-shrink: 0; white-space: nowrap; }
+.creator-search .hint:empty { display: none; }
+
 /* --- Creator grid table -------------------------------------------------- */
 .table-scroll { width: 100%; overflow-x: auto; }
 .creator-grid { min-width: 860px; margin-top: 14px; }

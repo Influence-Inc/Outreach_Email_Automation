@@ -5,6 +5,9 @@ const state = {
   selectedCampaignId: null,
   // Which stage stat the creator table is filtered by (null = show all).
   stageFilter: null,
+  // Free-text search over the creator rows (name / @handle). Empty = no filter.
+  // Reset when switching campaigns so an old query doesn't carry across.
+  searchQuery: '',
 };
 
 // Whether the admin has dismissed this creator's CURRENT flag from the "needs
@@ -249,8 +252,12 @@ async function selectCampaign(id) {
   eyebrow.textContent = c.brand_name;
   eyebrow.hidden = false;
   el('campaign-title').textContent = c.name;
-  // Switching campaigns clears any stage filter carried over from the last one.
+  // Switching campaigns clears any stage filter / search query carried over
+  // from the last one, so the operator lands on a clean unfiltered view.
   state.stageFilter = null;
+  state.searchQuery = '';
+  const searchInput = el('creator-search');
+  if (searchInput) searchInput.value = '';
   const stats = [
     { stage: 'creators', label: 'Creators', value: c.creator_count },
     { stage: 'pending', label: 'Pending', value: c.pending_count },
@@ -334,6 +341,60 @@ function syncStageFilterUI() {
       cell.classList.toggle('active', active);
       cell.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
+}
+
+// --- Creator search filter (name / @handle) ------------------------------
+// Case-insensitive substring match over the fields the operator is likely to
+// type. Leading '@' is stripped so both `gord` and `@gordonly` behave the same.
+// Returns null when the query is empty so refreshCreators can skip the filter
+// entirely.
+function buildSearchPredicate(rawQuery) {
+  const q = (rawQuery || '').trim().replace(/^@+/, '').toLowerCase();
+  if (!q) return null;
+  return (r) => {
+    // Fields worth matching: the @handle Instagram exposes, the operator's
+    // display name for the account (first / full), and the profile URL as a
+    // fallback for pre-scrape rows that don't yet have a parsed username.
+    const haystack = [
+      r.instagram_username,
+      r.full_name,
+      r.first_name,
+      r.instagram_url,
+    ]
+      .filter(Boolean)
+      .map((s) => String(s).toLowerCase())
+      .join(' ');
+    return haystack.includes(q);
+  };
+}
+
+// Update the "N of M" hint next to the search input so the operator can tell
+// at a glance how narrow their query is. Left blank when nothing is filtering
+// so the hint doesn't add noise on an empty box.
+function syncSearchCount(shown, total) {
+  const el2 = el('creator-search-count');
+  if (!el2) return;
+  const q = (state.searchQuery || '').trim();
+  const stage = state.stageFilter;
+  if (!q && !stage) {
+    el2.textContent = '';
+    return;
+  }
+  if (shown === total) {
+    el2.textContent = `${total} creator${total === 1 ? '' : 's'}`;
+  } else {
+    el2.textContent = `${shown} of ${total}`;
+  }
+}
+
+// Apply a new search query and re-render. Kept separate from the input's
+// change handler so empty-state "Clear search" links can call it too.
+function setSearchQuery(next) {
+  const value = String(next == null ? '' : next);
+  state.searchQuery = value;
+  const input = el('creator-search');
+  if (input && input.value !== value) input.value = value;
+  refreshCreators();
 }
 
 function makeEditable(td, { value, placeholder, onSave, allowEmpty = false }) {
@@ -2255,24 +2316,54 @@ async function refreshCreators() {
   // banner above the table (replaces the old Delegate button's badge).
   updateAttentionBanner(allRows.filter(isDelegateActionable).length);
   if (!allRows.length) {
+    syncSearchCount(0, 0);
     container.innerHTML =
       '<div class="hint" style="padding:26px 6px;">No creators yet. Paste Instagram links above to add some.</div>';
     return;
   }
-  const predicate = (state.stageFilter && STAGE_FILTERS[state.stageFilter]) || null;
-  const filtered = predicate ? allRows.filter(predicate) : allRows.slice();
+  const stagePredicate = (state.stageFilter && STAGE_FILTERS[state.stageFilter]) || null;
+  const searchPredicate = buildSearchPredicate(state.searchQuery);
+  const filtered = allRows.filter((r) => {
+    if (stagePredicate && !stagePredicate(r)) return false;
+    if (searchPredicate && !searchPredicate(r)) return false;
+    return true;
+  });
+  // Live match count next to the search input — always reflects the number of
+  // rows currently rendered under the query, whether or not a stage is active.
+  syncSearchCount(filtered.length, allRows.length);
   if (!filtered.length) {
-    const label = {
-      pending: 'pending',
-      outreach: 'in outreach',
-      replied: 'replied',
-      contracted: 'contracted',
-      removed: 'removed',
-    }[state.stageFilter];
-    container.innerHTML = `<div class="hint" style="padding:26px 6px;">No ${label} creators. <a href="#" class="stage-filter-clear">Show all</a></div>`;
-    container.querySelector('.stage-filter-clear').addEventListener('click', (e) => {
+    // Empty-state copy tells the operator what kind of nothing they're looking
+    // at: a search miss, a stage miss, or both. Each nothing links straight to
+    // the corresponding reset action.
+    const hasSearch = !!searchPredicate;
+    const hasStage = !!stagePredicate;
+    let msg;
+    if (hasSearch && hasStage) {
+      msg = `No matches for "<b>${escapeHtml(state.searchQuery)}</b>" among ${
+        state.stageFilter
+      } creators. <a href="#" class="creator-search-clear">Clear search</a> · <a href="#" class="stage-filter-clear">Clear stage</a>`;
+    } else if (hasSearch) {
+      msg = `No creators match "<b>${escapeHtml(state.searchQuery)}</b>". <a href="#" class="creator-search-clear">Clear search</a>`;
+    } else {
+      const label = {
+        pending: 'pending',
+        outreach: 'in outreach',
+        replied: 'replied',
+        contracted: 'contracted',
+        removed: 'removed',
+      }[state.stageFilter];
+      msg = `No ${label} creators. <a href="#" class="stage-filter-clear">Show all</a>`;
+    }
+    container.innerHTML = `<div class="hint" style="padding:26px 6px;">${msg}</div>`;
+    const clearStage = container.querySelector('.stage-filter-clear');
+    if (clearStage) clearStage.addEventListener('click', (e) => {
       e.preventDefault();
       setStageFilter(null);
+    });
+    const clearSearch = container.querySelector('.creator-search-clear');
+    if (clearSearch) clearSearch.addEventListener('click', (e) => {
+      e.preventDefault();
+      setSearchQuery('');
     });
     return;
   }
@@ -2481,6 +2572,32 @@ el('creator-form').addEventListener('submit', async (e) => {
 });
 
 el('refresh-btn').addEventListener('click', refreshCreators);
+
+// Live-filter the loaded creator rows as the operator types. Debounced so
+// each keystroke doesn't tear down + rebuild the table for a fast typist —
+// 120ms feels instant but batches typical typing bursts. Escape clears.
+{
+  const input = el('creator-search');
+  if (input) {
+    let debounce = null;
+    input.addEventListener('input', () => {
+      const value = input.value;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        if (state.searchQuery === value) return;
+        state.searchQuery = value;
+        refreshCreators();
+      }, 120);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSearchQuery('');
+        input.blur();
+      }
+    });
+  }
+}
 
 // Off-Instagram enrichment: for the creators still without an email, follow the
 // links captured off their profile (website / Linktree) and scrape a verified

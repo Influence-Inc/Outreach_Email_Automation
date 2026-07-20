@@ -136,6 +136,21 @@
               <button id="ig-dm-cancel-btn" class="ghost small" type="button">Cancel</button>
             </div>
 
+            <!-- Client-side filter on top of the loaded rows. Substring match
+                 over the creator's display name and @handle so a quick "gord"
+                 or "@gordonly" jumps straight to the row. Stacks with the
+                 stat-pill stage filter above — both apply. -->
+            <div class="creator-search">
+              <input
+                id="creator-search"
+                type="search"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="Search creators by name or @handle…"
+              />
+              <span id="creator-search-count" class="hint"></span>
+            </div>
+
             <!-- Surfaces creators that need a human right now (AI hand-offs, offers
                  awaiting approval, accepted deals awaiting the brand's go-ahead).
                  Those rows are also sorted to the top of the table below. -->
