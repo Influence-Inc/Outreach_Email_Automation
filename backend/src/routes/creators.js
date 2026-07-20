@@ -421,6 +421,42 @@ function parseUsername(url) {
   }
 }
 
+// Effective new-vs-old segment for the dashboard chip. Prefers the Creator-DB
+// verdict cached on the row (creator_segment); when that hasn't been computed
+// yet (Creator-DB unreachable / not configured), it falls back to a LOCAL
+// signal — the same Instagram handle appearing in another campaign in our own
+// creators table counts as "returning" — so the chip is meaningful immediately,
+// without waiting on the cross-service lookup. Display-only: portal routing
+// still uses the authoritative creator_segment set by the segmentation job.
+async function attachSegment(rows) {
+  if (!rows.length) return;
+  const need = rows.filter((r) => !r.creator_segment && r.instagram_username);
+  const localReturning = new Set();
+  if (need.length) {
+    const handles = [...new Set(need.map((r) => String(r.instagram_username).toLowerCase()))];
+    const dups = await db.many(
+      `SELECT LOWER(instagram_username) AS handle, COUNT(DISTINCT campaign_id) AS n
+         FROM creators
+        WHERE instagram_username IS NOT NULL AND LOWER(instagram_username) = ANY($1::text[])
+        GROUP BY LOWER(instagram_username)`,
+      [handles],
+    );
+    for (const d of dups) if (Number(d.n) > 1) localReturning.add(d.handle);
+  }
+  for (const r of rows) {
+    if (r.creator_segment === 'old' || r.creator_segment === 'new') {
+      r.segment = r.creator_segment;
+      r.segment_source = 'creator-db';
+    } else if (r.instagram_username && localReturning.has(String(r.instagram_username).toLowerCase())) {
+      r.segment = 'old';
+      r.segment_source = 'local';
+    } else {
+      r.segment = 'new';
+      r.segment_source = 'local';
+    }
+  }
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const { campaign_id, status } = req.query;
@@ -443,6 +479,7 @@ router.get('/', async (req, res, next) => {
     await attachRateLog(rows);
     await contracts.attachContracts(rows);
     await offerPortal.attachOffers(rows);
+    await attachSegment(rows);
     res.json(rows);
 
     // Refresh new-vs-old segmentation in the background (best-effort). Any row
