@@ -285,9 +285,16 @@ async function selectCampaign(id) {
   el('usage-rights-status').textContent = '';
   el('campaign-instantly-id').value = c.instantly_campaign_id || '';
   el('instantly-status').textContent = '';
+  syncSendEmailsBtn(c);
   syncIgDmTemplateUI(c);
   syncStageFilterUI();
   await refreshCreators();
+}
+
+function syncSendEmailsBtn(c) {
+  const btn = el('send-emails-btn');
+  const count = c ? c.email_found_count || 0 : 0;
+  btn.textContent = count ? `Send emails (${count})` : 'Send emails';
 }
 
 // Render the IG DM template card + Send-IG-DMs button state for a campaign.
@@ -2730,6 +2737,8 @@ el('send-emails-btn').addEventListener('click', async () => {
       : 'No eligible creators to queue.';
     await refreshCreators();
     await refreshCampaigns();
+    const updated = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+    syncSendEmailsBtn(updated);
   } catch (err) {
     status.textContent = `Failed: ${err.message}`;
   } finally {
