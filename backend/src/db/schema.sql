@@ -331,6 +331,76 @@ CREATE INDEX IF NOT EXISTS idx_email_messages_creator ON email_messages(creator_
 -- generated; the timeline falls back to the deterministic gist meanwhile.
 ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS summary TEXT;
 
+-- ---------------------------------------------------------------------------
+-- Offer Portal (old-creator negotiation)
+-- ---------------------------------------------------------------------------
+-- Replicated from the Influence-CDB-portal offer system, keyed to this app's
+-- SERIAL creator ids + TEXT campaign ids. "Old" creators (those who've already
+-- done a DIFFERENT campaign, per the Creator Database — see creator_segment
+-- below) don't negotiate over email. Instead the admin-approved offer is minted
+-- here and its /o/:token link is delivered over email + WhatsApp + iMessage;
+-- accept / decline / counter all happen on the hosted offer page.
+
+CREATE TABLE IF NOT EXISTS offers (
+  id                   SERIAL PRIMARY KEY,
+  creator_id           INTEGER NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  campaign_id          TEXT REFERENCES campaigns(id) ON DELETE SET NULL,
+  token                TEXT NOT NULL UNIQUE,                 -- unguessable public id (/o/:token)
+  brand_name           TEXT NOT NULL,
+  deliverables         JSONB NOT NULL DEFAULT '[]'::jsonb,   -- array of free-text lines ("2 Reels")
+  rate                 NUMERIC(12,2) NOT NULL,
+  currency             TEXT NOT NULL DEFAULT 'USD',
+  status               TEXT NOT NULL DEFAULT 'pending',      -- pending | accepted | declined
+  decline_reason       TEXT,                                 -- one-tap reason on decline
+  requested_rate       NUMERIC(12,2),                        -- creator's counter on a Budget decline
+  expected_impressions INTEGER,                              -- drives the CPM-based counter math
+  parent_offer_id      INTEGER REFERENCES offers(id) ON DELETE SET NULL, -- set on a counter-offer
+  expires_at           TIMESTAMPTZ NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_offers_creator_id ON offers(creator_id);
+CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status);
+
+-- Append-only audit log. INSERT only — offer history is reconstructed from here.
+CREATE TABLE IF NOT EXISTS offer_events (
+  id          SERIAL PRIMARY KEY,
+  offer_id    INTEGER NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+  event       TEXT NOT NULL,      -- sent | viewed | accepted | declined
+  channel     TEXT NOT NULL,      -- email | whatsapp | imessage | web
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_offer_events_offer_id ON offer_events(offer_id);
+
+-- Every inbound/outbound offer-portal message across the messaging channels.
+-- needs_review flags a reply the bot couldn't confidently action (surfaced for
+-- a human in the dashboard). Kept separate from email_messages (the Instantly
+-- negotiation transcript) so the two negotiation modes never intermix.
+CREATE TABLE IF NOT EXISTS offer_messages (
+  id           SERIAL PRIMARY KEY,
+  creator_id   INTEGER NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  offer_id     INTEGER REFERENCES offers(id) ON DELETE SET NULL,
+  direction    TEXT NOT NULL,     -- inbound | outbound
+  channel      TEXT NOT NULL,     -- email | whatsapp | imessage
+  body         TEXT NOT NULL,
+  needs_review BOOLEAN NOT NULL DEFAULT FALSE,
+  sent_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_offer_messages_creator_id ON offer_messages(creator_id);
+CREATE INDEX IF NOT EXISTS idx_offer_messages_needs_review ON offer_messages(needs_review) WHERE needs_review;
+
+-- New-vs-old segmentation + messaging contact, sourced from the Creator Database
+-- keyed on the creator's Instagram handle (profile id).
+--   creator_segment  : 'new' | 'old' | NULL (not yet checked)
+--   prior_campaigns  : JSONB array of the OTHER campaigns they've been part of
+--   segment_checked_at: when the Creator-DB lookup last ran
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS creator_segment     TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS segment_checked_at  TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS prior_campaigns     JSONB;
+-- WhatsApp + iMessage contact for the offer portal. Sourced from the Creator-DB
+-- master record (phoneNumber); both default to that number when we only have one.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS whatsapp TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS imessage TEXT;
+CREATE INDEX IF NOT EXISTS idx_creators_segment ON creators(creator_segment);
 -- Per-campaign Instagram DM template. Renders through the same {firstName}/
 -- {brandName}/{campaignName} placeholders as the email templates. Used by the
 -- Chrome extension's IG DM sender when a creator has no email — the message is

@@ -27,4 +27,27 @@ async function many(text, params) {
   return res.rows;
 }
 
-module.exports = { pool, query, one, many };
+// Run `fn` inside a single transaction. `fn` receives a dedicated pooled client
+// (use client.query(...)) and its return value is passed through on COMMIT; any
+// throw rolls back. Used by the offer portal for the atomic accept/decline and
+// counter-offer transitions.
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* ignore rollback failure — surface the original error */
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { pool, query, one, many, withTransaction };

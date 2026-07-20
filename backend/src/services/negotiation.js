@@ -18,6 +18,7 @@ const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const contracts = require('./contracts');
 const thread = require('./thread');
+const offers = require('./offers');
 const { formatFirstName } = require('./nameFormat');
 
 // ── Claude client (shared) ────────────────────────────────────────────────
@@ -1896,10 +1897,98 @@ function resolveApprovedOffer(creator) {
 // (so the admin can proactively send an offer to an engaged creator who hasn't
 // named a rate yet). An outreach thread is required so the offer goes out as a
 // threaded reply, never a cold email before the intro outreach.
+// OLD-creator variant: instead of an email negotiation, mint the approved offer
+// as an offer-portal offer and deliver its link over email + WhatsApp + iMessage.
+// The admin's offer-shaping flow (pricing, sliders, approval) is unchanged — only
+// the delivery + negotiation surface differs. Same AWAITING_DECISION transition
+// as the email path, but WITHOUT the Instantly reply-thread requirement (portal
+// offers don't need an email thread to reply on).
+async function sendApprovedOfferViaPortal(creatorId, { fromStages = ['AWAITING_APPROVAL'] } = {}) {
+  const stagePlaceholders = fromStages.map((_, i) => `$${i + 2}`).join(', ');
+  const claim = await db.one(
+    `UPDATE creators SET negotiation_status = 'AWAITING_DECISION', updated_at = NOW()
+     WHERE id = $1 AND offer_approved = TRUE
+       AND negotiation_status IN (${stagePlaceholders})
+     RETURNING id`,
+    [creatorId, ...fromStages],
+  );
+  if (!claim) {
+    const c = await db.one(`SELECT negotiation_status FROM creators WHERE id = $1`, [creatorId]);
+    if (!c) return { skipped: 'creator not found' };
+    return {
+      skipped: `creator is not awaiting an offer (stage: ${
+        c.negotiation_status ? c.negotiation_status.replace(/_/g, ' ').toLowerCase() : 'no reply yet'
+      })`,
+    };
+  }
+
+  const creator = await loadCreator(creatorId);
+  const offer = resolveApprovedOffer(creator);
+  if (!offer) {
+    await db.query(
+      `UPDATE creators SET negotiation_status = 'AWAITING_APPROVAL', updated_at = NOW() WHERE id = $1`,
+      [creatorId],
+    );
+    return { error: 'no offer to send' };
+  }
+
+  let result;
+  try {
+    result = await offers.sendPortalOffer(creatorId, offer);
+  } catch (err) {
+    // Nothing was dispatched — safe to roll the stage back so the admin can retry.
+    await db.query(
+      `UPDATE creators SET negotiation_status = 'AWAITING_APPROVAL', updated_at = NOW() WHERE id = $1`,
+      [creatorId],
+    );
+    console.error(`[negotiation] portal offer failed for creator ${creatorId}:`, err.message);
+    throw err;
+  }
+
+  // No channel to reach them on (no email / WhatsApp / iMessage) — roll back.
+  if (result && result.skipped) {
+    await db.query(
+      `UPDATE creators SET negotiation_status = 'AWAITING_APPROVAL', updated_at = NOW() WHERE id = $1`,
+      [creatorId],
+    );
+    return { skipped: result.skipped };
+  }
+
+  // Timeline entry for the Rate column — the same 'rate_offer_sent' event the
+  // email path logs, tagged as delivered via the offer portal.
+  try {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_offer_sent', $2)`,
+      [creatorId, { fee: offer.flat_fee, cpm: offer.cpm_applied, label: offer.label, via: 'offer_portal', token: result.token }],
+    );
+  } catch (logErr) {
+    console.error(`[negotiation] rate_offer_sent (portal) log failed for creator ${creatorId}:`, logErr.message);
+  }
+
+  // Sending the offer resolves this creator's turn — clear any hand-off flags.
+  try {
+    await db.query(
+      `UPDATE creators SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL, updated_at = NOW() WHERE id = $1`,
+      [creatorId],
+    );
+  } catch (clrErr) {
+    console.error(`[negotiation] post-offer cleanup (portal) failed for creator ${creatorId}:`, clrErr.message);
+  }
+
+  return { sent: true, via: 'offer_portal', token: result.token, url: result.url };
+}
+
 async function sendApprovedOffer(
   creatorId,
   { fromStages = ['AWAITING_APPROVAL'], preparedEmail = null } = {},
 ) {
+  // OLD creators negotiate on the offer portal, not over email. Route them there
+  // before the email-thread claim below (portal offers need no reply thread).
+  const seg = await db.one(`SELECT creator_segment FROM creators WHERE id = $1`, [creatorId]);
+  if (seg && seg.creator_segment === 'old') {
+    return sendApprovedOfferViaPortal(creatorId, { fromStages });
+  }
+
   const stagePlaceholders = fromStages.map((_, i) => `$${i + 2}`).join(', ');
   const claim = await db.one(
     `UPDATE creators SET negotiation_status = 'AWAITING_DECISION', updated_at = NOW()
