@@ -2302,23 +2302,26 @@ async function refreshCreators() {
     const handle = document.createElement('div');
     handle.className = 'cr-handle';
     handle.innerHTML = `<a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || r.instagram_url)}</a>`;
-    // New-vs-old segment chip (from the Creator Database). "Returning" = the
-    // creator has worked with us on a prior campaign, so they negotiate on the
-    // offer portal; "New" = first-timer, unchanged outreach flow.
-    if (r.creator_segment === 'old' || r.creator_segment === 'new') {
+    // New-vs-old segment chip. r.segment is the effective verdict: the Creator
+    // Database classification when known, else a local fallback (same handle in
+    // another campaign here). "Returning" = worked with us before, so they
+    // negotiate on the offer portal; "New" = first-timer, unchanged flow.
+    if (r.segment === 'old' || r.segment === 'new') {
       const seg = document.createElement('span');
-      seg.className = 'cr-segment ' + r.creator_segment;
-      seg.textContent = r.creator_segment === 'old' ? 'Returning' : 'New';
-      if (r.creator_segment === 'old' && Array.isArray(r.prior_campaigns) && r.prior_campaigns.length) {
+      seg.className = 'cr-segment ' + r.segment;
+      seg.textContent = r.segment === 'old' ? 'Returning' : 'New';
+      if (r.segment === 'old' && Array.isArray(r.prior_campaigns) && r.prior_campaigns.length) {
         const names = r.prior_campaigns
           .map((c) => (c && c.brandName ? `${c.name} · ${c.brandName}` : c && c.name))
           .filter(Boolean);
         seg.title = 'Worked with us before: ' + names.join(', ');
-      } else {
+      } else if (r.segment === 'old') {
         seg.title =
-          r.creator_segment === 'old'
-            ? 'Returning creator — worked with us on a previous campaign'
-            : 'New creator — no prior campaign on record';
+          r.segment_source === 'local'
+            ? 'Returning creator — also appears in another campaign here'
+            : 'Returning creator — worked with us on a previous campaign';
+      } else {
+        seg.title = 'New creator — no prior campaign found';
       }
       handle.appendChild(seg);
     }
