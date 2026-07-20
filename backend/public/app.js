@@ -661,8 +661,12 @@ function parseViewsInput(s) {
 }
 
 // PATCH a single contract deal field. Used by the editable Deals column.
+// For signed contracts, appends ?force=1 so the server allows the edit
+// without re-triggering signing or notifying the creator.
 function saveContractField(r, patch) {
-  return api(`/api/creators/${r.id}/contract`, {
+  const signed = r.contract && r.contract.status !== 'pending';
+  const qs = signed ? '?force=1' : '';
+  return api(`/api/creators/${r.id}/contract${qs}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
@@ -685,13 +689,15 @@ function appendEditableDealLine(cell, r, { label, value, placeholder, onSave }) 
   makeEditable(val, { value: value == null ? '' : String(value), placeholder, allowEmpty: true, onSave });
 }
 
-// The editable deal terms shown under the rate once a contract exists and is
-// still PENDING (unsigned) — the admin can correct anything the extraction got
-// wrong straight from the Deals column. A signed contract is read-only.
+// The editable deal terms shown under the rate once a contract exists — the
+// admin can correct anything the extraction got wrong straight from the Deals
+// column. Works for both pending and signed contracts (signed edits are
+// persisted silently without re-triggering signing or notifying the creator).
 function renderEditableDeal(cell, r, data) {
+  const signed = r.contract && r.contract.status !== 'pending';
   const hint = document.createElement('div');
   hint.className = 'deal-edit-hint';
-  hint.textContent = 'Deal terms · click to edit';
+  hint.textContent = signed ? 'Signed · click to edit' : 'Deal terms · click to edit';
   cell.appendChild(hint);
 
   const isViewBased = data.offerType === 'view_based';
@@ -848,25 +854,11 @@ function renderRateCell(r, cell) {
       badge.textContent = data.offerLabel;
       cell.appendChild(badge);
     }
-    // Pending -> editable deal terms; signed/completed -> read-only summary.
-    if (r.contract.status === 'pending') {
-      renderEditableDeal(cell, r, data);
-      return;
-    }
-    for (const item of dealSummaryItems(data)) {
-      if (item.kind === 'badge') continue; // already rendered above
-      const lineDiv = document.createElement('div');
-      lineDiv.className = 'deal-line';
-      const tag = document.createElement('span');
-      tag.className = 'deal-tag';
-      tag.textContent = item.label;
-      const value = document.createElement('span');
-      value.className = 'deal-val';
-      value.textContent = item.value;
-      lineDiv.appendChild(tag);
-      lineDiv.appendChild(value);
-      cell.appendChild(lineDiv);
-    }
+    // Deal terms are always editable — including signed/completed contracts
+    // (the server accepts ?force=1 so edits go through without re-triggering
+    // signing or notifying the creator).
+    renderEditableDeal(cell, r, data);
+    return;
   }
 }
 

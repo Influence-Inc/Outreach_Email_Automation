@@ -940,16 +940,19 @@ function coerceContractPatch(patch) {
 }
 
 // Apply an admin's deal-term edits to a creator's contract. Only touches a
-// PENDING contract — a signed one is executed and must not be silently altered
-// (returns {signed:true} so the caller can 409). Returns {missing:true} when
-// there's no contract yet, {updated:false, noop:true} when nothing changed.
-async function updateContractFields(creatorId, patch) {
+// PENDING contract by default — a signed one is executed and must not be
+// silently altered (returns {signed:true} so the caller can 409). Pass
+// {force:true} to update a signed contract in place (e.g. correcting terms
+// the creator already agreed to verbally) without re-triggering signing.
+// Returns {missing:true} when there's no contract yet, {updated:false,
+// noop:true} when nothing changed.
+async function updateContractFields(creatorId, patch, { force = false } = {}) {
   const existing = await db.one(
     `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
     [creatorId],
   );
   if (!existing) return { missing: true };
-  if (existing.status !== 'pending') return { signed: true, row: existing };
+  if (existing.status !== 'pending' && !force) return { signed: true, row: existing };
 
   const changes = coerceContractPatch(patch || {});
   if (!Object.keys(changes).length) return { updated: false, noop: true, row: existing };
