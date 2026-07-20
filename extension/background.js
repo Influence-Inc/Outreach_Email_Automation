@@ -22,6 +22,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+  if (request.action === 'runIgDmQueue') {
+    runIgDmQueue(request.payload || {}, sender)
+      .then((summary) => sendResponse({ ok: true, summary }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (request.action === 'abortIgDmQueue') {
+    igDmQueueState.abort = true;
+    sendResponse({ ok: true });
+    return true;
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -311,6 +322,173 @@ async function runScrapeQueue(payload, sender) {
   } finally {
     scrapeQueueState.running = false;
     scrapeQueueState.abort = false;
+  }
+
+  return summary;
+}
+
+// ---------------------------------------------------------------------------
+// Instagram DM queue runner. For each creator handed to us we open their IG
+// profile in a foreground tab, ask the instagram-dm content script to drive
+// the Direct composer (type the body, flip on Priority Message Request, send),
+// then POST the outcome back to the dashboard so it can log the event and
+// refresh the row.
+// ---------------------------------------------------------------------------
+
+const igDmQueueState = {
+  running: false,
+  abort: false,
+};
+
+async function postIgDmResult(apiBase, creatorId, { ok, error }) {
+  const url = `${apiBase}/api/creators/${creatorId}/ig-dm-result`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(ok ? { ok: true } : { ok: false, error: error || 'unknown' }),
+  });
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      const j = await resp.json();
+      detail = j.error || '';
+    } catch {}
+    throw new Error(`POST ig-dm-result ${resp.status} ${detail}`);
+  }
+  return resp.json();
+}
+
+async function emitIgDmProgress(senderTabId, payload) {
+  if (senderTabId == null) return;
+  try {
+    await chrome.tabs.sendMessage(senderTabId, {
+      action: 'igDmQueueProgress',
+      payload,
+    });
+  } catch (err) {
+    // Dashboard tab closed; not fatal.
+  }
+}
+
+async function runIgDmQueue(payload, sender) {
+  const { apiBase, jobs, pacingMs } = payload;
+  const senderTabId = sender && sender.tab && sender.tab.id;
+
+  if (!apiBase || !Array.isArray(jobs) || !jobs.length) {
+    throw new Error('invalid payload: apiBase + non-empty jobs[] required');
+  }
+  if (igDmQueueState.running) {
+    throw new Error('IG DM queue already running');
+  }
+
+  igDmQueueState.running = true;
+  igDmQueueState.abort = false;
+
+  const pace = Number.isFinite(pacingMs) ? pacingMs : 8000;
+  const total = jobs.length;
+  const summary = { total, processed: 0, sent: 0, errors: 0 };
+
+  await emitIgDmProgress(senderTabId, { event: 'start', total });
+
+  try {
+    for (let i = 0; i < jobs.length; i++) {
+      if (igDmQueueState.abort) {
+        await emitIgDmProgress(senderTabId, { event: 'aborted', index: i, total });
+        break;
+      }
+      const job = jobs[i];
+      const index = i + 1;
+      await emitIgDmProgress(senderTabId, {
+        event: 'creator-start',
+        index,
+        total,
+        creatorId: job.id,
+        username: job.instagramUsername,
+      });
+
+      let tabId = null;
+      let outcome = 'error';
+      let error = null;
+
+      try {
+        const baseUrl =
+          job.instagramUrl ||
+          (job.instagramUsername
+            ? `https://www.instagram.com/${job.instagramUsername}/`
+            : null);
+        if (!baseUrl) throw new Error('no instagram url');
+        // Foreground tab: Instagram's Direct composer is heavy and IntersectionObserver-
+        // driven. Chrome throttles hidden tabs, and the composer will simply not
+        // hydrate when the tab is occluded. Keep the window focused during the run.
+        const tab = await chrome.tabs.create({ url: baseUrl, active: true });
+        tabId = tab.id;
+        await waitForTabComplete(tabId, 30000);
+        // Settle: Instagram's SPA hydration + the "Message" button aren't in the
+        // DOM at document_idle. A short pause lets the profile header render.
+        await sleep(jittered(1800, 1200));
+
+        const resp = await sendMessageToTab(
+          tabId,
+          {
+            action: 'sendInstagramDm',
+            body: job.body,
+            username: job.instagramUsername,
+          },
+          90000, // Instagram's DM composer can take a while to open + settle.
+        );
+        if (resp && resp.ok) {
+          outcome = 'sent';
+        } else {
+          error = (resp && resp.error) || 'content-script returned no result';
+          outcome = 'error';
+        }
+      } catch (err) {
+        error = err.message;
+        outcome = 'error';
+      } finally {
+        if (tabId != null) {
+          try { await chrome.tabs.remove(tabId); } catch {}
+        }
+      }
+
+      // Report the outcome upstream. A failure to report is itself a failure
+      // (the dashboard would keep showing the DM as queued forever), so we
+      // downgrade this creator's outcome accordingly.
+      try {
+        await postIgDmResult(apiBase, job.id, {
+          ok: outcome === 'sent',
+          error: outcome === 'sent' ? null : error,
+        });
+      } catch (err) {
+        error = `${error || 'send failed'}; result post also failed: ${err.message}`;
+        outcome = 'error';
+      }
+
+      summary.processed += 1;
+      if (outcome === 'sent') summary.sent += 1;
+      else summary.errors += 1;
+
+      await emitIgDmProgress(senderTabId, {
+        event: 'creator-done',
+        index,
+        total,
+        creatorId: job.id,
+        username: job.instagramUsername,
+        outcome,
+        error,
+      });
+
+      if (i < jobs.length - 1 && !igDmQueueState.abort) {
+        // Randomized pacing between DMs so we don't look like a bot cranking
+        // through profiles every 8s exactly.
+        await sleep(jittered(pace, Math.floor(pace * 0.6)));
+      }
+    }
+
+    await emitIgDmProgress(senderTabId, { event: 'done', summary });
+  } finally {
+    igDmQueueState.running = false;
+    igDmQueueState.abort = false;
   }
 
   return summary;

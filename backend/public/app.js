@@ -7,15 +7,43 @@ const state = {
   stageFilter: null,
 };
 
+// Whether the admin has dismissed this creator's CURRENT flag from the "needs
+// you" list. Computed server-side and returned on each creator row as
+// `flag_dismissed` (see routes/creators.js + db/flagFingerprint.js): the
+// dismissal is stored against a fingerprint of the flag, so it holds only until
+// genuinely new activity that needs a human — a fresh hand-off, a re-priced
+// offer, a status move — shifts that fingerprint and the row re-flags on its
+// own. Server-side so a dismissal syncs across devices and the sidebar
+// pending-dot (campaigns action_count) honors it too.
+function isFlagDismissed(r) {
+  return !!r.flag_dismissed;
+}
+
+// Dismiss the creator's current flag on the server (POST /:id/dismiss-flag).
+// Non-destructive — the negotiation state is untouched, nothing closed or sent.
+async function dismissFlag(r) {
+  await api(`/api/creators/${r.id}/dismiss-flag`, { method: 'POST' });
+}
+
 // Predicate for each clickable stat, mirroring the FILTER (...) definitions the
 // backend uses to compute the counts in the stats bar (see routes/campaigns.js).
 // Keeping these in sync means clicking a stat shows exactly that many rows.
 const STAGE_FILTERS = {
   creators: () => true,
-  // Awaiting outreach: not yet sent, and not an auto-rejected duplicate/stopped.
-  pending: (r) => !r.outreach_sent_at && r.status !== 'duplicate' && r.status !== 'stopped',
-  // Outreach email confirmed sent.
-  outreach: (r) => r.outreach_sent_at != null,
+  // Awaiting outreach: we haven't reached them on any channel yet, and the
+  // row isn't an auto-rejected duplicate / stopped one. "Reached them" covers
+  // both email outreach (outreach_sent_at stamped when Instantly confirms) and
+  // an Instagram Priority DM (ig_dm_sent_at stamped when the extension confirms).
+  // Without the ig_dm_sent_at guard, DM'd creators kept showing up under
+  // Pending even though they'd already been contacted.
+  pending: (r) =>
+    !r.outreach_sent_at &&
+    !r.ig_dm_sent_at &&
+    r.status !== 'duplicate' &&
+    r.status !== 'stopped',
+  // Outreach confirmed sent, on any channel — email OR Instagram DM. Keeps the
+  // "how many creators have we actually reached out to?" number honest.
+  outreach: (r) => r.outreach_sent_at != null || r.ig_dm_sent_at != null,
   replied: (r) => r.status === 'replied',
   // Contract signed or completed (a merely-sent 'pending' contract doesn't count).
   contracted: (r) => r.contract && (r.contract.status === 'signed' || r.contract.status === 'completed'),
@@ -250,8 +278,41 @@ async function selectCampaign(id) {
   el('usage-rights-status').textContent = '';
   el('campaign-instantly-id').value = c.instantly_campaign_id || '';
   el('instantly-status').textContent = '';
+  syncIgDmTemplateUI(c);
   syncStageFilterUI();
   await refreshCreators();
+}
+
+// Render the IG DM template card + Send-IG-DMs button state for a campaign.
+// The button hides entirely when the campaign has no template (there is
+// nothing to send yet); the card's summary hint also swaps between "not set"
+// and "N queued" so the operator sees at a glance whether it's ready.
+function syncIgDmTemplateUI(c) {
+  const card = el('ig-dm-template-card');
+  const text = el('ig-dm-template-text');
+  const hint = el('ig-dm-template-hint');
+  const btn = el('send-ig-dms-btn');
+  card.hidden = false;
+  text.value = c.ig_dm_body || '';
+  el('ig-dm-template-status').textContent = '';
+  const queueCount = c.ig_dm_queue_count || 0;
+  const sentCount = c.ig_dm_sent_count || 0;
+  if (!c.ig_dm_body) {
+    hint.textContent = 'not set';
+    // Open the card automatically when the template is empty so the operator
+    // sees the empty textarea instead of having to expand it themselves.
+    card.open = true;
+    btn.hidden = true;
+  } else {
+    const bits = [];
+    if (queueCount) bits.push(`${queueCount} to DM`);
+    if (sentCount) bits.push(`${sentCount} sent`);
+    hint.textContent = bits.join(' · ') || 'ready';
+    card.open = false;
+    btn.hidden = queueCount === 0;
+    btn.textContent = `Send Instagram DMs (${queueCount})`;
+    btn.disabled = false;
+  }
 }
 
 // Toggle the creator table's stage filter. Clicking the active stage (or the
@@ -386,7 +447,29 @@ function statusPillFor(r) {
     if (isContractApprovalPending(r)) return { cls: 'accepted', text: 'awaiting approval' };
     return { cls: 'accepted', text: 'accepted' };
   }
-  const st = r.status || 'pending_extraction';
+  // IG DM lifecycle. The DM columns are timestamps (creators.ig_dm_sent_at /
+  // ig_dm_queued_at), not additions to the `status` enum, so they're checked
+  // separately. Placed BEFORE the status→pill fallback so a 'no_email' row
+  // that we've since DM'd stops advertising "no email" and shows "IG DM sent"
+  // instead. Reuses the outreach_* pill styles — same visual weight, same
+  // meaning to the operator (queued → sent).
+  if (r.ig_dm_sent_at) return { cls: 'outreach_sent', text: 'IG DM sent' };
+  if (r.ig_dm_queued_at) return { cls: 'outreach_queued', text: 'IG DM queued' };
+  // Normalize the effective status so a legacy stuck row — one where status
+  // is still 'email_found' but the email column has been blanked — reads as
+  // 'no_email' here. The schema.sql cleanup rewrites those rows on boot, but
+  // this backstop keeps the pill honest until the operator refreshes. The
+  // ground-truth signal is r.email, not the status enum.
+  let st = r.status || 'pending_extraction';
+  if (st === 'email_found' && !r.email) st = 'no_email';
+  // 'no_email' isn't a dead end when we have an IG handle — it's just the
+  // signal that the next outreach path is a Priority IG DM. Reuse the
+  // email_found pill styling so the row still reads as "ready to reach out"
+  // rather than muted/failed. The Send IG DM button below carries the actual
+  // action; this pill just names the state so it lines up with the button.
+  if (st === 'no_email' && (r.instagram_username || r.instagram_url)) {
+    return { cls: 'email_found', text: 'IG DM' };
+  }
   return { cls: st, text: st.replace(/_/g, ' ') };
 }
 
@@ -802,6 +885,105 @@ function makeInterveneButton(r, { label = 'Reply hand-off', plain = false } = {}
   return btn;
 }
 
+// Is this creator a candidate for a per-row "Send IG DM" button? Mirrors the
+// backend's IG_DM_ELIGIBLE_STATUSES + prerequisite checks (no email, not
+// already DM'd, has an IG handle we can resolve). The campaign's own template
+// still has to exist for the button to fire — that's enforced on the server
+// and surfaced as a tooltip below rather than hiding the button, so operators
+// discover the "set a DM template first" requirement in situ.
+//
+// Legacy-row defensiveness: rows that landed in `status='email_found'` with
+// no actual email (rejected addresses cleared on the dashboard before the
+// PATCH handler learned to roll status back) are also eligible — the
+// authoritative signal is r.email being empty. The schema.sql cleanup
+// rewrites those rows on boot, but this covers them until the next server
+// restart and any row we miss.
+function isIgDmEligible(r) {
+  if (!r) return false;
+  if (r.email) return false;
+  if (r.ig_dm_sent_at) return false;
+  if (!r.instagram_username && !r.instagram_url) return false;
+  const st = r.status || 'pending_extraction';
+  return (
+    st === 'no_email' ||
+    st === 'pending_extraction' ||
+    st === 'invalid_email' ||
+    st === 'email_found' // stale-status backstop; !r.email above already guarded
+  );
+}
+
+// Per-creator "Send IG DM" button. POSTs to the same /:id/queue-ig-dm endpoint
+// the bulk sender uses; on success it hands the returned single-job array to
+// the extension via the shared OEA_RUN_IG_DM_QUEUE bridge so the send drives
+// through the exact same Instagram flow as the bulk button.
+function makeSendIgDmButton(r) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small cr-send-btn';
+  btn.textContent = 'Send IG DM';
+  // Cache the current campaign's template state so the button self-explains
+  // when it can't send — no template = disabled with a clear tooltip that
+  // points at the template card above.
+  const campaign = state.campaigns.find((c) => c.id === state.selectedCampaignId);
+  const hasTemplate = !!(campaign && campaign.ig_dm_body && String(campaign.ig_dm_body).trim());
+  if (!hasTemplate) {
+    btn.disabled = true;
+    btn.title = 'Set an Instagram DM template for this campaign first (card above).';
+  } else {
+    btn.title = 'Send this creator the campaign\'s IG DM as a Priority Message Request.';
+  }
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const result = await api(`/api/creators/${r.id}/queue-ig-dm`, { method: 'POST' });
+      if (!result || !result.job) {
+        alert('Server returned no job payload — nothing to send.');
+        return;
+      }
+      // Refresh eagerly so the row already reflects "IG DM queued" while the
+      // extension starts driving Instagram in the background.
+      await refreshCreators();
+      await refreshCampaigns();
+      startExtensionIgDmSend([result.job]);
+    } catch (err) {
+      alert(err.message);
+      btn.disabled = false;
+    }
+  };
+  return btn;
+}
+
+// "Dismiss" — snooze THIS flag from the "needs you" list without opening its
+// pop-up/configurator. Works for any flagged row (offer awaiting approval,
+// accepted deal awaiting contract approval, or an AI hand-off). Records the
+// current flag on the server (see dismissFlag) so the creator drops out of the
+// banner, the top-of-table sort, the row highlight and the inline launchers —
+// but nothing about the underlying state changes: the offer stays open, the
+// deal stays unapproved, the hand-off message stays parked. The dismissal is
+// stored server-side: it syncs across devices, is reflected in the sidebar
+// pending-dot, and stays put until there's genuinely new activity that needs a
+// human — a fresh hand-off, a re-priced offer, or a status move — at which
+// point the flag re-surfaces on its own.
+function makeDismissFlagButton(r) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small cr-dismiss-btn';
+  btn.textContent = 'Dismiss';
+  btn.title = 'Hide this from your flagged list for now — it re-surfaces on any new activity';
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await dismissFlag(r);
+      await refreshCreators();
+      await refreshCampaigns();
+    } catch (err) {
+      alert(err.message);
+      btn.disabled = false;
+    }
+  };
+  return btn;
+}
+
 // Status column: pill + delete + (send-outreach when pending) + timeline.
 // Offer-portal status pill (old creators): reflects the current offer's state
 // across the portal + messaging channels.
@@ -968,13 +1150,30 @@ function renderStatusCell(r, cell) {
     await refreshCampaigns();
   };
   top.appendChild(del);
+
+  // Dismiss sits beside delete (rather than down with the type-specific
+  // launcher) so the two dismissive actions on a flagged row — snooze the flag
+  // vs. remove the creator outright — read as a pair. Shown for every flagged
+  // row (offer to decide, deal to approve, or hand-off), matching the same
+  // isDelegateActionable check that puts the row in the "needs you" set in the
+  // first place (it already excludes an already-dismissed flag).
+  if (isDelegateActionable(r)) {
+    top.appendChild(makeDismissFlagButton(r));
+  }
+
   cell.appendChild(top);
 
   // Offer-portal negotiation status (old creators) — portal + WhatsApp/iMessage
   // updates, shown right under the main status pill.
   if (r.portal_offer) cell.appendChild(renderPortalOfferBlock(r));
 
-  if (r.status === 'email_found') {
+  // Guard on r.email as well as the status. If a stale row is still tagged
+  // 'email_found' but its address has since been cleared (e.g. the operator
+  // rejected an incorrect email but the row hasn't reloaded yet), showing
+  // Send outreach anyway would 400 the moment it's clicked. The row instead
+  // falls through to the IG DM affordance, which is the right path when
+  // there's no address to email.
+  if (r.status === 'email_found' && r.email) {
     const send = document.createElement('button');
     send.type = 'button';
     send.className = 'ghost small cr-send-btn';
@@ -991,10 +1190,16 @@ function renderStatusCell(r, cell) {
       }
     };
     cell.appendChild(send);
+  } else if (isIgDmEligible(r)) {
+    // Per-row fallback for the bulk "Send Instagram DMs" button: any single
+    // creator whose email we couldn't find can be DM'd on the spot without
+    // sweeping the whole campaign. Same code path — queue-ig-dm renders the
+    // template and hands the job to the extension for a Priority send.
+    cell.appendChild(makeSendIgDmButton(r));
   }
 
   // Each delegation type gets an inline launcher, right by the timeline — no
-  // separate Delegate view.
+  // separate Delegate view. "Dismiss" (up by delete) snoozes any of the three.
   //   • offer awaiting approval → "Decide offer" (IG + Chrome-extension panel)
   //     plus "Configure here", the in-dashboard fallback pop-up for when the
   //     extension isn't loaded
@@ -1002,9 +1207,16 @@ function renderStatusCell(r, cell) {
   //   • AI hand-off             → "Reply hand-off" pop-up
   // The pop-up (openInterventionModal) also folds in the reply box whenever the
   // same creator has a parked message, so at most one intervene button is shown.
-  if (isOfferActionable(r)) {
-    cell.appendChild(makeDecideOfferButton(r));
-    cell.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+  // A dismissed flag hides the launcher too — the row reads as normal until the
+  // flag re-surfaces.
+  if (isFlagDismissed(r)) {
+    // no launcher while snoozed
+  } else if (isOfferActionable(r)) {
+    const offerActions = document.createElement('div');
+    offerActions.className = 'cr-offer-actions';
+    offerActions.appendChild(makeDecideOfferButton(r));
+    offerActions.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+    cell.appendChild(offerActions);
   } else if (isContractApprovalPending(r)) {
     cell.appendChild(makeInterveneButton(r, { label: 'Approve deal' }));
   } else if (r.needs_human) {
@@ -2413,6 +2625,65 @@ el('send-emails-btn').addEventListener('click', async () => {
   }
 });
 
+// --- Instagram DM template + Send-IG-DMs ---------------------------------
+// The per-campaign IG DM template is edited on the campaign page. Saving it
+// enables the "Send Instagram DMs" button as soon as there is at least one
+// eligible creator (no email + IG handle) waiting.
+el('save-ig-dm-template-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('save-ig-dm-template-btn');
+  const status = el('ig-dm-template-status');
+  const body = el('ig-dm-template-text').value;
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ig_dm_body: body }),
+    });
+    status.textContent = body.trim() ? 'Saved.' : 'Cleared.';
+    await refreshCampaigns();
+    const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+    if (c) syncIgDmTemplateUI(c);
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el('send-ig-dms-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+  const queueCount = c ? c.ig_dm_queue_count : 0;
+  if (!queueCount) { alert('Nothing to send — every creator either has an email or has already been DM’d.'); return; }
+  if (!confirm(
+    `Send Instagram DMs to ${queueCount} creator(s) as Priority Message Requests?\n\n` +
+    `The Chrome extension will drive Instagram — keep the browser window focused ` +
+    `and don't switch away while it runs.`,
+  )) return;
+  const btn = el('send-ig-dms-btn');
+  btn.disabled = true;
+  try {
+    const result = await api('/api/creators/bulk/queue-ig-dm', {
+      method: 'POST',
+      body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
+    });
+    if (!result.queued) {
+      showIgDmProgress(`Nothing to send (${result.skipped || 0} skipped — no IG handle).`);
+      el('ig-dm-cancel-btn').textContent = 'Hide';
+      await refreshCreators();
+      await refreshCampaigns();
+      return;
+    }
+    startExtensionIgDmSend(result.jobs);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // --- Extension bridge ----------------------------------------------------
 // The Chrome extension content script announces itself on load with a
 // window.postMessage({type: 'OEA_EXTENSION_READY'}). Track that so we can
@@ -2431,7 +2702,101 @@ window.addEventListener('message', (event) => {
   if (msg.type === 'OEA_SCRAPE_PROGRESS') {
     handleScrapeProgress(msg);
   }
+  if (msg.type === 'OEA_IG_DM_PROGRESS') {
+    handleIgDmProgress(msg);
+  }
 });
+
+// --- IG DM queue progress (mirrors scrape-progress UX) --------------------
+let igDmInFlight = false;
+
+function showIgDmProgress(text) {
+  el('ig-dm-progress').hidden = false;
+  el('ig-dm-progress-text').textContent = text;
+  el('ig-dm-cancel-btn').textContent = 'Cancel';
+}
+function hideIgDmProgress() {
+  el('ig-dm-progress').hidden = true;
+  el('ig-dm-progress-text').textContent = '';
+}
+
+el('ig-dm-cancel-btn').addEventListener('click', () => {
+  if (el('ig-dm-cancel-btn').textContent === 'Hide') {
+    hideIgDmProgress();
+    return;
+  }
+  window.postMessage({ type: 'OEA_ABORT_IG_DM_QUEUE' }, window.location.origin);
+  showIgDmProgress('Cancelling after current DM…');
+});
+
+function handleIgDmProgress(msg) {
+  if (msg.event === 'start') {
+    showIgDmProgress(`Sending 0/${msg.total} Instagram DMs…`);
+  } else if (msg.event === 'creator-start') {
+    showIgDmProgress(
+      `DM ${msg.index}/${msg.total} — @${msg.username || msg.creatorId}…`,
+    );
+  } else if (msg.event === 'creator-done') {
+    let tail;
+    if (msg.outcome === 'sent') {
+      tail = `sent to @${msg.username || msg.creatorId}`;
+    } else {
+      tail = `failed on @${msg.username || msg.creatorId}: ${msg.error || 'unknown'}`;
+    }
+    showIgDmProgress(`DM ${msg.index}/${msg.total} — ${tail}`);
+    refreshCreators();
+  } else if (msg.event === 'done') {
+    igDmInFlight = false;
+    const s = msg.summary || {};
+    showIgDmProgress(
+      `Done. ${s.processed || 0} processed · ${s.sent || 0} sent · ${s.errors || 0} failed.`,
+    );
+    el('ig-dm-cancel-btn').textContent = 'Hide';
+    refreshCreators();
+    refreshCampaigns();
+  } else if (msg.event === 'aborted') {
+    igDmInFlight = false;
+    showIgDmProgress(`Aborted at ${msg.index}/${msg.total}.`);
+    el('ig-dm-cancel-btn').textContent = 'Hide';
+    refreshCreators();
+    refreshCampaigns();
+  } else if (msg.event === 'error') {
+    igDmInFlight = false;
+    showIgDmProgress(`Extension error: ${msg.error}`);
+    el('ig-dm-cancel-btn').textContent = 'Hide';
+  }
+}
+
+// Hand the pre-rendered IG DM jobs off to the extension. The extension drives
+// Instagram — navigates each profile, opens the DM composer, types the body,
+// flips it to a Priority Message Request, and reports each result back via
+// /api/creators/:id/ig-dm-result (the backend already logs those events).
+function startExtensionIgDmSend(jobs) {
+  if (!jobs || !jobs.length) return;
+  window.postMessage({ type: 'OEA_PING' }, window.location.origin);
+  igDmInFlight = true;
+  showIgDmProgress(`Starting ${jobs.length} Instagram DM(s)…`);
+  window.postMessage(
+    {
+      type: 'OEA_RUN_IG_DM_QUEUE',
+      payload: {
+        apiBase: window.location.origin,
+        jobs,
+        pacingMs: 8000,
+      },
+    },
+    window.location.origin,
+  );
+  setTimeout(() => {
+    if (!extensionBridge.ready) {
+      igDmInFlight = false;
+      showIgDmProgress(
+        'Extension not detected. Load the unpacked extension at chrome://extensions then reload this page.',
+      );
+      el('ig-dm-cancel-btn').textContent = 'Hide';
+    }
+  }, 2000);
+}
 
 function showScrapeProgress(text) {
   el('scrape-progress').hidden = false;
@@ -2745,8 +3110,10 @@ function isContractApprovalPending(r) {
 
 // Needs a human right now: an AI hand-off, an offer awaiting approval, or an
 // accepted deal awaiting the brand POC's contract approval. Drives the top-of-
-// table sort, the row highlight, and the banner count.
+// table sort, the row highlight, and the banner count. A flag the admin has
+// temporarily dismissed (Dismiss button) is suppressed until it re-surfaces.
 function isDelegateActionable(r) {
+  if (isFlagDismissed(r)) return false;
   return !!r.needs_human || isOfferActionable(r) || isContractApprovalPending(r);
 }
 

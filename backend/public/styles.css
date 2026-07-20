@@ -28,8 +28,8 @@
 
   --green: #147a52;        /* positive terminal state / rate */
   --green-live: #3fae74;   /* live indicator */
-  --danger: #c53127;       /* delegate badge / destructive */
-  --danger-live: #e0463f;  /* pending dot */
+  --danger: #FF3140;       /* delegate badge / destructive */
+  --danger-live: #FF3140;  /* pending dot */
   --warn: #b4471f;         /* remove-all / warnings */
 
   --radius: 16px;
@@ -145,7 +145,7 @@ a { color: var(--ink); }
 .tree .campaign-item.has-pending .campaign-name { margin-right: 0; }
 .tree .pending-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--danger-live);
-  box-shadow: 0 0 0 3px rgba(224, 70, 63, 0.18);
+  box-shadow: 0 0 0 3px rgba(255, 49, 64, 0.18);
   margin-left: auto; margin-right: 2px; flex-shrink: 0;
 }
 .tree .count-pill {
@@ -216,6 +216,24 @@ a { color: var(--ink); }
   padding: 24px; margin-bottom: 22px; box-shadow: var(--shadow-card);
 }
 .card h2 { font-weight: 600; font-size: 18px; letter-spacing: -0.01em; margin: 0 0 16px; }
+
+/* Collapsible IG DM template card. Uses <details><summary> so it stays closed
+   by default (once a template is set) but pops open when it's empty. The
+   summary lays out like a card-header with a status hint on the right. */
+details.card summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin: 0;
+}
+details.card summary::-webkit-details-marker { display: none; }
+details.card summary h2 { margin: 0; }
+details.card[open] summary { margin-bottom: 8px; }
+details.card summary::after {
+  content: '▸'; color: var(--ink-2); font-size: 12px; transition: transform 0.15s;
+  margin-left: 4px;
+}
+details.card[open] summary::after { transform: rotate(90deg); }
+details.card .subhead { margin: 6px 0 12px; }
 .card-header {
   display: flex; align-items: center; justify-content: space-between;
   gap: 16px; flex-wrap: wrap; margin-bottom: 20px;
@@ -450,7 +468,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status-pill.followup_sent      { background: #f3e4cb; color: #855a1a; }
 .status-pill.replied            { background: #dde7f7; color: #2952a3; }
 .status-pill.accepted           { background: #e1f1e9; color: #147a52; }
-.status-pill.failed             { background: #fbe6e3; color: #c53127; }
+.status-pill.failed             { background: #fbe6e3; color: #FF3140; }
 .status-pill.invalid_email      { background: #fbe6e3; color: #b4471f; }
 .status-pill.duplicate          { background: #ece9f5; color: #6b5aa8; }
 .status-pill.stopped            { background: #eceff3; color: #5b6472; }
@@ -594,7 +612,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .attention-banner:hover { background: #fbeade; border-color: #ecc3b1; }
 .attention-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--danger);
-  flex-shrink: 0; box-shadow: 0 0 0 4px rgba(197, 49, 39, 0.12);
+  flex-shrink: 0; box-shadow: 0 0 0 4px rgba(255, 49, 64, 0.12);
 }
 .attention-text { font-size: 13px; color: var(--ink); }
 .attention-text b { font-weight: 700; }
@@ -604,8 +622,9 @@ button:disabled { opacity: 0.5; cursor: default; }
    rail so the intervention reads at a glance. */
 .creator-row.needs-attention {
   background: #fdf7f4;
-  box-shadow: inset 3px 0 0 var(--warn);
+  box-shadow: inset 3px 0 0 var(--danger);
   border-radius: 0 8px 8px 0;
+  padding-left: 18px;
 }
 
 /* The in-table hand-off / approval launcher — same footprint as "Decide offer"
@@ -615,6 +634,11 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--warn); background: #fdf0ea; border-color: #f2d4c7; font-weight: 600;
 }
 .ghost.small.cr-intervene-btn:hover { background: #fbe4d9; border-color: #ecc3b1; }
+
+/* Offer-actionable row: "Decide offer" + "Configure here" sit side by side
+   under the status pill, wrapping if the column gets narrow. ("Dismiss" lives
+   up in .cr-status-top, next to the delete icon.) */
+.cr-offer-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* The pop-up reuses the email-modal shell; its body holds the reply/approval
    blocks below and scrolls as normal flow rather than pre-wrapped email text. */

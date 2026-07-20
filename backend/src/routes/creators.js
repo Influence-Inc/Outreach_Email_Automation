@@ -10,6 +10,8 @@ const offerPortal = require('../services/offers');
 const segmentation = require('../services/segmentation');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
+const { renderIgDm } = require('../services/templates');
+const { flagDismissedSql } = require('../db/flagFingerprint');
 
 // Assemble the off-Instagram email-enrichment context for a creator: the links
 // captured by the extension (creators.bio_links) plus anything a fresh scrape
@@ -64,6 +66,9 @@ const RATE_LOG_TYPES = [
   'outreach_queued',
   'sent_outreach',
   'sent_followup',
+  'ig_dm_queued',
+  'ig_dm_sent',
+  'ig_dm_failed',
   'replied',
   'rate_quoted',
   'rate_offer_sent',
@@ -138,6 +143,13 @@ function rateLogEntry(type, detail, msg, summary) {
       // The step number is still recorded on the event's detail for auditing,
       // but the timeline label stays clean — just "Follow-up sent".
       return { text: 'Follow-up sent', tone: 'done' };
+    case 'ig_dm_queued':
+      // Extension has been handed the DM and is driving Instagram's DM composer.
+      return { text: 'Instagram DM queued', tone: 'active' };
+    case 'ig_dm_sent':
+      return { text: 'Instagram DM sent (priority)', tone: 'done' };
+    case 'ig_dm_failed':
+      return { text: d.error ? `Instagram DM failed — ${d.error}` : 'Instagram DM failed', tone: 'muted' };
     case 'replied': {
       // Never a bare "Creator replied" — surface a recap of what the creator
       // actually wrote: the Claude summary of the whole email when we have one,
@@ -249,8 +261,14 @@ function rateLogEntry(type, detail, msg, summary) {
 // taking up its own timeline row above the sent one. Returns a new array.
 function collapseSupersededSteps(log) {
   const entries = Array.isArray(log) ? log : [];
-  if (!entries.some((e) => e.type === 'sent_outreach')) return entries.slice();
-  return entries.filter((e) => e.type !== 'outreach_queued');
+  const hasSent = entries.some((e) => e.type === 'sent_outreach');
+  const hasDmSent = entries.some((e) => e.type === 'ig_dm_sent');
+  if (!hasSent && !hasDmSent) return entries.slice();
+  return entries.filter((e) => {
+    if (hasSent && e.type === 'outreach_queued') return false;
+    if (hasDmSent && e.type === 'ig_dm_queued') return false;
+    return true;
+  });
 }
 
 // The events whose timeline label summarizes an inbound creator reply vs. an
@@ -413,8 +431,13 @@ router.get('/', async (req, res, next) => {
       params.push(status);
       where += ` AND status = $${params.length}`;
     }
+    // `flag_dismissed` is derived, not stored: TRUE only while the stored
+    // dismissal fingerprint still matches the creator's current flag. New
+    // activity shifts the fingerprint and the row re-flags on its own. The
+    // dashboard reads this boolean directly (see isFlagDismissed in app.js).
     const rows = await db.many(
-      `SELECT * FROM creators ${where} ORDER BY created_at DESC`,
+      `SELECT *, ${flagDismissedSql()} AS flag_dismissed
+         FROM creators ${where} ORDER BY created_at DESC`,
       params,
     );
     await attachRateLog(rows);
@@ -655,6 +678,22 @@ router.patch('/:id', async (req, res, next) => {
       updates.push(
         `status = CASE WHEN status IN ('pending_extraction','no_email','invalid_email') THEN 'email_found' ELSE status END`,
       );
+    } else if (
+      Object.prototype.hasOwnProperty.call(body, 'email') &&
+      (body.email === '' || body.email == null)
+    ) {
+      // Clearing the email (e.g. the operator rejected an incorrect address
+      // and blanked the cell). Roll back an 'email_found' / 'invalid_email'
+      // status to 'no_email' so the row's status pill and its per-row action
+      // buttons stop advertising a send path we no longer have an address
+      // for — otherwise the Send outreach button (gated on status ===
+      // 'email_found') sticks around after the address is gone. Post-send
+      // statuses (outreach_queued, outreach_sent, followup_sent, replied,
+      // duplicate, stopped) are left alone: the outreach did happen and its
+      // history shouldn't be rewritten by a later edit to the address column.
+      updates.push(
+        `status = CASE WHEN status IN ('email_found','invalid_email') THEN 'no_email' ELSE status END`,
+      );
     }
     updates.push('updated_at = NOW()');
     const row = await db.one(
@@ -796,6 +835,225 @@ router.post('/bulk/delete', async (req, res, next) => {
     if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
     const result = await db.query(`DELETE FROM creators WHERE campaign_id = $1`, [campaign_id]);
     res.json({ ok: true, deleted: result.rowCount });
+  } catch (err) { next(err); }
+});
+
+// --- Instagram DM queue ---------------------------------------------------
+// For creators without an email, we send the outreach as an Instagram Direct
+// Message instead. The Chrome extension does the actual sending (Meta gives no
+// server-side DM API for cold outreach), so these endpoints just render the
+// per-campaign IG DM template, mark the creator as queued, and return the queue
+// for the extension to drive. Result reporting flows back through the
+// /:id/ig-dm-result and /bulk/ig-dm-result endpoints below.
+
+const IG_DM_ELIGIBLE_STATUSES = new Set([
+  'no_email',
+  'pending_extraction',
+  'invalid_email',
+]);
+
+async function loadCampaignForIgDm(campaignId) {
+  return db.one(
+    `SELECT id, name, brand_name, ig_dm_body FROM campaigns WHERE id = $1`,
+    [campaignId],
+  );
+}
+
+// Vars available inside the IG DM template. Kept in sync with the email
+// templates' placeholders so an admin who copies from one to the other doesn't
+// have to relearn the syntax. firstName falls back to the IG @handle so a
+// missing name doesn't render "Hi ,".
+function igDmVars(creator, campaign) {
+  const firstName =
+    creator.first_name ||
+    (creator.full_name ? String(creator.full_name).split(/\s+/)[0] : '') ||
+    (creator.instagram_username ? `@${creator.instagram_username}` : '') ||
+    'there';
+  return {
+    firstName,
+    brandName: campaign.brand_name || '',
+    campaignName: campaign.name || '',
+  };
+}
+
+// Build a single queue item the extension can drive: everything it needs to
+// find the profile and send the DM. Returns null (with a reason) when this
+// creator can't be sent to right now — the caller uses the reason to skip it.
+function buildIgDmJob(creator, campaign) {
+  if (!creator.instagram_username && !creator.instagram_url) {
+    return { skip: 'no_instagram_handle' };
+  }
+  const body = renderIgDm(campaign.ig_dm_body, igDmVars(creator, campaign));
+  if (!body) return { skip: 'no_template' };
+  return {
+    job: {
+      id: creator.id,
+      instagramUrl: creator.instagram_url,
+      instagramUsername: creator.instagram_username,
+      firstName: creator.first_name || null,
+      body,
+    },
+  };
+}
+
+// Queue IG DMs for every eligible creator in a campaign (no email + not yet
+// DM'd + status is one where DM is appropriate + has an IG handle). Returns
+// the queue so the dashboard can hand it to the extension in one hop.
+// Registered before /:id/queue-ig-dm so "bulk" isn't swallowed as an :id.
+router.post('/bulk/queue-ig-dm', async (req, res) => {
+  try {
+    const { campaign_id, creator_ids } = req.body || {};
+    if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+    const campaign = await loadCampaignForIgDm(campaign_id);
+    if (!campaign) return res.status(404).json({ error: 'campaign not found' });
+    if (!campaign.ig_dm_body || !String(campaign.ig_dm_body).trim()) {
+      return res.status(400).json({
+        error: 'This campaign has no Instagram DM template. Add one on the campaign page first.',
+      });
+    }
+
+    // Optional narrower scope: only queue this specific set of creators. Used
+    // by row-level "Send DM" affordances on the dashboard.
+    let scoped = null;
+    if (creator_ids !== undefined) {
+      scoped = (Array.isArray(creator_ids) ? creator_ids : [])
+        .map((n) => Number(n))
+        .filter((n) => Number.isInteger(n));
+      if (!scoped.length) return res.json({ ok: true, queued: 0, jobs: [] });
+    }
+
+    const params = [campaign_id, [...IG_DM_ELIGIBLE_STATUSES]];
+    let where = `campaign_id = $1
+         AND (email IS NULL OR email = '')
+         AND ig_dm_sent_at IS NULL
+         AND status = ANY($2::text[])`;
+    if (scoped) {
+      params.push(scoped);
+      where += ` AND id = ANY($${params.length}::int[])`;
+    }
+    const targets = await db.many(
+      `SELECT * FROM creators WHERE ${where} ORDER BY created_at ASC`,
+      params,
+    );
+
+    const jobs = [];
+    let skipped = 0;
+    for (const creator of targets) {
+      const built = buildIgDmJob(creator, campaign);
+      if (built.skip) { skipped += 1; continue; }
+      await db.query(
+        `UPDATE creators
+           SET ig_dm_queued_at = NOW(),
+               ig_dm_body      = $2,
+               ig_dm_error     = NULL,
+               updated_at      = NOW()
+         WHERE id = $1`,
+        [creator.id, built.job.body],
+      );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_queued', $2)`,
+        [creator.id, { username: creator.instagram_username || null }],
+      );
+      jobs.push(built.job);
+    }
+    res.json({ ok: true, queued: jobs.length, skipped, jobs });
+  } catch (err) {
+    console.error('bulk queue-ig-dm failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Queue an IG DM for a single creator. Returns the job payload the extension
+// needs to drive the send. Refuses creators that already have an email (they
+// belong on the email path) and creators whose campaign has no IG DM template
+// yet. Idempotent: re-queueing before the extension confirms the send just
+// re-stamps ig_dm_queued_at and returns the same job.
+router.post('/:id/queue-ig-dm', async (req, res, next) => {
+  try {
+    const creator = await db.one(
+      `SELECT * FROM creators WHERE id = $1`,
+      [req.params.id],
+    );
+    if (!creator) return res.status(404).json({ error: 'not found' });
+    if (creator.email) {
+      return res.status(409).json({
+        error: `creator ${creator.id} already has an email — use send-outreach instead`,
+      });
+    }
+    if (creator.ig_dm_sent_at) {
+      return res.status(409).json({ error: `creator ${creator.id} was already DM'd` });
+    }
+    const campaign = await loadCampaignForIgDm(creator.campaign_id);
+    if (!campaign) return res.status(404).json({ error: 'campaign not found' });
+
+    const built = buildIgDmJob(creator, campaign);
+    if (built.skip === 'no_template') {
+      return res.status(400).json({
+        error: 'This campaign has no Instagram DM template. Add one on the campaign page first.',
+      });
+    }
+    if (built.skip === 'no_instagram_handle') {
+      return res.status(400).json({ error: 'creator has no Instagram handle to DM' });
+    }
+
+    const updated = await db.one(
+      `UPDATE creators
+         SET ig_dm_queued_at = NOW(),
+             ig_dm_body      = $2,
+             ig_dm_error     = NULL,
+             updated_at      = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [creator.id, built.job.body],
+    );
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_queued', $2)`,
+      [creator.id, { username: creator.instagram_username || null }],
+    );
+    res.json({ ok: true, creator: updated, job: built.job });
+  } catch (err) { next(err); }
+});
+
+// Extension calls back with the result of one DM send. `ok:true` stamps
+// ig_dm_sent_at; `ok:false` records the error and leaves the creator queued so
+// the operator can retry it. The event is logged either way for the timeline.
+router.post('/:id/ig-dm-result', async (req, res, next) => {
+  try {
+    const { ok, error } = req.body || {};
+    const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    if (!creator) return res.status(404).json({ error: 'not found' });
+
+    if (ok === true) {
+      const updated = await db.one(
+        `UPDATE creators
+           SET ig_dm_sent_at = NOW(),
+               ig_dm_error   = NULL,
+               updated_at    = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [creator.id],
+      );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_sent', $2)`,
+        [creator.id, { username: creator.instagram_username || null }],
+      );
+      return res.json({ ok: true, creator: updated });
+    }
+
+    const errMsg = typeof error === 'string' && error ? error : 'unknown extension error';
+    const updated = await db.one(
+      `UPDATE creators
+         SET ig_dm_error = $2,
+             updated_at  = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [creator.id, errMsg],
+    );
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_failed', $2)`,
+      [creator.id, { error: errMsg, username: creator.instagram_username || null }],
+    );
+    res.json({ ok: false, creator: updated });
   } catch (err) { next(err); }
 });
 

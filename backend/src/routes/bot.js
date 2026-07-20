@@ -10,6 +10,7 @@ const express = require('express');
 const db = require('../db');
 const contracts = require('../services/contracts');
 const { runBackfill } = require('../services/contractBackfill');
+const { runBackfill: runDashboardBackfill } = require('../services/dashboardBackfill');
 
 const router = express.Router();
 
@@ -78,6 +79,24 @@ router.post('/sync-contracts', requireBotToken, async (req, res, next) => {
   } catch (err) {
     if (err.code === 'NOT_CONFIGURED') {
       return res.status(400).json({ error: 'CREATOR_DB_URL is not set on this service' });
+    }
+    next(err);
+  }
+});
+
+// POST /api/bot/sync-contracts-to-dashboard[?dryRun=true][&limit=N]
+// One-shot backfill trigger: push already-signed contracts to the campaign
+// dashboard (same logic as `npm run sync:dashboard`). Guarded by
+// OUTREACH_BOT_TOKEN like the rest of the bot API. Idempotent.
+router.post('/sync-contracts-to-dashboard', requireBotToken, async (req, res, next) => {
+  try {
+    const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : null;
+    const result = await runDashboardBackfill({ dryRun, limit });
+    res.json(result);
+  } catch (err) {
+    if (err.code === 'NOT_CONFIGURED') {
+      return res.status(400).json({ error: 'CAMPAIGN_DASHBOARD_URL is not set on this service' });
     }
     next(err);
   }

@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { syncCampaigns } = require('../services/campaignsApi');
 const { computeOffers } = require('../services/pricing');
+const { flagDismissedSql } = require('../db/flagFingerprint');
 
 const router = express.Router();
 
@@ -12,21 +13,40 @@ router.get('/', async (_req, res, next) => {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
+              c.ig_dm_body,
               COUNT(cr.id)::int AS creator_count,
+              -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
+              -- creators without an email who haven't been DM'd yet.
+              COUNT(cr.id) FILTER (
+                WHERE (cr.email IS NULL OR cr.email = '')
+                  AND cr.ig_dm_sent_at IS NULL
+                  AND cr.status IN ('no_email','pending_extraction','invalid_email')
+              )::int AS ig_dm_queue_count,
+              COUNT(cr.id) FILTER (WHERE cr.ig_dm_sent_at IS NOT NULL)::int AS ig_dm_sent_count,
               -- email_found_count feeds the "Send outreach" confirmation dialog
               -- (creators with an email but no outreach yet); not shown as a stat.
               COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
-              -- Outreach: creators the outreach email has actually gone out to,
-              -- regardless of any later follow-ups/replies. outreach_sent_at is
-              -- stamped only once Instantly CONFIRMS the send (not at enrollment),
-              -- so a queued-but-not-yet-sent creator is deliberately not counted
-              -- here — it still reads as pending until the email truly sends.
-              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS outreach_sent_count,
-              -- Pending: creators still awaiting their outreach email to actually
-              -- go out — this includes 'outreach_queued' leads (enrolled in
-              -- Instantly, send not yet confirmed). Excludes duplicates
-              -- (auto-rejected) and stopped creators, which never send.
-              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NULL AND cr.status NOT IN ('duplicate', 'stopped'))::int AS pending_count,
+              -- Outreach: creators we've actually reached, on ANY channel —
+              -- outreach_sent_at (email, stamped when Instantly confirms) OR
+              -- ig_dm_sent_at (Instagram Priority DM, stamped when the extension
+              -- confirms). Includes both so the "how many reached?" number is
+              -- honest regardless of the channel used. A queued-but-not-yet-sent
+              -- creator is deliberately not counted here — it still reads as
+              -- pending until the send truly lands.
+              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL OR cr.ig_dm_sent_at IS NOT NULL)::int AS outreach_sent_count,
+              -- Pending: creators we haven't reached yet on any channel — no
+              -- email sent AND no IG DM sent. This includes 'outreach_queued'
+              -- leads (enrolled in Instantly, email not yet confirmed) and
+              -- 'ig_dm_queued' rows (DM handed to the extension, not yet
+              -- confirmed). Excludes duplicates (auto-rejected) and stopped
+              -- creators, which never send. Without the ig_dm_sent_at guard,
+              -- DM'd creators showed up under Pending even after we'd already
+              -- reached them.
+              COUNT(cr.id) FILTER (
+                WHERE cr.outreach_sent_at IS NULL
+                  AND cr.ig_dm_sent_at IS NULL
+                  AND cr.status NOT IN ('duplicate', 'stopped')
+              )::int AS pending_count,
               COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
               -- Removed: creators whose outreach was explicitly stopped (removed
               -- from the campaign). The automated follow-up steps skip these.
@@ -45,11 +65,16 @@ router.get('/', async (_req, res, next) => {
               -- action_count also includes accepted deals parked for the brand
               -- POC's go-ahead (no approval recorded, no contract yet) — they
               -- render as approval cards in the Delegate window.
+              -- A creator the admin has dismissed (flag snoozed from the
+              -- dashboard) drops out of the count until new activity re-flags it
+              -- (flagDismissedSql), so the sidebar pending-dot matches the table.
               COUNT(cr.id) FILTER (
-                WHERE cr.needs_human
+                WHERE (
+                     cr.needs_human
                    OR (cr.suggested_offers IS NOT NULL AND cr.negotiation_status = 'AWAITING_APPROVAL')
                    OR (cr.negotiation_status = 'ACCEPTED' AND NOT cr.contract_approved
                        AND NOT EXISTS (SELECT 1 FROM contracts ct2 WHERE ct2.creator_id = cr.id))
+                ) AND NOT ${flagDismissedSql('cr.')}
               )::int AS action_count
        FROM campaigns c
        LEFT JOIN creators cr ON cr.campaign_id = c.id
@@ -87,9 +112,10 @@ router.patch('/:id', async (req, res, next) => {
     const hasMaxCpm = Object.prototype.hasOwnProperty.call(body, 'max_cpm');
     const hasInstantly = Object.prototype.hasOwnProperty.call(body, 'instantly_campaign_id');
     const hasUsageRights = Object.prototype.hasOwnProperty.call(body, 'usage_rights_policy');
-    if (!hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights) {
+    const hasIgDm = Object.prototype.hasOwnProperty.call(body, 'ig_dm_body');
+    if (!hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm) {
       return res.status(400).json({
-        error: 'template_id, max_cpm, instantly_campaign_id or usage_rights_policy is required',
+        error: 'template_id, max_cpm, instantly_campaign_id, usage_rights_policy or ig_dm_body is required',
       });
     }
 
@@ -133,6 +159,17 @@ router.patch('/:id', async (req, res, next) => {
       }
       params.push(policy);
       sets.push(`usage_rights_policy = $${params.length}`);
+    }
+
+    if (hasIgDm) {
+      const raw = body.ig_dm_body;
+      if (raw != null && typeof raw !== 'string') {
+        return res.status(400).json({ error: 'ig_dm_body must be a string or null' });
+      }
+      // Trim; empty string clears the template so the Send-IG-DMs button disables.
+      const value = raw == null ? null : String(raw).trim() || null;
+      params.push(value);
+      sets.push(`ig_dm_body = $${params.length}`);
     }
 
     const row = await db.one(

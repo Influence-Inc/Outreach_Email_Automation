@@ -167,6 +167,16 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegate_question TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS delegated_at      TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_creators_needs_human ON creators(needs_human) WHERE needs_human;
 
+-- "Dismiss" snoozes a creator out of the flagged / "needs you" list from the
+-- dashboard without touching the negotiation state. We store the fingerprint of
+-- the flag that was dismissed (an md5 over the flag-raising columns, see
+-- db/flagFingerprint.js) rather than a plain boolean, so the dismissal holds
+-- only while the flag is unchanged: genuinely new activity that needs a human
+-- shifts the fingerprint, the stored value no longer matches, and the creator
+-- re-flags on its own. Server-side so a dismissal syncs across devices and the
+-- campaigns action_count (sidebar pending-dot) can honor it.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS flag_dismissed_fp TEXT;
+
 -- Instantly.ai hybrid integration. reply_to_uuid is Instantly's thread handle,
 -- used to send threaded negotiation replies via POST /api/v2/emails/reply.
 -- latest_inbound_text holds the creator's most recent reply text, written by
@@ -391,3 +401,43 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS prior_campaigns     JSONB;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS whatsapp TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS imessage TEXT;
 CREATE INDEX IF NOT EXISTS idx_creators_segment ON creators(creator_segment);
+-- Per-campaign Instagram DM template. Renders through the same {firstName}/
+-- {brandName}/{campaignName} placeholders as the email templates. Used by the
+-- Chrome extension's IG DM sender when a creator has no email — the message is
+-- typed into Instagram's Direct composer as a Priority message request so it
+-- lands in the recipient's main inbox instead of the general Requests queue.
+-- NULL / empty = IG DM sending is disabled for this campaign (the Send IG DMs
+-- button on the dashboard is disabled until an admin fills a template in).
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS ig_dm_body TEXT;
+
+-- IG DM send tracking on creators. Distinct from the email fields so the
+-- outreach lifecycle stays uncontaminated — a creator can have BOTH an email
+-- outreach and an IG DM sent (rare, but possible if we later discover an email).
+--   ig_dm_queued_at   — dashboard queued the DM for the extension to send
+--   ig_dm_sent_at     — extension confirmed the DM went out
+--   ig_dm_body        — the exact rendered body sent (audit)
+--   ig_dm_error       — extension's last failure reason
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_queued_at TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_sent_at   TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_body      TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_error     TEXT;
+CREATE INDEX IF NOT EXISTS idx_creators_ig_dm_sent_at ON creators(ig_dm_sent_at);
+
+-- Backfill for rows that landed in a `status='email_found'` state without an
+-- actual email (rejected addresses cleared on the dashboard before the PATCH
+-- handler learned to roll status back to 'no_email'). Without this cleanup
+-- these rows keep advertising "EMAIL FOUND" + "Send outreach" indefinitely.
+-- Idempotent — a no-op once every stuck row has been rewritten. Post-send
+-- statuses (outreach_queued/sent, followup_sent, replied, duplicate, stopped)
+-- are deliberately excluded: the outreach did happen and its history should
+-- stand even if the address column has since been blanked.
+UPDATE creators
+   SET status = 'no_email'
+ WHERE status = 'email_found'
+   AND (email IS NULL OR email = '');
+
+-- Campaign-dashboard (influence-stats) sync tracking on contracts, mirroring
+-- synced_to_creator_db. Tracked independently: the two integrations succeed
+-- or fail independently, and neither affects the contract's own
+-- pending/signed/completed status (that stays tied to Creator-DB sync only).
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS synced_to_dashboard BOOLEAN NOT NULL DEFAULT FALSE;

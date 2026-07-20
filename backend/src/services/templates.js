@@ -69,4 +69,14 @@ function getHardcodedDefaults() {
   };
 }
 
-module.exports = { renderOutreach, renderFollowup, getHardcodedDefaults };
+// Substitute {firstName}/{brandName}/{campaignName} into the per-campaign
+// Instagram DM template. Returns the rendered body, or null when the campaign
+// has no template configured (which disables the Send IG DMs flow).
+function renderIgDm(campaignIgDmBody, vars) {
+  if (typeof campaignIgDmBody !== 'string') return null;
+  const trimmed = campaignIgDmBody.trim();
+  if (!trimmed) return null;
+  return fill(trimmed, vars);
+}
+
+module.exports = { renderOutreach, renderFollowup, renderIgDm, getHardcodedDefaults };
