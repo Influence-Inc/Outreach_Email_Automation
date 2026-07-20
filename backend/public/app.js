@@ -2725,9 +2725,9 @@ el('send-emails-btn').addEventListener('click', async () => {
       method: 'POST',
       body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
     });
-    // "Queued", not "Sent" — Instantly dispatches each Step 1 email on its own
-    // schedule; the creator flips to "Outreach sent" once its send is confirmed.
-    status.textContent = `Done. Queued ${result.sent}, failed ${result.failed} (of ${result.processed}).`;
+    status.textContent = result.total
+      ? `Queuing ${result.total} creator(s) in the background — refresh to see progress.`
+      : 'No eligible creators to queue.';
     await refreshCreators();
     await refreshCampaigns();
   } catch (err) {
