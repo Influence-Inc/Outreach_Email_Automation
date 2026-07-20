@@ -24,12 +24,6 @@ api.get('/:token', async (req, res, next) => {
       data: c.data,
       signedAt: c.signed_at,
       signerName: c.signer_name,
-      signerEmail: c.signer_email,
-      // What the creator actually submitted when signing (contact, address,
-      // drawn signature, bank/payout details). Present once signed; null while
-      // still pending. Reachable only via the unguessable contract token, the
-      // same credential used to fill these in.
-      submission: c.status !== 'pending' ? c.submission || null : null,
     });
   } catch (err) {
     next(err);
