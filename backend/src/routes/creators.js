@@ -1107,32 +1107,40 @@ router.post('/bulk/send-outreach', async (req, res) => {
        ORDER BY created_at ASC`,
       [campaign_id],
     );
-    const results = [];
+
+    if (pending.length === 0) {
+      return res.json({ ok: true, total: 0, message: 'No eligible creators to queue.' });
+    }
+
+    // Respond immediately so the HTTP request doesn't time out.
+    // Processing continues in the background.
+    res.json({ ok: true, total: pending.length, message: `Queuing outreach for ${pending.length} creator(s) in the background.` });
+
+    // Process all creators in the background with pacing.
     let sent = 0;
     let failed = 0;
     for (const row of pending) {
       let didSend = false;
       try {
-        const r = await sendOutreach(row.id);
-        results.push({ id: row.id, ok: true, trackingId: r.trackingId });
+        await sendOutreach(row.id);
         sent += 1;
         didSend = true;
       } catch (err) {
-        results.push({ id: row.id, ok: false, error: err.message });
+        console.error(`[bulk-outreach] creator ${row.id} failed: ${err.message}`);
         failed += 1;
       }
-      // Pace only after an actual send — skipped invalids (and other no-sends)
-      // shouldn't burn the inter-send delay.
       if (didSend && row !== pending[pending.length - 1]) {
         const baseMs = Number(process.env.SEND_PACING_MS) || 60_000;
         const jitterMs = Math.floor(baseMs * 0.2 * (Math.random() * 2 - 1));
         await new Promise((r) => setTimeout(r, Math.max(0, baseMs + jitterMs)));
       }
     }
-    res.json({ ok: true, processed: results.length, sent, failed, results });
+    console.log(`[bulk-outreach] campaign ${campaign_id} complete: ${sent} sent, ${failed} failed (of ${pending.length})`);
   } catch (err) {
     console.error('bulk send-outreach failed:', err);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
