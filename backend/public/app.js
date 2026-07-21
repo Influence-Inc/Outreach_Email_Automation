@@ -287,6 +287,7 @@ async function selectCampaign(id) {
   el('instantly-status').textContent = '';
   syncSendEmailsBtn(c);
   syncIgDmTemplateUI(c);
+  syncMessagingBriefUI(c);
   syncStageFilterUI();
   await refreshCreators();
 }
@@ -327,6 +328,21 @@ function syncIgDmTemplateUI(c) {
     btn.textContent = `Send Instagram DMs (${queueCount})`;
     btn.disabled = false;
   }
+}
+
+// Render the WhatsApp/iMessage brief card for a campaign. Unlike the IG DM
+// template, an empty brief never disables anything (sendOfferBriefing falls
+// back to a generic blurb) — the hint just tells the operator whether a
+// custom pitch is set or the generic default is in use.
+function syncMessagingBriefUI(c) {
+  const card = el('messaging-brief-card');
+  const text = el('messaging-brief-text');
+  const hint = el('messaging-brief-hint');
+  card.hidden = false;
+  text.value = c.messaging_brief || '';
+  el('messaging-brief-status').textContent = '';
+  hint.textContent = c.messaging_brief ? 'custom' : 'using generic fallback';
+  card.open = false;
 }
 
 // Toggle the creator table's stage filter. Clicking the active stage (or the
@@ -2959,6 +2975,30 @@ el('save-ig-dm-template-btn').addEventListener('click', async () => {
     await refreshCampaigns();
     const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
     if (c) syncIgDmTemplateUI(c);
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// --- WhatsApp/iMessage brief -----------------------------------------------
+el('save-messaging-brief-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('save-messaging-brief-btn');
+  const status = el('messaging-brief-status');
+  const body = el('messaging-brief-text').value;
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ messaging_brief: body }),
+    });
+    status.textContent = body.trim() ? 'Saved.' : 'Cleared — using generic fallback.';
+    await refreshCampaigns();
+    const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+    if (c) syncMessagingBriefUI(c);
   } catch (err) {
     status.textContent = `Failed: ${err.message}`;
   } finally {

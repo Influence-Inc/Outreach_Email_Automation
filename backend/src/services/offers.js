@@ -7,20 +7,22 @@
 // email negotiation, the admin's approved offer is minted here.
 //
 // Delivery never cold-pushes WhatsApp/iMessage. A fresh offer sends only an
-// invite email ("text Hi to this number"); the offer's actual details go out
-// as a free-form reply the moment the creator initiates contact on WhatsApp or
-// iMessage (see deliverOfferOverChannel), and every later offer/counter in that
-// negotiation stays on that same channel (creators.established_channel). A
-// creator with no usable messaging channel falls back to the full offer email
-// with the direct /o/:token web link instead.
+// invite email ("text Hi to this number"); the moment the creator initiates
+// contact, the conversation runs in TWO steps (offers.messaging_stage) rather
+// than dumping the rate immediately: a short brand/product brief with a yes/no
+// interest check (sendOfferBriefing), then — only once they say yes — the full
+// offer details as a free-form reply (deliverOfferOverChannel). Every later
+// offer/counter in that negotiation stays on that same channel
+// (creators.established_channel). A creator with no usable messaging channel
+// falls back to the full offer email with the direct /o/:token web link instead.
 
 const { randomBytes } = require('crypto');
 const db = require('../db');
-const { formatDate, formatMoney } = require('./offerPortal/format');
+const { formatDate, formatMoney, fillTemplate } = require('./offerPortal/format');
 const email = require('./offerPortal/email');
 const whatsapp = require('./offerPortal/whatsapp');
 const imessage = require('./offerPortal/imessage');
-const { thankYouMessage, politeCloseMessage } = require('./offerPortal/replies');
+const { thankYouMessage, politeCloseMessage, renderMessagingBrief } = require('./offerPortal/replies');
 
 const DEFAULT_EXPIRY_DAYS = Number(process.env.OFFER_EXPIRY_DAYS || 7);
 
@@ -140,13 +142,58 @@ async function establishedMessagingChannel(creatorId) {
   return (row && row.established_channel) || null;
 }
 
+// Send the brand/product brief — the FIRST message in this offer's messaging
+// conversation (see offers.messaging_stage), sent before any rate/deliverables.
+// Ends with a yes/no interest check; only a "yes" (handled in offerWebhook.js)
+// goes on to reveal the actual offer via deliverOfferOverChannel. Uses the
+// campaign's custom messaging_brief when an admin has set one (placeholder-
+// filled), else a generic brand-name-only blurb. Marks the channel established
+// (sticky) on success, same as deliverOfferOverChannel.
+async function sendOfferBriefing(offerId, channel) {
+  const offer = await db.one(
+    `SELECT o.*, c.first_name, c.full_name, c.whatsapp, c.imessage,
+            ca.name AS campaign_name, ca.messaging_brief
+     FROM offers o
+     JOIN creators c ON c.id = o.creator_id
+     LEFT JOIN campaigns ca ON ca.id = o.campaign_id
+     WHERE o.id = $1`,
+    [offerId],
+  );
+  if (!offer) return { sent: false, reason: 'not_found' };
+
+  const to = channel === 'imessage' ? offer.imessage : offer.whatsapp;
+  if (!to) return { sent: false, reason: 'no_contact_for_channel' };
+
+  const firstName = firstNameOf(offer);
+  const custom = offer.messaging_brief && String(offer.messaging_brief).trim();
+  const brandBlurb = custom
+    ? fillTemplate(custom, { firstName, brandName: offer.brand_name, campaignName: offer.campaign_name || '' })
+    : `We're running a paid collaboration campaign with ${offer.brand_name} and think you'd be a great fit.`;
+  const body = renderMessagingBrief(firstName, brandBlurb);
+
+  const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
+  const result = await send({ to, body });
+  if (result.sent) {
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+       VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+      [offer.creator_id, offer.id, channel, body, result.id || null],
+    );
+    await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'briefed', $2)`, [offer.id, channel]);
+    await db.query(`UPDATE offers SET messaging_stage = 'briefed' WHERE id = $1`, [offer.id]);
+    await db.query(
+      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
+      [offer.creator_id, channel],
+    );
+  }
+  return result;
+}
+
 // Deliver an offer's full details directly over an ALREADY-established
-// messaging channel, as a free-form reply. Never used for a creator's first
-// contact — that would be cold outreach (a WhatsApp message needs a
-// pre-approved template outside an open session, and an unsolicited first
-// iMessage risks spam-filtering). Used both for the delivery triggered by a
-// creator's first "Hi" (see offerWebhook.js) and every later offer/counter in
-// the same negotiation. Marks the channel established (sticky) on success.
+// messaging channel, as a free-form reply. Only ever called once the creator
+// has confirmed interest at the brief stage (or, for a counter-offer, mid-
+// negotiation where a brief has no place — see negotiateBudget). Marks
+// messaging_stage 'revealed' and the channel established (sticky) on success.
 async function deliverOfferOverChannel(offerId, channel) {
   const offer = await db.one(
     `SELECT o.*, c.first_name, c.full_name, c.whatsapp, c.imessage
@@ -177,6 +224,7 @@ async function deliverOfferOverChannel(offerId, channel) {
       [offer.creator_id, offer.id, channel, body, result.id || null],
     );
     await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'sent', $2)`, [offer.id, channel]);
+    await db.query(`UPDATE offers SET messaging_stage = 'revealed' WHERE id = $1`, [offer.id]);
     await db.query(
       `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
       [offer.creator_id, channel],
@@ -187,8 +235,10 @@ async function deliverOfferOverChannel(offerId, channel) {
 
 // Top-level dispatcher for a NEW offer. We never cold-push a WhatsApp/iMessage
 // message — only three outcomes:
-//   established_channel set → deliver the full offer directly (free-form reply)
-//   not set, WA/iMessage usable → invite email only ("text Hi to continue")
+//   established_channel set → send the brand/product brief directly (free-form
+//     reply), starting the staged conversation (offers.messaging_stage)
+//   not set, WA/iMessage usable → invite email only ("text Hi to continue");
+//     the brief happens once they make contact (see offerWebhook.js)
 //   neither usable (opted out / no number / vendor unconfigured) → fall back to
 //     the full offer email with the direct web link, so it's always reachable
 async function sendOfferOutreach(offerId) {
@@ -203,9 +253,9 @@ async function sendOfferOutreach(offerId) {
 
   if (offer.established_channel && !offer.messaging_opted_out) {
     try {
-      await deliverOfferOverChannel(offer.id, offer.established_channel);
+      await sendOfferBriefing(offer.id, offer.established_channel);
     } catch (err) {
-      console.error('[offers] outreach delivery failed', err.message);
+      console.error('[offers] outreach briefing failed', err.message);
     }
     return;
   }
@@ -242,8 +292,14 @@ async function sendOfferOutreach(offerId) {
         ]);
       }
     } else {
+      // Reveals the full offer directly (no brief/interest-check phase over
+      // email) — stamp 'revealed' so a later, unexpected WhatsApp/iMessage
+      // contact from this creator isn't mistakenly briefed again.
       const res = await email.sendOfferEmail({ to: offer.creator_email, firstName, brandName: offer.brand_name, offerUrl: url, expiryDate: expiry });
-      if (res.sent) await logSend('email', `Offer email — "New collaboration opportunity — ${offer.brand_name}" (${url})`);
+      if (res.sent) {
+        await logSend('email', `Offer email — "New collaboration opportunity — ${offer.brand_name}" (${url})`);
+        await db.query(`UPDATE offers SET messaging_stage = 'revealed' WHERE id = $1`, [offer.id]);
+      }
     }
   } catch (err) {
     console.error('[offers] outreach email failed', err.message);
@@ -840,6 +896,7 @@ module.exports = {
   generateOfferToken,
   offerUrl,
   establishedMessagingChannel,
+  sendOfferBriefing,
   deliverOfferOverChannel,
   createOffer,
   respondToOffer,

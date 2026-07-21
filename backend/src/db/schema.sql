@@ -360,12 +360,21 @@ CREATE TABLE IF NOT EXISTS offers (
 );
 CREATE INDEX IF NOT EXISTS idx_offers_creator_id ON offers(creator_id);
 CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status);
+-- Where this specific offer's WhatsApp/iMessage conversation is at:
+--   NULL     — not yet briefed (nothing sent over messaging for this offer)
+--   briefed  — the brand/product brief went out; awaiting the creator's
+--              interest yes/no (NOT yet the accept/decline/counter on terms)
+--   revealed — the full offer (rate/deliverables/link) has been sent; the
+--              normal accept/decline/counter flow applies from here
+-- A counter-offer (parent_offer_id set) skips straight to 'revealed' — it's
+-- delivered directly, mid-negotiation, never re-briefed.
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS messaging_stage TEXT;
 
 -- Append-only audit log. INSERT only — offer history is reconstructed from here.
 CREATE TABLE IF NOT EXISTS offer_events (
   id          SERIAL PRIMARY KEY,
   offer_id    INTEGER NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-  event       TEXT NOT NULL,      -- invited | sent | viewed | accepted | declined
+  event       TEXT NOT NULL,      -- invited | briefed | sent | viewed | accepted | declined
   channel     TEXT NOT NULL,      -- email | whatsapp | imessage | web
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -399,6 +408,17 @@ ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS delivery_status      TEXT;
 ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS delivery_status_at   TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_offer_messages_provider_msg
   ON offer_messages(provider_message_id) WHERE provider_message_id IS NOT NULL;
+
+-- Backfill offers.messaging_stage: an offer that already has an outbound
+-- WhatsApp/iMessage message logged (from before this staged-conversation flow
+-- existed) already had its full details delivered — mark it 'revealed' so it's
+-- never mistakenly re-briefed. No-op once applied (only touches NULL rows).
+UPDATE offers SET messaging_stage = 'revealed'
+ WHERE messaging_stage IS NULL
+   AND EXISTS (
+     SELECT 1 FROM offer_messages m
+      WHERE m.offer_id = offers.id AND m.direction = 'outbound' AND m.channel IN ('whatsapp', 'imessage')
+   );
 
 -- New-vs-old segmentation + messaging contact, sourced from the Creator Database
 -- keyed on the creator's Instagram handle (profile id).
@@ -434,6 +454,14 @@ CREATE INDEX IF NOT EXISTS idx_creators_segment ON creators(creator_segment);
 -- NULL / empty = IG DM sending is disabled for this campaign (the Send IG DMs
 -- button on the dashboard is disabled until an admin fills a template in).
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS ig_dm_body TEXT;
+
+-- Per-campaign brand/product blurb for the WhatsApp/iMessage brief message
+-- (see offers.messaging_stage) — the short "here's who we are and what we're
+-- offering" intro sent the moment a creator first replies, before the actual
+-- rate/deliverables. Same {firstName}/{brandName}/{campaignName} placeholders
+-- as ig_dm_body. NULL / empty = a generic brand-name-only blurb is used
+-- instead (the brief still always sends — this only customises its content).
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS messaging_brief TEXT;
 
 -- IG DM send tracking on creators. Distinct from the email fields so the
 -- outreach lifecycle stays uncontaminated — a creator can have BOTH an email

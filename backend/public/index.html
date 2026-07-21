@@ -125,6 +125,35 @@
             </div>
           </details>
 
+          <!-- WhatsApp/iMessage brief (per campaign). Sent as the first message
+               once a Used creator makes contact, before the actual offer — a
+               short intro to the brand and product with a yes/no interest
+               check. Optional: an empty template falls back to a generic
+               brand-name-only blurb, so this never blocks the conversation. -->
+          <details id="messaging-brief-card" class="card" hidden>
+            <summary class="ig-dm-summary">
+              <h2>WhatsApp / iMessage brief</h2>
+              <span id="messaging-brief-hint" class="hint"></span>
+            </summary>
+            <p class="hint subhead">
+              Sent as the first WhatsApp/iMessage reply once a Used creator says
+              &ldquo;Hi&rdquo; — a short intro to the brand and product, before the
+              actual offer. Ends with a yes/no interest check automatically;
+              just write the pitch. Leave blank to use a generic fallback.
+              Supports the same <code>{firstName}</code>, <code>{brandName}</code>,
+              <code>{campaignName}</code> placeholders as the email templates.
+            </p>
+            <textarea
+              id="messaging-brief-text"
+              class="io-scroll"
+              rows="6"
+              placeholder="{brandName} makes [product] and we think your audience would love it. We're putting together a paid campaign and you'd be a great fit."></textarea>
+            <div class="form-foot end">
+              <span id="messaging-brief-status" class="hint push"></span>
+              <button id="save-messaging-brief-btn" class="btn-primary" type="button">Save brief</button>
+            </div>
+          </details>
+
           <div id="creator-table-wrap" class="card" hidden>
             <div class="card-header">
               <h2>Creators</h2>

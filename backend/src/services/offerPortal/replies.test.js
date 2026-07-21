@@ -87,6 +87,21 @@ test('tooHighReply names the creator and the current rate', () => {
   assert.match(msg, /\$300/);
 });
 
+test('renderMessagingBrief greets by name, includes the blurb, and ends with a yes/no CTA', () => {
+  const msg = replies.renderMessagingBrief('Sam', 'Acme makes eco-friendly water bottles.');
+  assert.match(msg, /^Hi Sam,/);
+  assert.match(msg, /Acme makes eco-friendly water bottles\./);
+  assert.match(msg, /Reply Yes or No/);
+});
+
+test('interestClarificationMessage nudges toward Yes/No, not the generic deflection', () => {
+  const msg = replies.interestClarificationMessage('Sam');
+  assert.match(msg, /Sam/);
+  assert.match(msg, /Yes/);
+  assert.match(msg, /No/);
+  assert.doesNotMatch(msg, /jennifer@useinfluence\.xyz/); // that's DEFLECTION_MESSAGE's job, not this one
+});
+
 test('thankYouMessage and politeCloseMessage include the creator name', () => {
   assert.match(replies.thankYouMessage('Sam'), /Sam/);
   assert.match(replies.politeCloseMessage('Sam'), /Sam/);

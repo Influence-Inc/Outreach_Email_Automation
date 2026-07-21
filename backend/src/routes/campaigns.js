@@ -13,7 +13,7 @@ router.get('/', async (_req, res, next) => {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
-              c.ig_dm_body,
+              c.ig_dm_body, c.messaging_brief,
               COUNT(cr.id)::int AS creator_count,
               -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
               -- creators without an email who haven't been DM'd yet.
@@ -113,9 +113,11 @@ router.patch('/:id', async (req, res, next) => {
     const hasInstantly = Object.prototype.hasOwnProperty.call(body, 'instantly_campaign_id');
     const hasUsageRights = Object.prototype.hasOwnProperty.call(body, 'usage_rights_policy');
     const hasIgDm = Object.prototype.hasOwnProperty.call(body, 'ig_dm_body');
-    if (!hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm) {
+    const hasMessagingBrief = Object.prototype.hasOwnProperty.call(body, 'messaging_brief');
+    if (!hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm && !hasMessagingBrief) {
       return res.status(400).json({
-        error: 'template_id, max_cpm, instantly_campaign_id, usage_rights_policy or ig_dm_body is required',
+        error:
+          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body or messaging_brief is required',
       });
     }
 
@@ -170,6 +172,17 @@ router.patch('/:id', async (req, res, next) => {
       const value = raw == null ? null : String(raw).trim() || null;
       params.push(value);
       sets.push(`ig_dm_body = $${params.length}`);
+    }
+
+    if (hasMessagingBrief) {
+      const raw = body.messaging_brief;
+      if (raw != null && typeof raw !== 'string') {
+        return res.status(400).json({ error: 'messaging_brief must be a string or null' });
+      }
+      // Trim; empty string clears it, falling back to the generic brand-name blurb.
+      const value = raw == null ? null : String(raw).trim() || null;
+      params.push(value);
+      sets.push(`messaging_brief = $${params.length}`);
     }
 
     const row = await db.one(
