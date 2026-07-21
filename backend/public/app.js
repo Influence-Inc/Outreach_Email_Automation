@@ -1146,18 +1146,28 @@ function renderPortalOfferBlock(r) {
   const chips = document.createElement('div');
   chips.className = 'po-chips';
   const chan = p.channels || {};
-  const addChip = (label, sent, replied) => {
+  const addChip = (label, sent, replied, delivery) => {
     const c = document.createElement('span');
-    c.className = 'po-chip' + (sent ? ' on' : ' off') + (replied ? ' replied' : '');
-    c.textContent = label + (sent ? (replied ? ' ↩' : ' ✓') : ' —');
-    c.title = sent
-      ? (replied ? label + ' — sent · creator replied' : label + ' — sent')
-      : label + ' — not sent';
+    const failed = delivery === 'failed';
+    c.className =
+      'po-chip' + (sent ? ' on' : ' off') + (replied ? ' replied' : '') + (failed ? ' failed' : '');
+    let mark = ' —';
+    if (sent) {
+      if (replied) mark = ' ↩';
+      else if (failed) mark = ' ⚠';
+      else if (delivery === 'read' || delivery === 'delivered') mark = ' ✓✓';
+      else mark = ' ✓';
+    }
+    c.textContent = label + mark;
+    if (!sent) c.title = label + ' — not sent';
+    else if (replied) c.title = label + ' — sent · creator replied';
+    else if (delivery) c.title = label + ' — ' + delivery; // sent / delivered / read / failed
+    else c.title = label + ' — sent';
     chips.appendChild(c);
   };
   if (chan.email) addChip('Email', chan.email.sent, false);
-  if (chan.whatsapp) addChip('WhatsApp', chan.whatsapp.sent, chan.whatsapp.replied);
-  if (chan.imessage) addChip('iMessage', chan.imessage.sent, chan.imessage.replied);
+  if (chan.whatsapp) addChip('WhatsApp', chan.whatsapp.sent, chan.whatsapp.replied, chan.whatsapp.delivery);
+  if (chan.imessage) addChip('iMessage', chan.imessage.sent, chan.imessage.replied, chan.imessage.delivery);
   const viewed = document.createElement('span');
   viewed.className = 'po-chip' + (p.viewed ? ' on' : ' off');
   viewed.textContent = 'Portal' + (p.viewed ? ' viewed' : ' —');

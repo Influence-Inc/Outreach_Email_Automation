@@ -80,6 +80,22 @@ test('parseInbound still handles the flat AiSensy WhatsApp shape', () => {
   });
 });
 
+test('parseInbound does NOT treat AiSensy content type "text" as an event to skip', () => {
+  // `type` here is the message CONTENT type, not an event kind — the reply must
+  // still be parsed, not ignored.
+  assert.deepStrictEqual(webhook.parseInbound({ from: '919812345670', type: 'text', message: 'yes' }), {
+    from: '919812345670',
+    body: 'yes',
+  });
+});
+
+test('parseInbound skips delivery-status events (handled as status upstream)', () => {
+  assert.deepStrictEqual(
+    webhook.parseInbound({ event_type: 'message.delivered', data: { message: { id: 'm_1' } } }),
+    { ignore: 'event:message.delivered' },
+  );
+});
+
 test('parseInbound returns null when there is no sender to match on', () => {
   assert.strictEqual(
     webhook.parseInbound({ event_type: 'message.created', data: { message: { parts: [{ type: 'text', value: 'hi' }] } } }),

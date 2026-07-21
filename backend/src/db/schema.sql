@@ -391,6 +391,14 @@ CREATE INDEX IF NOT EXISTS idx_offer_messages_needs_review ON offer_messages(nee
 -- (AiSensy / Linq) can be verified against parseInbound and the parser locked to
 -- it. Only populated on inbound rows.
 ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS raw_payload JSONB;
+-- Delivery tracking for OUTBOUND rows. provider_message_id is the id the gateway
+-- returns on send; delivery_status is updated (sent → delivered → read, or
+-- failed) as the provider POSTs status callbacks to the inbound webhook.
+ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS provider_message_id TEXT;
+ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS delivery_status      TEXT;
+ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS delivery_status_at   TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_offer_messages_provider_msg
+  ON offer_messages(provider_message_id) WHERE provider_message_id IS NOT NULL;
 
 -- New-vs-old segmentation + messaging contact, sourced from the Creator Database
 -- keyed on the creator's Instagram handle (profile id).

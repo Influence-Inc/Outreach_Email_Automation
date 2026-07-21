@@ -21,6 +21,7 @@ const offers = require('../services/offers');
 const { classifyReply, DEFLECTION_MESSAGE } = require('../services/offerPortal/replies');
 const { normalizePhone, sendWhatsAppText } = require('../services/offerPortal/whatsapp');
 const { sendIMessageText } = require('../services/offerPortal/imessage');
+const { parseStatusEvent, NEW_MESSAGE_EVENTS } = require('../services/offerPortal/deliveryStatus');
 
 const router = express.Router();
 
@@ -41,10 +42,10 @@ function unwrap(payload) {
 
 // Event kind, if the gateway sends one. Linq: "message.created", "reaction.*",
 // "participant.*", "call.*", read/typing events. AiSensy inbound has none.
+// NB: only event_type/event — never the bare `type`, which AiSensy uses for the
+// message CONTENT type (text/image), not an event kind.
 function eventType(payload) {
-  return (
-    getString(payload, 'event_type') || getString(payload, 'event') || getString(payload, 'type') || null
-  );
+  return getString(payload, 'event_type') || getString(payload, 'event') || null;
 }
 
 // The sender's phone/handle. Linq puts it in sender_handle ({ handle, service }
@@ -102,9 +103,12 @@ function extractBody(d) {
 function parseInbound(payload) {
   if (!payload || typeof payload !== 'object') return null;
 
-  // Skip non-message events (reactions, receipts, typing, participant, call).
+  // Only a genuinely new inbound message is a reply. Everything else — reactions,
+  // receipts, typing, participant/call events, and delivery-status events
+  // (message.delivered/read/failed) — is ignored here (status callbacks are
+  // handled before this in the webhook route).
   const evt = eventType(payload);
-  if (evt && !/^message/i.test(evt)) return { ignore: `event:${evt}` };
+  if (evt && !NEW_MESSAGE_EVENTS.has(evt.toLowerCase())) return { ignore: `event:${evt}` };
 
   const d = unwrap(payload);
 
@@ -220,9 +224,9 @@ async function sendDeflection(channel, creator, offerId) {
     const result = await send({ to, body: DEFLECTION_MESSAGE });
     if (result.sent) {
       await db.query(
-        `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
-         VALUES ($1, $2, 'outbound', $3, $4)`,
-        [creator.id, offerId, channel, DEFLECTION_MESSAGE],
+        `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+         VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+        [creator.id, offerId, channel, DEFLECTION_MESSAGE, result.id || null],
       );
     }
   } catch (err) {
@@ -242,6 +246,15 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
     console.log(`[offer-webhook] inbound ${channel} raw:`, JSON.stringify(req.body).slice(0, 1000));
   } catch (_) {
     /* body not serialisable — ignore */
+  }
+
+  // A delivery/read/failed status callback (not a reply) → update the outbound
+  // row it refers to and stop. Checked before parseInbound so a status event is
+  // never mistaken for a creator reply.
+  const statusEvent = parseStatusEvent(req.body);
+  if (statusEvent) {
+    const result = await offers.recordDeliveryStatus({ channel, ...statusEvent });
+    return res.json({ ok: true, status: statusEvent.status, updated: result.updated || 0 });
   }
 
   const parsed = parseInbound(req.body);

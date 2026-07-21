@@ -143,11 +143,11 @@ async function sendOfferOutreach(offerId) {
   const expiry = formatDate(offer.expires_at);
   const params = { firstName, brandName: offer.brand_name, offerUrl: url, expiryDate: expiry };
 
-  const logSend = (channel, body) =>
+  const logSend = (channel, body, providerMessageId = null) =>
     db.query(
-      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
-       VALUES ($1, $2, 'outbound', $3, $4)`,
-      [offer.creator_id, offer.id, channel, body],
+      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+       VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+      [offer.creator_id, offer.id, channel, body, providerMessageId],
     );
 
   // Email
@@ -166,7 +166,7 @@ async function sendOfferOutreach(offerId) {
   if (offer.whatsapp) {
     try {
       const res = await whatsapp.sendOfferOutreachWhatsApp({ to: offer.whatsapp, ...params });
-      if (res.sent) await logSend('whatsapp', whatsapp.renderOfferOutreachBody(params));
+      if (res.sent) await logSend('whatsapp', whatsapp.renderOfferOutreachBody(params), res.id);
     } catch (err) {
       console.error('[offers] outreach WhatsApp failed', err.message);
     }
@@ -176,7 +176,7 @@ async function sendOfferOutreach(offerId) {
   if (offer.imessage) {
     try {
       const res = await imessage.sendOfferOutreachIMessage({ to: offer.imessage, ...params });
-      if (res.sent) await logSend('imessage', imessage.renderOfferOutreachBody(params));
+      if (res.sent) await logSend('imessage', imessage.renderOfferOutreachBody(params), res.id);
     } catch (err) {
       console.error('[offers] outreach iMessage failed', err.message);
     }
@@ -197,7 +197,7 @@ async function onOfferResponded(offerId, response) {
     if (!offer) return;
 
     const firstName = firstNameOf(offer);
-    const logSend = (channel, body) =>
+    const logSend = (channel, body, providerMessageId = null) =>
       db.query(
         `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
          VALUES ($1, $2, 'outbound', $3, $4)`,
@@ -223,7 +223,7 @@ async function onOfferResponded(offerId, response) {
     if (offer.whatsapp) {
       try {
         const res = await whatsapp.sendWhatsAppText({ to: offer.whatsapp, body });
-        if (res.sent) await logSend('whatsapp', body);
+        if (res.sent) await logSend('whatsapp', body, res.id);
       } catch (err) {
         console.error('[offers] follow-up WhatsApp failed', err.message);
       }
@@ -231,7 +231,7 @@ async function onOfferResponded(offerId, response) {
     if (offer.imessage) {
       try {
         const res = await imessage.sendIMessageText({ to: offer.imessage, body });
-        if (res.sent) await logSend('imessage', body);
+        if (res.sent) await logSend('imessage', body, res.id);
       } catch (err) {
         console.error('[offers] follow-up iMessage failed', err.message);
       }
@@ -285,6 +285,21 @@ async function onOfferResponded(offerId, response) {
   } catch (err) {
     console.error('[offers] onOfferResponded failed', err.message);
   }
+}
+
+// Update an OUTBOUND message's delivery state from a provider status callback
+// (sent / delivered / read / failed), correlated by the id the gateway returned
+// on send. A status we can't match to a row (unknown id) is a no-op, never an
+// error — status callbacks and sends race, and some sends predate id capture.
+async function recordDeliveryStatus({ channel, providerMessageId, status }) {
+  if (!providerMessageId || !status) return { ok: false, reason: 'incomplete' };
+  const res = await db.query(
+    `UPDATE offer_messages
+        SET delivery_status = $3, delivery_status_at = NOW()
+      WHERE provider_message_id = $1 AND channel = $2 AND direction = 'outbound'`,
+    [providerMessageId, channel, status],
+  );
+  return { ok: true, updated: res.rowCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -607,7 +622,7 @@ async function attachOffers(rows) {
       [offerIds],
     ),
     db.many(
-      `SELECT creator_id, direction, channel, needs_review, sent_at
+      `SELECT creator_id, direction, channel, needs_review, delivery_status, sent_at
        FROM offer_messages WHERE creator_id = ANY($1::int[])
        ORDER BY sent_at ASC`,
       [ids],
@@ -635,8 +650,8 @@ async function attachOffers(rows) {
 
     const channels = {
       email: { sent: false },
-      whatsapp: { sent: false, replied: false },
-      imessage: { sent: false, replied: false },
+      whatsapp: { sent: false, replied: false, delivery: null },
+      imessage: { sent: false, replied: false, delivery: null },
     };
     let needsReview = false;
     let lastActivityAt = o.created_at;
@@ -644,8 +659,11 @@ async function attachOffers(rows) {
     for (const m of cms) {
       const ch = channels[m.channel];
       if (ch) {
-        if (m.direction === 'outbound') ch.sent = true;
-        else if (m.direction === 'inbound' && 'replied' in ch) ch.replied = true;
+        if (m.direction === 'outbound') {
+          ch.sent = true;
+          // Latest outbound wins (rows are ordered by sent_at ASC).
+          if ('delivery' in ch && m.delivery_status) ch.delivery = m.delivery_status;
+        } else if (m.direction === 'inbound' && 'replied' in ch) ch.replied = true;
       }
       if (m.needs_review) needsReview = true;
       if (newer(m.sent_at, lastActivityAt)) lastActivityAt = m.sent_at;
@@ -681,6 +699,7 @@ module.exports = {
   respondToOffer,
   logOfferViewed,
   sendOfferOutreach,
+  recordDeliveryStatus,
   negotiateBudget,
   getOfferForPage,
   sendPortalOffer,

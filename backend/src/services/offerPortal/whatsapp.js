@@ -6,6 +6,8 @@
 // {{3}} Offer Link, {{4}} Expiry Date. Sends are skipped gracefully when
 // AISENSY_API_KEY is absent, so dev never breaks.
 
+const { extractProviderMessageId } = require('./deliveryStatus');
+
 function apiKey() {
   return process.env.AISENSY_API_KEY || '';
 }
@@ -47,7 +49,8 @@ async function sendOfferOutreachWhatsApp({ to, firstName, brandName, offerUrl, e
       const text = await res.text().catch(() => '');
       return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
     }
-    return { sent: true };
+    const data = await res.json().catch(() => null);
+    return { sent: true, id: extractProviderMessageId(data) };
   } catch (err) {
     return { sent: false, error: err && err.message ? err.message : 'unknown error' };
   }
@@ -78,7 +81,8 @@ async function sendWhatsAppText({ to, body }) {
       const text = await res.text().catch(() => '');
       return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
     }
-    return { sent: true };
+    const data = await res.json().catch(() => null);
+    return { sent: true, id: extractProviderMessageId(data) };
   } catch (err) {
     return { sent: false, error: err && err.message ? err.message : 'unknown error' };
   }
