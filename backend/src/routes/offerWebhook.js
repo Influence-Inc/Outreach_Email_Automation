@@ -18,7 +18,12 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const offers = require('../services/offers');
-const { classifyReply, DEFLECTION_MESSAGE } = require('../services/offerPortal/replies');
+const {
+  classifyReply,
+  parseRequestedRate,
+  tooHighReply,
+  DEFLECTION_MESSAGE,
+} = require('../services/offerPortal/replies');
 const { normalizePhone, sendWhatsAppText } = require('../services/offerPortal/whatsapp');
 const { sendIMessageText } = require('../services/offerPortal/imessage');
 const { parseStatusEvent, NEW_MESSAGE_EVENTS } = require('../services/offerPortal/deliveryStatus');
@@ -198,7 +203,7 @@ function authorizedSecret(req, secretEnv) {
 // present/absent country code doesn't miss the match.
 async function matchCreator(contactColumn, fromDigits) {
   const rows = await db.many(
-    `SELECT id, whatsapp, imessage, ${contactColumn} AS contact
+    `SELECT id, whatsapp, imessage, first_name, full_name, ${contactColumn} AS contact
      FROM creators WHERE ${contactColumn} IS NOT NULL`,
   );
   const tail = (s) => s.slice(-10);
@@ -216,23 +221,33 @@ async function matchCreator(contactColumn, fromDigits) {
   return exact || suffix;
 }
 
-async function sendDeflection(channel, creator, offerId) {
+const firstNameOf = (creator) =>
+  (creator.first_name && String(creator.first_name).trim()) ||
+  (creator.full_name ? String(creator.full_name).trim().split(/\s+/)[0] : '') ||
+  'there';
+
+// Send a free-form text on the creator's channel and log it as an outbound
+// offer_message. Best-effort — a send failure is logged, never thrown.
+async function sendChannelMessage(channel, creator, offerId, body) {
   const to = channel === 'imessage' ? creator.imessage : creator.whatsapp;
   if (!to) return;
   try {
     const send = channel === 'imessage' ? sendIMessageText : sendWhatsAppText;
-    const result = await send({ to, body: DEFLECTION_MESSAGE });
+    const result = await send({ to, body });
     if (result.sent) {
       await db.query(
         `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
          VALUES ($1, $2, 'outbound', $3, $4, $5)`,
-        [creator.id, offerId, channel, DEFLECTION_MESSAGE, result.id || null],
+        [creator.id, offerId, channel, body, result.id || null],
       );
     }
   } catch (err) {
-    console.error(`[offer-webhook] ${channel} deflection send failed`, err.message);
+    console.error(`[offer-webhook] ${channel} send failed`, err.message);
   }
 }
+
+const sendDeflection = (channel, creator, offerId) =>
+  sendChannelMessage(channel, creator, offerId, DEFLECTION_MESSAGE);
 
 // Shared handler for both channels. `authFn(req)` returns true when the request
 // is authentic (WhatsApp: shared secret; iMessage: Linq HMAC signature).
@@ -297,8 +312,32 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
       needsReview = true;
       shouldDeflect = true;
     }
+  } else if (intent === 'other' && pendingOffer) {
+    // Not a clear yes/no — maybe a counter-rate ask ("can you do $500?"). Route
+    // it through the SAME CPM counter engine the web offer page uses, so a
+    // messaged counter and a web counter can't drift apart.
+    const requestedRate = parseRequestedRate(parsed.body);
+    const neg = requestedRate
+      ? await offers.negotiateBudget({ token: pendingOffer.token, requestedRate })
+      : null;
+    if (neg && neg.ok && neg.outcome === 'countered') {
+      outcome = 'countered'; // negotiateBudget already delivered the counter link
+    } else if (neg && neg.ok && neg.outcome === 'too_high') {
+      outcome = 'too_high';
+      needsReview = true; // above the ceiling — surface for a human too
+      await sendChannelMessage(
+        channel,
+        matched,
+        attachedOfferId,
+        tooHighReply(firstNameOf(matched), neg.originalRateFormatted),
+      );
+    } else {
+      // No parseable rate, or the negotiation errored → human review + deflection.
+      needsReview = true;
+      shouldDeflect = true;
+    }
   } else {
-    // Unrecognised intent, OR accept/decline with no pending offer.
+    // Accept/decline with no pending offer, or nothing actionable.
     needsReview = true;
     shouldDeflect = true;
   }
