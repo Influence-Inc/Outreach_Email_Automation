@@ -32,6 +32,16 @@ const firstNameOf = (creator) =>
   (creator.full_name ? String(creator.full_name).trim().split(/\s+/)[0] : '') ||
   'there';
 
+// Which channel to message when a creator has both numbers on file. WhatsApp
+// reaches more devices (Android + iPhone, vs. iMessage's iPhone-only) and is the
+// fully provisioned channel, so it wins — sending both would double-text a
+// creator who has both. Falls back to iMessage when only that number is on file.
+function preferredMessagingChannel(contact) {
+  if (contact.whatsapp) return 'whatsapp';
+  if (contact.imessage) return 'imessage';
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
@@ -162,18 +172,18 @@ async function sendOfferOutreach(offerId) {
     }
   }
 
-  // WhatsApp
-  if (offer.whatsapp && !offer.messaging_opted_out) {
+  // WhatsApp / iMessage — exactly one, per preferredMessagingChannel (never both,
+  // so a creator with both numbers on file isn't double-texted).
+  const msgChannel = offer.messaging_opted_out ? null : preferredMessagingChannel(offer);
+
+  if (msgChannel === 'whatsapp') {
     try {
       const res = await whatsapp.sendOfferOutreachWhatsApp({ to: offer.whatsapp, ...params });
       if (res.sent) await logSend('whatsapp', whatsapp.renderOfferOutreachBody(params), res.id);
     } catch (err) {
       console.error('[offers] outreach WhatsApp failed', err.message);
     }
-  }
-
-  // iMessage
-  if (offer.imessage && !offer.messaging_opted_out) {
+  } else if (msgChannel === 'imessage') {
     try {
       const res = await imessage.sendOfferOutreachIMessage({ to: offer.imessage, ...params });
       if (res.sent) await logSend('imessage', imessage.renderOfferOutreachBody(params), res.id);
@@ -199,9 +209,9 @@ async function onOfferResponded(offerId, response) {
     const firstName = firstNameOf(offer);
     const logSend = (channel, body, providerMessageId = null) =>
       db.query(
-        `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
-         VALUES ($1, $2, 'outbound', $3, $4)`,
-        [offer.creator_id, offer.id, channel, body],
+        `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+         VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+        [offer.creator_id, offer.id, channel, body, providerMessageId],
       );
 
     // Email confirmation (accept only — no email on decline).
@@ -218,17 +228,18 @@ async function onOfferResponded(offerId, response) {
       }
     }
 
-    // WhatsApp + iMessage thank-you / polite-close (both accept and decline).
+    // WhatsApp / iMessage thank-you / polite-close (both accept and decline) —
+    // exactly one channel, per preferredMessagingChannel.
     const body = response === 'accepted' ? thankYouMessage(firstName) : politeCloseMessage(firstName);
-    if (offer.whatsapp && !offer.messaging_opted_out) {
+    const msgChannel = offer.messaging_opted_out ? null : preferredMessagingChannel(offer);
+    if (msgChannel === 'whatsapp') {
       try {
         const res = await whatsapp.sendWhatsAppText({ to: offer.whatsapp, body });
         if (res.sent) await logSend('whatsapp', body, res.id);
       } catch (err) {
         console.error('[offers] follow-up WhatsApp failed', err.message);
       }
-    }
-    if (offer.imessage && !offer.messaging_opted_out) {
+    } else if (msgChannel === 'imessage') {
       try {
         const res = await imessage.sendIMessageText({ to: offer.imessage, body });
         if (res.sent) await logSend('imessage', body, res.id);
@@ -763,6 +774,7 @@ async function resolveNeedsReview({ messageId }) {
 module.exports = {
   generateOfferToken,
   offerUrl,
+  preferredMessagingChannel,
   createOffer,
   respondToOffer,
   listNeedsReview,
