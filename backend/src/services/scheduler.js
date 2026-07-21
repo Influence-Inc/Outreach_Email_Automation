@@ -2,13 +2,17 @@ const db = require('../db');
 const negotiation = require('./negotiation');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
+const segmentation = require('./segmentation');
 
 const intervalMs = () =>
   Number(process.env.SCHEDULER_INTERVAL_MINUTES || 5) * 60 * 1000;
 const negotiationFollowupDays = () => Number(process.env.NEGOTIATION_FOLLOWUP_DAYS || 2);
+// How often the new-vs-Used segmentation sweep runs (TTL-gated, default hourly).
+const segmentSweepMs = () => Number(process.env.SEGMENT_SWEEP_MINUTES || 60) * 60 * 1000;
 
 let timer = null;
 let negRunning = false;
+let lastSegmentSweep = 0;
 
 // Outreach and follow-up sending is now handled by Instantly.ai.
 // Reply detection arrives via the /webhook/instantly endpoint (reply_received event).
@@ -195,9 +199,21 @@ async function refreshLearning() {
     .catch((err) => console.error('scheduled harvest failed:', err.message));
 }
 
+// Periodically segment creators (new vs. Used) so portal routing + WhatsApp/
+// iMessage phone backfill happen without waiting on someone opening the
+// dashboard. TTL-gated so it runs at most every SEGMENT_SWEEP_MINUTES; a sweep
+// with nothing due is cheap, and it no-ops when CREATOR_DB_URL isn't set.
+async function maybeSegment() {
+  if (Date.now() - lastSegmentSweep < segmentSweepMs()) return;
+  lastSegmentSweep = Date.now();
+  const r = await segmentation.segmentAllCampaigns();
+  if (r && r.updated) console.log(`[segmentation] scheduled sweep updated ${r.updated} creator(s)`);
+}
+
 async function tick() {
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
   await refreshLearning().catch((err) => console.error('learning tick failed:', err));
+  await maybeSegment().catch((err) => console.error('segmentation tick failed:', err));
 }
 
 function start() {

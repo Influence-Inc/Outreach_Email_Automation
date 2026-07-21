@@ -110,4 +110,26 @@ async function segmentCampaign(campaignId, { force = false } = {}) {
   return segmentCreators(creators, campaign.name, { force });
 }
 
-module.exports = { segmentCreators, segmentCampaign, handleFor };
+// Segment every campaign's creators — the scheduled sweep, so Used-creator
+// marking + WhatsApp/iMessage phone backfill happen without waiting on a
+// dashboard load. segmentCreators skips creators already checked within
+// SEGMENT_TTL_MS, so a sweep with nothing due does no Creator-DB work.
+async function segmentAllCampaigns({ force = false } = {}) {
+  if (!creatorDb.isConfigured()) return { skipped: 'CREATOR_DB_URL not set' };
+  const campaigns = await db.many(`SELECT id FROM campaigns`);
+  let checked = 0;
+  let updated = 0;
+  for (const c of campaigns) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await segmentCampaign(c.id, { force });
+      if (r && r.checked) checked += r.checked;
+      if (r && r.updated) updated += r.updated;
+    } catch (err) {
+      console.error(`[segmentation] scheduled sweep failed for campaign ${c.id}:`, err.message);
+    }
+  }
+  return { campaigns: campaigns.length, checked, updated };
+}
+
+module.exports = { segmentCreators, segmentCampaign, segmentAllCampaigns, handleFor };
