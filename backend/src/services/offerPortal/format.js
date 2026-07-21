@@ -26,4 +26,16 @@ function formatDate(date) {
   }).format(date instanceof Date ? date : new Date(date));
 }
 
-module.exports = { formatMoney, formatDate };
+// Substitute {placeholder} tokens. Mirrors services/templates.js's `fill` (kept
+// as a small local copy rather than a cross-import — the offer-portal flow is
+// deliberately decoupled from the new-creator email/IG-DM flow). Unknown
+// {...} tokens are left intact rather than blanked out.
+function fillTemplate(template, vars) {
+  return String(template || '').replace(/\{(\w+)\}/g, (match, key) =>
+    Object.prototype.hasOwnProperty.call(vars, key)
+      ? String(vars[key] == null ? '' : vars[key])
+      : match,
+  );
+}
+
+module.exports = { formatMoney, formatDate, fillTemplate };

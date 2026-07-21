@@ -91,9 +91,14 @@ async function sendOfferOutreachIMessage(params) {
   return sendIMessageText({ to: params.to, body: renderOfferOutreachBody(params) });
 }
 
+// Our own iMessage sender number, shown in the invite email so a creator knows
+// what to text. Same value the send path uses as the Linq `from` field.
+const businessNumber = fromNumber;
+
 module.exports = {
   toE164,
   buildLinqPayload,
+  businessNumber,
   sendIMessageText,
   sendOfferOutreachIMessage,
   renderOfferOutreachBody,

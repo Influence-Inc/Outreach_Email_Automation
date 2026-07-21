@@ -3,11 +3,20 @@
 // Inbound offer-portal webhooks + reply bot. AiSensy (WhatsApp) and Linq (the
 // iMessage gateway) POST each creator reply here; we:
 //   1. match the sender to a creator by their WhatsApp / iMessage number
-//   2. classify the body (accept / decline / other)
-//   3. accept/decline with a pending offer → call respondToOffer — the SAME
+//   2. a pending offer's conversation runs in stages (offers.messaging_stage —
+//      this is how the offer ever reaches WhatsApp/iMessage; nothing is ever
+//      pushed there cold, see offers.js's module comment):
+//        not yet briefed → send the brand/product brief + a yes/no interest
+//          check (never the raw offer) — almost always triggered by "Hi"
+//        briefed, awaiting interest → classify the reply as yes/no on
+//          INTEREST (not a rate decision yet): yes reveals the full offer,
+//          no declines the opportunity, unclear gets a Yes/No nudge
+//        revealed → falls through to step 3 below, same as always
+//   3. classify the body (accept / decline / other) against the REAL offer
+//   4. accept/decline with a pending offer → call respondToOffer — the SAME
 //      backend path the web Accept button uses (a WhatsApp "yes" and a web
 //      Accept can never drift apart)
-//   4. anything else → send the deflection reply and flag needs_review so it
+//   5. anything else → send the deflection reply and flag needs_review so it
 //      surfaces for a human in the dashboard.
 // Ported from Influence-CDB-portal (api/webhooks/aisensy/route.ts), generalised
 // to both channels. Linq nests the reply differently from AiSensy (its content
@@ -24,6 +33,7 @@ const {
   isOptOut,
   isOptIn,
   tooHighReply,
+  interestClarificationMessage,
   DEFLECTION_MESSAGE,
   OPT_OUT_CONFIRMATION,
   OPT_IN_CONFIRMATION,
@@ -354,10 +364,56 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   }
 
   const pendingOffer = await db.one(
-    `SELECT id, token FROM offers WHERE creator_id = $1 AND status = 'pending'
+    `SELECT id, token, messaging_stage FROM offers WHERE creator_id = $1 AND status = 'pending'
      ORDER BY created_at DESC LIMIT 1`,
     [matched.id],
   );
+
+  // A pending offer's messaging conversation runs in stages (offers.
+  // messaging_stage) rather than dumping the rate on first contact:
+  //   null     — this offer has never been briefed on this channel. First
+  //              contact (almost always just "Hi") triggers the brand/product
+  //              brief + a yes/no interest check — never the raw offer.
+  //   briefed  — awaiting a yes/no on INTEREST (not yet a rate decision).
+  //              yes → reveal the full offer; no → decline the opportunity;
+  //              unclear → nudge toward Yes/No instead of the generic
+  //              deflection, which would be a non-sequitur here.
+  //   revealed — the real offer is out; falls through to the normal
+  //              accept/decline/counter flow below, unchanged.
+  const logInboundAtOffer = (needsReview = false) =>
+    db.query(
+      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, needs_review, raw_payload, provider_message_id)
+       VALUES ($1, $2, 'inbound', $3, $4, $5, $6::jsonb, $7)`,
+      [matched.id, pendingOffer.id, channel, parsed.body, needsReview, JSON.stringify(req.body ?? null), providerMessageId],
+    );
+
+  if (pendingOffer && !pendingOffer.messaging_stage) {
+    const briefed = await offers.sendOfferBriefing(pendingOffer.id, channel);
+    await logInboundAtOffer(!briefed.sent);
+    return res.json({ ok: true, outcome: briefed.sent ? 'briefed' : 'briefing_failed' });
+  }
+
+  if (pendingOffer && pendingOffer.messaging_stage === 'briefed') {
+    const interest = classifyReply(parsed.body);
+    let outcome;
+    let needsReview = false;
+    if (interest === 'accept') {
+      const revealed = await offers.deliverOfferOverChannel(pendingOffer.id, channel);
+      outcome = revealed.sent ? 'offer_revealed' : 'offer_reveal_failed';
+      needsReview = !revealed.sent;
+    } else if (interest === 'decline') {
+      const result = await offers.respondToOffer({ token: pendingOffer.token, response: 'declined', channel });
+      outcome = result.ok ? 'declined_at_brief' : 'declined_at_brief_failed';
+      needsReview = !result.ok;
+    } else {
+      await sendChannelMessage(channel, matched, pendingOffer.id, interestClarificationMessage(firstNameOf(matched)));
+      outcome = 'interest_unclear';
+      needsReview = true;
+    }
+    await logInboundAtOffer(needsReview);
+    return res.json({ ok: true, outcome, needsReview });
+  }
+
   const fallbackOffer = pendingOffer
     ? null
     : await db.one(

@@ -18,6 +18,19 @@ function mockResponse(ok, bodyObj) {
   };
 }
 
+test('businessNumber reflects AISENSY_WHATSAPP_NUMBER (empty when unset)', () => {
+  const saved = process.env.AISENSY_WHATSAPP_NUMBER;
+  try {
+    delete process.env.AISENSY_WHATSAPP_NUMBER;
+    assert.strictEqual(whatsapp.businessNumber(), '');
+    process.env.AISENSY_WHATSAPP_NUMBER = '+18005551234';
+    assert.strictEqual(whatsapp.businessNumber(), '+18005551234');
+  } finally {
+    if (saved === undefined) delete process.env.AISENSY_WHATSAPP_NUMBER;
+    else process.env.AISENSY_WHATSAPP_NUMBER = saved;
+  }
+});
+
 // Run `fn` with env + global.fetch stubbed, restoring both afterwards.
 async function withStub({ env, fetchFn }, fn) {
   const savedFetch = global.fetch;

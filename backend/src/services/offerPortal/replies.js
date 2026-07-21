@@ -49,6 +49,23 @@ function politeCloseMessage(firstName) {
 const DEFLECTION_MESSAGE =
   'Thanks for the message. For any questions or doubts, please contact our support team at jennifer@useinfluence.xyz and they will get back to you.';
 
+// Brand/product brief sent the moment a creator first replies — BEFORE the
+// actual rate/deliverables (see offers.messaging_stage). brandBlurb is already
+// resolved by the caller (the campaign's custom messaging_brief, placeholder-
+// filled, or a generic brand-name-only fallback); this just wraps it with a
+// greeting and the interest yes/no CTA.
+function renderMessagingBrief(firstName, brandBlurb) {
+  return `Hi ${firstName}, this is INFLUENCE. ${brandBlurb} Interested in hearing more? Reply Yes or No.`;
+}
+
+// Sent when a reply to the brief (awaiting a yes/no on INTEREST, not yet a rate
+// decision) doesn't classify as either. A stage-appropriate nudge instead of
+// the generic DEFLECTION_MESSAGE, which points to human support and would be a
+// non-sequitur here — the creator just needs to pick Yes or No.
+function interestClarificationMessage(firstName) {
+  return `Thanks, ${firstName}! Just let us know — reply Yes if you'd like to hear the details, or No if you're not interested right now.`;
+}
+
 // Extract a counter-rate ask from a free-text reply ("can you do $500?",
 // "how about 750", "$1,200"). Returns the number, or null when there's no clear
 // monetary ask (so the caller falls back to human review). Deliberately
@@ -130,6 +147,8 @@ module.exports = {
   thankYouMessage,
   politeCloseMessage,
   tooHighReply,
+  renderMessagingBrief,
+  interestClarificationMessage,
   DEFLECTION_MESSAGE,
   OPT_OUT_CONFIRMATION,
   OPT_IN_CONFIRMATION,

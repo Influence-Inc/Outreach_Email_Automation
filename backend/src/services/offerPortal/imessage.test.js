@@ -42,6 +42,19 @@ test('buildLinqPayload produces Linq chats/parts shape with E.164 numbers', () =
   });
 });
 
+test('businessNumber reflects IMESSAGE_FROM_NUMBER (empty when unset)', () => {
+  const saved = process.env.IMESSAGE_FROM_NUMBER;
+  try {
+    delete process.env.IMESSAGE_FROM_NUMBER;
+    assert.strictEqual(imessage.businessNumber(), '');
+    process.env.IMESSAGE_FROM_NUMBER = '+18005550000';
+    assert.strictEqual(imessage.businessNumber(), '+18005550000');
+  } finally {
+    if (saved === undefined) delete process.env.IMESSAGE_FROM_NUMBER;
+    else process.env.IMESSAGE_FROM_NUMBER = saved;
+  }
+});
+
 test('renderOfferOutreachBody includes name, brand, link, and expiry', () => {
   const body = imessage.renderOfferOutreachBody({
     firstName: 'Sam',
