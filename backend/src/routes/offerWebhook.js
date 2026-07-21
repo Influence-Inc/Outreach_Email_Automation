@@ -18,9 +18,23 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const offers = require('../services/offers');
-const { classifyReply, DEFLECTION_MESSAGE } = require('../services/offerPortal/replies');
+const {
+  classifyReply,
+  parseRequestedRate,
+  isOptOut,
+  isOptIn,
+  tooHighReply,
+  DEFLECTION_MESSAGE,
+  OPT_OUT_CONFIRMATION,
+  OPT_IN_CONFIRMATION,
+} = require('../services/offerPortal/replies');
 const { normalizePhone, sendWhatsAppText } = require('../services/offerPortal/whatsapp');
 const { sendIMessageText } = require('../services/offerPortal/imessage');
+const {
+  parseStatusEvent,
+  extractProviderMessageId,
+  NEW_MESSAGE_EVENTS,
+} = require('../services/offerPortal/deliveryStatus');
 
 const router = express.Router();
 
@@ -41,10 +55,10 @@ function unwrap(payload) {
 
 // Event kind, if the gateway sends one. Linq: "message.created", "reaction.*",
 // "participant.*", "call.*", read/typing events. AiSensy inbound has none.
+// NB: only event_type/event — never the bare `type`, which AiSensy uses for the
+// message CONTENT type (text/image), not an event kind.
 function eventType(payload) {
-  return (
-    getString(payload, 'event_type') || getString(payload, 'event') || getString(payload, 'type') || null
-  );
+  return getString(payload, 'event_type') || getString(payload, 'event') || null;
 }
 
 // The sender's phone/handle. Linq puts it in sender_handle ({ handle, service }
@@ -102,9 +116,12 @@ function extractBody(d) {
 function parseInbound(payload) {
   if (!payload || typeof payload !== 'object') return null;
 
-  // Skip non-message events (reactions, receipts, typing, participant, call).
+  // Only a genuinely new inbound message is a reply. Everything else — reactions,
+  // receipts, typing, participant/call events, and delivery-status events
+  // (message.delivered/read/failed) — is ignored here (status callbacks are
+  // handled before this in the webhook route).
   const evt = eventType(payload);
-  if (evt && !/^message/i.test(evt)) return { ignore: `event:${evt}` };
+  if (evt && !NEW_MESSAGE_EVENTS.has(evt.toLowerCase())) return { ignore: `event:${evt}` };
 
   const d = unwrap(payload);
 
@@ -192,48 +209,92 @@ function authorizedSecret(req, secretEnv) {
 // Match an inbound number to a creator whose contact column (whatsapp/imessage)
 // matches. Compares on bare digits, then falls back to the last 10 digits so a
 // present/absent country code doesn't miss the match.
-async function matchCreator(contactColumn, fromDigits) {
-  const rows = await db.many(
-    `SELECT id, whatsapp, imessage, ${contactColumn} AS contact
-     FROM creators WHERE ${contactColumn} IS NOT NULL`,
-  );
+// Pure matcher: pick the row whose contact matches fromDigits — exact bare-digits
+// first, else last-10-digits suffix (so a present/absent country code doesn't
+// miss). Each row exposes a normalisable `contact`. Extracted for unit testing.
+function pickMatch(rows, fromDigits) {
   const tail = (s) => s.slice(-10);
-  let exact = null;
   let suffix = null;
   for (const r of rows) {
     const digits = normalizePhone(r.contact);
     if (!digits) continue;
-    if (digits === fromDigits) {
-      exact = r;
-      break;
-    }
+    if (digits === fromDigits) return r; // exact wins immediately
     if (tail(digits) && tail(digits) === tail(fromDigits)) suffix = suffix || r;
   }
-  return exact || suffix;
+  return suffix;
 }
 
-async function sendDeflection(channel, creator, offerId) {
+async function matchCreator(contactColumn, fromDigits) {
+  const rows = await db.many(
+    `SELECT id, whatsapp, imessage, first_name, full_name, ${contactColumn} AS contact
+     FROM creators WHERE ${contactColumn} IS NOT NULL`,
+  );
+  return pickMatch(rows, fromDigits);
+}
+
+// Pure routing for an inbound reply: which backend action it maps to. Keeps the
+// webhook's decision — and the guarantee that a messaged accept/decline converges
+// on the SAME respondToOffer the web button uses — unit-testable.
+function decideInboundAction({ intent, hasPendingOffer, requestedRate }) {
+  if ((intent === 'accept' || intent === 'decline') && hasPendingOffer) {
+    return { action: 'respond', response: intent === 'accept' ? 'accepted' : 'declined' };
+  }
+  if (intent === 'other' && hasPendingOffer && requestedRate) {
+    return { action: 'negotiate', requestedRate };
+  }
+  return { action: 'review' };
+}
+
+const firstNameOf = (creator) =>
+  (creator.first_name && String(creator.first_name).trim()) ||
+  (creator.full_name ? String(creator.full_name).trim().split(/\s+/)[0] : '') ||
+  'there';
+
+// Send a free-form text on the creator's channel and log it as an outbound
+// offer_message. Best-effort — a send failure is logged, never thrown.
+async function sendChannelMessage(channel, creator, offerId, body) {
   const to = channel === 'imessage' ? creator.imessage : creator.whatsapp;
   if (!to) return;
   try {
     const send = channel === 'imessage' ? sendIMessageText : sendWhatsAppText;
-    const result = await send({ to, body: DEFLECTION_MESSAGE });
+    const result = await send({ to, body });
     if (result.sent) {
       await db.query(
-        `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
-         VALUES ($1, $2, 'outbound', $3, $4)`,
-        [creator.id, offerId, channel, DEFLECTION_MESSAGE],
+        `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+         VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+        [creator.id, offerId, channel, body, result.id || null],
       );
     }
   } catch (err) {
-    console.error(`[offer-webhook] ${channel} deflection send failed`, err.message);
+    console.error(`[offer-webhook] ${channel} send failed`, err.message);
   }
 }
+
+const sendDeflection = (channel, creator, offerId) =>
+  sendChannelMessage(channel, creator, offerId, DEFLECTION_MESSAGE);
 
 // Shared handler for both channels. `authFn(req)` returns true when the request
 // is authentic (WhatsApp: shared secret; iMessage: Linq HMAC signature).
 async function handleInbound(channel, contactColumn, authFn, req, res) {
   if (!authFn(req)) return res.status(401).json({ ok: false });
+
+  // Log the exact inbound shape (truncated) so the provider's real schema can be
+  // verified against parseInbound from the Railway logs — including sends from a
+  // number that isn't yet a known creator, which never reach the DB below.
+  try {
+    console.log(`[offer-webhook] inbound ${channel} raw:`, JSON.stringify(req.body).slice(0, 1000));
+  } catch (_) {
+    /* body not serialisable — ignore */
+  }
+
+  // A delivery/read/failed status callback (not a reply) → update the outbound
+  // row it refers to and stop. Checked before parseInbound so a status event is
+  // never mistaken for a creator reply.
+  const statusEvent = parseStatusEvent(req.body);
+  if (statusEvent) {
+    const result = await offers.recordDeliveryStatus({ channel, ...statusEvent });
+    return res.json({ ok: true, status: statusEvent.status, updated: result.updated || 0 });
+  }
 
   const parsed = parseInbound(req.body);
   if (!parsed) return res.json({ ok: true, ignored: 'unparseable' });
@@ -243,6 +304,53 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   if (!matched) {
     console.warn(`[offer-webhook] inbound ${channel} from unknown number ${parsed.from}`);
     return res.json({ ok: true, ignored: 'unknown_sender' });
+  }
+
+  // Idempotency: providers retry webhook deliveries. If this exact inbound
+  // message was already recorded, skip re-processing — accept/decline is already
+  // guarded by respondToOffer, but a retried counter or "other" would otherwise
+  // double-act (a second counter-offer, a duplicate needs_review row).
+  const providerMessageId = extractProviderMessageId(req.body);
+  if (providerMessageId) {
+    const seen = await db.one(
+      `SELECT 1 FROM offer_messages
+        WHERE direction = 'inbound' AND provider_message_id = $1 LIMIT 1`,
+      [providerMessageId],
+    );
+    if (seen) return res.json({ ok: true, deduped: true });
+  }
+
+  // Compliance: STOP/UNSUBSCRIBE opt-out (and START opt-in). Handled before any
+  // offer logic — an opt-out must suppress future automated sends regardless of
+  // offer state. The single confirmation is sent directly (it isn't gated by the
+  // opt-out flag we just set), which is standard practice.
+  if (isOptOut(parsed.body)) {
+    await db.query(
+      `UPDATE creators SET messaging_opted_out = TRUE, messaging_opted_out_at = NOW(), updated_at = NOW()
+       WHERE id = $1`,
+      [matched.id],
+    );
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, direction, channel, body, raw_payload, provider_message_id)
+       VALUES ($1, 'inbound', $2, $3, $4::jsonb, $5)`,
+      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null), providerMessageId],
+    );
+    await sendChannelMessage(channel, matched, null, OPT_OUT_CONFIRMATION);
+    return res.json({ ok: true, outcome: 'opted_out' });
+  }
+  if (isOptIn(parsed.body)) {
+    await db.query(
+      `UPDATE creators SET messaging_opted_out = FALSE, messaging_opted_out_at = NULL, updated_at = NOW()
+       WHERE id = $1`,
+      [matched.id],
+    );
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, direction, channel, body, raw_payload, provider_message_id)
+       VALUES ($1, 'inbound', $2, $3, $4::jsonb, $5)`,
+      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null), providerMessageId],
+    );
+    await sendChannelMessage(channel, matched, null, OPT_IN_CONFIRMATION);
+    return res.json({ ok: true, outcome: 'opted_in' });
   }
 
   const pendingOffer = await db.one(
@@ -259,14 +367,18 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   const attachedOfferId = (pendingOffer && pendingOffer.id) || (fallbackOffer && fallbackOffer.id) || null;
 
   const intent = classifyReply(parsed.body);
+  const requestedRate = intent === 'other' ? parseRequestedRate(parsed.body) : null;
+  const decision = decideInboundAction({ intent, hasPendingOffer: !!pendingOffer, requestedRate });
+
   let needsReview = false;
   let shouldDeflect = false;
   let outcome = 'deflected';
 
-  if ((intent === 'accept' || intent === 'decline') && pendingOffer) {
+  if (decision.action === 'respond') {
+    // Same backend path as the web Accept/Decline button — no drift.
     const result = await offers.respondToOffer({
       token: pendingOffer.token,
-      response: intent === 'accept' ? 'accepted' : 'declined',
+      response: decision.response,
       channel,
     });
     if (result.ok) {
@@ -275,16 +387,41 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
       needsReview = true;
       shouldDeflect = true;
     }
+  } else if (decision.action === 'negotiate') {
+    // A counter-rate ask ("can you do $500?") → the SAME CPM counter engine the
+    // web offer page uses, so a messaged counter and a web counter can't drift.
+    const neg = await offers.negotiateBudget({
+      token: pendingOffer.token,
+      requestedRate: decision.requestedRate,
+    });
+    if (neg && neg.ok && neg.outcome === 'countered') {
+      outcome = 'countered'; // negotiateBudget already delivered the counter link
+    } else if (neg && neg.ok && neg.outcome === 'too_high') {
+      outcome = 'too_high';
+      needsReview = true; // above the ceiling — surface for a human too
+      await sendChannelMessage(
+        channel,
+        matched,
+        attachedOfferId,
+        tooHighReply(firstNameOf(matched), neg.originalRateFormatted),
+      );
+    } else {
+      // Negotiation errored → human review + deflection.
+      needsReview = true;
+      shouldDeflect = true;
+    }
   } else {
-    // Unrecognised intent, OR accept/decline with no pending offer.
+    // Nothing actionable (unrecognised, or accept/decline with no pending offer).
     needsReview = true;
     shouldDeflect = true;
   }
 
+  // Persist the raw payload alongside the parsed body so the exact provider
+  // schema stays inspectable (verification, and any future parser tightening).
   await db.query(
-    `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, needs_review)
-     VALUES ($1, $2, 'inbound', $3, $4, $5)`,
-    [matched.id, attachedOfferId, channel, parsed.body, needsReview],
+    `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, needs_review, raw_payload, provider_message_id)
+     VALUES ($1, $2, 'inbound', $3, $4, $5, $6::jsonb, $7)`,
+    [matched.id, attachedOfferId, channel, parsed.body, needsReview, JSON.stringify(req.body ?? null), providerMessageId],
   );
 
   if (shouldDeflect) await sendDeflection(channel, matched, attachedOfferId);
@@ -315,5 +452,7 @@ router.post('/imessage', async (req, res, next) => {
 router.parseInbound = parseInbound;
 router.verifyLinqSignature = verifyLinqSignature;
 router.eventType = eventType;
+router.pickMatch = pickMatch;
+router.decideInboundAction = decideInboundAction;
 
 module.exports = router;

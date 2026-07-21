@@ -49,10 +49,88 @@ function politeCloseMessage(firstName) {
 const DEFLECTION_MESSAGE =
   'Thanks for the message. For any questions or doubts, please contact our support team at jennifer@useinfluence.xyz and they will get back to you.';
 
+// Extract a counter-rate ask from a free-text reply ("can you do $500?",
+// "how about 750", "$1,200"). Returns the number, or null when there's no clear
+// monetary ask (so the caller falls back to human review). Deliberately
+// conservative: a bare small number like "2" ("2 reels") is NOT treated as a rate.
+function parseRequestedRate(body) {
+  const text = String(body || '');
+
+  // Currency-marked amount: $500, 500 usd, ₹5,000, rs 5000, 750 dollars.
+  const marked = text.match(
+    /(?:\$|₹|usd|inr|rs\.?)\s*([\d][\d,]*(?:\.\d+)?)|([\d][\d,]*(?:\.\d+)?)\s*(?:dollars?|usd|inr|rupees?|rs\.?)/i,
+  );
+  if (marked) {
+    const n = Number((marked[1] || marked[2]).replace(/,/g, ''));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+
+  // The whole message is just a number ("500", "1,200").
+  const only = text.trim().replace(/[,$₹]/g, '');
+  if (/^\d+(?:\.\d+)?$/.test(only)) {
+    const n = Number(only);
+    if (Number.isFinite(n) && n >= 50) return n;
+  }
+
+  // A number alongside price-intent words ("how about 750", "do 600 for it").
+  if (/\b(do|about|for|rate|price|pay|paid|budget|counter|quote|offer|charge)\b/i.test(text)) {
+    const m = text.match(/\b(\d[\d,]{1,})(?:\.\d+)?\b/);
+    if (m) {
+      const n = Number(m[1].replace(/,/g, ''));
+      if (Number.isFinite(n) && n >= 50) return n;
+    }
+  }
+  return null;
+}
+
+// Sent when a counter-rate ask is above the CPM ceiling (negotiateBudget returns
+// 'too_high'): the original offer stays live at its rate.
+function tooHighReply(firstName, currentRateFormatted) {
+  return `Thanks ${firstName}. That's a bit beyond our budget for this campaign${
+    currentRateFormatted ? ` — the current offer stands at ${currentRateFormatted}` : ''
+  }. It's still live if you'd like to go ahead, and we'd love to work with you.`;
+}
+
+// STOP/UNSUBSCRIBE opt-out + START opt-in (SMS/WhatsApp compliance). Match the
+// canonical single keyword exactly (so "stop by anytime" is NOT an opt-out), plus
+// the unmistakable "unsubscribe" / "opt out" phrasing anywhere in the message.
+function normalizeKeyword(body) {
+  return String(body || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?,]+$/, '');
+}
+const OPT_OUT_EXACT = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit', 'optout', 'opt out', 'opt-out']);
+const OPT_IN_EXACT = new Set(['start', 'unstop', 'resume', 'subscribe', 'optin', 'opt in', 'opt-in']);
+
+function isOptOut(body) {
+  const t = normalizeKeyword(body);
+  if (!t) return false;
+  if (OPT_OUT_EXACT.has(t)) return true;
+  return /\bunsubscribe\b/.test(t) || /\bopt[\s-]?out\b/.test(t);
+}
+function isOptIn(body) {
+  const t = normalizeKeyword(body);
+  if (!t) return false;
+  if (OPT_IN_EXACT.has(t)) return true;
+  return /\bopt[\s-]?in\b/.test(t);
+}
+
+const OPT_OUT_CONFIRMATION =
+  "You've been unsubscribed and won't receive further messages from INFLUENCE. Reply START at any time to resume.";
+const OPT_IN_CONFIRMATION =
+  "You're re-subscribed to INFLUENCE messages. Reply STOP at any time to unsubscribe.";
+
 module.exports = {
   DECLINE_REASONS,
   classifyReply,
+  parseRequestedRate,
+  isOptOut,
+  isOptIn,
   thankYouMessage,
   politeCloseMessage,
+  tooHighReply,
   DEFLECTION_MESSAGE,
+  OPT_OUT_CONFIRMATION,
+  OPT_IN_CONFIRMATION,
 };

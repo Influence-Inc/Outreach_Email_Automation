@@ -16,6 +16,8 @@
 // creds are set. Mirrors the WhatsApp/email pattern: iMessage has no template
 // concept, so the "outreach" is just a text message carrying the offer link.
 
+const { extractProviderMessageId } = require('./deliveryStatus');
+
 const DEFAULT_API_URL = 'https://api.linqapp.com/api/partner/v3/chats';
 
 function apiKey() {
@@ -72,7 +74,8 @@ async function sendIMessageText({ to, body }) {
       const text = await res.text().catch(() => '');
       return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
     }
-    return { sent: true };
+    const data = await res.json().catch(() => null);
+    return { sent: true, id: extractProviderMessageId(data) };
   } catch (err) {
     return { sent: false, error: err && err.message ? err.message : 'unknown error' };
   }

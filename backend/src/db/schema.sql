@@ -387,6 +387,18 @@ CREATE TABLE IF NOT EXISTS offer_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_offer_messages_creator_id ON offer_messages(creator_id);
 CREATE INDEX IF NOT EXISTS idx_offer_messages_needs_review ON offer_messages(needs_review) WHERE needs_review;
+-- Raw inbound webhook payload, captured verbatim so the provider's real schema
+-- (AiSensy / Linq) can be verified against parseInbound and the parser locked to
+-- it. Only populated on inbound rows.
+ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS raw_payload JSONB;
+-- Delivery tracking for OUTBOUND rows. provider_message_id is the id the gateway
+-- returns on send; delivery_status is updated (sent → delivered → read, or
+-- failed) as the provider POSTs status callbacks to the inbound webhook.
+ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS provider_message_id TEXT;
+ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS delivery_status      TEXT;
+ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS delivery_status_at   TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_offer_messages_provider_msg
+  ON offer_messages(provider_message_id) WHERE provider_message_id IS NOT NULL;
 
 -- New-vs-old segmentation + messaging contact, sourced from the Creator Database
 -- keyed on the creator's Instagram handle (profile id).
@@ -400,6 +412,10 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS prior_campaigns     JSONB;
 -- master record (phoneNumber); both default to that number when we only have one.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS whatsapp TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS imessage TEXT;
+-- Messaging opt-out (STOP/UNSUBSCRIBE compliance). When TRUE, no automated
+-- WhatsApp/iMessage sends go to this creator; reset by a START/opt-in reply.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS messaging_opted_out    BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS messaging_opted_out_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_creators_segment ON creators(creator_segment);
 -- Per-campaign Instagram DM template. Renders through the same {firstName}/
 -- {brandName}/{campaignName} placeholders as the email templates. Used by the

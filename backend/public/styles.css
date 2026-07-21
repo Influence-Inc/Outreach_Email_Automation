@@ -963,4 +963,51 @@ button:disabled { opacity: 0.5; cursor: default; }
 .po-chip.on       { background: var(--surface); color: var(--ink-2); }
 .po-chip.replied  { background: #dde7f7; color: #2952a3; border-color: #c4d4ee; }
 .po-chip.off      { background: transparent; color: var(--faint); border-style: dashed; }
+.po-chip.failed   { background: #fbe4e6; color: #b3202c; border-color: #f0c2c6; }
 .po-review { font-size: 11.5px; font-weight: 500; color: var(--danger); }
+
+/* Needs-review inbox (offer-portal messaging) */
+.review-inbox-btn { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; }
+.review-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--danger); color: #fff; font-size: 11px; font-weight: 600;
+}
+.review-modal { position: fixed; inset: 0; z-index: 50; }
+.review-backdrop { position: absolute; inset: 0; background: rgba(20, 18, 15, 0.5); }
+.review-panel {
+  position: absolute; top: 0; right: 0; height: 100%;
+  width: min(460px, 100%); background: var(--surface); border-left: 1px solid var(--line);
+  box-shadow: -24px 0 60px rgba(20, 18, 15, 0.22);
+  display: flex; flex-direction: column; overflow-y: auto;
+}
+.review-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+}
+.review-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.review-empty { padding: 24px 18px; }
+.review-list { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+.review-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 12px; background: var(--surface); box-shadow: var(--shadow-card);
+}
+.review-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.review-who { font-size: 13px; font-weight: 600; color: var(--ink); }
+.review-meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.review-body {
+  margin: 8px 0; padding: 8px 10px; border-radius: var(--radius-xs);
+  background: var(--accent-faded); color: var(--ink); font-size: 13px; line-height: 1.4;
+  white-space: pre-wrap; word-break: break-word;
+}
+.review-offer { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
+.review-reply {
+  width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 13px;
+  padding: 8px 10px; border: 1px solid var(--line-2); border-radius: var(--radius-xs);
+  background: var(--surface); color: var(--ink);
+}
+.review-reply:focus { outline: none; box-shadow: var(--ring); border-color: var(--faint); }
+.review-item-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.review-status { flex: 1; min-width: 0; }
+.btn-primary.small { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 7px; }

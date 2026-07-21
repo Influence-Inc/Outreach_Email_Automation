@@ -11,6 +11,7 @@ const webhook = require('./routes/webhook');
 const offerWebhook = require('./routes/offerWebhook');
 const { api: contractsApi, page: contractPage } = require('./routes/contracts');
 const { api: offersApi, page: offerPage } = require('./routes/offers');
+const offerReview = require('./routes/offerReview');
 const bot = require('./routes/bot');
 const creatorDbRoutes = require('./routes/creatorDb');
 const scheduler = require('./services/scheduler');
@@ -60,6 +61,7 @@ app.use('/api/contracts', contractsApi);
 // Offer-portal API — the public offer page fetches data + posts accept/decline/
 // counter here (resolved by unguessable token only).
 app.use('/api/offers', offersApi);
+app.use('/api/offer-review', offerReview);
 // Bot API for the campaigns dashboard (influence-stats) to fetch per-creator
 // contract URLs so it can render the "Contract submission" column.
 app.use('/api/bot', bot);
