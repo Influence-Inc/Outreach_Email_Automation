@@ -8,6 +8,7 @@ const { computeStats, computeOffers, parseViewCount } = require('../services/pri
 const contracts = require('../services/contracts');
 const offerPortal = require('../services/offers');
 const segmentation = require('../services/segmentation');
+const creatorDb = require('../services/creatorDb');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
@@ -300,6 +301,29 @@ function backfillSummaries(pending) {
   }
 }
 
+// Attach a 3-way `category` string ('used' | 'unused' | 'new') to each creator
+// row using one bulk categorize call against Creator-DB. See creatorDb.js for
+// the category rules. Best-effort — if Creator-DB is unreachable or
+// unconfigured, every row falls back to 'new' so the dashboard still renders.
+// Distinct from attachSegment() below, which stays in place for the backend
+// routing logic in negotiation.js (offer-portal for returning creators).
+async function attachCategories(rows) {
+  if (!rows.length) return;
+  const keys = rows.map((r) => ({
+    email: r.email || undefined,
+    instagramUsername: r.instagram_username || undefined,
+  }));
+  const results = await creatorDb.categorizeCreators(keys);
+  for (let i = 0; i < rows.length; i += 1) {
+    const r = rows[i];
+    const c = results[i] || { category: 'new', creator: null };
+    r.category = c.category;
+    // The Creator-DB master record is exposed too, so the dashboard can show
+    // "already in DB with N past contracts" tooltips without a second call.
+    r.creator_db_ref = c.creator || null;
+  }
+}
+
 // Attach a `rate_log` array (oldest→newest) to each creator row, in place. One
 // grouped query over the curated event types for all returned creators.
 async function attachRateLog(rows) {
@@ -480,6 +504,7 @@ router.get('/', async (req, res, next) => {
     await contracts.attachContracts(rows);
     await offerPortal.attachOffers(rows);
     await attachSegment(rows);
+    await attachCategories(rows);
     res.json(rows);
 
     // Refresh new-vs-old segmentation in the background (best-effort). Any row

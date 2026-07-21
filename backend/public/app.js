@@ -496,6 +496,31 @@ function avatarInitial(r) {
   return String(src).replace(/^@/, '').charAt(0).toUpperCase() || '?';
 }
 
+// Small "Used / Unused / New" badge shown next to a creator's handle in the
+// creators table. The category comes from Creator-DB's categorize endpoint
+// (attached server-side by routes/creators.js — see attachCategories):
+//   • used   — creator is in Creator-DB with ≥1 contract (worked with before)
+//   • unused — in Creator-DB, no contracts (contacted but never signed)
+//   • new    — not in Creator-DB (never seen before)
+// The badge is skipped when the category isn't known (Creator-DB unconfigured
+// or the call failed); the rest of the row still renders normally.
+const CATEGORY_LABELS = { used: 'Used', unused: 'Unused', new: 'New' };
+function renderCategoryBadge(r) {
+  const cat = r && r.category;
+  if (!cat || !(cat in CATEGORY_LABELS)) return null;
+  const el = document.createElement('span');
+  el.className = `creator-badge cat-${cat}`;
+  el.textContent = CATEGORY_LABELS[cat];
+  if (cat === 'used' && r.creator_db_ref && r.creator_db_ref.contractsCount) {
+    el.title = `In Creator-DB · ${r.creator_db_ref.contractsCount} past contract${r.creator_db_ref.contractsCount === 1 ? '' : 's'}`;
+  } else if (cat === 'unused') {
+    el.title = 'In Creator-DB · contacted before but never signed';
+  } else if (cat === 'new') {
+    el.title = 'Not in Creator-DB yet — first outreach for this creator';
+  }
+  return el;
+}
+
 // Status pill class + label. An accepted negotiation is surfaced as its own
 // pill even though the outreach status stays 'replied'.
 function statusPillFor(r) {
@@ -2414,29 +2439,15 @@ async function refreshCreators() {
     const handle = document.createElement('div');
     handle.className = 'cr-handle';
     handle.innerHTML = `<a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || r.instagram_url)}</a>`;
-    // New-vs-old segment chip. r.segment is the effective verdict: the Creator
-    // Database classification when known, else a local fallback (same handle in
-    // another campaign here). "Returning" = worked with us before, so they
-    // negotiate on the offer portal; "New" = first-timer, unchanged flow.
-    if (r.segment === 'old' || r.segment === 'new') {
-      const seg = document.createElement('span');
-      seg.className = 'cr-segment ' + r.segment;
-      seg.textContent = r.segment === 'old' ? 'Returning' : 'New';
-      if (r.segment === 'old' && Array.isArray(r.prior_campaigns) && r.prior_campaigns.length) {
-        const names = r.prior_campaigns
-          .map((c) => (c && c.brandName ? `${c.name} · ${c.brandName}` : c && c.name))
-          .filter(Boolean);
-        seg.title = 'Worked with us before: ' + names.join(', ');
-      } else if (r.segment === 'old') {
-        seg.title =
-          r.segment_source === 'local'
-            ? 'Returning creator — also appears in another campaign here'
-            : 'Returning creator — worked with us on a previous campaign';
-      } else {
-        seg.title = 'New creator — no prior campaign found';
-      }
-      handle.appendChild(seg);
-    }
+    // Used / Unused / New badge — comes from Creator-DB's categorize call
+    // (see routes/creators.js attachCategories). Rendered inline with the
+    // handle so the row's provenance reads at a glance. Replaces the older
+    // 2-way Returning/New chip so the roster reads with the finer distinction
+    // the operator team asked for. (The backend `creator_segment` remains
+    // untouched and continues to drive the offer-portal routing decision in
+    // negotiation.js — that's a display-independent concern.)
+    const badge = renderCategoryBadge(r);
+    if (badge) handle.appendChild(badge);
     identity.appendChild(handle);
 
     // First name and full name are separate, independently editable fields —
@@ -2538,6 +2549,156 @@ el('sync-btn').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+
+// ── "Add creators" panel: switch between DB search and paste-URLs ────────────
+// The two flows share the same card. Clicking a tab shows one panel and hides
+// the other; the panels stay separate so the search input's Enter key never
+// accidentally submits the paste-URLs form.
+(function initAddPanelTabs() {
+  const tabSearch = el('add-tab-search');
+  const tabNew = el('add-tab-new');
+  const panelSearch = el('add-panel-search');
+  const panelNew = el('add-panel-new');
+  function show(which) {
+    const showSearch = which === 'search';
+    panelSearch.hidden = !showSearch;
+    panelNew.hidden = showSearch;
+    tabSearch.classList.toggle('active', showSearch);
+    tabNew.classList.toggle('active', !showSearch);
+    tabSearch.setAttribute('aria-selected', String(showSearch));
+    tabNew.setAttribute('aria-selected', String(!showSearch));
+  }
+  tabSearch.addEventListener('click', () => show('search'));
+  tabNew.addEventListener('click', () => show('new'));
+})();
+
+// ── Creator-DB search-and-add ────────────────────────────────────────────────
+// Debounced free-text search against Creator-DB via /api/creator-db/search;
+// each match renders as a row with an "Add to campaign" button that POSTs to
+// /api/creator-db/import. Category filter (any/used/unused) is passed through
+// so an admin can restrict to only past-worked creators.
+(function initDbSearch() {
+  const input = el('db-search-input');
+  const status = el('db-search-status');
+  const results = el('db-search-results');
+  const filter = el('db-search-filter');
+  const state2 = { category: 'any', lastQuery: '', timer: null, reqId: 0 };
+
+  filter.querySelectorAll('.segmented-opt').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      filter.querySelectorAll('.segmented-opt').forEach((b) => b.classList.toggle('active', b === btn));
+      state2.category = btn.dataset.value;
+      runSearch(input.value);
+    });
+  });
+
+  input.addEventListener('input', () => {
+    clearTimeout(state2.timer);
+    state2.timer = setTimeout(() => runSearch(input.value), 250);
+  });
+  // A form containing a single text input submits on Enter; the search input
+  // must NOT accidentally trigger the paste-URLs submit handler.
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); runSearch(input.value); }
+  });
+
+  async function runSearch(q) {
+    const query = String(q || '').trim();
+    state2.lastQuery = query;
+    if (!query && state2.category === 'any') {
+      results.hidden = true;
+      results.innerHTML = '';
+      status.textContent = 'Type to search creators the team has worked with or contacted before.';
+      return;
+    }
+    status.textContent = 'Searching…';
+    const myReq = ++state2.reqId;
+    try {
+      const params = new URLSearchParams();
+      if (query) params.set('q', query);
+      if (state2.category !== 'any') params.set('category', state2.category);
+      const out = await api(`/api/creator-db/search?${params.toString()}`);
+      if (myReq !== state2.reqId) return; // an even fresher search superseded us
+      renderResults(out);
+    } catch (err) {
+      if (myReq !== state2.reqId) return;
+      status.textContent = `Search failed: ${err.message}`;
+      results.hidden = true;
+    }
+  }
+
+  function renderResults(payload) {
+    const rows = (payload && Array.isArray(payload.data)) ? payload.data : [];
+    results.innerHTML = '';
+    if (!rows.length) {
+      status.textContent = 'No matches.';
+      results.hidden = true;
+      return;
+    }
+    status.textContent = `Showing ${rows.length}${payload.meta && payload.meta.total > rows.length ? ` of ${payload.meta.total}` : ''}.`;
+    for (const c of rows) {
+      const category = (c.contractsCount || 0) > 0 ? 'used' : 'unused';
+      const item = document.createElement('div');
+      item.className = 'db-search-item';
+      const info = document.createElement('div');
+      info.className = 'db-search-info';
+      const name = document.createElement('div');
+      name.className = 'db-search-name';
+      const nameStr = c.creatorName || c.instagramUsername || c.email || '(unnamed)';
+      name.textContent = nameStr;
+      const badge = document.createElement('span');
+      badge.className = `creator-badge cat-${category}`;
+      badge.textContent = category === 'used' ? 'Used' : 'Unused';
+      if (category === 'used') badge.title = `${c.contractsCount} past contract${c.contractsCount === 1 ? '' : 's'}`;
+      name.appendChild(badge);
+      const meta = document.createElement('div');
+      meta.className = 'db-search-meta';
+      const bits = [];
+      if (c.instagramUsername) bits.push(`@${c.instagramUsername}`);
+      if (c.email) bits.push(c.email);
+      if (c.campaignName) bits.push(c.campaignName);
+      meta.textContent = bits.join(' · ');
+      info.appendChild(name);
+      info.appendChild(meta);
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'ghost small';
+      addBtn.textContent = 'Add';
+      addBtn.addEventListener('click', () => addCreator(c, addBtn));
+      item.appendChild(info);
+      item.appendChild(addBtn);
+      results.appendChild(item);
+    }
+    results.hidden = false;
+  }
+
+  async function addCreator(c, btn) {
+    if (!state.selectedCampaignId) { alert('Select a campaign first.'); return; }
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = 'Adding…';
+    try {
+      await api('/api/creator-db/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          campaign_id: state.selectedCampaignId,
+          email: c.email || undefined,
+          instagram_username: c.instagramUsername || undefined,
+          first_name: c.creatorName ? String(c.creatorName).split(/\s+/)[0] : undefined,
+          full_name: c.creatorName || undefined,
+        }),
+      });
+      btn.textContent = 'Added ✓';
+      setTimeout(() => { btn.textContent = prev; btn.disabled = false; }, 1400);
+      await refreshCreators();
+      await refreshCampaigns();
+    } catch (err) {
+      btn.textContent = prev;
+      btn.disabled = false;
+      alert(`Failed to add: ${err.message}`);
+    }
+  }
+})();
 
 el('creator-form').addEventListener('submit', async (e) => {
   e.preventDefault();
