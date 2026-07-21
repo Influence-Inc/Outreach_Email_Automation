@@ -136,6 +136,35 @@ test('multiple quoted rates stay collapsed with their per-option deliverables', 
   assert.strictEqual(entry.options[1].label, '$5,000 for 600,000 combined views');
 });
 
+// ── offer-sent step surfaces the views the CPM was priced against ──────────
+
+test('rate_offer_sent shows the view base alongside fee and CPM', () => {
+  const entry = rateLogEntry('rate_offer_sent', { fee: 4200, cpm: 6 });
+  assert.strictEqual(entry.text, 'Offer sent — $4,200 · 700K views x $6 CPM');
+  assert.strictEqual(entry.tone, 'active');
+});
+
+test('rate_offer_sent prefers a stored views value over the fee/CPM derivation', () => {
+  const entry = rateLogEntry('rate_offer_sent', { fee: 3000, cpm: 10, views: 250000 });
+  assert.strictEqual(entry.text, 'Offer sent — $3,000 · 250K views x $10 CPM');
+});
+
+test('rate_offer_sent falls back to the plain CPM tag when views cannot be derived', () => {
+  assert.strictEqual(
+    rateLogEntry('rate_offer_sent', { fee: 1500, cpm: 0 }).text,
+    'Offer sent — $1,500 · CPM $0',
+  );
+});
+
+test('rate_offer_sent from the delegate reply keeps the source tag', () => {
+  const entry = rateLogEntry('rate_offer_sent', { fee: 4200, cpm: 6, source: 'delegate' });
+  assert.strictEqual(entry.text, 'Offer sent — $4,200 · 700K views x $6 CPM (from delegate)');
+});
+
+test('rate_offer_sent with no fee or CPM degrades to the bare label', () => {
+  assert.strictEqual(rateLogEntry('rate_offer_sent', {}).text, 'Offer sent');
+});
+
 // ── "Outreach queued" collapses into "Outreach sent" once the send lands ─────
 
 test('the queued step is dropped once outreach has been sent', () => {
