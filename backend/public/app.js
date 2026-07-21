@@ -640,6 +640,12 @@ function dealSummaryItems(data) {
   }
   if (usageBits.length) items.push({ label: 'USAGE', value: usageBits.join(' · ') });
 
+  const bonusAmt = data.bonusAmount != null ? Number(data.bonusAmount) : null;
+  const bonusViews = data.bonusThresholdViews != null ? Number(data.bonusThresholdViews) : null;
+  if (bonusAmt && bonusViews) {
+    items.push({ label: 'BONUS', value: `$${fmtNum(bonusAmt)} if ${fmtViews(bonusViews)}+ views` });
+  }
+
   // Payment schedule — only shown when an upfront split actually applies (the
   // creator demanded upfront payment). No split means "paid in full on
   // completion", the default, so there's nothing to surface here.
@@ -800,6 +806,22 @@ function renderEditableDeal(cell, r, data) {
     placeholder: 'None',
     onSave: (v) => saveContractField(r, { exclusivity: v }),
   });
+
+  const bonusAmt = data.bonusAmount != null ? Number(data.bonusAmount) : null;
+  const bonusViews = data.bonusThresholdViews != null ? Number(data.bonusThresholdViews) : null;
+  if (bonusAmt && bonusViews) {
+    const bonusLine = document.createElement('div');
+    bonusLine.className = 'deal-line';
+    const bonusTag = document.createElement('span');
+    bonusTag.className = 'deal-tag';
+    bonusTag.textContent = 'BONUS';
+    const bonusVal = document.createElement('span');
+    bonusVal.className = 'deal-val';
+    bonusVal.textContent = `$${fmtNum(bonusAmt)} if ${fmtViews(bonusViews)}+ views`;
+    bonusLine.appendChild(bonusTag);
+    bonusLine.appendChild(bonusVal);
+    cell.appendChild(bonusLine);
+  }
 
   // Upfront payment is a boolean toggle: ON adds the default 30/70 split, OFF
   // means paid in full on completion. The payment schedule is only meant to be

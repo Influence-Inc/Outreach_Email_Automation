@@ -226,8 +226,16 @@
       ? 'each payment milestone'
       : 'completing and posting all agreed deliverables';
     var termsText = 'Direct bank transfer, initiated within ' + daysN + ' working days of ' + termsAnchor;
+    var hasBonus = d.bonusAmount && d.bonusThresholdViews;
+    var baseComp = hasBonus ? compensation - Number(d.bonusAmount) : compensation;
     html += section('Compensation & Payment', rowsWrap(
-      row('Compensation', fmtMoney(compensation, d.currency), { big: true }) +
+      row('Compensation', fmtMoney(baseComp, d.currency), { big: true }) +
+      (hasBonus
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
+        : '') +
+      (hasBonus
+        ? row('Total (incl. bonus)', fmtMoney(compensation, d.currency))
+        : '') +
       row('Currency', d.currency) +
       row('Payment terms', termsText) +
       (hasSchedule
