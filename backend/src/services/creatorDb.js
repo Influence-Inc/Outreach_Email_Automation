@@ -181,6 +181,11 @@ async function syncSignedCreator(contract, creator) {
 // `excludeCampaign` (the current campaign's name). Returns { results: [...] }
 // in the same order as the handles passed in — see the Creator-DB
 // CreatorsService.checkParticipation for the result shape.
+//
+// Kept in place for the segmentation job (services/segmentation.js) that
+// writes creators.creator_segment, which the negotiation flow reads to decide
+// whether to route a returning creator through the offer portal — an
+// orthogonal concern from the Used/Unused/New badge on the dashboard.
 async function lookupParticipation(instagramUsernames, excludeCampaign) {
   const handles = (instagramUsernames || []).map((h) => String(h || '').trim()).filter(Boolean);
   if (!handles.length) return { results: [] };
@@ -189,4 +194,52 @@ async function lookupParticipation(instagramUsernames, excludeCampaign) {
   return request('POST', '/creators/participation', body);
 }
 
-module.exports = { syncSignedCreator, buildPayload, isConfigured, lookupParticipation };
+// ── Bulk categorization + creator lookup (Used / Unused / New dashboard badge)
+// One round-trip per creators-list load, batching every row's {email, ig}
+// through the Creator-DB categorize endpoint. Distinct from the older
+// participation lookup: the categorize response tells us whether a creator has
+// signed at least one contract (Used) vs merely being in the DB (Unused), and
+// it can match by EITHER email or Instagram — so a row we only have an email
+// for still lights up correctly.
+//
+// Category rules (see Creator-DB CreatorsService.categorize):
+//   • used   — creator is in Creator-DB and has ≥1 contract row (any status)
+//   • unused — creator is in Creator-DB but has NO contracts
+//   • new    — no creator matches (not in Creator-DB)
+async function categorizeCreators(keys) {
+  if (!Array.isArray(keys) || !keys.length) return [];
+  // Any error (Creator-DB down, unset URL) is turned into a batch of 'new' so
+  // the dashboard still renders without categorization instead of failing the
+  // whole creators list.
+  if (!isConfigured()) return keys.map(() => ({ category: 'new', creator: null }));
+  try {
+    return await request('POST', '/creators/categorize', { keys });
+  } catch (err) {
+    console.warn('[creatorDb] categorize failed:', err.message);
+    return keys.map(() => ({ category: 'new', creator: null }));
+  }
+}
+
+// Search Creator-DB for existing creators to import into a campaign. Passes
+// through the free-text `q` and the Used/Unused `category` filter; returns the
+// raw Creator-DB paginated response {data, meta}. Called by the Deal Studio's
+// "Search Creator Database" panel — see routes/creatorDb.js.
+async function searchCreators({ q = '', category = 'any', limit = 20 } = {}) {
+  const params = new URLSearchParams();
+  const query = String(q || '').trim();
+  if (query) params.set('search', query);
+  if (category === 'used' || category === 'unused') params.set('category', category);
+  // Pagination: hard-cap at 50 (Creator-DB's own PaginationQueryDto max) so a
+  // stray call can't ask for the entire creators table.
+  params.set('limit', String(Math.max(1, Math.min(50, Number(limit) || 20))));
+  return request('GET', `/creators?${params.toString()}`);
+}
+
+module.exports = {
+  syncSignedCreator,
+  buildPayload,
+  isConfigured,
+  lookupParticipation,
+  categorizeCreators,
+  searchCreators,
+};

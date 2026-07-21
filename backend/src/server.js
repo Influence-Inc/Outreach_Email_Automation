@@ -12,6 +12,7 @@ const offerWebhook = require('./routes/offerWebhook');
 const { api: contractsApi, page: contractPage } = require('./routes/contracts');
 const { api: offersApi, page: offerPage } = require('./routes/offers');
 const bot = require('./routes/bot');
+const creatorDbRoutes = require('./routes/creatorDb');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
@@ -48,6 +49,9 @@ app.use('/api/creators', creators);
 // Negotiation admin actions live under /api/creators too (e.g. /:id/offer,
 // /:id/quoted-rate). Two-segment paths fall through the creators router above.
 app.use('/api/creators', negotiation);
+// Creator-Database bridge: /search (Used/Unused/New lookup) + /import (create
+// a creators row from a picked Creator-DB record). See routes/creatorDb.js.
+app.use('/api/creator-db', creatorDbRoutes);
 app.use('/api/settings', settings);
 app.use('/webhook', webhook);
 // Inbound WhatsApp + iMessage for the offer portal (old-creator negotiation).
