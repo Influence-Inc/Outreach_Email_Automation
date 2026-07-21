@@ -30,7 +30,11 @@ const {
 } = require('../services/offerPortal/replies');
 const { normalizePhone, sendWhatsAppText } = require('../services/offerPortal/whatsapp');
 const { sendIMessageText } = require('../services/offerPortal/imessage');
-const { parseStatusEvent, NEW_MESSAGE_EVENTS } = require('../services/offerPortal/deliveryStatus');
+const {
+  parseStatusEvent,
+  extractProviderMessageId,
+  NEW_MESSAGE_EVENTS,
+} = require('../services/offerPortal/deliveryStatus');
 
 const router = express.Router();
 
@@ -302,6 +306,20 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
     return res.json({ ok: true, ignored: 'unknown_sender' });
   }
 
+  // Idempotency: providers retry webhook deliveries. If this exact inbound
+  // message was already recorded, skip re-processing — accept/decline is already
+  // guarded by respondToOffer, but a retried counter or "other" would otherwise
+  // double-act (a second counter-offer, a duplicate needs_review row).
+  const providerMessageId = extractProviderMessageId(req.body);
+  if (providerMessageId) {
+    const seen = await db.one(
+      `SELECT 1 FROM offer_messages
+        WHERE direction = 'inbound' AND provider_message_id = $1 LIMIT 1`,
+      [providerMessageId],
+    );
+    if (seen) return res.json({ ok: true, deduped: true });
+  }
+
   // Compliance: STOP/UNSUBSCRIBE opt-out (and START opt-in). Handled before any
   // offer logic — an opt-out must suppress future automated sends regardless of
   // offer state. The single confirmation is sent directly (it isn't gated by the
@@ -313,9 +331,9 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
       [matched.id],
     );
     await db.query(
-      `INSERT INTO offer_messages (creator_id, direction, channel, body, raw_payload)
-       VALUES ($1, 'inbound', $2, $3, $4::jsonb)`,
-      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null)],
+      `INSERT INTO offer_messages (creator_id, direction, channel, body, raw_payload, provider_message_id)
+       VALUES ($1, 'inbound', $2, $3, $4::jsonb, $5)`,
+      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null), providerMessageId],
     );
     await sendChannelMessage(channel, matched, null, OPT_OUT_CONFIRMATION);
     return res.json({ ok: true, outcome: 'opted_out' });
@@ -327,9 +345,9 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
       [matched.id],
     );
     await db.query(
-      `INSERT INTO offer_messages (creator_id, direction, channel, body, raw_payload)
-       VALUES ($1, 'inbound', $2, $3, $4::jsonb)`,
-      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null)],
+      `INSERT INTO offer_messages (creator_id, direction, channel, body, raw_payload, provider_message_id)
+       VALUES ($1, 'inbound', $2, $3, $4::jsonb, $5)`,
+      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null), providerMessageId],
     );
     await sendChannelMessage(channel, matched, null, OPT_IN_CONFIRMATION);
     return res.json({ ok: true, outcome: 'opted_in' });
@@ -401,9 +419,9 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   // Persist the raw payload alongside the parsed body so the exact provider
   // schema stays inspectable (verification, and any future parser tightening).
   await db.query(
-    `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, needs_review, raw_payload)
-     VALUES ($1, $2, 'inbound', $3, $4, $5, $6::jsonb)`,
-    [matched.id, attachedOfferId, channel, parsed.body, needsReview, JSON.stringify(req.body ?? null)],
+    `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, needs_review, raw_payload, provider_message_id)
+     VALUES ($1, $2, 'inbound', $3, $4, $5, $6::jsonb, $7)`,
+    [matched.id, attachedOfferId, channel, parsed.body, needsReview, JSON.stringify(req.body ?? null), providerMessageId],
   );
 
   if (shouldDeflect) await sendDeflection(channel, matched, attachedOfferId);
