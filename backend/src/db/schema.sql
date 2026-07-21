@@ -387,6 +387,10 @@ CREATE TABLE IF NOT EXISTS offer_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_offer_messages_creator_id ON offer_messages(creator_id);
 CREATE INDEX IF NOT EXISTS idx_offer_messages_needs_review ON offer_messages(needs_review) WHERE needs_review;
+-- Raw inbound webhook payload, captured verbatim so the provider's real schema
+-- (AiSensy / Linq) can be verified against parseInbound and the parser locked to
+-- it. Only populated on inbound rows.
+ALTER TABLE offer_messages ADD COLUMN IF NOT EXISTS raw_payload JSONB;
 
 -- New-vs-old segmentation + messaging contact, sourced from the Creator Database
 -- keyed on the creator's Instagram handle (profile id).

@@ -235,6 +235,15 @@ async function sendDeflection(channel, creator, offerId) {
 async function handleInbound(channel, contactColumn, authFn, req, res) {
   if (!authFn(req)) return res.status(401).json({ ok: false });
 
+  // Log the exact inbound shape (truncated) so the provider's real schema can be
+  // verified against parseInbound from the Railway logs — including sends from a
+  // number that isn't yet a known creator, which never reach the DB below.
+  try {
+    console.log(`[offer-webhook] inbound ${channel} raw:`, JSON.stringify(req.body).slice(0, 1000));
+  } catch (_) {
+    /* body not serialisable — ignore */
+  }
+
   const parsed = parseInbound(req.body);
   if (!parsed) return res.json({ ok: true, ignored: 'unparseable' });
   if (parsed.ignore) return res.json({ ok: true, ignored: parsed.ignore });
@@ -281,10 +290,12 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
     shouldDeflect = true;
   }
 
+  // Persist the raw payload alongside the parsed body so the exact provider
+  // schema stays inspectable (verification, and any future parser tightening).
   await db.query(
-    `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, needs_review)
-     VALUES ($1, $2, 'inbound', $3, $4, $5)`,
-    [matched.id, attachedOfferId, channel, parsed.body, needsReview],
+    `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, needs_review, raw_payload)
+     VALUES ($1, $2, 'inbound', $3, $4, $5, $6::jsonb)`,
+    [matched.id, attachedOfferId, channel, parsed.body, needsReview, JSON.stringify(req.body ?? null)],
   );
 
   if (shouldDeflect) await sendDeflection(channel, matched, attachedOfferId);
