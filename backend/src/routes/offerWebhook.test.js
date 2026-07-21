@@ -178,3 +178,73 @@ test('verifyLinqSignature rejects when a secret is set but no signature header i
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// pickMatch — creator phone matching (exact + last-10-digit suffix)
+// ---------------------------------------------------------------------------
+
+test('pickMatch returns the exact bare-digits match', () => {
+  const rows = [
+    { id: 1, contact: '+1 (555) 111-2222' },
+    { id: 2, contact: '+1 (555) 666-7777' },
+  ];
+  assert.strictEqual(webhook.pickMatch(rows, '15556667777').id, 2);
+});
+
+test('pickMatch falls back to a last-10-digit suffix when the country code differs', () => {
+  // Stored without country code; inbound has it (or vice versa).
+  const rows = [{ id: 5, contact: '5556667777' }];
+  assert.strictEqual(webhook.pickMatch(rows, '15556667777').id, 5);
+});
+
+test('pickMatch prefers an exact match over an earlier suffix match', () => {
+  const rows = [
+    { id: 1, contact: '5556667777' }, // suffix candidate (appears first)
+    { id: 2, contact: '15556667777' }, // exact
+  ];
+  assert.strictEqual(webhook.pickMatch(rows, '15556667777').id, 2);
+});
+
+test('pickMatch skips rows with no digits and returns null on no match', () => {
+  assert.strictEqual(webhook.pickMatch([{ id: 1, contact: 'n/a' }], '15556667777'), null);
+  assert.strictEqual(webhook.pickMatch([], '15556667777'), null);
+});
+
+// ---------------------------------------------------------------------------
+// decideInboundAction — intent → backend action (the respondToOffer convergence)
+// ---------------------------------------------------------------------------
+
+test('decideInboundAction routes accept/decline to respond (same path as web)', () => {
+  assert.deepStrictEqual(webhook.decideInboundAction({ intent: 'accept', hasPendingOffer: true }), {
+    action: 'respond',
+    response: 'accepted',
+  });
+  assert.deepStrictEqual(webhook.decideInboundAction({ intent: 'decline', hasPendingOffer: true }), {
+    action: 'respond',
+    response: 'declined',
+  });
+});
+
+test('decideInboundAction routes a rate ask with a pending offer to negotiate', () => {
+  assert.deepStrictEqual(
+    webhook.decideInboundAction({ intent: 'other', hasPendingOffer: true, requestedRate: 500 }),
+    { action: 'negotiate', requestedRate: 500 },
+  );
+});
+
+test('decideInboundAction falls back to review otherwise', () => {
+  // accept but nothing pending to respond to
+  assert.deepStrictEqual(webhook.decideInboundAction({ intent: 'accept', hasPendingOffer: false }), {
+    action: 'review',
+  });
+  // other with a rate but no pending offer
+  assert.deepStrictEqual(
+    webhook.decideInboundAction({ intent: 'other', hasPendingOffer: false, requestedRate: 500 }),
+    { action: 'review' },
+  );
+  // other with no parseable rate
+  assert.deepStrictEqual(
+    webhook.decideInboundAction({ intent: 'other', hasPendingOffer: true, requestedRate: null }),
+    { action: 'review' },
+  );
+});

@@ -205,24 +205,40 @@ function authorizedSecret(req, secretEnv) {
 // Match an inbound number to a creator whose contact column (whatsapp/imessage)
 // matches. Compares on bare digits, then falls back to the last 10 digits so a
 // present/absent country code doesn't miss the match.
+// Pure matcher: pick the row whose contact matches fromDigits — exact bare-digits
+// first, else last-10-digits suffix (so a present/absent country code doesn't
+// miss). Each row exposes a normalisable `contact`. Extracted for unit testing.
+function pickMatch(rows, fromDigits) {
+  const tail = (s) => s.slice(-10);
+  let suffix = null;
+  for (const r of rows) {
+    const digits = normalizePhone(r.contact);
+    if (!digits) continue;
+    if (digits === fromDigits) return r; // exact wins immediately
+    if (tail(digits) && tail(digits) === tail(fromDigits)) suffix = suffix || r;
+  }
+  return suffix;
+}
+
 async function matchCreator(contactColumn, fromDigits) {
   const rows = await db.many(
     `SELECT id, whatsapp, imessage, first_name, full_name, ${contactColumn} AS contact
      FROM creators WHERE ${contactColumn} IS NOT NULL`,
   );
-  const tail = (s) => s.slice(-10);
-  let exact = null;
-  let suffix = null;
-  for (const r of rows) {
-    const digits = normalizePhone(r.contact);
-    if (!digits) continue;
-    if (digits === fromDigits) {
-      exact = r;
-      break;
-    }
-    if (tail(digits) && tail(digits) === tail(fromDigits)) suffix = suffix || r;
+  return pickMatch(rows, fromDigits);
+}
+
+// Pure routing for an inbound reply: which backend action it maps to. Keeps the
+// webhook's decision — and the guarantee that a messaged accept/decline converges
+// on the SAME respondToOffer the web button uses — unit-testable.
+function decideInboundAction({ intent, hasPendingOffer, requestedRate }) {
+  if ((intent === 'accept' || intent === 'decline') && hasPendingOffer) {
+    return { action: 'respond', response: intent === 'accept' ? 'accepted' : 'declined' };
   }
-  return exact || suffix;
+  if (intent === 'other' && hasPendingOffer && requestedRate) {
+    return { action: 'negotiate', requestedRate };
+  }
+  return { action: 'review' };
 }
 
 const firstNameOf = (creator) =>
@@ -333,14 +349,18 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   const attachedOfferId = (pendingOffer && pendingOffer.id) || (fallbackOffer && fallbackOffer.id) || null;
 
   const intent = classifyReply(parsed.body);
+  const requestedRate = intent === 'other' ? parseRequestedRate(parsed.body) : null;
+  const decision = decideInboundAction({ intent, hasPendingOffer: !!pendingOffer, requestedRate });
+
   let needsReview = false;
   let shouldDeflect = false;
   let outcome = 'deflected';
 
-  if ((intent === 'accept' || intent === 'decline') && pendingOffer) {
+  if (decision.action === 'respond') {
+    // Same backend path as the web Accept/Decline button — no drift.
     const result = await offers.respondToOffer({
       token: pendingOffer.token,
-      response: intent === 'accept' ? 'accepted' : 'declined',
+      response: decision.response,
       channel,
     });
     if (result.ok) {
@@ -349,14 +369,13 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
       needsReview = true;
       shouldDeflect = true;
     }
-  } else if (intent === 'other' && pendingOffer) {
-    // Not a clear yes/no — maybe a counter-rate ask ("can you do $500?"). Route
-    // it through the SAME CPM counter engine the web offer page uses, so a
-    // messaged counter and a web counter can't drift apart.
-    const requestedRate = parseRequestedRate(parsed.body);
-    const neg = requestedRate
-      ? await offers.negotiateBudget({ token: pendingOffer.token, requestedRate })
-      : null;
+  } else if (decision.action === 'negotiate') {
+    // A counter-rate ask ("can you do $500?") → the SAME CPM counter engine the
+    // web offer page uses, so a messaged counter and a web counter can't drift.
+    const neg = await offers.negotiateBudget({
+      token: pendingOffer.token,
+      requestedRate: decision.requestedRate,
+    });
     if (neg && neg.ok && neg.outcome === 'countered') {
       outcome = 'countered'; // negotiateBudget already delivered the counter link
     } else if (neg && neg.ok && neg.outcome === 'too_high') {
@@ -369,12 +388,12 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
         tooHighReply(firstNameOf(matched), neg.originalRateFormatted),
       );
     } else {
-      // No parseable rate, or the negotiation errored → human review + deflection.
+      // Negotiation errored → human review + deflection.
       needsReview = true;
       shouldDeflect = true;
     }
   } else {
-    // Accept/decline with no pending offer, or nothing actionable.
+    // Nothing actionable (unrecognised, or accept/decline with no pending offer).
     needsReview = true;
     shouldDeflect = true;
   }
@@ -415,5 +434,7 @@ router.post('/imessage', async (req, res, next) => {
 router.parseInbound = parseInbound;
 router.verifyLinqSignature = verifyLinqSignature;
 router.eventType = eventType;
+router.pickMatch = pickMatch;
+router.decideInboundAction = decideInboundAction;
 
 module.exports = router;
