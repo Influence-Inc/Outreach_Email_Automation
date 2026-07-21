@@ -3,11 +3,15 @@
 // Inbound offer-portal webhooks + reply bot. AiSensy (WhatsApp) and Linq (the
 // iMessage gateway) POST each creator reply here; we:
 //   1. match the sender to a creator by their WhatsApp / iMessage number
-//   2. classify the body (accept / decline / other)
-//   3. accept/decline with a pending offer → call respondToOffer — the SAME
+//   2. first-ever contact with an offer waiting (no established_channel yet) →
+//      deliver the offer's full details now, as a free-form reply — this is
+//      how the offer itself ever reaches WhatsApp/iMessage; nothing is ever
+//      pushed there cold (see offers.js's module comment)
+//   3. otherwise, classify the body (accept / decline / other)
+//   4. accept/decline with a pending offer → call respondToOffer — the SAME
 //      backend path the web Accept button uses (a WhatsApp "yes" and a web
 //      Accept can never drift apart)
-//   4. anything else → send the deflection reply and flag needs_review so it
+//   5. anything else → send the deflection reply and flag needs_review so it
 //      surfaces for a human in the dashboard.
 // Ported from Influence-CDB-portal (api/webhooks/aisensy/route.ts), generalised
 // to both channels. Linq nests the reply differently from AiSensy (its content
@@ -226,7 +230,7 @@ function pickMatch(rows, fromDigits) {
 
 async function matchCreator(contactColumn, fromDigits) {
   const rows = await db.many(
-    `SELECT id, whatsapp, imessage, first_name, full_name, ${contactColumn} AS contact
+    `SELECT id, whatsapp, imessage, first_name, full_name, established_channel, ${contactColumn} AS contact
      FROM creators WHERE ${contactColumn} IS NOT NULL`,
   );
   return pickMatch(rows, fromDigits);
@@ -358,6 +362,24 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
      ORDER BY created_at DESC LIMIT 1`,
     [matched.id],
   );
+
+  // First-ever contact on this channel for this creator, with an offer waiting
+  // to go out: deliver the full offer now, as a free-form reply on the channel
+  // they just used, instead of running reply classification on what's almost
+  // always just "Hi" (see creators.established_channel — we never cold-push an
+  // offer's details, only ever reply once the creator initiates). Any later
+  // message from them continues through the normal accept/decline/counter flow
+  // below, since deliverOfferOverChannel marks the channel established on success.
+  if (pendingOffer && !matched.established_channel) {
+    const delivered = await offers.deliverOfferOverChannel(pendingOffer.id, channel);
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, raw_payload, provider_message_id)
+       VALUES ($1, $2, 'inbound', $3, $4, $5::jsonb, $6)`,
+      [matched.id, pendingOffer.id, channel, parsed.body, JSON.stringify(req.body ?? null), providerMessageId],
+    );
+    return res.json({ ok: true, outcome: delivered.sent ? 'offer_delivered' : 'offer_delivery_failed' });
+  }
+
   const fallbackOffer = pendingOffer
     ? null
     : await db.one(

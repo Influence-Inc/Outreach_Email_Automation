@@ -1,11 +1,18 @@
 'use strict';
 
-// Offer-portal service. Replicated from Influence-CDB-portal (src/lib/offers.ts),
-// adapted from Prisma to this app's pg layer. THE single backend path for
-// creating offers, delivering their /o/:token link over email + WhatsApp +
-// iMessage, and accepting / declining / counter-negotiating them. Used for OLD
-// creators (see creator_segment): instead of email negotiation, the admin's
-// approved offer is minted here and negotiated on the hosted offer page.
+// Offer-portal service. Originally replicated from Influence-CDB-portal
+// (src/lib/offers.ts, adapted from Prisma to this app's pg layer). THE single
+// backend path for creating offers and accepting / declining / counter-
+// negotiating them. Used for OLD creators (see creator_segment): instead of
+// email negotiation, the admin's approved offer is minted here.
+//
+// Delivery never cold-pushes WhatsApp/iMessage. A fresh offer sends only an
+// invite email ("text Hi to this number"); the offer's actual details go out
+// as a free-form reply the moment the creator initiates contact on WhatsApp or
+// iMessage (see deliverOfferOverChannel), and every later offer/counter in that
+// negotiation stays on that same channel (creators.established_channel). A
+// creator with no usable messaging channel falls back to the full offer email
+// with the direct /o/:token web link instead.
 
 const { randomBytes } = require('crypto');
 const db = require('../db');
@@ -31,16 +38,6 @@ const firstNameOf = (creator) =>
   (creator.first_name && String(creator.first_name).trim()) ||
   (creator.full_name ? String(creator.full_name).trim().split(/\s+/)[0] : '') ||
   'there';
-
-// Which channel to message when a creator has both numbers on file. WhatsApp
-// reaches more devices (Android + iPhone, vs. iMessage's iPhone-only) and is the
-// fully provisioned channel, so it wins — sending both would double-text a
-// creator who has both. Falls back to iMessage when only that number is on file.
-function preferredMessagingChannel(contact) {
-  if (contact.whatsapp) return 'whatsapp';
-  if (contact.imessage) return 'imessage';
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // Create
@@ -136,60 +133,120 @@ async function logOfferViewed(offerId) {
 // Outbound delivery (email + WhatsApp + iMessage)
 // ---------------------------------------------------------------------------
 
-// Deliver the offer link across every configured channel and log each send to
-// offer_messages. Each channel is best-effort and isolated — one failure never
-// blocks the others.
+// The channel this creator has actually initiated contact on, if any — see
+// established_channel's schema comment. Null means "not yet."
+async function establishedMessagingChannel(creatorId) {
+  const row = await db.one(`SELECT established_channel FROM creators WHERE id = $1`, [creatorId]);
+  return (row && row.established_channel) || null;
+}
+
+// Deliver an offer's full details directly over an ALREADY-established
+// messaging channel, as a free-form reply. Never used for a creator's first
+// contact — that would be cold outreach (a WhatsApp message needs a
+// pre-approved template outside an open session, and an unsolicited first
+// iMessage risks spam-filtering). Used both for the delivery triggered by a
+// creator's first "Hi" (see offerWebhook.js) and every later offer/counter in
+// the same negotiation. Marks the channel established (sticky) on success.
+async function deliverOfferOverChannel(offerId, channel) {
+  const offer = await db.one(
+    `SELECT o.*, c.first_name, c.full_name, c.whatsapp, c.imessage
+     FROM offers o JOIN creators c ON c.id = o.creator_id
+     WHERE o.id = $1`,
+    [offerId],
+  );
+  if (!offer) return { sent: false, reason: 'not_found' };
+
+  const to = channel === 'imessage' ? offer.imessage : offer.whatsapp;
+  if (!to) return { sent: false, reason: 'no_contact_for_channel' };
+
+  const params = {
+    firstName: firstNameOf(offer),
+    brandName: offer.brand_name,
+    offerUrl: offerUrl(offer.token),
+    expiryDate: formatDate(offer.expires_at),
+  };
+  const mod = channel === 'imessage' ? imessage : whatsapp;
+  const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
+  const body = mod.renderOfferOutreachBody(params);
+
+  const result = await send({ to, body });
+  if (result.sent) {
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+       VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+      [offer.creator_id, offer.id, channel, body, result.id || null],
+    );
+    await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'sent', $2)`, [offer.id, channel]);
+    await db.query(
+      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
+      [offer.creator_id, channel],
+    );
+  }
+  return result;
+}
+
+// Top-level dispatcher for a NEW offer. We never cold-push a WhatsApp/iMessage
+// message — only three outcomes:
+//   established_channel set → deliver the full offer directly (free-form reply)
+//   not set, WA/iMessage usable → invite email only ("text Hi to continue")
+//   neither usable (opted out / no number / vendor unconfigured) → fall back to
+//     the full offer email with the direct web link, so it's always reachable
 async function sendOfferOutreach(offerId) {
   const offer = await db.one(
-    `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage, c.messaging_opted_out
+    `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage,
+            c.messaging_opted_out, c.established_channel
      FROM offers o JOIN creators c ON c.id = o.creator_id
      WHERE o.id = $1`,
     [offerId],
   );
   if (!offer) return;
 
+  if (offer.established_channel && !offer.messaging_opted_out) {
+    try {
+      await deliverOfferOverChannel(offer.id, offer.established_channel);
+    } catch (err) {
+      console.error('[offers] outreach delivery failed', err.message);
+    }
+    return;
+  }
+
+  if (!offer.creator_email) return; // no established channel and no email — nothing to try
+
   const firstName = firstNameOf(offer);
   const url = offerUrl(offer.token);
   const expiry = formatDate(offer.expires_at);
-  const params = { firstName, brandName: offer.brand_name, offerUrl: url, expiryDate: expiry };
-
-  const logSend = (channel, body, providerMessageId = null) =>
+  const logSend = (channel, body) =>
     db.query(
-      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
-       VALUES ($1, $2, 'outbound', $3, $4, $5)`,
-      [offer.creator_id, offer.id, channel, body, providerMessageId],
+      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
+       VALUES ($1, $2, 'outbound', $3, $4)`,
+      [offer.creator_id, offer.id, channel, body],
     );
 
-  // Email
-  if (offer.creator_email) {
-    try {
-      const res = await email.sendOfferEmail({ to: offer.creator_email, ...params });
+  const waNumber = !offer.messaging_opted_out && offer.whatsapp ? whatsapp.businessNumber() : '';
+  const imNumber = !offer.messaging_opted_out && offer.imessage ? imessage.businessNumber() : '';
+
+  try {
+    if (waNumber || imNumber) {
+      const res = await email.sendPortalInviteEmail({
+        to: offer.creator_email,
+        firstName,
+        brandName: offer.brand_name,
+        whatsappNumber: waNumber || null,
+        imessageNumber: imNumber || null,
+      });
       if (res.sent) {
-        await logSend('email', `Offer email — "New collaboration opportunity — ${offer.brand_name}" (${url})`);
+        const via = [waNumber && 'WhatsApp', imNumber && 'iMessage'].filter(Boolean).join(' / ');
+        await logSend('email', `Portal invite email — text "Hi" on ${via} to continue`);
+        await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'invited', 'email')`, [
+          offer.id,
+        ]);
       }
-    } catch (err) {
-      console.error('[offers] outreach email failed', err.message);
+    } else {
+      const res = await email.sendOfferEmail({ to: offer.creator_email, firstName, brandName: offer.brand_name, offerUrl: url, expiryDate: expiry });
+      if (res.sent) await logSend('email', `Offer email — "New collaboration opportunity — ${offer.brand_name}" (${url})`);
     }
-  }
-
-  // WhatsApp / iMessage — exactly one, per preferredMessagingChannel (never both,
-  // so a creator with both numbers on file isn't double-texted).
-  const msgChannel = offer.messaging_opted_out ? null : preferredMessagingChannel(offer);
-
-  if (msgChannel === 'whatsapp') {
-    try {
-      const res = await whatsapp.sendOfferOutreachWhatsApp({ to: offer.whatsapp, ...params });
-      if (res.sent) await logSend('whatsapp', whatsapp.renderOfferOutreachBody(params), res.id);
-    } catch (err) {
-      console.error('[offers] outreach WhatsApp failed', err.message);
-    }
-  } else if (msgChannel === 'imessage') {
-    try {
-      const res = await imessage.sendOfferOutreachIMessage({ to: offer.imessage, ...params });
-      if (res.sent) await logSend('imessage', imessage.renderOfferOutreachBody(params), res.id);
-    } catch (err) {
-      console.error('[offers] outreach iMessage failed', err.message);
-    }
+  } catch (err) {
+    console.error('[offers] outreach email failed', err.message);
   }
 }
 
@@ -199,7 +256,8 @@ async function sendOfferOutreach(offerId) {
 async function onOfferResponded(offerId, response) {
   try {
     const offer = await db.one(
-      `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage, c.messaging_opted_out
+      `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage,
+              c.messaging_opted_out, c.established_channel
        FROM offers o JOIN creators c ON c.id = o.creator_id
        WHERE o.id = $1`,
       [offerId],
@@ -229,9 +287,11 @@ async function onOfferResponded(offerId, response) {
     }
 
     // WhatsApp / iMessage thank-you / polite-close (both accept and decline) —
-    // exactly one channel, per preferredMessagingChannel.
+    // only over an ALREADY-established channel. A web response with no prior
+    // messaging contact has nowhere to send this (nothing to establish it with
+    // — the email confirmation above already covers the accept case).
     const body = response === 'accepted' ? thankYouMessage(firstName) : politeCloseMessage(firstName);
-    const msgChannel = offer.messaging_opted_out ? null : preferredMessagingChannel(offer);
+    const msgChannel = offer.messaging_opted_out ? null : offer.established_channel;
     if (msgChannel === 'whatsapp') {
       try {
         const res = await whatsapp.sendWhatsAppText({ to: offer.whatsapp, body });
@@ -485,11 +545,16 @@ async function negotiateBudget({ token, requestedRate }) {
 
   if (raced || !counterId) return { ok: false, reason: 'already_responded' };
 
-  // Counter-offer goes back out over the channels so the creator keeps the link.
+  // Deliver the counter directly ONLY if this creator already has an
+  // established messaging channel (mid-conversation on WhatsApp/iMessage) — a
+  // web-originated counter is already shown right on the offer page the creator
+  // is looking at, so no extra send (and no cold-outreach invite email) is
+  // needed there.
   try {
-    await sendOfferOutreach(counterId);
+    const channel = await establishedMessagingChannel(offer.creator_id);
+    if (channel) await deliverOfferOverChannel(counterId, channel);
   } catch (err) {
-    console.error('[offers] counter outreach failed', err.message);
+    console.error('[offers] counter delivery failed', err.message);
   }
 
   const counter = await db.one(`SELECT * FROM offers WHERE id = $1`, [counterId]);
@@ -774,7 +839,8 @@ async function resolveNeedsReview({ messageId }) {
 module.exports = {
   generateOfferToken,
   offerUrl,
-  preferredMessagingChannel,
+  establishedMessagingChannel,
+  deliverOfferOverChannel,
   createOffer,
   respondToOffer,
   listNeedsReview,

@@ -365,7 +365,7 @@ CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status);
 CREATE TABLE IF NOT EXISTS offer_events (
   id          SERIAL PRIMARY KEY,
   offer_id    INTEGER NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-  event       TEXT NOT NULL,      -- sent | viewed | accepted | declined
+  event       TEXT NOT NULL,      -- invited | sent | viewed | accepted | declined
   channel     TEXT NOT NULL,      -- email | whatsapp | imessage | web
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -416,6 +416,15 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS imessage TEXT;
 -- WhatsApp/iMessage sends go to this creator; reset by a START/opt-in reply.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS messaging_opted_out    BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS messaging_opted_out_at TIMESTAMPTZ;
+-- Which messaging channel this creator has actually initiated contact on
+-- ('whatsapp' | 'imessage' | NULL = not yet). We never cold-push an offer's
+-- full details over WhatsApp/iMessage — a first offer only invites the creator
+-- (by email) to text us; the offer itself is delivered as a free-form reply the
+-- moment they make first contact, which also avoids WhatsApp's 24h template
+-- requirement and iMessage cold-outreach entirely. Sticky once set (COALESCE on
+-- write) — whichever channel they pick first is used for every offer/counter/
+-- follow-up in this negotiation from then on, so they're never messaged on both.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS established_channel TEXT;
 CREATE INDEX IF NOT EXISTS idx_creators_segment ON creators(creator_segment);
 -- Per-campaign Instagram DM template. Renders through the same {firstName}/
 -- {brandName}/{campaignName} placeholders as the email templates. Used by the

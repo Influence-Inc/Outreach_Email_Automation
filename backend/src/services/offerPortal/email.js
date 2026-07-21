@@ -81,6 +81,61 @@ async function sendOfferEmail({ to, firstName, brandName, offerUrl, expiryDate }
   return deliver({ to, subject, text, html });
 }
 
+// Invite email — sent instead of the full offer when the creator has a
+// WhatsApp/iMessage number on file and at least one of those channels is
+// configured. Deliberately withholds the offer details: the creator has to
+// text us first, which turns the actual offer send into a free-form reply
+// within an open conversation rather than cold outreach (no WhatsApp template
+// approval needed, and iMessage never gets an unsolicited first message).
+// whatsappNumber / imessageNumber are our own business numbers (E.164) for
+// each channel that's actually usable for this creator — either may be null.
+function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessageNumber }) {
+  const subject = `A ${brandName} collaboration opportunity for you`;
+
+  const lines = [];
+  if (whatsappNumber) lines.push(`WhatsApp: ${whatsappNumber}`);
+  if (imessageNumber) lines.push(`iMessage: ${imessageNumber}`);
+
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `We have a new collaboration opportunity for you with ${brandName}. Based on your previous work with us, we think this would be a great fit.`,
+    ``,
+    `If you're interested, send us a quick "Hi" and we'll share the full details and next steps right there:`,
+    ...lines.map((l) => `  ${l}`),
+    ``,
+    `— Team INFLUENCE`,
+  ].join('\n');
+
+  const waDigits = whatsappNumber ? whatsappNumber.replace(/[^\d]/g, '') : null;
+  const buttons = [
+    waDigits
+      ? `<a href="https://wa.me/${waDigits}?text=Hi" style="background:#25D366;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on WhatsApp</a>`
+      : '',
+    imessageNumber
+      ? `<a href="sms:${escapeHtml(imessageNumber)}&body=Hi" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('');
+
+  const plainNumbers = lines.map((l) => `<p style="margin:4px 0;color:#525252;">${escapeHtml(l)}</p>`).join('');
+
+  const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
+    <p>We have a new collaboration opportunity for you with <strong>${escapeHtml(brandName)}</strong>. Based on your previous work with us, we think this would be a great fit.</p>
+    <p>If you're interested, send us a quick "Hi" and we'll share the full details and next steps right there:</p>
+    <p style="text-align:center;margin:32px 0;">${buttons}</p>
+    ${plainNumbers}
+    <p style="margin-top:24px;">— Team INFLUENCE</p>`);
+
+  return { subject, text, html };
+}
+
+async function sendPortalInviteEmail({ to, firstName, brandName, whatsappNumber, imessageNumber }) {
+  const { subject, text, html } = renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessageNumber });
+  return deliver({ to, subject, text, html });
+}
+
 // Thank-you confirmation email on acceptance.
 async function sendOfferConfirmationEmail({ to, firstName, brandName }) {
   const subject = `Offer confirmed — ${brandName}`;
@@ -96,4 +151,9 @@ async function sendOfferConfirmationEmail({ to, firstName, brandName }) {
   return deliver({ to, subject, text, html });
 }
 
-module.exports = { sendOfferEmail, sendOfferConfirmationEmail };
+module.exports = {
+  sendOfferEmail,
+  sendOfferConfirmationEmail,
+  renderPortalInviteEmail,
+  sendPortalInviteEmail,
+};

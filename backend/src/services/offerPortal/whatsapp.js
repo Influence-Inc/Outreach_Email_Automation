@@ -11,6 +11,13 @@ const { extractProviderMessageId } = require('./deliveryStatus');
 function apiKey() {
   return process.env.AISENSY_API_KEY || '';
 }
+// Our own WhatsApp Business number (E.164), shown in the invite email so a
+// creator knows what to text. This is a display value only — AiSensy's
+// campaign/text APIs route through whichever number is tied to AISENSY_API_KEY
+// on their end regardless of what's configured here.
+function businessNumber() {
+  return process.env.AISENSY_WHATSAPP_NUMBER || '';
+}
 function campaignName() {
   return process.env.AISENSY_CAMPAIGN_NAME || 'offer_outreach';
 }
@@ -145,6 +152,7 @@ function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate })
 
 module.exports = {
   normalizePhone,
+  businessNumber,
   sendOfferOutreachWhatsApp,
   sendWhatsAppText,
   sendViaSessionTemplate,
