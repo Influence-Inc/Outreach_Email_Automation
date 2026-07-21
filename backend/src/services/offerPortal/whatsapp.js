@@ -56,13 +56,53 @@ async function sendOfferOutreachWhatsApp({ to, firstName, brandName, offerUrl, e
   }
 }
 
+// A pre-approved "utility" template whose single body param {{1}} carries an
+// arbitrary message — used to reach a creator OUTSIDE Meta's 24h session window,
+// where free-form session text is rejected.
+function sessionFallbackCampaign() {
+  return process.env.AISENSY_SESSION_CAMPAIGN || '';
+}
+
+// Deliver `body` through the session-fallback template. Returns null when no
+// fallback template is configured (so the caller keeps the original error).
+async function sendViaSessionTemplate({ to, body }) {
+  const campaign = sessionFallbackCampaign();
+  if (!campaign) return null;
+  try {
+    const res = await fetch(apiUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiKey: apiKey(),
+        campaignName: campaign,
+        destination: normalizePhone(to),
+        userName: 'INFLUENCE',
+        templateParams: [body],
+        source: 'deal-studio',
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
+    }
+    const data = await res.json().catch(() => null);
+    return { sent: true, id: extractProviderMessageId(data), viaTemplate: true };
+  } catch (err) {
+    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
+  }
+}
+
 // Free-form session text (within the 24h window after the creator messages us).
-// Used for thank-you / polite-close / deflection replies.
+// Used for thank-you / polite-close / deflection / too-high / review replies.
+// Outside the 24h window Meta rejects free-form text, so a failed send falls back
+// to the session template (when AISENSY_SESSION_CAMPAIGN is configured) which
+// carries the same body — so a delayed reply still reaches the creator.
 async function sendWhatsAppText({ to, body }) {
   if (!apiKey()) {
     console.warn(`[offer-whatsapp] AISENSY_API_KEY not set — skipping text to ${to}`);
     return { sent: false, skipped: true };
   }
+  let result;
   try {
     const res = await fetch(textApiUrl(), {
       method: 'POST',
@@ -77,15 +117,24 @@ async function sendWhatsAppText({ to, body }) {
         text: { body },
       }),
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      return { sent: true, id: extractProviderMessageId(data) };
     }
-    const data = await res.json().catch(() => null);
-    return { sent: true, id: extractProviderMessageId(data) };
+    const text = await res.text().catch(() => '');
+    result = { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
   } catch (err) {
-    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
+    result = { sent: false, error: err && err.message ? err.message : 'unknown error' };
   }
+
+  // Free-form failed (commonly: outside the 24h window) — try the template.
+  const fallback = await sendViaSessionTemplate({ to, body });
+  if (fallback && fallback.sent) {
+    console.warn(`[offer-whatsapp] free-form text failed (${result.error}); delivered via session template`);
+    return fallback;
+  }
+  if (fallback) return { sent: false, error: `session: ${result.error}; template: ${fallback.error}` };
+  return result;
 }
 
 // The exact WhatsApp template body — stored in offer_messages so the admin can
@@ -98,5 +147,6 @@ module.exports = {
   normalizePhone,
   sendOfferOutreachWhatsApp,
   sendWhatsAppText,
+  sendViaSessionTemplate,
   renderOfferOutreachBody,
 };
