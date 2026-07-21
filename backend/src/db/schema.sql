@@ -412,6 +412,10 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS prior_campaigns     JSONB;
 -- master record (phoneNumber); both default to that number when we only have one.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS whatsapp TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS imessage TEXT;
+-- Messaging opt-out (STOP/UNSUBSCRIBE compliance). When TRUE, no automated
+-- WhatsApp/iMessage sends go to this creator; reset by a START/opt-in reply.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS messaging_opted_out    BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS messaging_opted_out_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_creators_segment ON creators(creator_segment);
 -- Per-campaign Instagram DM template. Renders through the same {firstName}/
 -- {brandName}/{campaignName} placeholders as the email templates. Used by the

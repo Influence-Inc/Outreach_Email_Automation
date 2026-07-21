@@ -58,6 +58,27 @@ test('parseRequestedRate returns null when there is no monetary ask', () => {
   assert.strictEqual(replies.parseRequestedRate(''), null);
 });
 
+// --- opt-out / opt-in (compliance) -----------------------------------------
+
+test('isOptOut matches canonical STOP/UNSUBSCRIBE keywords', () => {
+  for (const w of ['STOP', 'stop', 'Stop.', 'unsubscribe', 'please unsubscribe me', 'opt out', 'CANCEL']) {
+    assert.strictEqual(replies.isOptOut(w), true, `"${w}" should opt out`);
+  }
+});
+
+test('isOptOut does not trip on "stop" inside a normal sentence', () => {
+  assert.strictEqual(replies.isOptOut('stop by anytime'), false);
+  assert.strictEqual(replies.isOptOut('yes'), false);
+  assert.strictEqual(replies.isOptOut(''), false);
+});
+
+test('isOptIn matches START/RESUME keywords', () => {
+  for (const w of ['START', 'start', 'resume', 'unstop', 'opt in']) {
+    assert.strictEqual(replies.isOptIn(w), true, `"${w}" should opt in`);
+  }
+  assert.strictEqual(replies.isOptIn('getting started with reels'), false);
+});
+
 // --- reply bodies ----------------------------------------------------------
 
 test('tooHighReply names the creator and the current rate', () => {

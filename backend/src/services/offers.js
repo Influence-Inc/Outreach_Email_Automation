@@ -131,7 +131,7 @@ async function logOfferViewed(offerId) {
 // blocks the others.
 async function sendOfferOutreach(offerId) {
   const offer = await db.one(
-    `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage
+    `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage, c.messaging_opted_out
      FROM offers o JOIN creators c ON c.id = o.creator_id
      WHERE o.id = $1`,
     [offerId],
@@ -163,7 +163,7 @@ async function sendOfferOutreach(offerId) {
   }
 
   // WhatsApp
-  if (offer.whatsapp) {
+  if (offer.whatsapp && !offer.messaging_opted_out) {
     try {
       const res = await whatsapp.sendOfferOutreachWhatsApp({ to: offer.whatsapp, ...params });
       if (res.sent) await logSend('whatsapp', whatsapp.renderOfferOutreachBody(params), res.id);
@@ -173,7 +173,7 @@ async function sendOfferOutreach(offerId) {
   }
 
   // iMessage
-  if (offer.imessage) {
+  if (offer.imessage && !offer.messaging_opted_out) {
     try {
       const res = await imessage.sendOfferOutreachIMessage({ to: offer.imessage, ...params });
       if (res.sent) await logSend('imessage', imessage.renderOfferOutreachBody(params), res.id);
@@ -189,7 +189,7 @@ async function sendOfferOutreach(offerId) {
 async function onOfferResponded(offerId, response) {
   try {
     const offer = await db.one(
-      `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage
+      `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage, c.messaging_opted_out
        FROM offers o JOIN creators c ON c.id = o.creator_id
        WHERE o.id = $1`,
       [offerId],
@@ -220,7 +220,7 @@ async function onOfferResponded(offerId, response) {
 
     // WhatsApp + iMessage thank-you / polite-close (both accept and decline).
     const body = response === 'accepted' ? thankYouMessage(firstName) : politeCloseMessage(firstName);
-    if (offer.whatsapp) {
+    if (offer.whatsapp && !offer.messaging_opted_out) {
       try {
         const res = await whatsapp.sendWhatsAppText({ to: offer.whatsapp, body });
         if (res.sent) await logSend('whatsapp', body, res.id);
@@ -228,7 +228,7 @@ async function onOfferResponded(offerId, response) {
         console.error('[offers] follow-up WhatsApp failed', err.message);
       }
     }
-    if (offer.imessage) {
+    if (offer.imessage && !offer.messaging_opted_out) {
       try {
         const res = await imessage.sendIMessageText({ to: offer.imessage, body });
         if (res.sent) await logSend('imessage', body, res.id);
@@ -721,12 +721,13 @@ async function replyToNeedsReview({ messageId, body }) {
   if (!text) return { ok: false, reason: 'empty_body' };
 
   const msg = await db.one(
-    `SELECT m.id, m.creator_id, m.channel, m.offer_id, c.whatsapp, c.imessage
+    `SELECT m.id, m.creator_id, m.channel, m.offer_id, c.whatsapp, c.imessage, c.messaging_opted_out
        FROM offer_messages m JOIN creators c ON c.id = m.creator_id
       WHERE m.id = $1 AND m.direction = 'inbound'`,
     [messageId],
   );
   if (!msg) return { ok: false, reason: 'not_found' };
+  if (msg.messaging_opted_out) return { ok: false, reason: 'creator_opted_out' };
 
   const to = msg.channel === 'imessage' ? msg.imessage : msg.channel === 'whatsapp' ? msg.whatsapp : null;
   if (!to) return { ok: false, reason: 'no_contact_for_channel' };

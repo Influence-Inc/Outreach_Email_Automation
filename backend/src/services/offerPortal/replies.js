@@ -91,12 +91,46 @@ function tooHighReply(firstName, currentRateFormatted) {
   }. It's still live if you'd like to go ahead, and we'd love to work with you.`;
 }
 
+// STOP/UNSUBSCRIBE opt-out + START opt-in (SMS/WhatsApp compliance). Match the
+// canonical single keyword exactly (so "stop by anytime" is NOT an opt-out), plus
+// the unmistakable "unsubscribe" / "opt out" phrasing anywhere in the message.
+function normalizeKeyword(body) {
+  return String(body || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?,]+$/, '');
+}
+const OPT_OUT_EXACT = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit', 'optout', 'opt out', 'opt-out']);
+const OPT_IN_EXACT = new Set(['start', 'unstop', 'resume', 'subscribe', 'optin', 'opt in', 'opt-in']);
+
+function isOptOut(body) {
+  const t = normalizeKeyword(body);
+  if (!t) return false;
+  if (OPT_OUT_EXACT.has(t)) return true;
+  return /\bunsubscribe\b/.test(t) || /\bopt[\s-]?out\b/.test(t);
+}
+function isOptIn(body) {
+  const t = normalizeKeyword(body);
+  if (!t) return false;
+  if (OPT_IN_EXACT.has(t)) return true;
+  return /\bopt[\s-]?in\b/.test(t);
+}
+
+const OPT_OUT_CONFIRMATION =
+  "You've been unsubscribed and won't receive further messages from INFLUENCE. Reply START at any time to resume.";
+const OPT_IN_CONFIRMATION =
+  "You're re-subscribed to INFLUENCE messages. Reply STOP at any time to unsubscribe.";
+
 module.exports = {
   DECLINE_REASONS,
   classifyReply,
   parseRequestedRate,
+  isOptOut,
+  isOptIn,
   thankYouMessage,
   politeCloseMessage,
   tooHighReply,
   DEFLECTION_MESSAGE,
+  OPT_OUT_CONFIRMATION,
+  OPT_IN_CONFIRMATION,
 };

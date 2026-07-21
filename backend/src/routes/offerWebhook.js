@@ -21,8 +21,12 @@ const offers = require('../services/offers');
 const {
   classifyReply,
   parseRequestedRate,
+  isOptOut,
+  isOptIn,
   tooHighReply,
   DEFLECTION_MESSAGE,
+  OPT_OUT_CONFIRMATION,
+  OPT_IN_CONFIRMATION,
 } = require('../services/offerPortal/replies');
 const { normalizePhone, sendWhatsAppText } = require('../services/offerPortal/whatsapp');
 const { sendIMessageText } = require('../services/offerPortal/imessage');
@@ -280,6 +284,39 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   if (!matched) {
     console.warn(`[offer-webhook] inbound ${channel} from unknown number ${parsed.from}`);
     return res.json({ ok: true, ignored: 'unknown_sender' });
+  }
+
+  // Compliance: STOP/UNSUBSCRIBE opt-out (and START opt-in). Handled before any
+  // offer logic — an opt-out must suppress future automated sends regardless of
+  // offer state. The single confirmation is sent directly (it isn't gated by the
+  // opt-out flag we just set), which is standard practice.
+  if (isOptOut(parsed.body)) {
+    await db.query(
+      `UPDATE creators SET messaging_opted_out = TRUE, messaging_opted_out_at = NOW(), updated_at = NOW()
+       WHERE id = $1`,
+      [matched.id],
+    );
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, direction, channel, body, raw_payload)
+       VALUES ($1, 'inbound', $2, $3, $4::jsonb)`,
+      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null)],
+    );
+    await sendChannelMessage(channel, matched, null, OPT_OUT_CONFIRMATION);
+    return res.json({ ok: true, outcome: 'opted_out' });
+  }
+  if (isOptIn(parsed.body)) {
+    await db.query(
+      `UPDATE creators SET messaging_opted_out = FALSE, messaging_opted_out_at = NULL, updated_at = NOW()
+       WHERE id = $1`,
+      [matched.id],
+    );
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, direction, channel, body, raw_payload)
+       VALUES ($1, 'inbound', $2, $3, $4::jsonb)`,
+      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null)],
+    );
+    await sendChannelMessage(channel, matched, null, OPT_IN_CONFIRMATION);
+    return res.json({ ok: true, outcome: 'opted_in' });
   }
 
   const pendingOffer = await db.one(
