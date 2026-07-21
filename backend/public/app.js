@@ -3571,9 +3571,161 @@ function buildReplyBlock(r) {
   return block;
 }
 
+// ---------------------------------------------------------------------------
+// Needs-review inbox — inbound messaging replies the bot couldn't action.
+// Populated from /api/offer-review; lets an admin reply on the same channel
+// (WhatsApp / iMessage) or dismiss, clearing offer_messages.needs_review.
+// ---------------------------------------------------------------------------
+const reviewState = { items: [] };
+
+function channelLabel(ch) {
+  return ch === 'imessage' ? 'iMessage' : ch === 'whatsapp' ? 'WhatsApp' : ch;
+}
+
+function setReviewCount(n) {
+  const btn = el('review-inbox-btn');
+  const badge = el('review-inbox-count');
+  if (!btn || !badge) return;
+  badge.textContent = String(n);
+  btn.hidden = n === 0;
+}
+
+async function refreshReviewCount() {
+  try {
+    reviewState.items = await api('/api/offer-review');
+    setReviewCount(reviewState.items.length);
+    if (!el('review-inbox').hidden) renderReviewList();
+  } catch (_) {
+    /* secondary surface — never block the dashboard on it */
+  }
+}
+
+function removeReviewItem(id) {
+  reviewState.items = reviewState.items.filter((x) => x.id !== id);
+  setReviewCount(reviewState.items.length);
+  renderReviewList();
+}
+
+function renderReviewItem(it) {
+  const card = document.createElement('div');
+  card.className = 'review-item';
+
+  const head = document.createElement('div');
+  head.className = 'review-item-head';
+  const who = document.createElement('span');
+  who.className = 'review-who';
+  who.textContent = it.name + (it.handle && it.handle !== it.name ? ` · ${it.handle}` : '');
+  const meta = document.createElement('span');
+  meta.className = 'review-meta';
+  meta.textContent = `${channelLabel(it.channel)} · ${fmtDate(it.at)}`;
+  head.appendChild(who);
+  head.appendChild(meta);
+  card.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'review-body';
+  body.textContent = it.body;
+  card.appendChild(body);
+
+  if (it.offer) {
+    const offer = document.createElement('div');
+    offer.className = 'review-offer';
+    const rate = it.offer.rate != null ? `${it.offer.currency || ''} ${it.offer.rate}`.trim() : '—';
+    offer.textContent = `Offer: ${rate} · ${it.offer.status}`;
+    card.appendChild(offer);
+  }
+
+  const replyBox = document.createElement('textarea');
+  replyBox.className = 'review-reply io-scroll';
+  replyBox.rows = 2;
+  replyBox.placeholder = `Reply to ${it.name} over ${channelLabel(it.channel)}…`;
+  card.appendChild(replyBox);
+
+  const foot = document.createElement('div');
+  foot.className = 'review-item-foot';
+  const status = document.createElement('span');
+  status.className = 'review-status hint';
+  const dismiss = document.createElement('button');
+  dismiss.className = 'ghost small';
+  dismiss.type = 'button';
+  dismiss.textContent = 'Dismiss';
+  const send = document.createElement('button');
+  send.className = 'btn-primary small';
+  send.type = 'button';
+  send.textContent = 'Send reply';
+
+  send.onclick = async () => {
+    const text = replyBox.value.trim();
+    if (!text) return replyBox.focus();
+    send.disabled = true;
+    dismiss.disabled = true;
+    status.textContent = 'Sending…';
+    try {
+      await api(`/api/offer-review/${it.id}/reply`, {
+        method: 'POST',
+        body: JSON.stringify({ body: text }),
+      });
+      removeReviewItem(it.id);
+    } catch (err) {
+      status.textContent = `Failed: ${err.message}`;
+      send.disabled = false;
+      dismiss.disabled = false;
+    }
+    return undefined;
+  };
+
+  dismiss.onclick = async () => {
+    send.disabled = true;
+    dismiss.disabled = true;
+    status.textContent = 'Dismissing…';
+    try {
+      await api(`/api/offer-review/${it.id}/resolve`, { method: 'POST' });
+      removeReviewItem(it.id);
+    } catch (err) {
+      status.textContent = `Failed: ${err.message}`;
+      send.disabled = false;
+      dismiss.disabled = false;
+    }
+  };
+
+  foot.appendChild(status);
+  foot.appendChild(dismiss);
+  foot.appendChild(send);
+  card.appendChild(foot);
+  return card;
+}
+
+function renderReviewList() {
+  const list = el('review-list');
+  const empty = el('review-empty');
+  list.innerHTML = '';
+  if (!reviewState.items.length) {
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+  for (const it of reviewState.items) list.appendChild(renderReviewItem(it));
+}
+
+function openReviewInbox() {
+  el('review-inbox').hidden = false;
+  renderReviewList();
+  refreshReviewCount();
+}
+function closeReviewInbox() {
+  el('review-inbox').hidden = true;
+}
+
+if (el('review-inbox-btn')) {
+  el('review-inbox-btn').addEventListener('click', openReviewInbox);
+  el('review-close').addEventListener('click', closeReviewInbox);
+  el('review-backdrop').addEventListener('click', closeReviewInbox);
+}
+
 (async () => {
   await refreshCampaigns();
   // Restore the view encoded in the URL so a refresh keeps the current
   // campaign instead of dropping back to the empty picker.
   await handleRoute();
+  refreshReviewCount();
 })();

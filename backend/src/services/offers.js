@@ -692,11 +692,81 @@ async function attachOffers(rows) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// needs_review inbox — inbound replies the bot couldn't confidently action
+// ---------------------------------------------------------------------------
+
+// List flagged inbound messages with the creator + offer context the admin inbox
+// renders. Newest first.
+async function listNeedsReview({ limit = 200 } = {}) {
+  return db.many(
+    `SELECT m.id, m.creator_id, m.channel, m.body, m.sent_at, m.offer_id,
+            c.first_name, c.full_name, c.instagram_username, c.whatsapp, c.imessage,
+            o.token AS offer_token, o.status AS offer_status,
+            o.rate AS offer_rate, o.currency AS offer_currency
+       FROM offer_messages m
+       JOIN creators c ON c.id = m.creator_id
+       LEFT JOIN offers o ON o.id = m.offer_id
+      WHERE m.direction = 'inbound' AND m.needs_review = TRUE
+      ORDER BY m.sent_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+}
+
+// Send an admin's free-form reply on the creator's channel and clear the flag on
+// the inbound message it answers. Returns { ok, reason? }.
+async function replyToNeedsReview({ messageId, body }) {
+  const text = String(body || '').trim();
+  if (!text) return { ok: false, reason: 'empty_body' };
+
+  const msg = await db.one(
+    `SELECT m.id, m.creator_id, m.channel, m.offer_id, c.whatsapp, c.imessage
+       FROM offer_messages m JOIN creators c ON c.id = m.creator_id
+      WHERE m.id = $1 AND m.direction = 'inbound'`,
+    [messageId],
+  );
+  if (!msg) return { ok: false, reason: 'not_found' };
+
+  const to = msg.channel === 'imessage' ? msg.imessage : msg.channel === 'whatsapp' ? msg.whatsapp : null;
+  if (!to) return { ok: false, reason: 'no_contact_for_channel' };
+
+  let sendResult;
+  if (msg.channel === 'whatsapp') sendResult = await whatsapp.sendWhatsAppText({ to, body: text });
+  else if (msg.channel === 'imessage') sendResult = await imessage.sendIMessageText({ to, body: text });
+  else return { ok: false, reason: 'unsupported_channel' };
+
+  if (!sendResult.sent) {
+    return { ok: false, reason: sendResult.skipped ? 'channel_not_configured' : sendResult.error || 'send_failed' };
+  }
+
+  await db.query(
+    `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+     VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+    [msg.creator_id, msg.offer_id, msg.channel, text, sendResult.id || null],
+  );
+  await db.query(`UPDATE offer_messages SET needs_review = FALSE WHERE id = $1`, [messageId]);
+  return { ok: true };
+}
+
+// Clear the flag without replying (dismiss).
+async function resolveNeedsReview({ messageId }) {
+  const res = await db.query(
+    `UPDATE offer_messages SET needs_review = FALSE
+      WHERE id = $1 AND direction = 'inbound' AND needs_review = TRUE`,
+    [messageId],
+  );
+  return { ok: true, cleared: res.rowCount };
+}
+
 module.exports = {
   generateOfferToken,
   offerUrl,
   createOffer,
   respondToOffer,
+  listNeedsReview,
+  replyToNeedsReview,
+  resolveNeedsReview,
   logOfferViewed,
   sendOfferOutreach,
   recordDeliveryStatus,

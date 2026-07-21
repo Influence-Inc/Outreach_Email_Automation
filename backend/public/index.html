@@ -22,6 +22,9 @@
       <span class="topbar-divider"></span>
       <span class="topbar-title">Deal Studio</span>
     </div>
+    <button id="review-inbox-btn" class="ghost small review-inbox-btn" type="button" hidden>
+      Needs review<span id="review-inbox-count" class="review-count">0</span>
+    </button>
     <div class="auth" id="sender-status">
       <span class="live-dot"></span>
       Outreach &amp; follow-ups sent automatically
@@ -230,6 +233,18 @@
       </div>
     </section>
   </main>
+
+  <div id="review-inbox" class="review-modal" hidden>
+    <div class="review-backdrop" id="review-backdrop"></div>
+    <div class="review-panel io-scroll">
+      <div class="review-head">
+        <h2>Replies needing review</h2>
+        <button id="review-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <p class="hint review-empty" id="review-empty" hidden>Nothing needs review right now.</p>
+      <div id="review-list" class="review-list"></div>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
 </body>
