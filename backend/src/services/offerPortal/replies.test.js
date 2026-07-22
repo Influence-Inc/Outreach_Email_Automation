@@ -102,6 +102,13 @@ test('interestClarificationMessage nudges toward Yes/No, not the generic deflect
   assert.doesNotMatch(msg, /jennifer@useinfluence\.xyz/); // that's DEFLECTION_MESSAGE's job, not this one
 });
 
+test('firstContactHoldingMessage is warm and does not read as a support brush-off', () => {
+  const msg = replies.firstContactHoldingMessage('Sam');
+  assert.match(msg, /Sam/);
+  assert.match(msg, /shortly/i);
+  assert.doesNotMatch(msg, /jennifer@useinfluence\.xyz/); // not the support deflection
+});
+
 test('thankYouMessage and politeCloseMessage include the creator name', () => {
   assert.match(replies.thankYouMessage('Sam'), /Sam/);
   assert.match(replies.politeCloseMessage('Sam'), /Sam/);

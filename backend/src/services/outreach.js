@@ -3,6 +3,7 @@ const db = require('../db');
 const { verifyEmail } = require('./emailVerify');
 const { formatFirstName } = require('./nameFormat');
 const instantly = require('./instantly');
+const offers = require('./offers');
 
 // The name that flows into Instantly's {{firstName}} merge tag for the
 // outreach email. The stored first_name is run through formatFirstName so the
@@ -131,6 +132,42 @@ async function sendOutreach(creatorId) {
   const prep = await prepareOutreach(creatorId);
   if (!prep.ok) throw new Error(prep.message);
   const { creator, to, trackingId } = prep;
+
+  // USED (old-segment) creators negotiate over WhatsApp/iMessage, not email — so
+  // their outreach is the messaging INVITE ("text Hi to this number"), not the
+  // Instantly cold-email sequence. New/unused creators keep the email path below
+  // unchanged. Falls back to that same email path when a used creator has no
+  // usable messaging channel (no phone on file / opted out / vendor
+  // unconfigured), so they're never left uncontacted.
+  if (creator.creator_segment === 'old') {
+    const invite = await offers.sendUsedCreatorInvite(creatorId);
+    if (invite.sent) {
+      // The invite email is sent synchronously via Resend (unlike the Instantly
+      // path, which only queues), so mark it sent outright.
+      await db.query(
+        `UPDATE creators
+            SET status = 'outreach_sent',
+                outreach_queued_at = NOW(),
+                outreach_sent_at = NOW(),
+                outreach_message_id = $2,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [creatorId, trackingId],
+      );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, message_id, detail)
+         VALUES ($1, 'sent_outreach', $2, $3)`,
+        [creatorId, trackingId, { via: 'portal_invite', channels: invite.channels }],
+      );
+      console.log(
+        `[outreach] used creator ${creatorId} sent messaging invite (${invite.channels.join(' / ')})`,
+      );
+      return { ok: true, trackingId, via: 'portal_invite', channels: invite.channels };
+    }
+    console.warn(
+      `[outreach] used creator ${creatorId} has no messaging channel (${invite.reason}) — falling back to email outreach`,
+    );
+  }
 
   // Route to this campaign's own Instantly campaign (its own outreach copy +
   // follow-up sequence), falling back to the global env default when unmapped.
