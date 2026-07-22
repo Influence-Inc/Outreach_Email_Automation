@@ -3361,7 +3361,42 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-// --- Guidelines (universal AI prompt + global AI kill-switch) ------------
+// --- Guidelines (universal AI prompt + global AI kill-switch + per-reply notes)
+
+// Renders one textarea per reply type into the Guidelines "Per-reply
+// instructions" section. The reply-type list comes from the server so the UI
+// stays in sync with backend/src/services/settings.js REPLY_NOTE_TYPES.
+function renderReplyNotes(types, notes) {
+  const wrap = el('reply-notes-list');
+  const safeTypes = Array.isArray(types) ? types : [];
+  const safeNotes = notes && typeof notes === 'object' ? notes : {};
+  wrap.innerHTML = safeTypes
+    .map((t) => {
+      const key = t && t.key;
+      const label = t && t.label ? t.label : key;
+      if (!key) return '';
+      const val = typeof safeNotes[key] === 'string' ? safeNotes[key] : '';
+      const inputId = `reply-note-${key}`;
+      return (
+        '<div class="reply-note-item">' +
+        `<label class="reply-note-label" for="${escapeHtml(inputId)}">${escapeHtml(label)}</label>` +
+        `<textarea id="${escapeHtml(inputId)}" data-reply-note-key="${escapeHtml(key)}" class="io-scroll" rows="4" placeholder="e.g. keep it under 3 short lines; never mention discounts.">${escapeHtml(val)}</textarea>` +
+        '</div>'
+      );
+    })
+    .join('');
+}
+
+// Collect the current textarea values keyed by reply type. Reads from the DOM
+// so unsaved edits are what gets sent on Save.
+function collectReplyNotes() {
+  const out = {};
+  document.querySelectorAll('[data-reply-note-key]').forEach((node) => {
+    const key = node.getAttribute('data-reply-note-key');
+    if (key) out[key] = node.value || '';
+  });
+  return out;
+}
 
 async function refreshSettings() {
   try {
@@ -3369,6 +3404,8 @@ async function refreshSettings() {
     el('guidelines-text').value = s.guidelines || '';
     el('ai-replies-toggle').checked = s.ai_replies_enabled !== false;
     el('ai-replies-status').textContent = '';
+    renderReplyNotes(s.reply_note_types || [], s.reply_prompt_notes || {});
+    el('reply-notes-status').textContent = '';
   } catch (err) {
     el('guidelines-status').textContent = `Failed to load: ${err.message}`;
   }
@@ -3390,6 +3427,24 @@ el('save-guidelines-btn').addEventListener('click', async () => {
     await api('/api/settings/guidelines', {
       method: 'PUT',
       body: JSON.stringify({ guidelines: el('guidelines-text').value }),
+    });
+    status.textContent = 'Saved.';
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el('save-reply-notes-btn').addEventListener('click', async () => {
+  const btn = el('save-reply-notes-btn');
+  const status = el('reply-notes-status');
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api('/api/settings/reply-prompt-notes', {
+      method: 'PUT',
+      body: JSON.stringify({ notes: collectReplyNotes() }),
     });
     status.textContent = 'Saved.';
   } catch (err) {
