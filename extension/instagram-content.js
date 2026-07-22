@@ -192,10 +192,24 @@
     return best;
   }
 
+  // Pinned reels sit at the top of the grid and don't reflect recent performance,
+  // so their views would skew the negotiation baseline. Instagram marks them with
+  // a pin badge SVG (aria-label "Pinned post icon") inside the tile; a few older
+  // layouts use a "Pinned" text label instead. Cover both.
+  function isPinnedReel(container) {
+    if (!container) return false;
+    if (container.querySelector('svg[aria-label*="Pinned" i]')) return true;
+    for (const span of container.querySelectorAll('span')) {
+      if ((span.textContent || '').trim().toLowerCase() === 'pinned') return true;
+    }
+    return false;
+  }
+
   // One scrape pass over the reels feed: record each reel's views keyed by reel
   // id into `reels`, reading from the link's immediate parent. Repeated passes
   // across scrolls accumulate and dedupe (reels that scrolled out of view stay
-  // recorded). Scoped to the main feed so sidebar/suggested reels are ignored.
+  // recorded). Scoped to the main feed so sidebar/suggested reels are ignored,
+  // and pinned reels are skipped so they don't skew the recent-views baseline.
   function scrapeVisibleReels(reels) {
     const feed =
       document.querySelector('main') ||
@@ -205,6 +219,7 @@
       const href = link.getAttribute('href') || link.href || '';
       const id = (href.split('/reel/')[1] || '').split('/')[0];
       if (!id || reels.has(id)) continue;
+      if (isPinnedReel(link.parentElement) || isPinnedReel(link)) continue;
       const views = extractViewCount(link.parentElement);
       if (views != null && views > 0) reels.set(id, views);
     }
