@@ -66,6 +66,15 @@ function interestClarificationMessage(firstName) {
   return `Thanks, ${firstName}! Just let us know — reply Yes if you'd like to hear the details, or No if you're not interested right now.`;
 }
 
+// Sent when a creator replies to the invite email before an offer has been
+// priced (no offer exists yet). A warm holding reply — the admin is flagged to
+// price the offer, whose brief then follows on this same channel — instead of
+// the generic support deflection, which would read as a brush-off to someone
+// who just reached out as asked.
+function firstContactHoldingMessage(firstName) {
+  return `Thanks ${firstName}, great to hear from you! We'll share the collaboration details with you right here shortly.`;
+}
+
 // Extract a counter-rate ask from a free-text reply ("can you do $500?",
 // "how about 750", "$1,200"). Returns the number, or null when there's no clear
 // monetary ask (so the caller falls back to human review). Deliberately
@@ -149,6 +158,7 @@ module.exports = {
   tooHighReply,
   renderMessagingBrief,
   interestClarificationMessage,
+  firstContactHoldingMessage,
   DEFLECTION_MESSAGE,
   OPT_OUT_CONFIRMATION,
   OPT_IN_CONFIRMATION,

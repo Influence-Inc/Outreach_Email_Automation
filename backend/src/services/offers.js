@@ -142,6 +142,18 @@ async function establishedMessagingChannel(creatorId) {
   return (row && row.established_channel) || null;
 }
 
+// Which of our own business messaging numbers to show a creator in the invite
+// ("text Hi to this number"): a channel is included only when the creator has a
+// number on file for it, isn't opted out, AND our business number for it is
+// configured. Returns { whatsappNumber, imessageNumber } — either may be null.
+function inviteNumbersFor(contact) {
+  const optedOut = !!contact.messaging_opted_out;
+  return {
+    whatsappNumber: !optedOut && contact.whatsapp ? whatsapp.businessNumber() || null : null,
+    imessageNumber: !optedOut && contact.imessage ? imessage.businessNumber() || null : null,
+  };
+}
+
 // Send the brand/product brief — the FIRST message in this offer's messaging
 // conversation (see offers.messaging_stage), sent before any rate/deliverables.
 // Ends with a yes/no interest check; only a "yes" (handled in offerWebhook.js)
@@ -272,8 +284,7 @@ async function sendOfferOutreach(offerId) {
       [offer.creator_id, offer.id, channel, body],
     );
 
-  const waNumber = !offer.messaging_opted_out && offer.whatsapp ? whatsapp.businessNumber() : '';
-  const imNumber = !offer.messaging_opted_out && offer.imessage ? imessage.businessNumber() : '';
+  const { whatsappNumber: waNumber, imessageNumber: imNumber } = inviteNumbersFor(offer);
 
   try {
     if (waNumber || imNumber) {
@@ -281,8 +292,8 @@ async function sendOfferOutreach(offerId) {
         to: offer.creator_email,
         firstName,
         brandName: offer.brand_name,
-        whatsappNumber: waNumber || null,
-        imessageNumber: imNumber || null,
+        whatsappNumber: waNumber,
+        imessageNumber: imNumber,
       });
       if (res.sent) {
         const via = [waNumber && 'WhatsApp', imNumber && 'iMessage'].filter(Boolean).join(' / ');
@@ -304,6 +315,44 @@ async function sendOfferOutreach(offerId) {
   } catch (err) {
     console.error('[offers] outreach email failed', err.message);
   }
+}
+
+// Send the standalone messaging invite to a USED creator at INITIAL outreach,
+// before any offer has been priced ("We have a {brand} offer for you — text Hi
+// on WhatsApp / iMessage to continue"). Unlike sendOfferOutreach this needs no
+// offer; the offer is priced/approved later and its brief is delivered over the
+// channel the creator establishes by replying. Returns { sent, reason?,
+// channels? }; the caller (outreach.sendOutreach) falls back to the normal
+// email-outreach path when sent is false, so a used creator with no phone on
+// file (or opted out, or no vendor configured) is never left uncontacted.
+async function sendUsedCreatorInvite(creatorId) {
+  const creator = await db.one(
+    `SELECT c.id, c.email, c.first_name, c.full_name, c.whatsapp, c.imessage,
+            c.messaging_opted_out, ca.brand_name
+     FROM creators c LEFT JOIN campaigns ca ON ca.id = c.campaign_id
+     WHERE c.id = $1`,
+    [creatorId],
+  );
+  if (!creator) return { sent: false, reason: 'not_found' };
+  if (!creator.email) return { sent: false, reason: 'no_email' };
+
+  const { whatsappNumber, imessageNumber } = inviteNumbersFor(creator);
+  if (!whatsappNumber && !imessageNumber) return { sent: false, reason: 'no_messaging_channel' };
+
+  const res = await email.sendPortalInviteEmail({
+    to: creator.email,
+    firstName: firstNameOf(creator),
+    brandName: creator.brand_name || 'INFLUENCE',
+    whatsappNumber,
+    imessageNumber,
+  });
+  if (!res.sent) {
+    return { sent: false, reason: res.skipped ? 'email_not_configured' : res.error || 'send_failed' };
+  }
+  return {
+    sent: true,
+    channels: [whatsappNumber && 'WhatsApp', imessageNumber && 'iMessage'].filter(Boolean),
+  };
 }
 
 // Follow-up dispatch on accept / decline. Best-effort across all channels.
@@ -896,6 +945,8 @@ module.exports = {
   generateOfferToken,
   offerUrl,
   establishedMessagingChannel,
+  inviteNumbersFor,
+  sendUsedCreatorInvite,
   sendOfferBriefing,
   deliverOfferOverChannel,
   createOffer,

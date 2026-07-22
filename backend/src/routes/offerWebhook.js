@@ -34,6 +34,7 @@ const {
   isOptIn,
   tooHighReply,
   interestClarificationMessage,
+  firstContactHoldingMessage,
   DEFLECTION_MESSAGE,
   OPT_OUT_CONFIRMATION,
   OPT_IN_CONFIRMATION,
@@ -368,6 +369,32 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
      ORDER BY created_at DESC LIMIT 1`,
     [matched.id],
   );
+  const fallbackOffer = pendingOffer
+    ? null
+    : await db.one(
+        `SELECT id FROM offers WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [matched.id],
+      );
+
+  // Invited, but no offer exists yet: the creator is replying to the messaging
+  // invite email before an admin has priced/approved their offer (a USED creator
+  // at initial outreach — see outreach.sendOutreach). Establish the channel so
+  // the eventual approved offer's brief is delivered HERE rather than a second
+  // invite email, flag it for a human to price, and reply with a warm holding
+  // message instead of the generic support deflection.
+  if (!pendingOffer && !fallbackOffer) {
+    await db.query(
+      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
+      [matched.id, channel],
+    );
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, direction, channel, body, needs_review, raw_payload, provider_message_id)
+       VALUES ($1, 'inbound', $2, $3, TRUE, $4::jsonb, $5)`,
+      [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null), providerMessageId],
+    );
+    await sendChannelMessage(channel, matched, null, firstContactHoldingMessage(firstNameOf(matched)));
+    return res.json({ ok: true, outcome: 'awaiting_offer', needsReview: true });
+  }
 
   // A pending offer's messaging conversation runs in stages (offers.
   // messaging_stage) rather than dumping the rate on first contact:
@@ -414,12 +441,6 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
     return res.json({ ok: true, outcome, needsReview });
   }
 
-  const fallbackOffer = pendingOffer
-    ? null
-    : await db.one(
-        `SELECT id FROM offers WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
-        [matched.id],
-      );
   const attachedOfferId = (pendingOffer && pendingOffer.id) || (fallbackOffer && fallbackOffer.id) || null;
 
   const intent = classifyReply(parsed.body);
