@@ -249,10 +249,24 @@ details.card .subhead { margin: 6px 0 12px; }
 .form-foot .push { margin-right: auto; }
 
 .field-label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 8px; color: var(--ink-2); }
-.reply-notes-list { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; margin-bottom: 12px; }
-.reply-note-item { display: flex; flex-direction: column; gap: 6px; }
-.reply-note-item .reply-note-label { font-weight: 600; font-size: 13px; color: var(--ink-2); }
+.reply-notes-list { display: flex; flex-direction: column; gap: 18px; margin-top: 4px; margin-bottom: 12px; }
+.reply-note-item { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--surface-2); }
+.reply-note-item .reply-note-label { font-weight: 600; font-size: 13px; color: var(--ink); }
 .reply-note-item textarea { min-height: 72px; }
+.reply-note-item .reply-note-input-label { font-weight: 600; font-size: 12px; color: var(--ink-2); margin-top: 4px; }
+.reply-note-item > details > summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); user-select: none; padding: 4px 0; }
+.reply-note-item > details > summary:hover { color: var(--ink); }
+.reply-prompt-view {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.55; color: var(--ink-2);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; margin: 8px 0 0 0; max-height: 320px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
+.reply-framing { margin: 4px 0 16px 0; border: 1px dashed var(--line); border-radius: 12px; padding: 10px 14px; background: var(--surface-2); }
+.reply-framing > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink-2); user-select: none; }
+.reply-framing > summary:hover { color: var(--ink); }
+.reply-framing .reply-prompt-view { margin-top: 10px; }
 .toggle-row { display: flex; align-items: center; gap: 12px; }
 .checkbox-label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
 input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
