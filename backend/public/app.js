@@ -3363,28 +3363,56 @@ function escapeHtml(s) {
 
 // --- Guidelines (universal AI prompt + global AI kill-switch + per-reply notes)
 
-// Renders one textarea per reply type into the Guidelines "Per-reply
-// instructions" section. The reply-type list comes from the server so the UI
-// stays in sync with backend/src/services/settings.js REPLY_NOTE_TYPES.
-function renderReplyNotes(types, notes) {
+// Renders one card per reply type into the Guidelines "Per-reply instructions"
+// section. Each card shows the current master prompt Claude follows (view-only,
+// collapsible) plus a textarea where the admin writes plain-English steering
+// notes. The reply-type list, notes, and master prompt snapshots all come from
+// the server so the UI stays in sync with the backend without hard-coding.
+function renderReplyNotes(types, notes, masterPrompts) {
   const wrap = el('reply-notes-list');
   const safeTypes = Array.isArray(types) ? types : [];
   const safeNotes = notes && typeof notes === 'object' ? notes : {};
+  const safePrompts = masterPrompts && typeof masterPrompts === 'object' ? masterPrompts : {};
   wrap.innerHTML = safeTypes
     .map((t) => {
       const key = t && t.key;
       const label = t && t.label ? t.label : key;
       if (!key) return '';
       const val = typeof safeNotes[key] === 'string' ? safeNotes[key] : '';
+      const prompt = typeof safePrompts[key] === 'string' ? safePrompts[key] : '';
       const inputId = `reply-note-${key}`;
+      const promptBlock = prompt
+        ? '<details>' +
+          '<summary>View current master prompt</summary>' +
+          `<pre class="reply-prompt-view io-scroll">${escapeHtml(prompt)}</pre>` +
+          '</details>'
+        : '';
       return (
         '<div class="reply-note-item">' +
-        `<label class="reply-note-label" for="${escapeHtml(inputId)}">${escapeHtml(label)}</label>` +
+        `<div class="reply-note-label">${escapeHtml(label)}</div>` +
+        promptBlock +
+        `<label class="reply-note-input-label" for="${escapeHtml(inputId)}">Your instructions to change or refine this prompt</label>` +
         `<textarea id="${escapeHtml(inputId)}" data-reply-note-key="${escapeHtml(key)}" class="io-scroll" rows="4" placeholder="e.g. keep it under 3 short lines; never mention discounts.">${escapeHtml(val)}</textarea>` +
         '</div>'
       );
     })
     .join('');
+}
+
+// Populates the global "How every reply is framed" collapsible block. Empty
+// string clears + hides the framing details entirely.
+function renderReplyFraming(framing) {
+  const wrap = el('reply-framing-wrap');
+  const text = el('reply-framing-text');
+  if (!wrap || !text) return;
+  const t = typeof framing === 'string' ? framing : '';
+  if (!t) {
+    wrap.hidden = true;
+    text.textContent = '';
+    return;
+  }
+  wrap.hidden = false;
+  text.textContent = t;
 }
 
 // Collect the current textarea values keyed by reply type. Reads from the DOM
@@ -3404,7 +3432,12 @@ async function refreshSettings() {
     el('guidelines-text').value = s.guidelines || '';
     el('ai-replies-toggle').checked = s.ai_replies_enabled !== false;
     el('ai-replies-status').textContent = '';
-    renderReplyNotes(s.reply_note_types || [], s.reply_prompt_notes || {});
+    renderReplyNotes(
+      s.reply_note_types || [],
+      s.reply_prompt_notes || {},
+      s.reply_master_prompts || {},
+    );
+    renderReplyFraming(s.reply_master_prompts_framing || '');
     el('reply-notes-status').textContent = '';
   } catch (err) {
     el('guidelines-status').textContent = `Failed to load: ${err.message}`;

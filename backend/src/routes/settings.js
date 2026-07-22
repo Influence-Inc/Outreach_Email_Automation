@@ -9,19 +9,24 @@ const {
   GUIDELINES_KEY,
   REPLY_NOTE_TYPES,
 } = require('../services/settings');
+const { getReplyPromptSnapshots } = require('../services/replyPromptSnapshots');
 
 const router = express.Router();
 
 // Current app-wide settings: the universal Guidelines prompt, the global AI
-// auto-reply kill-switch, and the per-reply prompt notes (with the schema of
-// which reply types exist so the UI can render them without hard-coding).
+// auto-reply kill-switch, the per-reply prompt notes, and the read-only master
+// prompt snapshots the Guidelines UI displays above each notes textarea so the
+// team can see the exact directive Claude follows before writing a note.
 router.get('/', async (_req, res, next) => {
   try {
+    const snapshots = getReplyPromptSnapshots();
     res.json({
       guidelines: await getGuidelines(),
       ai_replies_enabled: await getAiRepliesEnabled(),
       reply_prompt_notes: await getReplyPromptNotes(),
       reply_note_types: REPLY_NOTE_TYPES,
+      reply_master_prompts: snapshots.prompts,
+      reply_master_prompts_framing: snapshots.global_framing,
     });
   } catch (err) {
     next(err);
