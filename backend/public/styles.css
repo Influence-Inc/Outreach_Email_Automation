@@ -249,6 +249,10 @@ details.card .subhead { margin: 6px 0 12px; }
 .form-foot .push { margin-right: auto; }
 
 .field-label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 8px; color: var(--ink-2); }
+.reply-notes-list { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; margin-bottom: 12px; }
+.reply-note-item { display: flex; flex-direction: column; gap: 6px; }
+.reply-note-item .reply-note-label { font-weight: 600; font-size: 13px; color: var(--ink-2); }
+.reply-note-item textarea { min-height: 72px; }
 .toggle-row { display: flex; align-items: center; gap: 12px; }
 .checkbox-label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
 input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }

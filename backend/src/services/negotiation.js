@@ -13,7 +13,7 @@ const db = require('../db');
 const pricing = require('./pricing');
 const templates = require('./negotiationTemplates');
 const instantly = require('./instantly');
-const { getGuidelines, getAiRepliesEnabled } = require('./settings');
+const { getGuidelines, getAiRepliesEnabled, getReplyPromptNotes, REPLY_NOTE_TYPES } = require('./settings');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const contracts = require('./contracts');
@@ -180,6 +180,7 @@ function ctxFor(creator, extra = {}) {
     hasStats: creator.ig_scraped_data != null,
     approvedOffer: extra.approvedOffer || null,
     guidelines: extra.guidelines || '',
+    replyNotes: extra.replyNotes || null,
     // Governs the Usage Rights section in Reply 1 (see negotiationTemplates.js
     // reply1()) and paid-ad-rights inclusion in the generated contract (see
     // contracts.js). Defaults to 'no_rights' — the pre-existing behavior.
@@ -210,6 +211,53 @@ function guidelinesBlock(ctx) {
     g,
     '',
   ].join('\n');
+}
+
+// Look up the admin's free-form note for a single reply type (e.g. "reply1",
+// "reply2", "answer_question"). Returns '' when unset or when notes aren't in
+// context, so callers can safely concatenate the result.
+function replyNoteFor(ctx, key) {
+  const notes = ctx && ctx.replyNotes;
+  if (!notes || typeof notes !== 'object') return '';
+  const v = notes[key];
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+// Render a single reply-type's note as a labelled prompt block. Used by the
+// offer / counter-offer prompts where the whole prompt writes ONE reply type,
+// so the note applies unconditionally. Empty string when unset.
+function singleReplyNoteBlock(ctx, key, label) {
+  const note = replyNoteFor(ctx, key);
+  if (!note) return '';
+  return [
+    '',
+    `Team notes for THIS email (${label}) — follow these on top of the template; they override it on conflict:`,
+    note,
+    '',
+  ].join('\n');
+}
+
+// Render every reply-type note that has content as an action-keyed block. Used
+// by the classifier prompt (handleCreatorReply), which picks ONE action out of
+// many and writes the reply inline — Claude reads the map and applies the note
+// whose key matches the action it chose. Empty string when no notes are set.
+function actionReplyNotesBlock(ctx) {
+  const notes = ctx && ctx.replyNotes;
+  if (!notes || typeof notes !== 'object') return '';
+  const entries = (REPLY_NOTE_TYPES || [])
+    .map((t) => ({ key: t.key, label: t.label, note: replyNoteFor(ctx, t.key) }))
+    .filter((e) => e.note);
+  if (!entries.length) return '';
+  const lines = [
+    '',
+    'Team notes for specific reply types — when the action you choose below matches one of these keys, apply the note to the email you write. They stack on top of the templates and universal guidelines above; on conflict the note wins.',
+  ];
+  for (const e of entries) {
+    lines.push(`• [${e.key}] ${e.label}:`);
+    lines.push(e.note);
+    lines.push('');
+  }
+  return lines.join('\n');
 }
 
 function templateVars(ctx) {
@@ -279,6 +327,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
       ? `An admin has approved this offer to send: ${JSON.stringify(ctx.approvedOffer)}.`
       : 'No offer has been approved yet.',
     guidelinesBlock(ctx),
+    actionReplyNotesBlock(ctx),
     '',
     'Adapt the following canonical templates — keep their content and tone, do not free-write new structures:',
     '--- REPLY 1 (share details + ask for their rate) ---',
@@ -673,6 +722,9 @@ async function draftOfferEmail(
       : '',
     '',
     guidelinesBlock(ctx),
+    revised
+      ? singleReplyNoteBlock(ctx, 'counter_offer', 'Counter-offer — revised numbers')
+      : singleReplyNoteBlock(ctx, 'reply2', 'Reply 2 — priced offer'),
     // A revised counter goes to a creator who already has our first offer and
     // all its standing terms — so it must be SHORT and present just the new
     // numbers, not re-pitch the deal. A first offer adapts the full REPLY 2.
@@ -745,10 +797,10 @@ async function buildOfferDraft(creatorId, { offer: rawOffer, instructions = '' }
     err.status = 400;
     throw err;
   }
-  const guidelines = await getGuidelines();
+  const [guidelines, replyNotes] = await Promise.all([getGuidelines(), getReplyPromptNotes()]);
   const salutation =
     creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
-  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, salutation });
+  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, replyNotes, salutation });
   const combine = (await countSentNegotiation(creatorId)) === 0;
   const revised = (await countOffersSent(creatorId)) > 0;
   const email = await draftOfferEmail(creator, offer, ctx, {
@@ -840,11 +892,11 @@ async function buildReplyDraft(creatorId, { instructions = '' } = {}) {
     err.status = 400;
     throw err;
   }
-  const guidelines = await getGuidelines();
+  const [guidelines, replyNotes] = await Promise.all([getGuidelines(), getReplyPromptNotes()]);
   const salutation =
     creator.reply_salutation ||
     salutationFor(creator.first_name, creator.delegate_question || creator.latest_inbound_text);
-  const ctx = ctxFor(creator, { guidelines, salutation });
+  const ctx = ctxFor(creator, { guidelines, replyNotes, salutation });
   const email = await draftReplyEmail(creator, ctx, { instructions });
   return { subject: email.subject, body: email.body };
 }
@@ -1132,8 +1184,8 @@ async function processReply(creatorId) {
     return { action: 'delegated', reason: 'ai_off' };
   }
 
-  const guidelines = await getGuidelines();
-  const ctx = ctxFor(creator, { guidelines, salutation, includeRefs });
+  const [guidelines, replyNotes] = await Promise.all([getGuidelines(), getReplyPromptNotes()]);
+  const ctx = ctxFor(creator, { guidelines, replyNotes, salutation, includeRefs });
   const result = await handleCreatorReply(creator, inbound.text, ctx);
   // Visibility: surface Claude's classification + a snippet of its understanding
   // so it's obvious from Railway logs whether the model is doing the work.
@@ -1561,9 +1613,10 @@ async function handleAcceptedReply(creatorId) {
   //      confident it can answer from the templates / campaign context; send
   //      everything else — payment-structure and contractual questions, disputes,
   //      escalations, ambiguity — to a human so no creator question is dropped.
-  const guidelines = await getGuidelines();
+  const [guidelines, replyNotes] = await Promise.all([getGuidelines(), getReplyPromptNotes()]);
   const ctx = ctxFor(creator, {
     guidelines,
+    replyNotes,
     salutation: salutationFor(creator.first_name, inbound),
     includeRefs: askedForReferences(inbound),
   });
@@ -1672,9 +1725,10 @@ async function surfaceReopenedReply(creatorId) {
   // reply box. Skipped when AI replies are off for the template (everything then
   // goes to a human) or if classification errors out (fall through to hand-off).
   if (await aiRepliesEnabledForCreator(creator)) {
-    const guidelines = await getGuidelines();
+    const [guidelines, replyNotes] = await Promise.all([getGuidelines(), getReplyPromptNotes()]);
     const ctx = ctxFor(creator, {
       guidelines,
+      replyNotes,
       salutation: salutationFor(creator.first_name, inbound),
       includeRefs: askedForReferences(inbound),
     });
@@ -2024,13 +2078,13 @@ async function sendApprovedOffer(
     return { error: 'no offer to send' };
   }
 
-  const guidelines = await getGuidelines();
+  const [guidelines, replyNotes] = await Promise.all([getGuidelines(), getReplyPromptNotes()]);
   // Greet whoever's been corresponding (a manager may have shared the rate on
   // the creator's behalf). The reply salutation was persisted when the rate
   // came in; fall back to re-parsing any still-present inbound, then the name.
   const salutation =
     creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
-  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, salutation });
+  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, replyNotes, salutation });
 
   // A reviewed/edited draft (from the "Draft with AI" review-before-send flow)
   // is sent verbatim — we do NOT re-draft over wording the admin already
