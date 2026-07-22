@@ -18,6 +18,11 @@ const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
 const { seedDefaultIfEmpty } = require('./services/emailTemplates');
+const {
+  offerPortalConfig,
+  offerPortalConfigIssues,
+  logOfferPortalConfig,
+} = require('./services/offerPortal/config');
 
 const app = express();
 app.use(cors());
@@ -44,6 +49,16 @@ app.get('/api/debug/ig-probe', async (req, res) => {
 });
 
 app.get('/api/debug/ig-cookie', (_req, res) => res.json(igCookieStatus()));
+
+// Offer-portal channel readiness: is the Used-creator "text us on WhatsApp /
+// iMessage" invite actually wired up, or is it silently falling back to the
+// Instantly cold email? Reports status only — never API keys (the WhatsApp/
+// iMessage numbers it returns are our own public business numbers, the same ones
+// shown to creators in the invite). Hit this after setting the Railway vars to
+// confirm inviteReady/conversationReady flip to true.
+app.get('/api/debug/offer-portal-config', (_req, res) =>
+  res.json({ ...offerPortalConfig(), issues: offerPortalConfigIssues() }),
+);
 
 app.use('/api/campaigns', campaigns);
 app.use('/api/creators', creators);
@@ -107,6 +122,11 @@ const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
   console.log(`Backend listening on http://localhost:${port}`);
   scheduler.start();
+
+  // Surface offer-portal channel config at boot so a half-configured deploy (the
+  // Used-creator messaging invite silently falling back to Instantly email) is
+  // visible in the logs instead of a mystery. See services/offerPortal/config.js.
+  logOfferPortalConfig();
 
   seedDefaultIfEmpty().catch((err) =>
     console.error('seedDefaultIfEmpty failed:', err.message),

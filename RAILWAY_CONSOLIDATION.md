@@ -173,6 +173,19 @@ Full inventory:
   `CONTENT_CADENCE`, `LEARN_FROM_DELEGATE`, `LEARN_HARVEST_HOURS`,
   `LEARN_HARVEST_MAX_EMAILS`, `SENDER_EMAIL`, `CREATOR_DB_URL`,
   `CREATOR_DB_API_KEY`, `CREATOR_DB_TIMEOUT_MS`, `OUTREACH_BOT_TOKEN`, `DRY_RUN`.
+  - **Offer portal (Used-creator WhatsApp/iMessage negotiation) — required for
+    the "text us on WhatsApp/iMessage" invite to fire; if any are unset the
+    Used-creator flow silently falls back to the plain Instantly cold email:**
+    `RESEND_API_KEY` (invite/offer/confirmation emails go through Resend, **not**
+    Instantly — master switch for the whole flow), `OFFER_EMAIL_FROM`,
+    `AISENSY_API_KEY`, `AISENSY_WHATSAPP_NUMBER` (our business WhatsApp number,
+    shown in the invite), `AISENSY_WEBHOOK_SECRET`, `AISENSY_SESSION_CAMPAIGN`
+    (optional), `IMESSAGE_API_KEY`, `IMESSAGE_FROM_NUMBER` (our Linq sender
+    number, shown in the invite), `IMESSAGE_API_URL`, `IMESSAGE_WEBHOOK_SECRET`.
+    Every channel skips gracefully when its key is absent, so the app boots fine
+    partially configured (e.g. WhatsApp only). After setting these, hit
+    `GET /api/debug/offer-portal-config` (or read the `[offer-portal]` boot log)
+    to confirm `inviteReady`/`conversationReady` are `true`.
 - **creator-database:** `PORT` (injected), `NODE_ENV`, `LOG_LEVEL`,
   `DATABASE_URL`, `INTERNAL_API_KEY`, `INSTANTLY_API_KEY`, `INSTANTLY_API_BASE`,
   `INSTANTLY_TIMEOUT_MS`, `INSTANTLY_CAMPAIGN_IDS`, `INSTANTLY_EACCOUNT`,
