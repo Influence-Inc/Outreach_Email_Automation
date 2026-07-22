@@ -2704,7 +2704,7 @@ el('sync-btn').addEventListener('click', async () => {
     const prev = btn.textContent;
     btn.textContent = 'Adding…';
     try {
-      await api('/api/creator-db/import', {
+      const row = await api('/api/creator-db/import', {
         method: 'POST',
         body: JSON.stringify({
           campaign_id: state.selectedCampaignId,
@@ -2718,6 +2718,12 @@ el('sync-btn').addEventListener('click', async () => {
       setTimeout(() => { btn.textContent = prev; btn.disabled = false; }, 1400);
       await refreshCreators();
       await refreshCampaigns();
+      // Used creators pulled from Creator-DB often already have a known email
+      // (status 'email_found'), but have never had their reel views scraped in
+      // THIS system. Trigger the same automatic extension scrape the "paste
+      // Instagram URLs" flow uses, so Reach populates without a manual "Decide
+      // offer" click. Skipped for an email-only match with no IG handle to visit.
+      if (row && row.instagram_username) startExtensionScrape({ creators: [row] });
     } catch (err) {
       btn.textContent = prev;
       btn.disabled = false;
@@ -3244,9 +3250,14 @@ async function startExtensionScrape({ onlyPending = false, creators: explicitRow
     let list;
     if (explicitRows) {
       // Scoped run: scrape only the given rows (e.g. the just-added creators),
-      // still skipping any that don't need extraction — a duplicate, or a row
-      // that already resolved an email on insert.
-      list = explicitRows.filter((r) => r.status === 'pending_extraction');
+      // still skipping any that don't need it. A row is skipped only if it's
+      // NOT pending_extraction AND already has real ig_scraped_data (reel_count)
+      // — i.e. genuinely nothing left to do. A Creator-DB import can arrive
+      // with status 'email_found' (a known returning creator) but no views on
+      // file yet in this system, so that alone must never skip the scrape.
+      list = explicitRows.filter(
+        (r) => r.status === 'pending_extraction' || !(r.ig_scraped_data && r.ig_scraped_data.reel_count),
+      );
     } else {
       const rows = await api(
         `/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`,
