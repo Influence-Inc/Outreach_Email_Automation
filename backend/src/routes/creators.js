@@ -114,6 +114,14 @@ function isConversationalSend(type, detail) {
 
 const fmtMoney = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
 
+// Compact view-count formatter ("700K", "1.2M") matching the dashboard.
+const fmtViews = (n) => {
+  const v = Number(n || 0);
+  if (v >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+  return String(Math.round(v));
+};
+
 // Map one email_event to a human "delivery update" line for the Rate column.
 // Returns { text, tone } or null to skip.
 //
@@ -197,7 +205,18 @@ function rateLogEntry(type, detail, msg, summary) {
     }
     case 'rate_offer_sent': {
       const fee = d.fee != null ? fmtMoney(d.fee) : null;
-      const cpm = d.cpm != null ? ` · CPM $${d.cpm}` : '';
+      // Views were what the CPM was priced against, so surface both on the same
+      // line: "$4,200 · 700K views x $6 CPM". Prefer a stored views value; else
+      // derive it from fee/CPM (the offer's CPM math is views = fee / cpm × 1000).
+      let cpm = '';
+      if (d.cpm != null) {
+        const views = d.views != null
+          ? Number(d.views)
+          : (d.fee != null ? (Number(d.fee) * 1000) / Number(d.cpm) : null);
+        cpm = views != null && Number.isFinite(views) && views > 0
+          ? ` · ${fmtViews(views)} views x $${d.cpm} CPM`
+          : ` · CPM $${d.cpm}`;
+      }
       const via = d.source === 'delegate' ? ' (from delegate)' : '';
       return { text: fee ? `Offer sent — ${fee}${cpm}${via}` : `Offer sent${via}`, tone: 'active' };
     }
