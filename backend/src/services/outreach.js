@@ -4,6 +4,7 @@ const { verifyEmail } = require('./emailVerify');
 const { formatFirstName } = require('./nameFormat');
 const instantly = require('./instantly');
 const offers = require('./offers');
+const { offerPortalConfigIssues } = require('./offerPortal/config');
 
 // The name that flows into Instantly's {{firstName}} merge tag for the
 // outreach email. The stored first_name is run through formatFirstName so the
@@ -164,8 +165,19 @@ async function sendOutreach(creatorId) {
       );
       return { ok: true, trackingId, via: 'portal_invite', channels: invite.channels };
     }
+    // Falling back to the plain Instantly cold email means this Used creator
+    // will NOT be asked to text us on WhatsApp/iMessage. Spell out why: a
+    // deploy-level config gap (Resend/AiSensy/Linq not set) is very different
+    // from a per-creator gap (no phone on file / opted out), and the two need
+    // different fixes. The config issues below are global (same for everyone);
+    // if there are none, it's a per-creator reason.
+    const configIssues = offerPortalConfigIssues();
+    const why = configIssues.length
+      ? `offer-portal not fully configured: ${configIssues.join('; ')}`
+      : 'creator has no WhatsApp/iMessage number on file or has opted out';
     console.warn(
-      `[outreach] used creator ${creatorId} has no messaging channel (${invite.reason}) — falling back to email outreach`,
+      `[outreach] used creator ${creatorId}: messaging invite not sent (${invite.reason}) — ` +
+        `falling back to Instantly cold email. Reason: ${why}.`,
     );
   }
 
