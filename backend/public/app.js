@@ -488,6 +488,21 @@ function fmtViews(n) {
   return String(Math.round(n));
 }
 
+// Reach cell's "last video" line. Recent uploads read as a relative age
+// ("3d ago") — that's the negotiation-relevant signal (is this creator still
+// posting?). Anything older than ~a month falls back to the calendar date so
+// stale accounts don't look freshly active.
+function fmtLatestReelDate(s) {
+  if (!s) return '';
+  const then = new Date(s).getTime();
+  if (isNaN(then)) return '';
+  const days = Math.max(0, Math.round((Date.now() - then) / 86400000));
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days}d ago`;
+  return new Date(s).toLocaleDateString();
+}
+
 // Compact relative time for the rate timeline ("just now", "5m ago", "2h ago").
 function fmtAgo(s) {
   if (!s) return '';
@@ -586,10 +601,16 @@ function statusPillFor(r) {
 // reel view counts (comma/space separated) when the scraper comes up short.
 function renderReachCell(r, cell) {
   const s = r.ig_scraped_data;
+  const lastReel = s && s.latest_reel_date ? fmtLatestReelDate(s.latest_reel_date) : '';
   if (s && s.reel_count) {
     cell.innerHTML =
       `<div class="reach-main num">${fmtViews(s.p50)} <span class="unit">median</span></div>` +
-      `<div class="reach-sub">${s.reel_count} reels · low ${fmtViews(s.min_views)}</div>`;
+      `<div class="reach-sub">${s.reel_count} reels · low ${fmtViews(s.min_views)}</div>` +
+      (lastReel ? `<div class="reach-sub">Last video ${lastReel}</div>` : '');
+  } else if (lastReel) {
+    cell.innerHTML =
+      `<span class="empty">— no views</span>` +
+      `<div class="reach-sub">Last video ${lastReel}</div>`;
   } else {
     cell.innerHTML = '<span class="empty">— no views</span>';
   }

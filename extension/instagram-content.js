@@ -210,7 +210,9 @@
   // across scrolls accumulate and dedupe (reels that scrolled out of view stay
   // recorded). Scoped to the main feed so sidebar/suggested reels are ignored,
   // and pinned reels are skipped so they don't skew the recent-views baseline.
-  function scrapeVisibleReels(reels) {
+  // Also records the shortcode of the first non-pinned reel encountered — the
+  // profile grid renders newest-first, so this is the most recent upload.
+  function scrapeVisibleReels(reels, ctx) {
     const feed =
       document.querySelector('main') ||
       document.querySelector("section[role='region']") ||
@@ -218,36 +220,83 @@
     for (const link of feed.querySelectorAll("a[href*='/reel/']")) {
       const href = link.getAttribute('href') || link.href || '';
       const id = (href.split('/reel/')[1] || '').split('/')[0];
-      if (!id || reels.has(id)) continue;
+      if (!id) continue;
       if (isPinnedReel(link.parentElement) || isPinnedReel(link)) continue;
+      if (ctx && !ctx.latestShortcode) ctx.latestShortcode = id;
+      if (reels.has(id)) continue;
       const views = extractViewCount(link.parentElement);
       if (views != null && views > 0) reels.set(id, views);
     }
   }
 
   // Reels lazy-load as you scroll. Nudge the page down, accumulating into a Map
-  // until we have enough or stop making progress, then return the view counts.
+  // until we have enough or stop making progress, then return the view counts
+  // plus the newest non-pinned reel's shortcode (for the upload-date lookup).
   async function collectReelViews(maxReels = 12) {
     const reels = new Map();
-    scrapeVisibleReels(reels);
+    const ctx = { latestShortcode: null };
+    scrapeVisibleReels(reels, ctx);
     let stagnant = 0;
     for (let i = 0; i < 12 && reels.size < maxReels; i++) {
       const before = reels.size;
       window.scrollBy(0, Math.round(window.innerHeight * 0.9));
       await sleep(700);
-      scrapeVisibleReels(reels);
+      scrapeVisibleReels(reels, ctx);
       if (reels.size > before) stagnant = 0;
       else if (++stagnant >= 3) break; // no new reels after a few nudges — stop
     }
     window.scrollTo(0, 0);
-    return [...reels.values()].slice(0, maxReels);
+    return {
+      views: [...reels.values()].slice(0, maxReels),
+      latestShortcode: ctx.latestShortcode,
+    };
   }
 
   // Quick single-pass scrape for the popup path (no scrolling).
   function extractReelViews(maxReels = 12) {
     const reels = new Map();
-    scrapeVisibleReels(reels);
-    return [...reels.values()].slice(0, maxReels);
+    const ctx = { latestShortcode: null };
+    scrapeVisibleReels(reels, ctx);
+    return {
+      views: [...reels.values()].slice(0, maxReels),
+      latestShortcode: ctx.latestShortcode,
+    };
+  }
+
+  // Fetch an individual reel's page from the logged-in tab and pull the upload
+  // timestamp out of the embedded JSON. Instagram exposes it in a couple of
+  // shapes ("taken_at":\d+ Unix seconds, or "taken_at_timestamp":\d+); either
+  // works. Returns an ISO date string ("YYYY-MM-DD") for the reach column, or
+  // null on any failure — this is best-effort and must never break the scrape.
+  async function fetchLatestReelDate(shortcode) {
+    if (!shortcode) return null;
+    try {
+      const resp = await fetch(`https://www.instagram.com/reel/${encodeURIComponent(shortcode)}/`, {
+        credentials: 'include',
+        headers: {
+          Accept: 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      if (!resp.ok) return null;
+      const html = await resp.text();
+      let ts = null;
+      const m1 = html.match(/"taken_at"\s*:\s*(\d{9,13})/);
+      if (m1) ts = Number(m1[1]);
+      if (ts == null) {
+        const m2 = html.match(/"taken_at_timestamp"\s*:\s*(\d{9,13})/);
+        if (m2) ts = Number(m2[1]);
+      }
+      if (!Number.isFinite(ts) || ts <= 0) return null;
+      // Instagram gives seconds; if we somehow got ms, normalize.
+      if (ts < 1e12) ts = ts * 1000;
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toISOString().slice(0, 10);
+    } catch (e) {
+      console.warn('[OEA] latest-reel-date fetch failed:', e);
+      return null;
+    }
   }
 
   // ---- Instagram private-API email lookup (the Contact-button email) -------
@@ -392,6 +441,7 @@
       fullName: null,
       username: null,
       reelViews: [],
+      latestReelDate: null,
       bioLinks: []
     };
 
@@ -614,9 +664,16 @@
       // Collect reel view counts for negotiation pricing (best-effort). When
       // includeReels is set (dashboard queue) we scroll to lazy-load the reels
       // grid for the recent ~12 reels; otherwise (popup) do a quick single pass.
+      // Also captures the shortcode of the newest non-pinned reel so we can hit
+      // its page for the upload date (shown under the Reach column).
       try {
-        result.reelViews = includeReels ? await collectReelViews(12) : extractReelViews(12);
+        const reelScrape = includeReels ? await collectReelViews(12) : extractReelViews(12);
+        result.reelViews = reelScrape.views;
         console.log('Reel views extracted:', result.reelViews);
+        if (reelScrape.latestShortcode) {
+          result.latestReelDate = await fetchLatestReelDate(reelScrape.latestShortcode);
+          console.log('Latest reel date:', result.latestReelDate);
+        }
       } catch (e) {
         console.warn('Reel view extraction failed:', e);
       }
