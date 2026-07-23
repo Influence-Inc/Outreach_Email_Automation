@@ -22,9 +22,6 @@
       <span class="topbar-divider"></span>
       <span class="topbar-title">Deal Studio</span>
     </div>
-    <button id="review-inbox-btn" class="ghost small review-inbox-btn" type="button" hidden>
-      Needs review<span id="review-inbox-count" class="review-count">0</span>
-    </button>
     <div class="auth" id="sender-status">
       <span class="live-dot"></span>
       Outreach &amp; follow-ups sent automatically
@@ -65,19 +62,26 @@
             <div id="campaign-stats" class="stats" hidden></div>
           </div>
 
-          <form id="creator-form" class="card" hidden>
-            <h2>Add creators to this campaign</h2>
-            <!--
-              Two ways to add creators to a campaign:
-                1. Search the Creator Database (existing / Used or Unused creators from past outreach) and add them with one click.
-                2. Paste new Instagram URLs (for creators not in Creator-DB yet).
-            -->
-            <div class="add-tabs" role="tablist" aria-label="How to add creators">
-              <button type="button" id="add-tab-search" class="add-tab active" role="tab" aria-selected="true">Search Creator Database</button>
-              <button type="button" id="add-tab-new" class="add-tab" role="tab" aria-selected="false">Paste new Instagram links</button>
+          <form id="creator-form" class="card add-creators-card" hidden>
+            <div class="add-creators-head">
+              <h2>Add creators to this campaign</h2>
+              <p class="hint subhead">Paste Instagram links to add fresh creators, or pull from the Creator Database for people the team has worked with before.</p>
             </div>
 
-            <div id="add-panel-search" class="add-panel">
+            <div class="add-tabs" role="tablist" aria-label="How to add creators">
+              <button type="button" id="add-tab-new" class="add-tab active" role="tab" aria-selected="true">Paste new Instagram links</button>
+              <button type="button" id="add-tab-search" class="add-tab" role="tab" aria-selected="false">Search Creator Database</button>
+            </div>
+
+            <div id="add-panel-new" class="add-panel">
+              <textarea id="ig-urls" class="io-scroll" rows="4" placeholder="Paste one or more Instagram URLs, one per line:&#10;https://www.instagram.com/username1/&#10;https://www.instagram.com/username2/"></textarea>
+              <div class="form-foot">
+                <p id="add-status" class="hint">Paste one URL per line. Click &ldquo;Fetch emails&rdquo; after adding to look up emails.</p>
+                <button type="submit" class="btn-primary btn-lg">Add creators</button>
+              </div>
+            </div>
+
+            <div id="add-panel-search" class="add-panel" hidden>
               <div class="db-search-controls">
                 <input id="db-search-input" type="search" placeholder="Search by name, @handle, email, past campaign…" autocomplete="off" />
                 <div id="db-search-filter" class="segmented" role="group" aria-label="Filter">
@@ -88,14 +92,6 @@
               </div>
               <p id="db-search-status" class="hint">Type to search creators the team has worked with or contacted before.</p>
               <div id="db-search-results" class="db-search-results" hidden></div>
-            </div>
-
-            <div id="add-panel-new" class="add-panel" hidden>
-              <textarea id="ig-urls" class="io-scroll" rows="4" placeholder="Paste one or more Instagram URLs, one per line:&#10;https://www.instagram.com/username1/&#10;https://www.instagram.com/username2/"></textarea>
-              <div class="form-foot">
-                <p id="add-status" class="hint">Paste one URL per line. Click &ldquo;Fetch emails&rdquo; after adding to look up emails.</p>
-                <button type="submit" class="btn-primary btn-lg">Add creators</button>
-              </div>
             </div>
           </form>
 
@@ -191,21 +187,6 @@
             <div id="ig-dm-progress" class="hint scrape-progress" hidden>
               <span id="ig-dm-progress-text"></span>
               <button id="ig-dm-cancel-btn" class="ghost small" type="button">Cancel</button>
-            </div>
-
-            <!-- Client-side filter on top of the loaded rows. Substring match
-                 over the creator's display name and @handle so a quick "gord"
-                 or "@gordonly" jumps straight to the row. Stacks with the
-                 stat-pill stage filter above — both apply. -->
-            <div class="creator-search">
-              <input
-                id="creator-search"
-                type="search"
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="Search creators by name or @handle…"
-              />
-              <span id="creator-search-count" class="hint"></span>
             </div>
 
             <!-- Surfaces creators that need a human right now (AI hand-offs, offers

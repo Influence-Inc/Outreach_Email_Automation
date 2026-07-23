@@ -352,17 +352,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 #scrape-progress-text { flex: 1; }
 #fetch-status { margin-top: 12px; }
 
-/* Client-side search over the current campaign's rows. Rendered above the
-   table, stacks with the stat-pill stage filter. */
-.creator-search { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
-.creator-search input {
-  flex: 1; min-width: 0;
-  padding: 10px 14px; font-size: 13.5px;
-}
-.creator-search input::placeholder { color: var(--faint); }
-.creator-search .hint { flex-shrink: 0; white-space: nowrap; }
-.creator-search .hint:empty { display: none; }
-
 /* --- Creator grid table -------------------------------------------------- */
 .table-scroll { width: 100%; overflow-x: auto; }
 .creator-grid { min-width: 860px; margin-top: 14px; }
@@ -404,28 +393,43 @@ button:disabled { opacity: 0.5; cursor: default; }
 .creator-badge.cat-new    { background: #eef1f8; color: #47566e; border-color: #d9dfec; }
 
 /* --- "Add creators" card: tabs + Creator-DB search + results ---------------- */
-.add-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -6px 0 14px; }
+.add-creators-card { padding: 26px 28px; }
+.add-creators-head { margin-bottom: 18px; }
+.add-creators-head h2 { margin-bottom: 6px; }
+.add-creators-head .subhead { max-width: 64ch; margin: 0; }
+
+.add-tabs {
+  display: inline-flex; gap: 4px; padding: 4px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 10px; margin: 0 0 18px;
+}
 .add-tab {
   appearance: none; background: transparent; border: 0; cursor: pointer;
-  font-family: inherit; font-size: 13.5px; font-weight: 500; color: var(--muted);
-  padding: 10px 12px; margin-bottom: -1px; border-bottom: 2px solid transparent;
+  font-family: inherit; font-size: 13px; font-weight: 500; color: var(--muted);
+  padding: 8px 14px; border-radius: 7px;
+  transition: background 0.12s, color 0.12s;
 }
-.add-tab:hover { color: var(--ink-2); }
-.add-tab.active { color: var(--ink); font-weight: 600; border-bottom-color: var(--ink); }
+.add-tab:hover { color: var(--ink-2); background: var(--surface-3); }
+.add-tab.active {
+  color: var(--ink); font-weight: 600;
+  background: var(--surface); box-shadow: var(--shadow-card);
+  border: 1px solid var(--line);
+}
 
 .add-panel { display: block; }
+.add-panel textarea { min-height: 132px; }
 .db-search-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 #db-search-input {
   flex: 1 1 260px; min-width: 240px;
   font-family: inherit; font-size: 14px; color: var(--ink);
   background: var(--surface-2); border: 1px solid var(--line-2);
-  border-radius: 8px; padding: 9px 12px;
+  border-radius: 10px; padding: 10px 14px;
 }
 #db-search-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 
 .db-search-results {
   display: flex; flex-direction: column; gap: 6px;
-  margin-top: 10px; max-height: 340px; overflow-y: auto;
+  margin-top: 12px; max-height: 340px; overflow-y: auto;
   border: 1px solid var(--line); border-radius: var(--radius-md);
   padding: 6px;
 }
@@ -985,12 +989,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .po-review { font-size: 11.5px; font-weight: 500; color: var(--danger); }
 
 /* Needs-review inbox (offer-portal messaging) */
-.review-inbox-btn { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; }
-.review-count {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
-  background: var(--danger); color: #fff; font-size: 11px; font-weight: 600;
-}
 .review-modal { position: fixed; inset: 0; z-index: 50; }
 .review-backdrop { position: absolute; inset: 0; background: rgba(20, 18, 15, 0.5); }
 .review-panel {
