@@ -27,6 +27,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const offers = require('../services/offers');
+const negotiation = require('../services/negotiation');
 const {
   classifyReply,
   parseRequestedRate,
@@ -387,6 +388,16 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
       `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
       [matched.id, channel],
     );
+    // Put the creator in front of an admin to PRICE & SEND the offer: compute
+    // suggested offers from their scraped views + move to AWAITING_APPROVAL, so
+    // "Decide offer" appears in Deal Studio. Without this a Used creator who
+    // texts "Hi" sits at a null stage forever with no way to send them an offer.
+    // Idempotent + best-effort — a repeated "Hi" never re-flags or resets.
+    try {
+      await negotiation.startOfferForCreator(matched.id);
+    } catch (err) {
+      console.error('[offer-webhook] startOfferForCreator failed', err.message);
+    }
     await db.query(
       `INSERT INTO offer_messages (creator_id, direction, channel, body, needs_review, raw_payload, provider_message_id)
        VALUES ($1, 'inbound', $2, $3, TRUE, $4::jsonb, $5)`,

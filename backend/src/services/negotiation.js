@@ -1373,6 +1373,61 @@ async function routeCreatorToOffer(creator, inbound) {
   return { action: 'offer_requested' };
 }
 
+// Move a creator into the offer-approval pipeline by creator id — used when a
+// USED creator reaches out on WhatsApp/iMessage (the invite → "Hi" flow) so an
+// admin can price & send them an offer, which then goes out over the channel
+// they've established. Mirrors routeCreatorToOffer (computes suggested_offers +
+// AWAITING_APPROVAL) but keyed on id and IDEMPOTENT: a no-op once the creator is
+// already in an offer/negotiation stage, so repeated inbound "Hi"s don't re-log
+// or reset anything. With no view stats there's nothing to price from, so it
+// flags for a human to scrape + price instead.
+async function startOfferForCreator(creatorId) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) return { skipped: 'not_found' };
+  if (['AWAITING_APPROVAL', 'AWAITING_DECISION', 'ACCEPTED', 'CLOSED', 'DECLINED'].includes(creator.negotiation_status)) {
+    return { skipped: `already ${creator.negotiation_status}` };
+  }
+
+  if (!creator.ig_scraped_data) {
+    await db.query(
+      `UPDATE creators
+          SET needs_human = TRUE,
+              delegate_reason = COALESCE(delegate_reason, $2),
+              updated_at = NOW()
+        WHERE id = $1`,
+      [
+        creatorId,
+        'Reached out on WhatsApp/iMessage but has no view stats yet — scrape their reels to build an offer, then price & send it.',
+      ],
+    );
+    return { routed: false, reason: 'no_stats' };
+  }
+
+  let offers = Array.isArray(creator.suggested_offers) && creator.suggested_offers.length
+    ? creator.suggested_offers
+    : null;
+  if (!offers) {
+    const maxCpm = creator.max_cpm != null ? Number(creator.max_cpm) : Number(process.env.TARGET_CPM || 15);
+    const quotedRate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
+    offers = pricing.computeOffers(creator.ig_scraped_data, maxCpm, quotedRate);
+  }
+
+  await db.query(
+    `UPDATE creators
+        SET suggested_offers = $2::jsonb,
+            negotiation_status = 'AWAITING_APPROVAL',
+            needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
+            updated_at = NOW()
+      WHERE id = $1`,
+    [creatorId, JSON.stringify(offers)],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'offer_requested', $2)`,
+    [creatorId, { note: 'used creator reached out on messaging — price & send the offer', via: 'messaging' }],
+  );
+  return { routed: true };
+}
+
 // The fee of the offer the creator is accepting: the most recent priced offer
 // we logged as sent, falling back to the currently approved offer. Used to set
 // the agreed rate on acceptance.
@@ -2305,6 +2360,7 @@ module.exports = {
   buildReplyDraft,
   processReply,
   sendApprovedOffer,
+  startOfferForCreator,
   sendDelegateReply,
   ensureContractSent,
   approveContract,
