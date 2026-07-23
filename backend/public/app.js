@@ -3374,11 +3374,30 @@ const replyNotesState = {
   masterPrompts: {},
 };
 
+// Merge a saved team note into the master prompt for a single reply type,
+// producing the ONE revised prompt text that reflects what Claude will
+// actually see for that reply. Empty / whitespace-only note → returns the
+// base prompt unchanged, so the view stays honest.
+function buildRevisedPrompt(base, note) {
+  const b = typeof base === 'string' ? base : '';
+  const n = typeof note === 'string' ? note.trim() : '';
+  if (!n) return b;
+  return (
+    b +
+    '\n\n' +
+    '--- ADDITIONAL TEAM INSTRUCTIONS (in effect for this reply) ---\n' +
+    n +
+    '\n--- end of additional team instructions ---'
+  );
+}
+
 // Renders one card per reply type into the Guidelines "Per-reply instructions"
-// section. Each card shows the current master prompt Claude follows (view-only,
-// collapsible), a highlighted "Applied on top" block when a note is saved so
-// the change is visible in-place, a single-line input for the admin's plain-
-// English steering note, and a per-card Save button + status.
+// section. Each card shows the ONE current master prompt Claude follows for
+// that reply (base directive + any saved team note, merged inline into a
+// single revised prompt — view-only, collapsible), a single-line input for a
+// new / updated instruction, and a per-card Save button. Save opens an inline
+// preview of the proposed revised prompt with Confirm / Cancel — nothing is
+// persisted until Confirm.
 function renderReplyNotes(types, notes, masterPrompts) {
   const wrap = el('reply-notes-list');
   const safeTypes = Array.isArray(types) ? types : [];
@@ -3393,16 +3412,13 @@ function renderReplyNotes(types, notes, masterPrompts) {
       const label = t && t.label ? t.label : key;
       if (!key) return '';
       const val = typeof safeNotes[key] === 'string' ? safeNotes[key] : '';
-      const prompt = typeof safePrompts[key] === 'string' ? safePrompts[key] : '';
+      const base = typeof safePrompts[key] === 'string' ? safePrompts[key] : '';
       const inputId = `reply-note-${key}`;
-      const promptBlock = prompt
+      const revised = buildRevisedPrompt(base, val);
+      const promptBlock = base
         ? '<details>' +
           '<summary>View current master prompt</summary>' +
-          `<pre class="reply-prompt-view io-scroll">${escapeHtml(prompt)}</pre>` +
-          `<div class="reply-prompt-applied" data-applied-for="${escapeHtml(key)}"${val ? '' : ' hidden'}>` +
-          '<div class="reply-prompt-applied-head">Team note applied on top of this prompt</div>' +
-          `<div class="reply-prompt-applied-body">${escapeHtml(val)}</div>` +
-          '</div>' +
+          `<pre class="reply-prompt-view io-scroll" data-current-for="${escapeHtml(key)}">${escapeHtml(revised)}</pre>` +
           '</details>'
         : '';
       return (
@@ -3413,6 +3429,14 @@ function renderReplyNotes(types, notes, masterPrompts) {
         '<div class="reply-note-row">' +
         `<input id="${escapeHtml(inputId)}" data-reply-note-key="${escapeHtml(key)}" type="text" class="reply-note-input" placeholder="e.g. keep it under 3 short lines; never mention discounts." value="${escapeHtml(val)}" />` +
         `<button class="btn-primary" type="button" data-save-reply-note-key="${escapeHtml(key)}">Save</button>` +
+        '</div>' +
+        `<div class="reply-note-preview" data-preview-for="${escapeHtml(key)}" hidden>` +
+        '<div class="reply-note-preview-head">Preview: revised master prompt (not saved yet)</div>' +
+        `<pre class="reply-prompt-view io-scroll" data-preview-text-for="${escapeHtml(key)}"></pre>` +
+        '<div class="reply-note-preview-actions">' +
+        `<button class="ghost small" type="button" data-cancel-reply-note-key="${escapeHtml(key)}">Cancel</button>` +
+        `<button class="btn-primary" type="button" data-confirm-reply-note-key="${escapeHtml(key)}">Confirm and save</button>` +
+        '</div>' +
         '</div>' +
         `<div class="reply-note-status" data-status-for="${escapeHtml(key)}"></div>` +
         '</div>'
@@ -3437,19 +3461,68 @@ function renderReplyFraming(framing) {
   text.textContent = t;
 }
 
-// Save a single reply-type's note. The API replaces the entire notes map on
-// each PUT, so we send every known key with its current value (unchanged
-// values from the last load plus the new one for this card).
-async function saveReplyNote(key) {
+// Open the inline confirm-before-save preview for one reply type. Reads the
+// current input, builds the proposed revised master prompt, shows the preview
+// block, and disables the input + Save button while it's open — nothing is
+// persisted until the admin clicks Confirm.
+function openReplyNotePreview(key) {
   const input = document.querySelector(`input[data-reply-note-key="${key}"]`);
+  const saveBtn = document.querySelector(`[data-save-reply-note-key="${key}"]`);
+  const preview = document.querySelector(`[data-preview-for="${key}"]`);
+  const previewText = document.querySelector(`[data-preview-text-for="${key}"]`);
   const status = document.querySelector(`[data-status-for="${key}"]`);
-  const btn = document.querySelector(`[data-save-reply-note-key="${key}"]`);
-  const applied = document.querySelector(`[data-applied-for="${key}"]`);
-  if (!input || !status || !btn) return;
+  if (!input || !saveBtn || !preview || !previewText) return;
   const value = String(input.value || '').trim();
-  status.className = 'reply-note-status';
-  status.textContent = 'Saving…';
-  btn.disabled = true;
+  const base = replyNotesState.masterPrompts[key] || '';
+  previewText.textContent = buildRevisedPrompt(base, value);
+  preview.hidden = false;
+  input.disabled = true;
+  saveBtn.disabled = true;
+  if (status) {
+    status.className = 'reply-note-status';
+    status.textContent = value
+      ? 'Review the revised master prompt below, then Confirm to apply.'
+      : 'This will clear your saved instruction and restore the default. Confirm to apply.';
+  }
+}
+
+// Close the preview without saving. Re-enables the input + Save button and
+// leaves the input value untouched so the admin can edit and re-preview.
+function cancelReplyNotePreview(key) {
+  const input = document.querySelector(`input[data-reply-note-key="${key}"]`);
+  const saveBtn = document.querySelector(`[data-save-reply-note-key="${key}"]`);
+  const preview = document.querySelector(`[data-preview-for="${key}"]`);
+  const status = document.querySelector(`[data-status-for="${key}"]`);
+  if (preview) preview.hidden = true;
+  if (input) input.disabled = false;
+  if (saveBtn) saveBtn.disabled = false;
+  if (status) {
+    status.className = 'reply-note-status';
+    status.textContent = 'Cancelled — nothing was changed.';
+  }
+}
+
+// Persist the previewed note. The API replaces the entire notes map on each
+// PUT, so we send every known key with its current saved value plus the new
+// value for this key so other cards' notes aren't clobbered. On success we
+// update the "View current master prompt" text in-place with the new revised
+// prompt so the view reflects reality.
+async function confirmReplyNoteSave(key) {
+  const input = document.querySelector(`input[data-reply-note-key="${key}"]`);
+  const saveBtn = document.querySelector(`[data-save-reply-note-key="${key}"]`);
+  const preview = document.querySelector(`[data-preview-for="${key}"]`);
+  const confirmBtn = document.querySelector(`[data-confirm-reply-note-key="${key}"]`);
+  const cancelBtn = document.querySelector(`[data-cancel-reply-note-key="${key}"]`);
+  const currentText = document.querySelector(`[data-current-for="${key}"]`);
+  const status = document.querySelector(`[data-status-for="${key}"]`);
+  if (!input || !saveBtn || !preview || !confirmBtn) return;
+  const value = String(input.value || '').trim();
+  confirmBtn.disabled = true;
+  if (cancelBtn) cancelBtn.disabled = true;
+  if (status) {
+    status.className = 'reply-note-status';
+    status.textContent = 'Saving…';
+  }
   const nextNotes = { ...replyNotesState.notes, [key]: value };
   try {
     const res = await api('/api/settings/reply-prompt-notes', {
@@ -3458,22 +3531,27 @@ async function saveReplyNote(key) {
     });
     const saved = (res && res.reply_prompt_notes) || nextNotes;
     replyNotesState.notes = { ...saved };
-    input.value = typeof saved[key] === 'string' ? saved[key] : '';
-    if (applied) {
-      const savedVal = typeof saved[key] === 'string' ? saved[key] : '';
-      const body = applied.querySelector('.reply-prompt-applied-body');
-      if (body) body.textContent = savedVal;
-      applied.hidden = !savedVal;
+    const savedVal = typeof saved[key] === 'string' ? saved[key] : '';
+    input.value = savedVal;
+    const base = replyNotesState.masterPrompts[key] || '';
+    if (currentText) currentText.textContent = buildRevisedPrompt(base, savedVal);
+    preview.hidden = true;
+    input.disabled = false;
+    saveBtn.disabled = false;
+    if (status) {
+      status.className = 'reply-note-status ok';
+      status.textContent = savedVal
+        ? 'Saved. The revised master prompt above is now in effect.'
+        : 'Cleared. The master prompt above is back to its default.';
     }
-    status.className = 'reply-note-status ok';
-    status.textContent = value
-      ? 'Saved. Your instruction is now applied on top of this prompt.'
-      : 'Cleared. This prompt is back to its default.';
   } catch (err) {
-    status.className = 'reply-note-status err';
-    status.textContent = `Failed: ${err.message}`;
+    if (status) {
+      status.className = 'reply-note-status err';
+      status.textContent = `Failed: ${err.message}`;
+    }
   } finally {
-    btn.disabled = false;
+    confirmBtn.disabled = false;
+    if (cancelBtn) cancelBtn.disabled = false;
   }
 }
 
@@ -3519,19 +3597,23 @@ el('save-guidelines-btn').addEventListener('click', async () => {
   }
 });
 
-// Per-card Save buttons and Enter-to-save on the input. Delegated because the
-// notes list is re-rendered on every settings refresh.
+// Per-card Save / Confirm / Cancel buttons + Enter-to-open-preview on the
+// input. Delegated because the notes list is re-rendered on every settings
+// refresh. Save opens the preview only; Confirm persists; Cancel closes.
 el('reply-notes-list').addEventListener('click', (ev) => {
-  const btn = ev.target.closest('[data-save-reply-note-key]');
-  if (!btn) return;
-  saveReplyNote(btn.getAttribute('data-save-reply-note-key'));
+  const save = ev.target.closest('[data-save-reply-note-key]');
+  if (save) return openReplyNotePreview(save.getAttribute('data-save-reply-note-key'));
+  const confirmBtn = ev.target.closest('[data-confirm-reply-note-key]');
+  if (confirmBtn) return confirmReplyNoteSave(confirmBtn.getAttribute('data-confirm-reply-note-key'));
+  const cancel = ev.target.closest('[data-cancel-reply-note-key]');
+  if (cancel) return cancelReplyNotePreview(cancel.getAttribute('data-cancel-reply-note-key'));
 });
 el('reply-notes-list').addEventListener('keydown', (ev) => {
   if (ev.key !== 'Enter') return;
   const input = ev.target.closest('input[data-reply-note-key]');
-  if (!input) return;
+  if (!input || input.disabled) return;
   ev.preventDefault();
-  saveReplyNote(input.getAttribute('data-reply-note-key'));
+  openReplyNotePreview(input.getAttribute('data-reply-note-key'));
 });
 
 el('ai-replies-toggle').addEventListener('change', async (ev) => {
