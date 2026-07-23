@@ -32,6 +32,43 @@ test('salutationFor reads a plain sign-off name ("Best, Sarah")', () => {
   assert.strictEqual(negotiation.salutationFor('Dua', 'Yes, interested!\n\nBest, Sarah'), 'Sarah');
 });
 
+test('salutationFor reads a two-line sign-off ("Best,\\nTang") — signoff and name on separate lines', () => {
+  // The exact shape from the "Hi Linn" bug: a manager (Tang) writes on the
+  // creator (Linn)'s behalf, thanks Jennifer in the body, then signs off with
+  // "Best," on one line and "Tang" on the next. The old detector only read a
+  // single-line "Best, Tang" so this fell through to the creator's name.
+  const inbound = [
+    'Let me know your thoughts.',
+    '',
+    'Thanks Jennifer.',
+    '',
+    'Best,',
+    '',
+    'Tang',
+  ].join('\n');
+  assert.strictEqual(negotiation.salutationFor('Linn', inbound), 'Tang');
+  // The simpler shape without the "Thanks Jennifer." body line, too.
+  assert.strictEqual(
+    negotiation.salutationFor('Linn', 'Sounds good!\n\nBest,\nTang'),
+    'Tang',
+  );
+  // Multi-word name on its own line — truncated to the first token, matching
+  // the existing "- Alex Chen" dash-pattern behavior (nameOf returns firstToken).
+  assert.strictEqual(
+    negotiation.salutationFor('Linn', 'Sounds good!\n\nRegards,\nAlex Chen'),
+    'Alex',
+  );
+});
+
+test('detectSenderName picks the name even when stacked signoff words precede it', () => {
+  // Rare, but seen in the wild: "Best,\nRegards\nAlex" — the middle line is
+  // itself a signoff word, so we must skip it and keep looking for the name.
+  assert.strictEqual(
+    negotiation.detectSenderName('Sounds good!\n\nBest,\nRegards\nAlex'),
+    'Alex',
+  );
+});
+
 test('salutationFor keeps the creator name when the creator replies themselves', () => {
   assert.strictEqual(negotiation.salutationFor('Dua', 'Sounds great, tell me more!'), 'Dua');
   assert.strictEqual(negotiation.salutationFor('Dua', "I'm in! Love it.\n- Dua"), 'Dua');
