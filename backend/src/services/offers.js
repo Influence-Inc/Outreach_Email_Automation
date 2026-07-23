@@ -395,7 +395,13 @@ async function onOfferResponded(offerId, response) {
     // only over an ALREADY-established channel. A web response with no prior
     // messaging contact has nowhere to send this (nothing to establish it with
     // — the email confirmation above already covers the accept case).
-    const body = response === 'accepted' ? thankYouMessage(firstName) : politeCloseMessage(firstName);
+    let body = response === 'accepted' ? thankYouMessage(firstName) : politeCloseMessage(firstName);
+    // A creator who accepted by text still needs to review + sign the mini
+    // contract — send them the link (accept over the web page goes straight to
+    // the contract view, so this only matters for a messaged accept).
+    if (response === 'accepted') {
+      body += ` To confirm, please review & sign your agreement here: ${offerUrl(offer.token)}`;
+    }
     const msgChannel = offer.messaging_opted_out ? null : offer.established_channel;
     if (msgChannel === 'whatsapp') {
       try {
@@ -686,11 +692,42 @@ async function negotiateBudget({ token, requestedRate }) {
 // Page data + Deal Studio entry point
 // ---------------------------------------------------------------------------
 
+// The mini contract shown on the offer page after acceptance — deliberately
+// only the collaboration essentials the creator signs off on, NO contact/bank
+// details (that's the heavy full-contract system's job). Deliverables/brand/
+// campaign come from real data; platforms + timeline default to sensible
+// standard terms (these creators are Instagram-first; the deliverables are
+// Reels). `offer` must carry brand_name, deliverables, campaign_name,
+// first_name/full_name.
+const CONTRACT_PLATFORMS_DEFAULT = ['Instagram'];
+const CONTRACT_TIMELINE_DEFAULT = 'Content to be posted within 3 weeks of signing.';
+
+function creatorFullName(creator) {
+  return (
+    (creator.full_name && String(creator.full_name).trim()) ||
+    (creator.first_name && String(creator.first_name).trim()) ||
+    'Creator'
+  );
+}
+
+function miniContractTerms(offer) {
+  return {
+    creatorName: creatorFullName(offer),
+    brandName: offer.brand_name,
+    campaignName: (offer.campaign_name && String(offer.campaign_name).trim()) || null,
+    deliverables: Array.isArray(offer.deliverables) ? offer.deliverables : [],
+    platforms: CONTRACT_PLATFORMS_DEFAULT.slice(),
+    timeline: CONTRACT_TIMELINE_DEFAULT,
+  };
+}
+
 // Data the public offer page renders (mirrors o/[token]/page.tsx). Logs a view.
 async function getOfferForPage(token) {
   const offer = await db.one(
-    `SELECT o.*, c.first_name, c.full_name
-     FROM offers o JOIN creators c ON c.id = o.creator_id
+    `SELECT o.*, c.first_name, c.full_name, ca.name AS campaign_name
+     FROM offers o
+     JOIN creators c ON c.id = o.creator_id
+     LEFT JOIN campaigns ca ON ca.id = o.campaign_id
      WHERE o.token = $1`,
     [token],
   );
@@ -703,14 +740,25 @@ async function getOfferForPage(token) {
   }
 
   const expired = offer.status === 'pending' && new Date(offer.expires_at).getTime() < Date.now();
+  const signed = !!offer.contract_signed_at;
+  // After acceptance the creator reviews + signs the mini contract; only once
+  // signed is the deal fully confirmed on the page.
   const initialState =
     offer.status === 'accepted'
-      ? 'accepted'
+      ? signed
+        ? 'signed'
+        : 'contract'
       : offer.status === 'declined'
         ? 'declined'
         : expired
           ? 'expired'
           : 'active';
+
+  // The signed snapshot (immutable) wins over the live-computed terms once signed.
+  const contract =
+    signed && offer.contract_terms && typeof offer.contract_terms === 'object'
+      ? offer.contract_terms
+      : miniContractTerms(offer);
 
   return {
     token: offer.token,
@@ -722,7 +770,52 @@ async function getOfferForPage(token) {
     rateFormatted: formatMoney(offer.rate, offer.currency),
     expiresFormatted: formatDate(offer.expires_at),
     initialState,
+    contract,
+    contractSigned: signed,
+    signerName: offer.contract_signer_name || null,
+    signedAtFormatted: offer.contract_signed_at ? formatDate(offer.contract_signed_at) : null,
   };
+}
+
+// Record the creator's signature on the mini contract. Guarded: the offer must
+// be accepted and not already signed. Snapshots the exact terms shown at signing
+// into contract_terms (immutable record). Best-effort event logging.
+async function signMiniContract({ token, signerName, ip }) {
+  const name = String(signerName || '').trim();
+  if (!name) return { ok: false, reason: 'name_required' };
+
+  const offer = await db.one(
+    `SELECT o.*, c.first_name, c.full_name, ca.name AS campaign_name
+     FROM offers o
+     JOIN creators c ON c.id = o.creator_id
+     LEFT JOIN campaigns ca ON ca.id = o.campaign_id
+     WHERE o.token = $1`,
+    [token],
+  );
+  if (!offer) return { ok: false, reason: 'not_found' };
+  if (offer.status !== 'accepted') return { ok: false, reason: 'not_accepted' };
+  if (offer.contract_signed_at) return { ok: false, reason: 'already_signed' };
+
+  const terms = miniContractTerms(offer);
+  const upd = await db.query(
+    `UPDATE offers
+        SET contract_signed_at = NOW(), contract_signer_name = $2,
+            contract_signer_ip = $3, contract_terms = $4::jsonb
+      WHERE id = $1 AND status = 'accepted' AND contract_signed_at IS NULL`,
+    [offer.id, name, ip || null, JSON.stringify(terms)],
+  );
+  if (upd.rowCount === 0) return { ok: false, reason: 'already_signed' };
+
+  try {
+    await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'signed', 'web')`, [offer.id]);
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'mini_contract_signed', $2)`,
+      [offer.creator_id, { by: name, offerToken: token }],
+    );
+  } catch (err) {
+    console.error('[offers] mini-contract sign logging failed', err.message);
+  }
+  return { ok: true, signerName: name, signedAtFormatted: formatDate(new Date()) };
 }
 
 // Translate an admin-approved Deal Studio offer (pricing.js shape) into portal
@@ -959,6 +1052,8 @@ module.exports = {
   recordDeliveryStatus,
   negotiateBudget,
   getOfferForPage,
+  miniContractTerms,
+  signMiniContract,
   sendPortalOffer,
   offerTermsFromApproved,
   attachOffers,

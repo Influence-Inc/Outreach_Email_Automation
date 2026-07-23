@@ -19,6 +19,7 @@
   var submitting = false;
   var error = null;
   var rateInput = '';
+  var signerName = ''; // typed-name signature on the mini contract
 
   // Tiny DOM helper. h('div', {class:'x', onclick:fn}, child, child…)
   function h(tag, props) {
@@ -83,6 +84,10 @@
         'Sorry, ' + offer.firstName + ' — this offer is no longer available. If you are still interested, reply to your INFLUENCE contact and we will sort it out.');
     } else if (view === 'too_high') {
       root = renderTooHigh();
+    } else if (view === 'contract') {
+      root = renderContract();
+    } else if (view === 'signed') {
+      root = renderSigned();
     } else {
       root = renderActive();
     }
@@ -170,6 +175,98 @@
       errNode());
   }
 
+  // --- Mini contract (shown after acceptance) --------------------------------
+  function contractRow(label, value) {
+    return h('div', { class: 'crow' },
+      h('span', { class: 'crow-l' }, label),
+      h('span', { class: 'crow-v' }, value || '—'));
+  }
+  function contractPills(label, arr) {
+    var pills = h('div', { class: 'pill-list' });
+    (arr || []).forEach(function (x) { pills.appendChild(h('span', { class: 'pill' }, x)); });
+    return h('div', { class: 'crow crow-pills' }, h('span', { class: 'crow-l' }, label), pills);
+  }
+  function contractTermsBlock(c) {
+    var box = h('div', { class: 'terms' });
+    box.appendChild(contractRow('Creator', c.creatorName));
+    box.appendChild(contractRow('Brand', c.brandName));
+    if (c.campaignName) box.appendChild(contractRow('Campaign', c.campaignName));
+    box.appendChild(contractPills('Deliverables', c.deliverables));
+    box.appendChild(contractPills('Platforms', c.platforms));
+    box.appendChild(contractRow('Timeline', c.timeline));
+    return box;
+  }
+
+  function renderContract() {
+    var c = offer.contract || {};
+    var wrap = h('div', { class: 'fade' });
+    wrap.appendChild(h('div', { class: 'eyebrow' }, h('span', { class: 'dot' }), 'Agreement'));
+    wrap.appendChild(h('h1', { class: 'brand' }, 'Collaboration agreement'));
+    wrap.appendChild(h('p', { class: 'lede' }, 'Please review the details below and sign to confirm.'));
+    wrap.appendChild(contractTermsBlock(c));
+
+    var signBtn;
+    var input = h('input', {
+      type: 'text', placeholder: 'Type your full name', value: signerName,
+      oninput: function (e) { signerName = e.target.value; if (signBtn) signBtn.disabled = submitting || !signerName.trim(); },
+      onkeydown: function (e) { if (e.key === 'Enter' && signerName.trim()) signContract(); },
+    });
+    signBtn = btn('Sign & agree', { onClick: signContract, disabled: !signerName.trim() });
+    wrap.appendChild(h('div', {},
+      h('p', { class: 'ask' }, 'Sign to agree'),
+      h('p', { class: 'ask-sub' }, 'By tapping “Sign & agree”, you confirm you agree to the terms above.'),
+      h('div', { class: 'sign-input' }, input),
+      signBtn));
+
+    var e = errNode();
+    if (e) wrap.appendChild(e);
+    return wrap;
+  }
+
+  function renderSigned() {
+    var c = offer.contract || {};
+    var wrap = h('div', { class: 'fade' });
+    wrap.appendChild(h('div', { class: 'state', style: 'padding: 24px 6px 8px' },
+      h('div', { class: 'ic ok' }, '✓'),
+      h('h1', {}, 'Agreement signed'),
+      h('p', {}, 'Thanks, ' + (offer.serverSignerName || offer.firstName) +
+        '. Your agreement is confirmed — our team will be in touch with next steps.')));
+    var box = contractTermsBlock(c);
+    box.appendChild(contractRow('Signed by', offer.serverSignerName || signerName));
+    if (offer.signedAtFormatted) box.appendChild(contractRow('Signed on', offer.signedAtFormatted));
+    wrap.appendChild(box);
+    return wrap;
+  }
+
+  async function signContract() {
+    var name = (signerName || '').trim();
+    if (!name) { error = 'Please type your name to sign.'; render(); return; }
+    setSubmitting(true);
+    error = null;
+    try {
+      var res = await fetch('/api/offers/' + encodeURIComponent(offer.token) + '/sign-contract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signerName: name }),
+      });
+      var data = await res.json();
+      if (data.ok) {
+        offer.serverSignerName = data.signerName || name;
+        offer.signedAtFormatted = data.signedAtFormatted || null;
+        offer.contractSigned = true;
+        view = 'signed';
+      } else if (data.reason === 'already_signed') { return location.reload(); }
+      else if (data.reason === 'not_accepted') { error = 'Please accept the offer first.'; }
+      else if (data.reason === 'name_required') { error = 'Please type your name to sign.'; }
+      else { error = 'Something went wrong. Please try again.'; }
+    } catch (e) {
+      error = 'Network error. Please try again.';
+    } finally {
+      submitting = false;
+      render();
+    }
+  }
+
   function setSubmitting(v) { submitting = v; render(); }
 
   async function respond(response, reason) {
@@ -182,7 +279,8 @@
         body: JSON.stringify({ response: response, reason: reason }),
       });
       var data = await res.json();
-      if (data.ok) { view = data.status; }
+      // Accepting doesn't finish the flow — it opens the mini contract to sign.
+      if (data.ok) { view = data.status === 'accepted' ? 'contract' : data.status; }
       else if (data.reason === 'expired') { view = 'expired'; }
       else if (data.reason === 'already_responded') { return location.reload(); }
       else { error = 'Something went wrong. Please try again.'; }
@@ -240,8 +338,14 @@
         token: data.token, firstName: data.firstName, brandName: data.brandName,
         deliverables: data.deliverables, rate: data.rate, currency: data.currency,
         rateFormatted: data.rateFormatted, expiresFormatted: data.expiresFormatted,
+        contract: data.contract || null,
+        contractSigned: !!data.contractSigned,
+        serverSignerName: data.signerName || null,
+        signedAtFormatted: data.signedAtFormatted || null,
       };
-      view = data.initialState; // active | accepted | declined | expired
+      // Prefill the signature field with the creator's name (still editable).
+      signerName = (data.contract && data.contract.creatorName) || '';
+      view = data.initialState; // active | contract | signed | declined | expired
       render();
     } catch (e) {
       view = 'notfound';
