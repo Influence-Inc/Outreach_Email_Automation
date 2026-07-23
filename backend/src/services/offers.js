@@ -6,15 +6,18 @@
 // negotiating them. Used for OLD creators (see creator_segment): instead of
 // email negotiation, the admin's approved offer is minted here.
 //
-// Delivery never cold-pushes WhatsApp/iMessage. A fresh offer sends only an
-// invite email ("text Hi to this number"); the moment the creator initiates
-// contact, the conversation runs in TWO steps (offers.messaging_stage) rather
-// than dumping the rate immediately: a short brand/product brief with a yes/no
-// interest check (sendOfferBriefing), then — only once they say yes — the full
-// offer details as a free-form reply (deliverOfferOverChannel). Every later
-// offer/counter in that negotiation stays on that same channel
-// (creators.established_channel). A creator with no usable messaging channel
-// falls back to the full offer email with the direct /o/:token web link instead.
+// Delivery depends on whether the creator has ALREADY messaged us on a channel
+// (creators.established_channel — "subscribed"):
+//   • NOT established yet → we don't cold-push. The outreach email reveals the
+//     negotiation link AND invites them to text us on WhatsApp/iMessage; if they
+//     text (buttons prefill "Hi"), the conversation runs in TWO steps
+//     (offers.messaging_stage): a brand/product brief with a yes/no interest
+//     check (sendOfferBriefing), then — only once they say yes — the full offer
+//     as a free-form reply (deliverOfferOverChannel).
+//   • ALREADY established → the deal is delivered DIRECTLY on that channel
+//     (deliverOfferOverChannel), no "Hi" re-trigger and no interest brief.
+// A creator with no usable messaging channel falls back to the full offer email
+// with the direct /o/:token web link, so they're always reachable.
 
 const { randomBytes } = require('crypto');
 const db = require('../db');
@@ -257,14 +260,16 @@ async function deliverOfferOverChannel(offerId, channel) {
   return result;
 }
 
-// Top-level dispatcher for a NEW offer. We never cold-push a WhatsApp/iMessage
-// message — only three outcomes:
-//   established_channel set → send the brand/product brief directly (free-form
-//     reply), starting the staged conversation (offers.messaging_stage)
-//   not set, WA/iMessage usable → invite email only ("text Hi to continue");
-//     the brief happens once they make contact (see offerWebhook.js)
-//   neither usable (opted out / no number / vendor unconfigured) → fall back to
-//     the full offer email with the direct web link, so it's always reachable
+// Top-level dispatcher for a NEW offer. Three outcomes:
+//   established_channel set → the creator already messaged us on this channel
+//     (subscribed), so deliver the DEAL directly there (deliverOfferOverChannel)
+//     — no "Hi" re-trigger and no interest brief; the offer link goes straight to
+//     their WhatsApp/iMessage.
+//   not set, WA/iMessage usable → offer email that BOTH reveals the negotiation
+//     link AND invites them to text us on WhatsApp/iMessage (they choose the web
+//     portal or a chat; a "Hi" text still briefs them — see offerWebhook.js).
+//   neither usable (opted out / no number / vendor unconfigured) → the full offer
+//     email with the direct web link, so it's always reachable.
 async function sendOfferOutreach(offerId) {
   const offer = await db.one(
     `SELECT o.*, c.email AS creator_email, c.first_name, c.full_name, c.whatsapp, c.imessage,
@@ -277,9 +282,12 @@ async function sendOfferOutreach(offerId) {
 
   if (offer.established_channel && !offer.messaging_opted_out) {
     try {
-      await sendOfferBriefing(offer.id, offer.established_channel);
+      // They've already opted in on this channel, so send the DEAL directly (no
+      // "Hi" re-trigger, no interest brief) — the full offer + link goes straight
+      // to their WhatsApp/iMessage.
+      await deliverOfferOverChannel(offer.id, offer.established_channel);
     } catch (err) {
-      console.error('[offers] outreach briefing failed', err.message);
+      console.error('[offers] direct offer delivery failed', err.message);
     }
     return;
   }
@@ -300,16 +308,22 @@ async function sendOfferOutreach(offerId) {
 
   try {
     if (waNumber || imNumber) {
-      const res = await email.sendPortalInviteEmail({
+      // Offer email that BOTH reveals the negotiation link and invites a chat on
+      // WhatsApp/iMessage. messaging_stage is deliberately left unset: the phone
+      // buttons prefill "Hi", so a creator who texts still gets the staged brief
+      // (offerWebhook.js), while the web link is a parallel self-serve path.
+      const res = await email.sendOfferWithContactEmail({
         to: offer.creator_email,
         firstName,
         brandName: offer.brand_name,
+        offerUrl: url,
+        expiryDate: expiry,
         whatsappNumber: waNumber,
         imessageNumber: imNumber,
       });
       if (res.sent) {
         const via = [waNumber && 'WhatsApp', imNumber && 'iMessage'].filter(Boolean).join(' / ');
-        await logSend('email', `Portal invite email — text "Hi" on ${via} to continue`);
+        await logSend('email', `Offer email — link (${url}) + text "Hi" on ${via} option`);
         await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'invited', 'email')`, [
           offer.id,
         ]);
@@ -330,22 +344,51 @@ async function sendOfferOutreach(offerId) {
 }
 
 // Send the standalone messaging invite to a USED creator at INITIAL outreach,
-// before any offer has been priced ("We have a {brand} offer for you — text Hi
-// on WhatsApp / iMessage to continue"). Unlike sendOfferOutreach this needs no
-// offer; the offer is priced/approved later and its brief is delivered over the
-// channel the creator establishes by replying. Returns { sent, reason?,
-// channels? }; the caller (outreach.sendOutreach) falls back to the normal
-// email-outreach path when sent is false, so a used creator with no phone on
-// file (or opted out, or no vendor configured) is never left uncontacted.
+// before any offer has been priced. Two paths:
+//   • established_channel set (they've already messaged us — subscribed): reach
+//     out DIRECTLY on that channel with a proactive interest message; no "text
+//     Hi" email, no re-trigger from them. No priced offer exists yet, so this is
+//     a brand/interest note — the approved offer is delivered over the same
+//     channel once the admin prices it (see sendOfferOutreach).
+//   • otherwise: the "text Hi on WhatsApp / iMessage to continue" invite email.
+// Returns { sent, reason?, channels? }; the caller (outreach.sendOutreach) falls
+// back to the normal email-outreach path when sent is false, so a used creator
+// with no phone on file (or opted out, or no vendor configured) is never left
+// uncontacted.
 async function sendUsedCreatorInvite(creatorId) {
   const creator = await db.one(
     `SELECT c.id, c.email, c.first_name, c.full_name, c.whatsapp, c.imessage,
-            c.messaging_opted_out, ca.brand_name
+            c.messaging_opted_out, c.established_channel, ca.brand_name
      FROM creators c LEFT JOIN campaigns ca ON ca.id = c.campaign_id
      WHERE c.id = $1`,
     [creatorId],
   );
   if (!creator) return { sent: false, reason: 'not_found' };
+
+  // Already subscribed on a channel → outreach goes straight there, no "Hi" needed.
+  if (creator.established_channel && !creator.messaging_opted_out) {
+    const channel = creator.established_channel;
+    const to = channel === 'imessage' ? creator.imessage : creator.whatsapp;
+    if (to) {
+      const firstName = firstNameOf(creator);
+      const blurb = `We're running a new paid collaboration campaign${
+        creator.brand_name ? ` with ${creator.brand_name}` : ''
+      } and thought you'd be a great fit.`;
+      const body = renderMessagingBrief(firstName, blurb);
+      const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
+      const result = await send({ to, body });
+      if (result.sent) {
+        await db.query(
+          `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
+           VALUES ($1, 'outbound', $2, $3, $4)`,
+          [creator.id, channel, body, result.id || null],
+        );
+        return { sent: true, channels: [channel === 'imessage' ? 'iMessage' : 'WhatsApp'] };
+      }
+      // Channel send failed — fall through to the email invite below.
+    }
+  }
+
   if (!creator.email) return { sent: false, reason: 'no_email' };
 
   const { whatsappNumber, imessageNumber } = inviteNumbersFor(creator);
