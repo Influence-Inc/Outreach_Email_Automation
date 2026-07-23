@@ -72,3 +72,29 @@ test('inviteNumbersFor returns nulls when the creator has no numbers on file', (
     });
   });
 });
+
+// --- miniContractTerms (the fields shown on the mini contract) --------------
+
+test('miniContractTerms builds the contract from real offer data with sensible defaults', () => {
+  const terms = offers.miniContractTerms({
+    full_name: 'Sam Rivera',
+    first_name: 'Sam',
+    brand_name: 'Acme',
+    campaign_name: 'Spring Launch',
+    deliverables: ['2 Reels'],
+  });
+  assert.strictEqual(terms.creatorName, 'Sam Rivera');
+  assert.strictEqual(terms.brandName, 'Acme');
+  assert.strictEqual(terms.campaignName, 'Spring Launch');
+  assert.deepStrictEqual(terms.deliverables, ['2 Reels']);
+  assert.deepStrictEqual(terms.platforms, ['Instagram']); // default
+  assert.match(terms.timeline, /3 weeks/); // default
+  // Only the agreed essentials — never contact or bank details.
+  assert.ok(!('email' in terms) && !('phone' in terms) && !('bank' in terms) && !('paymentTerms' in terms));
+});
+
+test('miniContractTerms falls back to first name then "Creator", and null campaign', () => {
+  assert.strictEqual(offers.miniContractTerms({ first_name: 'Sam', brand_name: 'Acme' }).creatorName, 'Sam');
+  assert.strictEqual(offers.miniContractTerms({ brand_name: 'Acme' }).creatorName, 'Creator');
+  assert.strictEqual(offers.miniContractTerms({ brand_name: 'Acme' }).campaignName, null);
+});

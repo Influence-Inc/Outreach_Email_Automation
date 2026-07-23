@@ -369,12 +369,21 @@ CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status);
 -- A counter-offer (parent_offer_id set) skips straight to 'revealed' — it's
 -- delivered directly, mid-negotiation, never re-briefed.
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS messaging_stage TEXT;
+-- Lightweight "mini contract" the creator signs on the offer page right after
+-- accepting (name / brand / campaign / deliverables / platforms / timeline +
+-- a typed-name signature — deliberately NO contact or bank details, unlike the
+-- full contracts table). Self-contained here: contract_terms is the immutable
+-- snapshot of exactly what was shown at signing.
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signed_at   TIMESTAMPTZ;
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signer_name TEXT;
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signer_ip   TEXT;
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_terms       JSONB;
 
 -- Append-only audit log. INSERT only — offer history is reconstructed from here.
 CREATE TABLE IF NOT EXISTS offer_events (
   id          SERIAL PRIMARY KEY,
   offer_id    INTEGER NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-  event       TEXT NOT NULL,      -- invited | briefed | sent | viewed | accepted | declined
+  event       TEXT NOT NULL,      -- invited | briefed | sent | viewed | accepted | declined | signed
   channel     TEXT NOT NULL,      -- email | whatsapp | imessage | web
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

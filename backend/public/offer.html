@@ -97,6 +97,20 @@
 
     .err { color: var(--danger); font-size: 13px; margin-top: 12px; min-height: 16px; }
 
+    /* Mini contract rows */
+    .crow { display: flex; justify-content: space-between; gap: 14px; padding: 9px 0;
+      border-bottom: 1px solid var(--line-3); }
+    .crow:last-child { border-bottom: 0; }
+    .crow-l { color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: .04em;
+      text-transform: uppercase; flex: none; padding-top: 2px; }
+    .crow-v { color: var(--ink); text-align: right; font-weight: 500; font-size: 13.5px; }
+    .crow-pills { align-items: flex-start; }
+    .crow-pills .pill-list { justify-content: flex-end; }
+    .sign-input { margin-bottom: 12px; }
+    .sign-input input { width: 100%; font-family: var(--font); font-size: 15px; padding: 12px 13px;
+      border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); }
+    .sign-input input:focus { outline: none; border-color: var(--faint); box-shadow: var(--ring); }
+
     /* Centered states */
     .state { text-align: center; padding: 30px 6px 14px; }
     .state .ic { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center;
