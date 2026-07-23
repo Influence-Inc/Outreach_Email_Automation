@@ -183,6 +183,12 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS flag_dismissed_fp TEXT;
 -- the /webhook/instantly handler and consumed by negotiation.processReply().
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS instantly_reply_uuid TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_text  TEXT;
+-- The address that actually sent the most recent inbound reply. May differ from
+-- creators.email when a manager/agent replies on the creator's behalf from their
+-- own inbox. Used by salutationFor to derive a greeting from the sender's email
+-- local part ("claudia@…" → "Claudia") when the reply carries no signature name
+-- — so we no longer misgreet a third-party sender by the creator's stored name.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_from_email TEXT;
 -- Who to greet in our replies. Usually the creator's first name, but when a
 -- manager/agent replies on their behalf we detect and store that person's
 -- first name here so later emails (e.g. the admin-approved offer, sent after
