@@ -207,6 +207,50 @@ function inviteNumbersFor(contact) {
   };
 }
 
+// Send the brand/product brief + a yes/no interest check to a used creator who
+// has messaged us but has NO priced offer yet — the offer-less counterpart of
+// sendOfferBriefing. This is what lets the WhatsApp/iMessage bot OPEN with brand
+// details + an interest gauge before anything is priced (instead of a generic
+// holding line); the actual offer + portal link follows once an admin prices it
+// and it delivers on this same channel. Uses the campaign's custom
+// messaging_brief when set, else a generic brand blurb. Marks the channel
+// established. Returns the send result ({ sent, reason?/error? }).
+async function sendUsedCreatorBrief(creatorId, channel) {
+  const c = await db.one(
+    `SELECT c.id, c.first_name, c.full_name, c.whatsapp, c.imessage,
+            ca.name AS campaign_name, ca.brand_name, ca.messaging_brief
+     FROM creators c LEFT JOIN campaigns ca ON ca.id = c.campaign_id
+     WHERE c.id = $1`,
+    [creatorId],
+  );
+  if (!c) return { sent: false, reason: 'not_found' };
+
+  const to = channel === 'imessage' ? c.imessage : c.whatsapp;
+  if (!to) return { sent: false, reason: 'no_contact_for_channel' };
+
+  const firstName = firstNameOf(c);
+  const custom = c.messaging_brief && String(c.messaging_brief).trim();
+  const brandBlurb = custom
+    ? fillTemplate(custom, { firstName, brandName: c.brand_name || 'INFLUENCE', campaignName: c.campaign_name || '' })
+    : `We're running a paid collaboration campaign with ${c.brand_name || 'a brand'} and think you'd be a great fit.`;
+  const body = renderMessagingBrief(firstName, brandBlurb);
+
+  const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
+  const result = await send({ to, body });
+  if (result.sent) {
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
+       VALUES ($1, 'outbound', $2, $3, $4)`,
+      [c.id, channel, body, result.id || null],
+    );
+    await db.query(
+      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
+      [c.id, channel],
+    );
+  }
+  return result;
+}
+
 // Send the brand/product brief — the FIRST message in this offer's messaging
 // conversation (see offers.messaging_stage), sent before any rate/deliverables.
 // Ends with a yes/no interest check; only a "yes" (handled in offerWebhook.js)
@@ -1049,6 +1093,7 @@ module.exports = {
   establishedMessagingChannel,
   inviteNumbersFor,
   sendUsedCreatorInvite,
+  sendUsedCreatorBrief,
   sendOfferBriefing,
   deliverOfferOverChannel,
   createOffer,

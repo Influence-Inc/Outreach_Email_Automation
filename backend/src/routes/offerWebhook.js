@@ -237,7 +237,7 @@ function pickMatch(rows, fromDigits) {
 
 async function matchCreator(contactColumn, fromDigits) {
   const rows = await db.many(
-    `SELECT id, whatsapp, imessage, first_name, full_name, ${contactColumn} AS contact
+    `SELECT id, whatsapp, imessage, first_name, full_name, established_channel, ${contactColumn} AS contact
      FROM creators WHERE ${contactColumn} IS NOT NULL`,
   );
   return pickMatch(rows, fromDigits);
@@ -376,13 +376,16 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
         [matched.id],
       );
 
-  // Invited, but no offer exists yet: the creator is replying to the messaging
-  // invite email before an admin has priced/approved their offer (a USED creator
-  // at initial outreach — see outreach.sendOutreach). Establish the channel so
-  // the eventual approved offer's brief is delivered HERE rather than a second
-  // invite email, flag it for a human to price, and reply with a warm holding
-  // message instead of the generic support deflection.
+  // No offer exists yet: the creator is engaging before an admin has priced one (a
+  // USED creator who reached us on WhatsApp/iMessage — see outreach.sendOutreach).
+  // On FIRST contact, open with the brand/product brief + a yes/no interest check
+  // (brand details, gauge interest) — the offer + portal link follows once an
+  // admin prices it and delivers on this same channel. On later messages (already
+  // briefed, still no priced offer), reply with a warm holding line. Either way we
+  // establish the channel and flag it for a human to price. established_channel is
+  // set by this branch, so it's NULL only on the very first contact.
   if (!pendingOffer && !fallbackOffer) {
+    const firstContact = !matched.established_channel;
     await db.query(
       `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
       [matched.id, channel],
@@ -392,6 +395,14 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
        VALUES ($1, 'inbound', $2, $3, TRUE, $4::jsonb, $5)`,
       [matched.id, channel, parsed.body, JSON.stringify(req.body ?? null), providerMessageId],
     );
+    if (firstContact) {
+      const brief = await offers.sendUsedCreatorBrief(matched.id, channel);
+      return res.json({
+        ok: true,
+        outcome: brief.sent ? 'briefed_no_offer' : 'brief_failed',
+        needsReview: true,
+      });
+    }
     await sendChannelMessage(channel, matched, null, firstContactHoldingMessage(firstNameOf(matched)));
     return res.json({ ok: true, outcome: 'awaiting_offer', needsReview: true });
   }
