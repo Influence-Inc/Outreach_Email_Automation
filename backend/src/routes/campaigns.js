@@ -3,6 +3,7 @@ const db = require('../db');
 const { syncCampaigns } = require('../services/campaignsApi');
 const { computeOffers } = require('../services/pricing');
 const { flagDismissedSql } = require('../db/flagFingerprint');
+const { recentReelSql } = require('../db/reelFreshness');
 
 const router = express.Router();
 
@@ -16,16 +17,26 @@ router.get('/', async (_req, res, next) => {
               c.ig_dm_body, c.messaging_brief,
               COUNT(cr.id)::int AS creator_count,
               -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
-              -- creators without an email who haven't been DM'd yet.
+              -- creators without an email who haven't been DM'd yet AND whose
+              -- newest reel is inside the recency window (dormant accounts are
+              -- excluded from bulk sends — the admin can still DM them by hand
+              -- from the row menu). Keep in sync with routes/creators.js:
+              -- POST /bulk/queue-ig-dm.
               COUNT(cr.id) FILTER (
                 WHERE (cr.email IS NULL OR cr.email = '')
                   AND cr.ig_dm_sent_at IS NULL
                   AND cr.status IN ('no_email','pending_extraction','invalid_email')
+                  AND ${recentReelSql('cr.')}
               )::int AS ig_dm_queue_count,
               COUNT(cr.id) FILTER (WHERE cr.ig_dm_sent_at IS NOT NULL)::int AS ig_dm_sent_count,
               -- email_found_count feeds the "Send outreach" confirmation dialog
-              -- (creators with an email but no outreach yet); not shown as a stat.
-              COUNT(cr.id) FILTER (WHERE cr.status = 'email_found')::int AS email_found_count,
+              -- (creators with an email but no outreach yet); not shown as a
+              -- stat. Same dormant-reel exclusion as above so the number in the
+              -- confirm matches what the bulk endpoint will actually send.
+              COUNT(cr.id) FILTER (
+                WHERE cr.status = 'email_found'
+                  AND ${recentReelSql('cr.')}
+              )::int AS email_found_count,
               -- Outreach: creators we've actually reached, on ANY channel —
               -- outreach_sent_at (email, stamped when Instantly confirms) OR
               -- ig_dm_sent_at (Instagram Priority DM, stamped when the extension

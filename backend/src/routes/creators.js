@@ -13,6 +13,7 @@ const { findDuplicateCreator, duplicateMatchReason } = require('../services/dupl
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
 const { flagDismissedSql } = require('../db/flagFingerprint');
+const { STALE_REEL_MONTHS, recentReelSql } = require('../db/reelFreshness');
 
 // Assemble the off-Instagram email-enrichment context for a creator: the links
 // captured by the extension (creators.bio_links) plus anything a fresh scrape
@@ -1027,8 +1028,12 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
          AND ig_dm_sent_at IS NULL
          AND status = ANY($2::text[])`;
     if (scoped) {
+      // Row-level "Send DM" is the manual path — bypass the dormant-reel filter
+      // so an admin can still DM a dormant creator by hand from the row menu.
       params.push(scoped);
       where += ` AND id = ANY($${params.length}::int[])`;
+    } else {
+      where += ` AND ${recentReelSql()}`;
     }
     const targets = await db.many(
       `SELECT * FROM creators WHERE ${where} ORDER BY created_at ASC`,
@@ -1160,12 +1165,15 @@ router.post('/bulk/send-outreach', async (req, res) => {
   try {
     const { campaign_id } = req.body || {};
     if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+    // Dormant creators (newest reel > STALE_REEL_MONTHS old) are excluded from
+    // bulk sends. Row-level "Send outreach" still works — see /:id/send-outreach.
     const pending = await db.many(
       `SELECT id FROM creators
        WHERE campaign_id = $1
          AND status = 'email_found'
          AND email IS NOT NULL
          AND outreach_sent_at IS NULL
+         AND ${recentReelSql()}
        ORDER BY created_at ASC`,
       [campaign_id],
     );

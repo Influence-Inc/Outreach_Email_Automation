@@ -503,6 +503,19 @@ function fmtLatestReelDate(s) {
   return new Date(s).toLocaleDateString();
 }
 
+// Mirrors backend/src/db/reelFreshness.js — a creator whose newest reel is
+// older than this window is dormant, gets a warning treatment in the Reach
+// column, and is skipped by the bulk send-emails / send-IG-DMs buttons.
+const STALE_REEL_MONTHS = 3;
+function isReelDateStale(s) {
+  if (!s) return false;
+  const then = new Date(s).getTime();
+  if (isNaN(then)) return false;
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - STALE_REEL_MONTHS);
+  return then < cutoff.getTime();
+}
+
 // Compact relative time for the rate timeline ("just now", "5m ago", "2h ago").
 function fmtAgo(s) {
   if (!s) return '';
@@ -601,16 +614,23 @@ function statusPillFor(r) {
 // reel view counts (comma/space separated) when the scraper comes up short.
 function renderReachCell(r, cell) {
   const s = r.ig_scraped_data;
-  const lastReel = s && s.latest_reel_date ? fmtLatestReelDate(s.latest_reel_date) : '';
+  const lastReelRaw = s && s.latest_reel_date ? s.latest_reel_date : null;
+  const lastReel = lastReelRaw ? fmtLatestReelDate(lastReelRaw) : '';
+  const stale = isReelDateStale(lastReelRaw);
+  const lastLine = lastReel
+    ? `<div class="reach-sub reach-last${stale ? ' reach-stale' : ''}"` +
+      (stale
+        ? ` title="Last upload was over ${STALE_REEL_MONTHS} months ago — bulk send-emails and send-IG-DMs will skip this creator. Row-level send/DM still works."`
+        : '') +
+      `>${stale ? '&#9888; ' : ''}Last video ${lastReel}</div>`
+    : '';
   if (s && s.reel_count) {
     cell.innerHTML =
       `<div class="reach-main num">${fmtViews(s.p50)} <span class="unit">median</span></div>` +
       `<div class="reach-sub">${s.reel_count} reels · low ${fmtViews(s.min_views)}</div>` +
-      (lastReel ? `<div class="reach-sub">Last video ${lastReel}</div>` : '');
+      lastLine;
   } else if (lastReel) {
-    cell.innerHTML =
-      `<span class="empty">— no views</span>` +
-      `<div class="reach-sub">Last video ${lastReel}</div>`;
+    cell.innerHTML = `<span class="empty">— no views</span>` + lastLine;
   } else {
     cell.innerHTML = '<span class="empty">— no views</span>';
   }
