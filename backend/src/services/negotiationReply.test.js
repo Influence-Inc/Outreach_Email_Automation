@@ -80,6 +80,106 @@ test('detectSenderName returns null when there is no clear sender name', () => {
   assert.strictEqual(negotiation.detectSenderName(''), null);
 });
 
+// ── Sender-email fallback ──────────────────────────────────────────────────
+// When the inbound reply carries no signature or self-introduction, but the
+// sender's address is NOT the creator's own, derive the greeting from the
+// sender's email local part so a third-party inbox (a manager/agent replying on
+// the creator's behalf) is greeted by their own name rather than the creator's.
+// This is the "Hi Rachel" bug the team flagged: the reply came from Claudia,
+// signed just "Best," with no name — and defaulted to the creator ("Rachel")
+// because the signature branch fell through.
+
+test('salutationFor greets the sender by email local part when the signature has no name', () => {
+  const inbound = 'Thanks for the updated offer.\n\nWould $6,000 work?\n\nBest,';
+  assert.strictEqual(
+    negotiation.salutationFor('Rachel', inbound, {
+      senderEmail: 'claudia@example.com',
+      creatorEmail: 'idkrachex@gmail.com',
+    }),
+    'Claudia',
+  );
+});
+
+test('salutationFor still greets the creator when the reply came from the creator own address', () => {
+  const inbound = 'Sounds great, tell me more!';
+  assert.strictEqual(
+    negotiation.salutationFor('Rachel', inbound, {
+      senderEmail: 'rachel@gmail.com',
+      creatorEmail: 'rachel@gmail.com',
+    }),
+    'Rachel',
+  );
+  // Case-insensitive match — an inbound "From" with a different letter case
+  // is still the same address, not a third-party sender.
+  assert.strictEqual(
+    negotiation.salutationFor('Rachel', inbound, {
+      senderEmail: 'Rachel@Gmail.com',
+      creatorEmail: 'rachel@gmail.com',
+    }),
+    'Rachel',
+  );
+});
+
+test('salutationFor skips the email fallback when the sender is a role mailbox', () => {
+  // "info@…" / "team@…" reads as an inbox, not a person — greeting "Hi Info,"
+  // is worse than falling back to the creator's stored first name.
+  assert.strictEqual(
+    negotiation.salutationFor('Rachel', 'thanks!', {
+      senderEmail: 'info@agency.com',
+      creatorEmail: 'idkrachex@gmail.com',
+    }),
+    'Rachel',
+  );
+  assert.strictEqual(
+    negotiation.salutationFor('Rachel', 'thanks!', {
+      senderEmail: 'partnerships@agency.com',
+      creatorEmail: 'idkrachex@gmail.com',
+    }),
+    'Rachel',
+  );
+});
+
+test('salutationFor still prefers a real signature over the email fallback', () => {
+  // A signed reply from a third-party inbox greets by the SIGNATURE name, not
+  // the email — a manager Sarah writing from her agency's shared inbox stays
+  // "Hi Sarah,", not "Hi Info,".
+  assert.strictEqual(
+    negotiation.salutationFor('Rachel', 'Sounds good!\n\nBest, Sarah', {
+      senderEmail: 'info@agency.com',
+      creatorEmail: 'idkrachex@gmail.com',
+    }),
+    'Sarah',
+  );
+});
+
+test('salutationFor is backward-compatible when no emails are passed', () => {
+  // Existing call sites that never learn who sent the reply keep the old
+  // creator-name fallback — the email path only kicks in when we know both
+  // addresses and they differ.
+  assert.strictEqual(negotiation.salutationFor('Dua', 'Sounds great, tell me more!'), 'Dua');
+  assert.strictEqual(negotiation.salutationFor(null, 'sounds great'), 'there');
+});
+
+test('nameFromEmail derives a plausible first name from the local part', () => {
+  assert.strictEqual(negotiation.nameFromEmail('claudia@example.com'), 'Claudia');
+  assert.strictEqual(negotiation.nameFromEmail('claudia.villondo@example.com'), 'Claudia');
+  assert.strictEqual(negotiation.nameFromEmail('claudia+work@example.com'), 'Claudia');
+  assert.strictEqual(negotiation.nameFromEmail('jane_doe@example.com'), 'Jane');
+  assert.strictEqual(negotiation.nameFromEmail('SARAH@example.com'), 'Sarah');
+  assert.strictEqual(negotiation.nameFromEmail('sarah123@example.com'), 'Sarah');
+});
+
+test('nameFromEmail returns null for role mailboxes and malformed inputs', () => {
+  assert.strictEqual(negotiation.nameFromEmail('info@example.com'), null);
+  assert.strictEqual(negotiation.nameFromEmail('partnerships@example.com'), null);
+  assert.strictEqual(negotiation.nameFromEmail('no-reply@example.com'), null);
+  assert.strictEqual(negotiation.nameFromEmail(''), null);
+  assert.strictEqual(negotiation.nameFromEmail(null), null);
+  assert.strictEqual(negotiation.nameFromEmail('no-at-sign'), null);
+  // Local part is only digits/separators — nothing name-like survives.
+  assert.strictEqual(negotiation.nameFromEmail('123_456@example.com'), null);
+});
+
 // ── 2. Reference-account gate ───────────────────────────────────────────────
 
 test('askedForReferences is true only on an explicit portfolio/examples ask', () => {

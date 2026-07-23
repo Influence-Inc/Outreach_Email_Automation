@@ -99,30 +99,89 @@ function detectSenderName(text) {
   return null;
 }
 
-// The greeting name for our reply: the sender's name when someone clearly
-// replied on the creator's behalf, otherwise the creator's own first name.
-// The creator name is run through formatFirstName so the greeting reads the
-// way a person would write it — decorative casing, stylized fonts, and emoji
-// are normalized out ("ᴠᴇʀᴍᴏꜱᴀ" → "Vermosa") — while internal spaces are kept
-// (e.g. "Anvith K" greets "Hi Anvith K,"). Guards: the detected sender name
-// must differ from the creator's, be a single plausible token, and not be a
-// role/brand word.
+// Common role-mailbox local parts that read as an inbox, not a person
+// ("info@…", "team@…", "partnerships@…"). If the sender is one of these we do
+// NOT invent a name from it — we fall through to the creator's stored first
+// name instead, since "Hi Info," is worse than mis-greeting by the creator.
+const ROLE_MAILBOX_LOCALS = new Set([
+  'info', 'hello', 'hi', 'team', 'support', 'contact', 'admin', 'sales',
+  'billing', 'noreply', 'no-reply', 'notifications', 'help', 'office',
+  'inquiries', 'inquiry', 'partnerships', 'partnership', 'management',
+  'mgmt', 'talent', 'agency', 'brand', 'brands', 'collabs', 'collab',
+  'press', 'pr', 'marketing', 'business', 'biz', 'hi5', 'me',
+]);
+
+// Turn an email address into a plausible first name derived from its local
+// part. "claudia@x", "claudia.villondo@x", "claudia+work@x" → "Claudia".
+// Strips digits and separators, formats through formatFirstName (which folds
+// stylized fonts / decoration and title-cases), and returns only the first
+// token so a first-last local part yields just the first name. Returns null
+// when the local part is missing, is a role mailbox, or leaves nothing
+// name-like behind.
+function nameFromEmail(email) {
+  if (!email) return null;
+  const raw = String(email).trim();
+  const at = raw.indexOf('@');
+  if (at <= 0) return null;
+  let local = raw.slice(0, at);
+  // "+tag" suffixes (Gmail plus-addressing) never carry the name.
+  local = local.split('+')[0];
+  if (ROLE_MAILBOX_LOCALS.has(local.toLowerCase())) return null;
+  // Turn separators / digits into spaces so formatFirstName can split on them.
+  local = local.replace(/[._\-]+/g, ' ').replace(/\d+/g, ' ').trim();
+  if (!local) return null;
+  const formatted = formatFirstName(local);
+  const first = firstToken(formatted);
+  if (!first) return null;
+  if (ROLE_MAILBOX_LOCALS.has(first.toLowerCase())) return null;
+  return first;
+}
+
+// The greeting name for our reply.
+// 1. A clear signature or self-introduction in the inbound text wins ("Best,
+//    Sarah" → "Sarah"), and if it matches the creator's own first token we
+//    greet by the FULL stored name so a multi-word first_name like "Anvith K"
+//    still reads correctly when the creator signs just "- Anvith".
+// 2. Otherwise, if the reply came from an address that is NOT the creator's
+//    own (a manager/agent using their own inbox), derive the greeting from the
+//    sender's email local part — "claudia@…" becomes "Claudia" — so a
+//    signature-less reply from a third party isn't misgreeted by the creator's
+//    stored first name. Only kicks in when we know both the sender's address
+//    and the creator's; role mailboxes ("info@…") are skipped.
+// 3. Fall back to the creator's own first name (formatFirstName normalizes
+//    decorative casing / stylized fonts, while keeping internal spaces like
+//    "Anvith K"), and to "there" only when neither is known.
 //
 // `firstToken()` is used ONLY to compare the detected sender against the
-// creator's own name (a creator signing "- Anvith" should match a first_name
-// of "Anvith K", not be mistaken for someone else) — the returned greeting
-// name is always the full, normalized first_name.
+// creator's own name — the returned greeting name for the creator branch is
+// always the full, normalized first_name.
 const NOT_A_PERSON = new Set([
   'the', 'team', 'hi', 'hello', 'hey', 'manager', 'agent', 'influence', 'thanks',
 ]);
-function salutationFor(creatorFirstName, inboundText) {
+function salutationFor(creatorFirstName, inboundText, opts = {}) {
   const fullCreatorName = formatFirstName(creatorFirstName) || null;
   const creatorToken = firstToken(fullCreatorName);
   const sender = detectSenderName(inboundText);
-  if (!sender) return fullCreatorName || 'there';
-  if (NOT_A_PERSON.has(sender.toLowerCase())) return fullCreatorName || 'there';
-  if (creatorToken && sender.toLowerCase() === creatorToken.toLowerCase()) return fullCreatorName;
-  return sender; // someone else is writing on the creator's behalf
+  const { senderEmail = null, creatorEmail = null } = opts;
+
+  if (sender && !NOT_A_PERSON.has(sender.toLowerCase())) {
+    if (creatorToken && sender.toLowerCase() === creatorToken.toLowerCase()) return fullCreatorName;
+    return sender; // someone else is writing on the creator's behalf
+  }
+
+  // No usable signature name. If the reply came from a different address than
+  // the creator's own — a manager/agent inbox — greet by that inbox's owner
+  // rather than the creator. Same-address (or unknown-address) replies keep
+  // the pre-existing creator-name fallback so a creator writing without a
+  // signature still gets their stored first_name.
+  const senderNorm = senderEmail ? String(senderEmail).trim().toLowerCase() : '';
+  const creatorNorm = creatorEmail ? String(creatorEmail).trim().toLowerCase() : '';
+  if (senderNorm && senderNorm !== creatorNorm) {
+    const emailName = nameFromEmail(senderEmail);
+    if (emailName) return emailName;
+  }
+
+  return fullCreatorName || 'there';
 }
 
 // Did the sender explicitly ask to see references / a portfolio / other
@@ -820,7 +879,11 @@ async function buildOfferDraft(creatorId, { offer: rawOffer, instructions = '' }
     getReplyPromptOverrides(),
   ]);
   const salutation =
-    creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
+    creator.reply_salutation ||
+    salutationFor(creator.first_name, creator.latest_inbound_text, {
+      senderEmail: creator.latest_inbound_from_email,
+      creatorEmail: creator.email,
+    });
   const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, replyNotes, replyOverrides, salutation });
   const combine = (await countSentNegotiation(creatorId)) === 0;
   const revised = (await countOffersSent(creatorId)) > 0;
@@ -920,7 +983,10 @@ async function buildReplyDraft(creatorId, { instructions = '' } = {}) {
   ]);
   const salutation =
     creator.reply_salutation ||
-    salutationFor(creator.first_name, creator.delegate_question || creator.latest_inbound_text);
+    salutationFor(creator.first_name, creator.delegate_question || creator.latest_inbound_text, {
+      senderEmail: creator.latest_inbound_from_email,
+      creatorEmail: creator.email,
+    });
   const ctx = ctxFor(creator, { guidelines, replyNotes, replyOverrides, salutation });
   const email = await draftReplyEmail(creator, ctx, { instructions });
   return { subject: email.subject, body: email.body };
@@ -1181,7 +1247,10 @@ async function processReply(creatorId) {
   // creator's behalf) and whether they asked to see references. Computed up
   // front so we can persist the salutation — a later offer email (sent at admin
   // approval, after the inbound text has been consumed) reads it back.
-  const salutation = salutationFor(creator.first_name, inbound.text);
+  const salutation = salutationFor(creator.first_name, inbound.text, {
+    senderEmail: creator.latest_inbound_from_email,
+    creatorEmail: creator.email,
+  });
   const includeRefs = askedForReferences(inbound.text);
 
   // Dedup by consuming the text: clear latest_inbound_text once handled so a
@@ -1731,7 +1800,10 @@ async function handleAcceptedReply(creatorId) {
     guidelines,
     replyNotes,
     replyOverrides,
-    salutation: salutationFor(creator.first_name, inbound),
+    salutation: salutationFor(creator.first_name, inbound, {
+      senderEmail: creator.latest_inbound_from_email,
+      creatorEmail: creator.email,
+    }),
     includeRefs: askedForReferences(inbound),
   });
   const result = await handleCreatorReply(creator, inbound, ctx);
@@ -1848,7 +1920,10 @@ async function surfaceReopenedReply(creatorId) {
       guidelines,
       replyNotes,
       replyOverrides,
-      salutation: salutationFor(creator.first_name, inbound),
+      salutation: salutationFor(creator.first_name, inbound, {
+        senderEmail: creator.latest_inbound_from_email,
+        creatorEmail: creator.email,
+      }),
       includeRefs: askedForReferences(inbound),
     });
     let result = null;
@@ -2206,7 +2281,11 @@ async function sendApprovedOffer(
   // the creator's behalf). The reply salutation was persisted when the rate
   // came in; fall back to re-parsing any still-present inbound, then the name.
   const salutation =
-    creator.reply_salutation || salutationFor(creator.first_name, creator.latest_inbound_text);
+    creator.reply_salutation ||
+    salutationFor(creator.first_name, creator.latest_inbound_text, {
+      senderEmail: creator.latest_inbound_from_email,
+      creatorEmail: creator.email,
+    });
   const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, replyNotes, replyOverrides, salutation });
 
   // A reviewed/edited draft (from the "Draft with AI" review-before-send flow)
@@ -2376,6 +2455,7 @@ module.exports = {
   ctxFor,
   salutationFor,
   detectSenderName,
+  nameFromEmail,
   askedForReferences,
   extractOfferAmount,
   parseRateOptionsFromText,

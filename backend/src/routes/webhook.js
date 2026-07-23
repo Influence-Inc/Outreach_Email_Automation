@@ -467,6 +467,13 @@ router.post('/instantly', async (req, res) => {
       }
     }
 
+    // Also capture the actual sender address — may be a manager/agent writing
+    // from their own inbox, distinct from the lead's email. salutationFor reads
+    // this to derive the greeting from the sender's local part when the reply
+    // carries no signature name, so a third-party sender is greeted by their
+    // own name rather than the creator's.
+    const reply_from = pickReplyFrom(body);
+
     // Store the plain-text reply and Instantly's thread handle so that
     // negotiation.processReply() can read the text and send a threaded reply.
     await db.query(
@@ -476,9 +483,18 @@ router.post('/instantly', async (req, res) => {
            instantly_email_account = COALESCE($4, instantly_email_account),
            instantly_reply_subject = COALESCE($5, instantly_reply_subject),
            instantly_reply_cc = COALESCE($6, instantly_reply_cc),
+           latest_inbound_from_email = $7,
            updated_at = NOW()
        WHERE id = $1`,
-      [creator.id, reply_text, reply_to_uuid || null, email_account, reply_subject, reply_cc],
+      [
+        creator.id,
+        reply_text,
+        reply_to_uuid || null,
+        email_account,
+        reply_subject,
+        reply_cc,
+        reply_from || null,
+      ],
     );
 
     // Persist this inbound message to the full conversation thread (used later
