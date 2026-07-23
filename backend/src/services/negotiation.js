@@ -2178,10 +2178,17 @@ function resolveApprovedOffer(creator) {
 // offers don't need an email thread to reply on).
 async function sendApprovedOfferViaPortal(creatorId, { fromStages = ['AWAITING_APPROVAL'] } = {}) {
   const stagePlaceholders = fromStages.map((_, i) => `$${i + 2}`).join(', ');
+  // Old creators reach us on the portal / contacts, NOT the email-negotiation
+  // flow, so their negotiation_status is often NULL (they messaged us on
+  // WhatsApp/iMessage and never went through AWAITING_RATE/AWAITING_APPROVAL).
+  // Allow NULL here too, or an approved offer to a used creator who opted in via
+  // contact would be silently skipped ("creator is not awaiting an offer"). The
+  // offer_approved = TRUE guard is what gates the send; ACCEPTED/CLOSED/etc. are
+  // still excluded (they're neither NULL nor in fromStages).
   const claim = await db.one(
     `UPDATE creators SET negotiation_status = 'AWAITING_DECISION', updated_at = NOW()
      WHERE id = $1 AND offer_approved = TRUE
-       AND negotiation_status IN (${stagePlaceholders})
+       AND (negotiation_status IS NULL OR negotiation_status IN (${stagePlaceholders}))
      RETURNING id`,
     [creatorId, ...fromStages],
   );
