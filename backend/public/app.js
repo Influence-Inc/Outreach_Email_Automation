@@ -3365,46 +3365,43 @@ function escapeHtml(s) {
 // --- Guidelines (universal AI prompt + global AI kill-switch + per-reply notes)
 
 // In-memory copy of the last server payload for the per-reply notes section.
-// Individual card saves need the full notes map (the API replaces all notes on
-// each PUT), so this keeps the other cards' saved values intact when one card
-// is saved on its own. Repopulated by refreshSettings() on every load.
+// Individual card saves need the full notes + overrides maps (the API
+// replaces both wholesale on each PUT), so this keeps the other cards' saved
+// values intact when one card is saved on its own. Repopulated by
+// refreshSettings() on every load, and updated in place after each Confirm.
 const replyNotesState = {
   types: [],
   notes: {},
+  overrides: {},
   masterPrompts: {},
 };
 
-// Merge a saved team note into the master prompt for a single reply type,
-// producing the ONE revised prompt text that reflects what Claude will
-// actually see for that reply. Empty / whitespace-only note → returns the
-// base prompt unchanged, so the view stays honest.
-function buildRevisedPrompt(base, note) {
-  const b = typeof base === 'string' ? base : '';
-  const n = typeof note === 'string' ? note.trim() : '';
-  if (!n) return b;
-  return (
-    b +
-    '\n\n' +
-    '--- ADDITIONAL TEAM INSTRUCTIONS (in effect for this reply) ---\n' +
-    n +
-    '\n--- end of additional team instructions ---'
-  );
+// What the "View current master prompt" block shows for a given reply type:
+// the LLM-rewritten override when the team has confirmed one, else the base
+// snapshot from the server. Empty string when neither exists (unknown key).
+function effectiveMasterPrompt(key) {
+  const override = replyNotesState.overrides[key];
+  if (typeof override === 'string' && override.trim()) return override;
+  const base = replyNotesState.masterPrompts[key];
+  return typeof base === 'string' ? base : '';
 }
 
 // Renders one card per reply type into the Guidelines "Per-reply instructions"
-// section. Each card shows the ONE current master prompt Claude follows for
-// that reply (base directive + any saved team note, merged inline into a
-// single revised prompt — view-only, collapsible), a single-line input for a
-// new / updated instruction, and a per-card Save button. Save opens an inline
-// preview of the proposed revised prompt with Confirm / Cancel — nothing is
-// persisted until Confirm.
-function renderReplyNotes(types, notes, masterPrompts) {
+// section. Each card shows the CURRENT effective master prompt Claude follows
+// for that reply (view-only, collapsible — either the base or the team-
+// approved rewrite), a single-line input for the admin's plain-English
+// instruction to change it, and a per-card Save button. Save calls Claude
+// server-side to actually rewrite the prompt (not just append a note), shows
+// the result inline with Confirm / Cancel — nothing is persisted until Confirm.
+function renderReplyNotes(types, notes, overrides, masterPrompts) {
   const wrap = el('reply-notes-list');
   const safeTypes = Array.isArray(types) ? types : [];
   const safeNotes = notes && typeof notes === 'object' ? notes : {};
+  const safeOverrides = overrides && typeof overrides === 'object' ? overrides : {};
   const safePrompts = masterPrompts && typeof masterPrompts === 'object' ? masterPrompts : {};
   replyNotesState.types = safeTypes;
   replyNotesState.notes = { ...safeNotes };
+  replyNotesState.overrides = { ...safeOverrides };
   replyNotesState.masterPrompts = safePrompts;
   wrap.innerHTML = safeTypes
     .map((t) => {
@@ -3413,12 +3410,16 @@ function renderReplyNotes(types, notes, masterPrompts) {
       if (!key) return '';
       const val = typeof safeNotes[key] === 'string' ? safeNotes[key] : '';
       const base = typeof safePrompts[key] === 'string' ? safePrompts[key] : '';
+      const currentPrompt = effectiveMasterPrompt(key);
+      const hasOverride = !!(safeOverrides[key] && safeOverrides[key].trim());
       const inputId = `reply-note-${key}`;
-      const revised = buildRevisedPrompt(base, val);
+      const summaryLabel = hasOverride
+        ? 'View current master prompt (team-revised)'
+        : 'View current master prompt';
       const promptBlock = base
         ? '<details>' +
-          '<summary>View current master prompt</summary>' +
-          `<pre class="reply-prompt-view io-scroll" data-current-for="${escapeHtml(key)}">${escapeHtml(revised)}</pre>` +
+          `<summary>${escapeHtml(summaryLabel)}</summary>` +
+          `<pre class="reply-prompt-view io-scroll" data-current-for="${escapeHtml(key)}">${escapeHtml(currentPrompt)}</pre>` +
           '</details>'
         : '';
       return (
@@ -3461,28 +3462,75 @@ function renderReplyFraming(framing) {
   text.textContent = t;
 }
 
-// Open the inline confirm-before-save preview for one reply type. Reads the
-// current input, builds the proposed revised master prompt, shows the preview
-// block, and disables the input + Save button while it's open — nothing is
-// persisted until the admin clicks Confirm.
-function openReplyNotePreview(key) {
+// Pending previews built by the last Save click, keyed by reply type. We hold
+// the proposed revised prompt (what Claude returned) here until Confirm; on
+// Confirm this is what gets persisted as the new override for that key.
+const pendingReplyPreviews = {};
+
+// Handle a Save click for one reply type. Two paths:
+//   • non-empty instruction → POST to the server to get Claude to actually
+//     rewrite the current master prompt applying the instruction, then show
+//     the rewritten prompt in the preview block. Nothing is persisted yet.
+//   • empty instruction → treat as "clear my override, restore the default"
+//     and show the base master prompt as the preview.
+// Input + Save button are disabled while the preview is open; Confirm or
+// Cancel below re-enable them.
+async function openReplyNotePreview(key) {
   const input = document.querySelector(`input[data-reply-note-key="${key}"]`);
   const saveBtn = document.querySelector(`[data-save-reply-note-key="${key}"]`);
   const preview = document.querySelector(`[data-preview-for="${key}"]`);
   const previewText = document.querySelector(`[data-preview-text-for="${key}"]`);
+  const confirmBtn = document.querySelector(`[data-confirm-reply-note-key="${key}"]`);
   const status = document.querySelector(`[data-status-for="${key}"]`);
   if (!input || !saveBtn || !preview || !previewText) return;
   const value = String(input.value || '').trim();
-  const base = replyNotesState.masterPrompts[key] || '';
-  previewText.textContent = buildRevisedPrompt(base, value);
-  preview.hidden = false;
   input.disabled = true;
   saveBtn.disabled = true;
+  if (confirmBtn) confirmBtn.disabled = true;
+  preview.hidden = false;
+
+  // Clear-and-restore path.
+  if (!value) {
+    const base = replyNotesState.masterPrompts[key] || '';
+    pendingReplyPreviews[key] = { note: '', override: '', prompt: base };
+    previewText.textContent = base;
+    if (confirmBtn) confirmBtn.disabled = false;
+    if (status) {
+      status.className = 'reply-note-status';
+      status.textContent = 'This will clear your saved instruction and restore the default master prompt. Confirm to apply.';
+    }
+    return;
+  }
+
+  // Rewrite path — ask Claude to apply the instruction.
+  previewText.textContent = 'Rewriting master prompt with your instruction…';
   if (status) {
     status.className = 'reply-note-status';
-    status.textContent = value
-      ? 'Review the revised master prompt below, then Confirm to apply.'
-      : 'This will clear your saved instruction and restore the default. Confirm to apply.';
+    status.textContent = 'Applying your instruction to the current master prompt…';
+  }
+  try {
+    const res = await api('/api/settings/reply-prompt-preview', {
+      method: 'POST',
+      body: JSON.stringify({ key, instruction: value }),
+    });
+    const revised = (res && res.revised_prompt) || '';
+    if (!revised) throw new Error('empty response');
+    pendingReplyPreviews[key] = { note: value, override: revised, prompt: revised };
+    previewText.textContent = revised;
+    if (confirmBtn) confirmBtn.disabled = false;
+    if (status) {
+      status.className = 'reply-note-status';
+      status.textContent = 'Review the revised master prompt below, then Confirm to apply.';
+    }
+  } catch (err) {
+    delete pendingReplyPreviews[key];
+    preview.hidden = true;
+    input.disabled = false;
+    saveBtn.disabled = false;
+    if (status) {
+      status.className = 'reply-note-status err';
+      status.textContent = `Failed to preview: ${err.message}`;
+    }
   }
 }
 
@@ -3493,6 +3541,7 @@ function cancelReplyNotePreview(key) {
   const saveBtn = document.querySelector(`[data-save-reply-note-key="${key}"]`);
   const preview = document.querySelector(`[data-preview-for="${key}"]`);
   const status = document.querySelector(`[data-status-for="${key}"]`);
+  delete pendingReplyPreviews[key];
   if (preview) preview.hidden = true;
   if (input) input.disabled = false;
   if (saveBtn) saveBtn.disabled = false;
@@ -3502,11 +3551,12 @@ function cancelReplyNotePreview(key) {
   }
 }
 
-// Persist the previewed note. The API replaces the entire notes map on each
-// PUT, so we send every known key with its current saved value plus the new
-// value for this key so other cards' notes aren't clobbered. On success we
-// update the "View current master prompt" text in-place with the new revised
-// prompt so the view reflects reality.
+// Persist the previewed revised master prompt for one reply type. Sends both
+// the instruction (audit trail) and the LLM-rewritten prompt (what Claude
+// actually follows at runtime) to the server; the API replaces the whole
+// notes + overrides maps on each PUT, so we merge with the last-loaded state
+// to avoid clobbering the other cards. On success the "View current master
+// prompt" block is swapped in place to the new text.
 async function confirmReplyNoteSave(key) {
   const input = document.querySelector(`input[data-reply-note-key="${key}"]`);
   const saveBtn = document.querySelector(`[data-save-reply-note-key="${key}"]`);
@@ -3515,32 +3565,43 @@ async function confirmReplyNoteSave(key) {
   const cancelBtn = document.querySelector(`[data-cancel-reply-note-key="${key}"]`);
   const currentText = document.querySelector(`[data-current-for="${key}"]`);
   const status = document.querySelector(`[data-status-for="${key}"]`);
+  const summary = preview && preview.parentElement && preview.parentElement.querySelector('details > summary');
   if (!input || !saveBtn || !preview || !confirmBtn) return;
-  const value = String(input.value || '').trim();
+  const pending = pendingReplyPreviews[key];
+  if (!pending) return;
   confirmBtn.disabled = true;
   if (cancelBtn) cancelBtn.disabled = true;
   if (status) {
     status.className = 'reply-note-status';
     status.textContent = 'Saving…';
   }
-  const nextNotes = { ...replyNotesState.notes, [key]: value };
+  const nextNotes = { ...replyNotesState.notes, [key]: pending.note };
+  const nextOverrides = { ...replyNotesState.overrides, [key]: pending.override };
   try {
     const res = await api('/api/settings/reply-prompt-notes', {
       method: 'PUT',
-      body: JSON.stringify({ notes: nextNotes }),
+      body: JSON.stringify({ notes: nextNotes, overrides: nextOverrides }),
     });
-    const saved = (res && res.reply_prompt_notes) || nextNotes;
-    replyNotesState.notes = { ...saved };
-    const savedVal = typeof saved[key] === 'string' ? saved[key] : '';
-    input.value = savedVal;
-    const base = replyNotesState.masterPrompts[key] || '';
-    if (currentText) currentText.textContent = buildRevisedPrompt(base, savedVal);
+    const savedNotes = (res && res.reply_prompt_notes) || nextNotes;
+    const savedOverrides = (res && res.reply_prompt_overrides) || nextOverrides;
+    replyNotesState.notes = { ...savedNotes };
+    replyNotesState.overrides = { ...savedOverrides };
+    const savedNote = typeof savedNotes[key] === 'string' ? savedNotes[key] : '';
+    input.value = savedNote;
+    if (currentText) currentText.textContent = effectiveMasterPrompt(key);
+    if (summary) {
+      const hasOverride = !!(savedOverrides[key] && savedOverrides[key].trim());
+      summary.textContent = hasOverride
+        ? 'View current master prompt (team-revised)'
+        : 'View current master prompt';
+    }
     preview.hidden = true;
     input.disabled = false;
     saveBtn.disabled = false;
+    delete pendingReplyPreviews[key];
     if (status) {
       status.className = 'reply-note-status ok';
-      status.textContent = savedVal
+      status.textContent = savedNote
         ? 'Saved. The revised master prompt above is now in effect.'
         : 'Cleared. The master prompt above is back to its default.';
     }
@@ -3564,6 +3625,7 @@ async function refreshSettings() {
     renderReplyNotes(
       s.reply_note_types || [],
       s.reply_prompt_notes || {},
+      s.reply_prompt_overrides || {},
       s.reply_master_prompts || {},
     );
     renderReplyFraming(s.reply_master_prompts_framing || '');
