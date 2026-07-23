@@ -411,8 +411,6 @@
         $('subhead').textContent = d.creatorName ? 'Prepared for ' + d.creatorName : '';
         renderSections(d);
 
-        // Prefill identity fields from the negotiation-known values.
-        if (d.creatorName) $('legalName').value = d.creatorName;
 
         // Populate the country dropdown.
         var sel = $('addrCountry');
