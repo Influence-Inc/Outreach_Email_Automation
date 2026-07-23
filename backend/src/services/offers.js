@@ -146,6 +146,44 @@ async function establishedMessagingChannel(creatorId) {
   return (row && row.established_channel) || null;
 }
 
+// Whether this creator — the PERSON, keyed on phone — has already messaged us on
+// a channel in ANY campaign ("subscribed"), and which channel to reach them on.
+// established_channel is a per-campaign-row column, so a used creator pulled into
+// a NEW campaign is a fresh row with it unset; we therefore correlate across
+// every creators row that shares the same phone (matched on the last 10 digits,
+// the same way the inbound webhook matches senders). Returns the channel, or null
+// when they've never messaged us — or have opted out on ANY of their rows, which
+// suppresses the proactive push for compliance. `contact` needs whatsapp,
+// imessage, established_channel, messaging_opted_out.
+async function subscribedChannelFor(contact) {
+  const phone = contact.whatsapp || contact.imessage || null;
+  const tail = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+  if (!tail) {
+    // No phone to correlate on — fall back to this row's own state.
+    return contact.established_channel && !contact.messaging_opted_out
+      ? contact.established_channel
+      : null;
+  }
+
+  const norm = `right(regexp_replace(coalesce(whatsapp, imessage, ''), '[^0-9]', '', 'g'), 10)`;
+
+  // Opted out on ANY of the person's rows → never proactively message them.
+  const optOut = await db.one(
+    `SELECT bool_or(messaging_opted_out) AS opted_out FROM creators WHERE ${norm} = $1`,
+    [tail],
+  );
+  if (optOut && optOut.opted_out) return null;
+
+  // Most recently established channel across the person's rows.
+  const row = await db.one(
+    `SELECT established_channel FROM creators
+      WHERE established_channel IS NOT NULL AND ${norm} = $1
+      ORDER BY updated_at DESC LIMIT 1`,
+    [tail],
+  );
+  return (row && row.established_channel) || null;
+}
+
 // Which of our own business messaging numbers to show a creator in the invite
 // ("text Hi to this number"): a channel is included only when the creator has a
 // number on file for it, isn't opted out, AND that channel is fully operational
@@ -280,12 +318,14 @@ async function sendOfferOutreach(offerId) {
   );
   if (!offer) return;
 
-  if (offer.established_channel && !offer.messaging_opted_out) {
+  // Have they messaged us on a channel before (in this OR an earlier campaign)?
+  const subscribedChannel = await subscribedChannelFor(offer);
+  if (subscribedChannel) {
     try {
       // They've already opted in on this channel, so send the DEAL directly (no
       // "Hi" re-trigger, no interest brief) — the full offer + link goes straight
       // to their WhatsApp/iMessage.
-      await deliverOfferOverChannel(offer.id, offer.established_channel);
+      await deliverOfferOverChannel(offer.id, subscribedChannel);
     } catch (err) {
       console.error('[offers] direct offer delivery failed', err.message);
     }
@@ -365,9 +405,11 @@ async function sendUsedCreatorInvite(creatorId) {
   );
   if (!creator) return { sent: false, reason: 'not_found' };
 
-  // Already subscribed on a channel → outreach goes straight there, no "Hi" needed.
-  if (creator.established_channel && !creator.messaging_opted_out) {
-    const channel = creator.established_channel;
+  // Already subscribed on a channel (this OR an earlier campaign) → outreach goes
+  // straight there, no "Hi" needed.
+  const subscribedChannel = await subscribedChannelFor(creator);
+  if (subscribedChannel) {
+    const channel = subscribedChannel;
     const to = channel === 'imessage' ? creator.imessage : creator.whatsapp;
     if (to) {
       const firstName = firstNameOf(creator);
@@ -382,6 +424,11 @@ async function sendUsedCreatorInvite(creatorId) {
           `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
            VALUES ($1, 'outbound', $2, $3, $4)`,
           [creator.id, channel, body, result.id || null],
+        );
+        // Establish this campaign's row too, so a reply here is handled in context.
+        await db.query(
+          `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
+          [creator.id, channel],
         );
         return { sent: true, channels: [channel === 'imessage' ? 'iMessage' : 'WhatsApp'] };
       }
