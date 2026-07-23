@@ -77,14 +77,39 @@ function detectSenderName(text) {
   if (!text) return null;
   const s = String(text).replace(/\r\n/g, '\n');
 
-  // 1. Signature line: "- Alex", "– Alex Chen", "Best, Alex", "Thanks, Alex",
-  //    "- Alex, Manager". Scan the last few non-empty lines.
+  // 1. Signature block at the tail of the message. Scan the last few non-empty
+  //    lines and try each shape people actually use:
+  //   • "- Alex" / "– Alex Chen" / "- Alex, Manager"
+  //   • "Best, Alex" / "Thanks, Alex" — signoff + name on the SAME line
+  //   • "Best,\nTang" — signoff on its own line, name on the FOLLOWING line
+  //     (a two-line block is one of the most common sign-off shapes in the
+  //     wild; missing it here defaults the greeting to the creator's name and
+  //     produces "Hi Linn," on a reply from a manager named Tang).
+  const SIGNOFFS = 'best|thanks|thank you|regards|cheers|warmly|sincerely';
+  const signoffAloneRe = new RegExp(`^(?:${SIGNOFFS})[,!.]?$`, 'i');
+  const dashNameRe = new RegExp(`^[-–—]\\s*${NAME}(?:\\s*,\\s*(?:the\\s+)?(?:${ROLE_WORD})\\b)?`, 'i');
+  const signoffAndNameRe = new RegExp(`^(?:${SIGNOFFS})[,!]?\\s+${NAME}$`, 'i');
   const lines = s.split('\n').map((l) => l.trim()).filter(Boolean);
-  for (const line of lines.slice(-4)) {
-    let m = line.match(new RegExp(`^[-–—]\\s*${NAME}(?:\\s*,\\s*(?:the\\s+)?(?:${ROLE_WORD})\\b)?`, 'i'));
+  const tail = lines.slice(-6);
+  for (let i = 0; i < tail.length; i++) {
+    const line = tail[i];
+    let m = line.match(dashNameRe);
     if (nameOf(m)) return nameOf(m);
-    m = line.match(new RegExp(`^(?:best|thanks|thank you|regards|cheers|warmly|sincerely)[,!]?\\s+${NAME}$`, 'i'));
+    m = line.match(signoffAndNameRe);
     if (nameOf(m)) return nameOf(m);
+    // Two-line signature: this line is a bare "Best," / "Thanks," / "Regards"
+    // etc., and the next non-empty line is JUST a name ("Tang", "Alex Chen").
+    // Require the following line to match looksLikeName exactly so we can't
+    // pick up a body sentence, and skip stacked signoff words so
+    // "Best,\nRegards\nAlex" still lands on "Alex".
+    if (signoffAloneRe.test(line)) {
+      for (let j = i + 1; j < tail.length; j++) {
+        const nxt = tail[j];
+        if (signoffAloneRe.test(nxt)) continue;
+        if (looksLikeName(nxt)) return firstToken(nxt);
+        break;
+      }
+    }
   }
 
   // 2. Self-introduction: "this is Alex", "I'm Alex", "I am Alex",
