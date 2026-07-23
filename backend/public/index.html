@@ -241,16 +241,12 @@
 
           <div class="card">
             <label class="field-label">Per-reply instructions</label>
-            <p class="hint subhead">Each reply type below shows the current master prompt Claude follows (view-only) and a text box where you tell it what to change. Write plain instructions (e.g. "keep it to 3 short lines", "always mention we can be flexible on timelines", "never use exclamation marks"). Your notes get added to the master prompt for that reply type. Leave a box empty to use the default. Deal terms and offer numbers are never changed from here — those come from the offer configurator.</p>
+            <p class="hint subhead">Each reply type below shows the current master prompt Claude follows (view-only) and a single-line box where you tell it what to change. Write a plain instruction (e.g. "keep it under 3 short lines", "always mention we can be flexible on timelines", "never use exclamation marks") and hit Save on that card — your instruction is appended to the master prompt for that reply type and shows up inside the view above. Leave empty and Save to clear. Deal terms and offer numbers are never changed from here — those come from the offer configurator.</p>
             <details class="reply-framing" id="reply-framing-wrap">
               <summary>How every reply is framed (applies to all reply types)</summary>
               <pre id="reply-framing-text" class="reply-prompt-view io-scroll"></pre>
             </details>
             <div id="reply-notes-list" class="reply-notes-list"></div>
-            <div class="form-foot end">
-              <span id="reply-notes-status" class="hint push"></span>
-              <button id="save-reply-notes-btn" class="btn-primary" type="button">Save reply instructions</button>
-            </div>
           </div>
         </div>
 

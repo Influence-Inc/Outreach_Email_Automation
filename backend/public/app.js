@@ -3364,16 +3364,29 @@ function escapeHtml(s) {
 
 // --- Guidelines (universal AI prompt + global AI kill-switch + per-reply notes)
 
+// In-memory copy of the last server payload for the per-reply notes section.
+// Individual card saves need the full notes map (the API replaces all notes on
+// each PUT), so this keeps the other cards' saved values intact when one card
+// is saved on its own. Repopulated by refreshSettings() on every load.
+const replyNotesState = {
+  types: [],
+  notes: {},
+  masterPrompts: {},
+};
+
 // Renders one card per reply type into the Guidelines "Per-reply instructions"
 // section. Each card shows the current master prompt Claude follows (view-only,
-// collapsible) plus a textarea where the admin writes plain-English steering
-// notes. The reply-type list, notes, and master prompt snapshots all come from
-// the server so the UI stays in sync with the backend without hard-coding.
+// collapsible), a highlighted "Applied on top" block when a note is saved so
+// the change is visible in-place, a single-line input for the admin's plain-
+// English steering note, and a per-card Save button + status.
 function renderReplyNotes(types, notes, masterPrompts) {
   const wrap = el('reply-notes-list');
   const safeTypes = Array.isArray(types) ? types : [];
   const safeNotes = notes && typeof notes === 'object' ? notes : {};
   const safePrompts = masterPrompts && typeof masterPrompts === 'object' ? masterPrompts : {};
+  replyNotesState.types = safeTypes;
+  replyNotesState.notes = { ...safeNotes };
+  replyNotesState.masterPrompts = safePrompts;
   wrap.innerHTML = safeTypes
     .map((t) => {
       const key = t && t.key;
@@ -3386,14 +3399,22 @@ function renderReplyNotes(types, notes, masterPrompts) {
         ? '<details>' +
           '<summary>View current master prompt</summary>' +
           `<pre class="reply-prompt-view io-scroll">${escapeHtml(prompt)}</pre>` +
+          `<div class="reply-prompt-applied" data-applied-for="${escapeHtml(key)}"${val ? '' : ' hidden'}>` +
+          '<div class="reply-prompt-applied-head">Team note applied on top of this prompt</div>' +
+          `<div class="reply-prompt-applied-body">${escapeHtml(val)}</div>` +
+          '</div>' +
           '</details>'
         : '';
       return (
         '<div class="reply-note-item">' +
         `<div class="reply-note-label">${escapeHtml(label)}</div>` +
         promptBlock +
-        `<label class="reply-note-input-label" for="${escapeHtml(inputId)}">Your instructions to change or refine this prompt</label>` +
-        `<textarea id="${escapeHtml(inputId)}" data-reply-note-key="${escapeHtml(key)}" class="io-scroll" rows="4" placeholder="e.g. keep it under 3 short lines; never mention discounts.">${escapeHtml(val)}</textarea>` +
+        `<label class="reply-note-input-label" for="${escapeHtml(inputId)}">Your instruction to change or refine this prompt</label>` +
+        '<div class="reply-note-row">' +
+        `<input id="${escapeHtml(inputId)}" data-reply-note-key="${escapeHtml(key)}" type="text" class="reply-note-input" placeholder="e.g. keep it under 3 short lines; never mention discounts." value="${escapeHtml(val)}" />` +
+        `<button class="btn-primary" type="button" data-save-reply-note-key="${escapeHtml(key)}">Save</button>` +
+        '</div>' +
+        `<div class="reply-note-status" data-status-for="${escapeHtml(key)}"></div>` +
         '</div>'
       );
     })
@@ -3416,15 +3437,44 @@ function renderReplyFraming(framing) {
   text.textContent = t;
 }
 
-// Collect the current textarea values keyed by reply type. Reads from the DOM
-// so unsaved edits are what gets sent on Save.
-function collectReplyNotes() {
-  const out = {};
-  document.querySelectorAll('[data-reply-note-key]').forEach((node) => {
-    const key = node.getAttribute('data-reply-note-key');
-    if (key) out[key] = node.value || '';
-  });
-  return out;
+// Save a single reply-type's note. The API replaces the entire notes map on
+// each PUT, so we send every known key with its current value (unchanged
+// values from the last load plus the new one for this card).
+async function saveReplyNote(key) {
+  const input = document.querySelector(`input[data-reply-note-key="${key}"]`);
+  const status = document.querySelector(`[data-status-for="${key}"]`);
+  const btn = document.querySelector(`[data-save-reply-note-key="${key}"]`);
+  const applied = document.querySelector(`[data-applied-for="${key}"]`);
+  if (!input || !status || !btn) return;
+  const value = String(input.value || '').trim();
+  status.className = 'reply-note-status';
+  status.textContent = 'Saving…';
+  btn.disabled = true;
+  const nextNotes = { ...replyNotesState.notes, [key]: value };
+  try {
+    const res = await api('/api/settings/reply-prompt-notes', {
+      method: 'PUT',
+      body: JSON.stringify({ notes: nextNotes }),
+    });
+    const saved = (res && res.reply_prompt_notes) || nextNotes;
+    replyNotesState.notes = { ...saved };
+    input.value = typeof saved[key] === 'string' ? saved[key] : '';
+    if (applied) {
+      const savedVal = typeof saved[key] === 'string' ? saved[key] : '';
+      const body = applied.querySelector('.reply-prompt-applied-body');
+      if (body) body.textContent = savedVal;
+      applied.hidden = !savedVal;
+    }
+    status.className = 'reply-note-status ok';
+    status.textContent = value
+      ? 'Saved. Your instruction is now applied on top of this prompt.'
+      : 'Cleared. This prompt is back to its default.';
+  } catch (err) {
+    status.className = 'reply-note-status err';
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function refreshSettings() {
@@ -3439,7 +3489,6 @@ async function refreshSettings() {
       s.reply_master_prompts || {},
     );
     renderReplyFraming(s.reply_master_prompts_framing || '');
-    el('reply-notes-status').textContent = '';
   } catch (err) {
     el('guidelines-status').textContent = `Failed to load: ${err.message}`;
   }
@@ -3470,22 +3519,19 @@ el('save-guidelines-btn').addEventListener('click', async () => {
   }
 });
 
-el('save-reply-notes-btn').addEventListener('click', async () => {
-  const btn = el('save-reply-notes-btn');
-  const status = el('reply-notes-status');
-  btn.disabled = true;
-  status.textContent = 'Saving…';
-  try {
-    await api('/api/settings/reply-prompt-notes', {
-      method: 'PUT',
-      body: JSON.stringify({ notes: collectReplyNotes() }),
-    });
-    status.textContent = 'Saved.';
-  } catch (err) {
-    status.textContent = `Failed: ${err.message}`;
-  } finally {
-    btn.disabled = false;
-  }
+// Per-card Save buttons and Enter-to-save on the input. Delegated because the
+// notes list is re-rendered on every settings refresh.
+el('reply-notes-list').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('[data-save-reply-note-key]');
+  if (!btn) return;
+  saveReplyNote(btn.getAttribute('data-save-reply-note-key'));
+});
+el('reply-notes-list').addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter') return;
+  const input = ev.target.closest('input[data-reply-note-key]');
+  if (!input) return;
+  ev.preventDefault();
+  saveReplyNote(input.getAttribute('data-reply-note-key'));
 });
 
 el('ai-replies-toggle').addEventListener('change', async (ev) => {
