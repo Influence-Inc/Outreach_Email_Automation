@@ -1274,6 +1274,31 @@ async function processReply(creatorId) {
     return { action: 'delegated', reason: 'accepted_without_offer' };
   }
 
+  // The creator pushed back on the offer without naming a new number
+  // (request_counter_rate). The default reply is a REPLY 1-style "what rate
+  // would work for you?" — but if they've ALREADY told us a per-video / flat
+  // rate earlier in the thread (stored in quoted_rate) and we then priced the
+  // offer against views instead, asking again reads as tone-deaf and duplicates
+  // a question they already answered. Hand it to a human so the admin can
+  // either accept the prior rate as-is (acceptQuotedRate) or send a new
+  // flat-rate offer built on that number.
+  const priorRate =
+    creator.quoted_rate != null && Number.isFinite(Number(creator.quoted_rate))
+      ? Number(creator.quoted_rate)
+      : null;
+  if (result.action === 'request_counter_rate' && priorRate != null) {
+    console.log(
+      `[negotiation] creator ${creator.id}: request_counter_rate but a prior quoted_rate ($${priorRate}) is on file — delegating instead of re-asking`,
+    );
+    await delegate(
+      creator,
+      inbound,
+      `Creator pushed back on our offer without naming a new number, but they already quoted a rate of $${priorRate.toLocaleString('en-US')} earlier in the thread. Accept that rate as-is or send them a flat-rate offer instead of asking for it again.`,
+    );
+    await markHandled();
+    return { action: 'delegated', reason: 'request_counter_rate_with_prior_quote' };
+  }
+
   await applyReply(creator, ctx, result);
   await markHandled();
   return { action: result.action };
