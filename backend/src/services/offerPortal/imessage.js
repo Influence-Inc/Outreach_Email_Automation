@@ -95,6 +95,49 @@ async function sendOfferOutreachIMessage(params) {
 // what to text. Same value the send path uses as the Linq `from` field.
 const businessNumber = fromNumber;
 
+function escapeAttr(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// HTML for the public GET /go/imessage page. The email's "Text us on iMessage"
+// button links here (an https link email clients keep clickable) instead of a raw
+// `sms:` link (which Gmail strips); this page then opens the visitor's Messages
+// app to our business iMessage number. It auto-redirects and also shows a
+// tappable button + the number as a fallback (the manual tap always works, even
+// where a scripted redirect to the sms: scheme is blocked). Uses IMESSAGE_FROM_
+// NUMBER; renders a friendly notice when that isn't configured.
+function renderRedirectPage() {
+  const e164 = toE164(fromNumber());
+  const display = fromNumber() || e164;
+  const head =
+    '<!doctype html><html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Text us on iMessage</title>';
+  const bodyStyle =
+    "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" +
+    'padding:48px 24px;text-align:center;color:#171717;background:#f5f5f5;';
+
+  if (!e164) {
+    return `${head}</head><body style="${bodyStyle}"><p>Messaging isn't set up yet — please reply to our email instead.</p></body></html>`;
+  }
+
+  const smsHref = `sms:${e164}`;
+  const smsAttr = escapeAttr(smsHref);
+  return (
+    `${head}<meta http-equiv="refresh" content="0;url=${smsAttr}"></head>` +
+    `<body style="${bodyStyle}">` +
+    `<p style="font-size:16px;">Opening Messages…</p>` +
+    `<p style="margin:28px 0;"><a href="${smsAttr}" style="background:#171717;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:10px;display:inline-block;font-weight:600;font-size:16px;">Open iMessage</a></p>` +
+    `<p style="color:#525252;">or text us at <a href="${smsAttr}" style="color:#171717;">${escapeAttr(display)}</a></p>` +
+    `<script>setTimeout(function(){location.href=${JSON.stringify(smsHref)};},50);</script>` +
+    `</body></html>`
+  );
+}
+
 module.exports = {
   toE164,
   buildLinqPayload,
@@ -102,4 +145,5 @@ module.exports = {
   sendIMessageText,
   sendOfferOutreachIMessage,
   renderOfferOutreachBody,
+  renderRedirectPage,
 };

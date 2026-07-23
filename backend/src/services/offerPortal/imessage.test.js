@@ -68,6 +68,36 @@ test('renderOfferOutreachBody includes name, brand, link, and expiry', () => {
   assert.match(body, /Aug 1/);
 });
 
+test('renderRedirectPage opens Messages to the business number (normalised)', () => {
+  const saved = process.env.IMESSAGE_FROM_NUMBER;
+  try {
+    process.env.IMESSAGE_FROM_NUMBER = '+1 (205) 370-6046';
+    const html = imessage.renderRedirectPage();
+    // The sms: target is the normalised E.164 of our business number…
+    assert.match(html, /sms:\+12053706046/);
+    // …offered as a tappable button and an auto-redirect, with the number shown.
+    assert.match(html, /Open iMessage/);
+    assert.match(html, /http-equiv="refresh"/);
+    assert.match(html, /205/);
+  } finally {
+    if (saved === undefined) delete process.env.IMESSAGE_FROM_NUMBER;
+    else process.env.IMESSAGE_FROM_NUMBER = saved;
+  }
+});
+
+test('renderRedirectPage shows a notice (no sms: link) when no number is configured', () => {
+  const saved = process.env.IMESSAGE_FROM_NUMBER;
+  try {
+    delete process.env.IMESSAGE_FROM_NUMBER;
+    const html = imessage.renderRedirectPage();
+    assert.doesNotMatch(html, /sms:/);
+    assert.match(html, /isn't set up/);
+  } finally {
+    if (saved === undefined) delete process.env.IMESSAGE_FROM_NUMBER;
+    else process.env.IMESSAGE_FROM_NUMBER = saved;
+  }
+});
+
 test('sendIMessageText skips gracefully when creds are absent', async () => {
   const saved = {
     key: process.env.IMESSAGE_API_KEY,

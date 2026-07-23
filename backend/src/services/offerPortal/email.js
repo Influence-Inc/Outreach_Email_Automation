@@ -14,6 +14,22 @@ function fromAddress() {
   return process.env.OFFER_EMAIL_FROM || process.env.EMAIL_FROM || 'INFLUENCE <offers@useinfluence.xyz>';
 }
 
+function baseUrl() {
+  return (process.env.PUBLIC_BASE_URL || process.env.OFFER_PORTAL_BASE_URL || '').replace(/\/$/, '');
+}
+
+// Target for the "Text us on iMessage" email button. A raw `sms:` href gets
+// stripped by Gmail (and some other webmail), so the button links to our hosted
+// https redirect page (GET /go/imessage, see services/offerPortal/imessage.js +
+// server.js) — an https link email clients keep clickable — which then opens
+// Messages to our business number. Falls back to the direct `sms:` link only when
+// no base URL is configured (dev), so the button is never empty. `imE164` is the
+// clean "+<digits>" iMessage number.
+function imessageButtonHref(imE164) {
+  const base = baseUrl();
+  return base ? `${base}/go/imessage` : `sms:${imE164}`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -108,12 +124,10 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
   ].join('\n');
 
   // Numbers may be stored with human formatting (e.g. "+1 (205) 370-6046"); the
-  // link targets need bare/E.164 forms. wa.me wants digits only; sms: wants a
-  // clean "sms:+<digits>". We deliberately DON'T append a "&body=Hi" prefill: the
-  // raw "&" is an unescaped ampersand in the href, which Gmail's HTML sanitizer
-  // treats as malformed and strips — leaving a styled-but-unclickable button. A
-  // bare "sms:+<digits>" survives sanitizing and reliably opens Messages; the
-  // creator just types "Hi" (the copy tells them to).
+  // link targets need bare/E.164 forms. WhatsApp uses wa.me (an https link, always
+  // clickable). iMessage can't: a raw "sms:" link is stripped by Gmail's HTML
+  // sanitizer, leaving a dead button — so the iMessage button links to our https
+  // redirect page (imessageButtonHref → GET /go/imessage) which opens Messages.
   const waDigits = whatsappNumber ? whatsappNumber.replace(/[^\d]/g, '') : null;
   const imE164 = imessageNumber ? `+${imessageNumber.replace(/[^\d]/g, '')}` : null;
   const buttons = [
@@ -121,7 +135,7 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
       ? `<a href="https://wa.me/${waDigits}?text=Hi" style="background:#25D366;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on WhatsApp</a>`
       : '',
     imessageNumber
-      ? `<a href="sms:${escapeHtml(imE164)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
+      ? `<a href="${escapeHtml(imessageButtonHref(imE164))}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
       : '',
   ]
     .filter(Boolean)
@@ -181,7 +195,7 @@ function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDat
       ? `<a href="https://wa.me/${waDigits}?text=Hi" style="background:#25D366;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on WhatsApp</a>`
       : '',
     imessageNumber
-      ? `<a href="sms:${escapeHtml(imE164)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
+      ? `<a href="${escapeHtml(imessageButtonHref(imE164))}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
       : '',
   ]
     .filter(Boolean)
