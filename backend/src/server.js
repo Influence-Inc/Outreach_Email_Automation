@@ -23,6 +23,7 @@ const {
   offerPortalConfigIssues,
   logOfferPortalConfig,
 } = require('./services/offerPortal/config');
+const offerImessage = require('./services/offerPortal/imessage');
 
 const app = express();
 app.use(cors());
@@ -94,6 +95,13 @@ app.get('/contracts/:token', contractPage);
 // handler so /o/:token serves the offer shell, not the dashboard.
 app.get('/o/:token', offerPage);
 
+// Public iMessage redirect. The email "Text us on iMessage" button links here
+// (an https link email clients keep clickable, unlike a raw sms: link Gmail
+// strips); this opens the visitor's Messages app to our business number.
+app.get('/go/imessage', (_req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8').send(offerImessage.renderRedirectPage());
+});
+
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
 // SPA fallback: the dashboard uses real path URLs (e.g. /campaign/:id) so each
@@ -106,6 +114,7 @@ app.get('*', (req, res, next) => {
     req.path.startsWith('/webhook') ||
     req.path.startsWith('/contract') ||
     req.path.startsWith('/o/') ||
+    req.path.startsWith('/go/') ||
     req.path === '/health'
   ) {
     return next();

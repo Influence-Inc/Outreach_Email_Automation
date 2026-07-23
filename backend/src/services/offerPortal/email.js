@@ -14,6 +14,22 @@ function fromAddress() {
   return process.env.OFFER_EMAIL_FROM || process.env.EMAIL_FROM || 'INFLUENCE <offers@useinfluence.xyz>';
 }
 
+function baseUrl() {
+  return (process.env.PUBLIC_BASE_URL || process.env.OFFER_PORTAL_BASE_URL || '').replace(/\/$/, '');
+}
+
+// Target for the "Text us on iMessage" email button. A raw `sms:` href gets
+// stripped by Gmail (and some other webmail), so the button links to our hosted
+// https redirect page (GET /go/imessage, see services/offerPortal/imessage.js +
+// server.js) — an https link email clients keep clickable — which then opens
+// Messages to our business number. Falls back to the direct `sms:` link only when
+// no base URL is configured (dev), so the button is never empty. `imE164` is the
+// clean "+<digits>" iMessage number.
+function imessageButtonHref(imE164) {
+  const base = baseUrl();
+  return base ? `${base}/go/imessage` : `sms:${imE164}`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -108,9 +124,10 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
   ].join('\n');
 
   // Numbers may be stored with human formatting (e.g. "+1 (205) 370-6046"); the
-  // link targets need bare/E.164 forms. wa.me wants digits only; sms: wants a
-  // clean "+<digits>" with no spaces or parens (a raw space in the href breaks
-  // the tap-to-text handler on some clients).
+  // link targets need bare/E.164 forms. WhatsApp uses wa.me (an https link, always
+  // clickable). iMessage can't: a raw "sms:" link is stripped by Gmail's HTML
+  // sanitizer, leaving a dead button — so the iMessage button links to our https
+  // redirect page (imessageButtonHref → GET /go/imessage) which opens Messages.
   const waDigits = whatsappNumber ? whatsappNumber.replace(/[^\d]/g, '') : null;
   const imE164 = imessageNumber ? `+${imessageNumber.replace(/[^\d]/g, '')}` : null;
   const buttons = [
@@ -118,7 +135,7 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
       ? `<a href="https://wa.me/${waDigits}?text=Hi" style="background:#25D366;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on WhatsApp</a>`
       : '',
     imessageNumber
-      ? `<a href="sms:${escapeHtml(imE164)}&body=Hi" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
+      ? `<a href="${escapeHtml(imessageButtonHref(imE164))}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
       : '',
   ]
     .filter(Boolean)
@@ -138,6 +155,75 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
 
 async function sendPortalInviteEmail({ to, firstName, brandName, whatsappNumber, imessageNumber }) {
   const { subject, text, html } = renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessageNumber });
+  return deliver({ to, subject, text, html });
+}
+
+// Combined offer + contact email for USED creators: reveals the offer-portal
+// negotiation link (view / accept / decline / counter on the page) AND invites
+// the creator to continue over WhatsApp/iMessage — both paths in one outreach
+// email. Unlike renderPortalInviteEmail (which deliberately withholds the offer),
+// this INCLUDES the link, because for used creators we want the negotiation link
+// in the outreach itself. whatsappNumber/imessageNumber are our own business
+// numbers for each usable channel and may be null (then no contact block shows,
+// and it reads as a plain offer email).
+function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDate, whatsappNumber, imessageNumber }) {
+  const subject = `New collaboration opportunity — ${brandName}`;
+
+  const contactLines = [];
+  if (whatsappNumber) contactLines.push(`WhatsApp: ${whatsappNumber}`);
+  if (imessageNumber) contactLines.push(`iMessage: ${imessageNumber}`);
+
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `We have a new collaboration opportunity for you with ${brandName}. Based on your previous work with us, we think this would be a great fit. Here are the full details and terms: ${offerUrl}`,
+    ``,
+    `The offer is open until ${expiryDate}. You can accept, decline or counter right there.`,
+    ...(contactLines.length
+      ? ['', `Prefer to chat? Message us and we'll take it from there:`, ...contactLines.map((l) => `  ${l}`)]
+      : []),
+    ``,
+    `— Team INFLUENCE`,
+  ].join('\n');
+
+  // Numbers may be stored with human formatting; wa.me wants bare digits and
+  // sms: wants a clean "+<digits>" (see renderPortalInviteEmail for the rationale).
+  const waDigits = whatsappNumber ? whatsappNumber.replace(/[^\d]/g, '') : null;
+  const imE164 = imessageNumber ? `+${imessageNumber.replace(/[^\d]/g, '')}` : null;
+  const contactButtons = [
+    waDigits
+      ? `<a href="https://wa.me/${waDigits}?text=Hi" style="background:#25D366;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on WhatsApp</a>`
+      : '',
+    imessageNumber
+      ? `<a href="${escapeHtml(imessageButtonHref(imE164))}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('');
+  const contactBlock = contactButtons
+    ? `<p style="margin:28px 0 4px;color:#525252;">Prefer to chat? Message us and we'll take it from there:</p>
+    <p style="text-align:center;margin:8px 0;">${contactButtons}</p>`
+    : '';
+
+  const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
+    <p>We have a new collaboration opportunity for you with <strong>${escapeHtml(brandName)}</strong>. Based on your previous work with us, we think this would be a great fit.</p>
+    <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(offerUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">View the offer</a></p>
+    <p>The offer is open until <strong>${escapeHtml(expiryDate)}</strong>. You can accept, decline or counter right there.</p>
+    ${contactBlock}
+    <p style="margin-top:24px;">— Team INFLUENCE</p>`);
+
+  return { subject, text, html };
+}
+
+async function sendOfferWithContactEmail({ to, firstName, brandName, offerUrl, expiryDate, whatsappNumber, imessageNumber }) {
+  const { subject, text, html } = renderOfferWithContactEmail({
+    firstName,
+    brandName,
+    offerUrl,
+    expiryDate,
+    whatsappNumber,
+    imessageNumber,
+  });
   return deliver({ to, subject, text, html });
 }
 
@@ -161,4 +247,6 @@ module.exports = {
   sendOfferConfirmationEmail,
   renderPortalInviteEmail,
   sendPortalInviteEmail,
+  renderOfferWithContactEmail,
+  sendOfferWithContactEmail,
 };
