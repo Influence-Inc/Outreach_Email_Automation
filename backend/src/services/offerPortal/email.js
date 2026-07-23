@@ -107,13 +107,18 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
     `— Team INFLUENCE`,
   ].join('\n');
 
+  // Numbers may be stored with human formatting (e.g. "+1 (205) 370-6046"); the
+  // link targets need bare/E.164 forms. wa.me wants digits only; sms: wants a
+  // clean "+<digits>" with no spaces or parens (a raw space in the href breaks
+  // the tap-to-text handler on some clients).
   const waDigits = whatsappNumber ? whatsappNumber.replace(/[^\d]/g, '') : null;
+  const imE164 = imessageNumber ? `+${imessageNumber.replace(/[^\d]/g, '')}` : null;
   const buttons = [
     waDigits
       ? `<a href="https://wa.me/${waDigits}?text=Hi" style="background:#25D366;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on WhatsApp</a>`
       : '',
     imessageNumber
-      ? `<a href="sms:${escapeHtml(imessageNumber)}&body=Hi" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
+      ? `<a href="sms:${escapeHtml(imE164)}&body=Hi" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
       : '',
   ]
     .filter(Boolean)
