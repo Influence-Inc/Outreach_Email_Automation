@@ -2596,6 +2596,7 @@ el('sync-btn').addEventListener('click', async () => {
   }
   tabSearch.addEventListener('click', () => show('search'));
   tabNew.addEventListener('click', () => show('new'));
+  show('new');
 })();
 
 // ── Creator-DB search-and-add ────────────────────────────────────────────────
