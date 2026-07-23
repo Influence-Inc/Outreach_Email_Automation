@@ -4,26 +4,45 @@
 //
 // Guards inviteNumbersFor — decides which of our own business messaging numbers
 // to show a creator in the invite email. A channel is included only when the
-// creator has a number on file for it, isn't opted out, AND our business number
-// for that channel is configured. Env-stubbed; no DB.
+// creator has a number on file for it, isn't opted out, AND that channel is
+// fully operational on our side (business number set AND provider API key
+// present, so a reply can be answered). Env-stubbed; no DB.
 const test = require('node:test');
 const assert = require('node:assert');
 const offers = require('./offers');
 
-// Run `fn` with the two business-number env vars set to the given values.
-function withBusinessNumbers({ wa, im }, fn) {
-  const saved = { wa: process.env.AISENSY_WHATSAPP_NUMBER, im: process.env.IMESSAGE_FROM_NUMBER };
+// Run `fn` with each channel's business-number AND provider-API-key env vars set
+// to the given values. The API keys default to a present test value so callers
+// that only care about the numbers get a fully-operational channel; pass
+// waKey/imKey: undefined to simulate a half-configured channel (number set, key
+// missing) — the dead-end case inviteNumbersFor must withhold.
+function withBusinessNumbers(opts, fn) {
+  const NAMES = {
+    wa: 'AISENSY_WHATSAPP_NUMBER',
+    im: 'IMESSAGE_FROM_NUMBER',
+    waKey: 'AISENSY_API_KEY',
+    imKey: 'IMESSAGE_API_KEY',
+  };
+  // A destructuring default (`waKey = ...`) would also fire on an explicit
+  // `waKey: undefined`, so we can't tell "omitted" from "unset" that way. Use the
+  // `in` operator: absent ⇒ default test key; present-but-undefined ⇒ unset.
+  const { wa, im } = opts;
+  const waKey = 'waKey' in opts ? opts.waKey : 'ai_test_key';
+  const imKey = 'imKey' in opts ? opts.imKey : 'im_test_key';
+  const saved = {};
+  const setOrDel = (name, val) => {
+    if (val === undefined) delete process.env[name];
+    else process.env[name] = val;
+  };
   try {
-    if (wa === undefined) delete process.env.AISENSY_WHATSAPP_NUMBER;
-    else process.env.AISENSY_WHATSAPP_NUMBER = wa;
-    if (im === undefined) delete process.env.IMESSAGE_FROM_NUMBER;
-    else process.env.IMESSAGE_FROM_NUMBER = im;
+    for (const key of Object.keys(NAMES)) saved[key] = process.env[NAMES[key]];
+    setOrDel(NAMES.wa, wa);
+    setOrDel(NAMES.im, im);
+    setOrDel(NAMES.waKey, waKey);
+    setOrDel(NAMES.imKey, imKey);
     return fn();
   } finally {
-    if (saved.wa === undefined) delete process.env.AISENSY_WHATSAPP_NUMBER;
-    else process.env.AISENSY_WHATSAPP_NUMBER = saved.wa;
-    if (saved.im === undefined) delete process.env.IMESSAGE_FROM_NUMBER;
-    else process.env.IMESSAGE_FROM_NUMBER = saved.im;
+    for (const key of Object.keys(NAMES)) setOrDel(NAMES[key], saved[key]);
   }
 }
 
@@ -48,6 +67,19 @@ test('inviteNumbersFor omits a channel the creator has no number on file for', (
 test('inviteNumbersFor omits a channel whose business number is not configured', () => {
   withBusinessNumbers({ wa: undefined, im: '+18005555678' }, () => {
     // Creator has a WhatsApp number, but we have no WhatsApp business number set.
+    assert.deepStrictEqual(
+      offers.inviteNumbersFor({ whatsapp: '+1999', imessage: '+1999', messaging_opted_out: false }),
+      { whatsappNumber: null, imessageNumber: '+18005555678' },
+    );
+  });
+});
+
+test('inviteNumbersFor omits a channel whose provider API key is missing (dead-end guard)', () => {
+  // Production state that motivated this: the WhatsApp business number is set but
+  // AISENSY_API_KEY is not, so a reply on WhatsApp can't be answered. Showing it
+  // would route the creator into a dead end, so it's withheld; iMessage (fully
+  // wired) is still offered.
+  withBusinessNumbers({ wa: '+18005551234', im: '+18005555678', waKey: undefined }, () => {
     assert.deepStrictEqual(
       offers.inviteNumbersFor({ whatsapp: '+1999', imessage: '+1999', messaging_opted_out: false }),
       { whatsappNumber: null, imessageNumber: '+18005555678' },

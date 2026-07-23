@@ -22,6 +22,7 @@ const { formatDate, formatMoney, fillTemplate } = require('./offerPortal/format'
 const email = require('./offerPortal/email');
 const whatsapp = require('./offerPortal/whatsapp');
 const imessage = require('./offerPortal/imessage');
+const { offerPortalConfig } = require('./offerPortal/config');
 const { thankYouMessage, politeCloseMessage, renderMessagingBrief } = require('./offerPortal/replies');
 
 const DEFAULT_EXPIRY_DAYS = Number(process.env.OFFER_EXPIRY_DAYS || 7);
@@ -144,13 +145,24 @@ async function establishedMessagingChannel(creatorId) {
 
 // Which of our own business messaging numbers to show a creator in the invite
 // ("text Hi to this number"): a channel is included only when the creator has a
-// number on file for it, isn't opted out, AND our business number for it is
-// configured. Returns { whatsappNumber, imessageNumber } — either may be null.
+// number on file for it, isn't opted out, AND that channel is fully operational
+// on our side — its business number is set AND its provider API key is present,
+// so a reply on it can actually be answered. Advertising a channel we can't send
+// back on (e.g. a WhatsApp number with no AISENSY_API_KEY) would route the
+// creator into a dead end where they text "Hi" and hear nothing, so those are
+// withheld. Returns { whatsappNumber, imessageNumber } — either may be null.
 function inviteNumbersFor(contact) {
   const optedOut = !!contact.messaging_opted_out;
+  const cfg = offerPortalConfig();
   return {
-    whatsappNumber: !optedOut && contact.whatsapp ? whatsapp.businessNumber() || null : null,
-    imessageNumber: !optedOut && contact.imessage ? imessage.businessNumber() || null : null,
+    whatsappNumber:
+      !optedOut && contact.whatsapp && cfg.whatsapp.conversationReady
+        ? whatsapp.businessNumber() || null
+        : null,
+    imessageNumber:
+      !optedOut && contact.imessage && cfg.imessage.conversationReady
+        ? imessage.businessNumber() || null
+        : null,
   };
 }
 
