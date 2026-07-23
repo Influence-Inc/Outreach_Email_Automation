@@ -252,10 +252,27 @@ details.card .subhead { margin: 6px 0 12px; }
 .reply-notes-list { display: flex; flex-direction: column; gap: 18px; margin-top: 4px; margin-bottom: 12px; }
 .reply-note-item { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--surface-2); }
 .reply-note-item .reply-note-label { font-weight: 600; font-size: 13px; color: var(--ink); }
-.reply-note-item textarea { min-height: 72px; }
 .reply-note-item .reply-note-input-label { font-weight: 600; font-size: 12px; color: var(--ink-2); margin-top: 4px; }
 .reply-note-item > details > summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); user-select: none; padding: 4px 0; }
 .reply-note-item > details > summary:hover { color: var(--ink); }
+.reply-note-row { display: flex; align-items: center; gap: 10px; }
+.reply-note-row input.reply-note-input {
+  flex: 1 1 auto; min-width: 0; padding: 10px 12px; border-radius: 10px;
+  font-size: 13.5px; line-height: 1.4;
+}
+.reply-note-row .btn-primary { flex-shrink: 0; padding: 9px 16px; }
+.reply-note-status { font-size: 12px; color: var(--muted); min-height: 16px; }
+.reply-note-status.ok { color: var(--green); }
+.reply-note-status.err { color: var(--danger); }
+.reply-prompt-applied {
+  margin-top: 8px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--surface);
+  font-size: 12.5px; color: var(--ink); line-height: 1.5;
+}
+.reply-prompt-applied .reply-prompt-applied-head {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  color: var(--green); text-transform: uppercase; margin-bottom: 4px;
+}
 .reply-prompt-view {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px; line-height: 1.55; color: var(--ink-2);
