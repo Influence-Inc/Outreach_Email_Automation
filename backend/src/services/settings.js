@@ -9,6 +9,7 @@ const db = require('../db');
 const GUIDELINES_KEY = 'negotiation_guidelines';
 const AI_REPLIES_KEY = 'ai_replies_enabled';
 const REPLY_NOTES_KEY = 'reply_prompt_notes';
+const REPLY_OVERRIDES_KEY = 'reply_prompt_overrides';
 
 // Reply types the admin can steer with per-reply notes. Keys are injected into
 // Claude prompts as action-specific guidance; labels are the UI headings.
@@ -107,6 +108,42 @@ async function setReplyPromptNotes(notes) {
   return clean;
 }
 
+// Per-reply master-prompt overrides: the LLM-rewritten master prompt for a
+// specific reply type. Stored alongside the raw instruction (notes) so the
+// team has both an audit trail of "what was asked" AND the concrete revised
+// prompt that Claude actually follows at runtime. Empty string per key when
+// no override is set (the base master prompt from replyPromptSnapshots.js is
+// used at runtime instead).
+async function getReplyPromptOverrides() {
+  const empty = Object.fromEntries(REPLY_NOTE_KEYS.map((k) => [k, '']));
+  try {
+    const raw = await getSetting(REPLY_OVERRIDES_KEY);
+    if (!raw) return empty;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!parsed || typeof parsed !== 'object') return empty;
+    const out = { ...empty };
+    for (const k of REPLY_NOTE_KEYS) {
+      const v = parsed[k];
+      if (typeof v === 'string') out[k] = v;
+    }
+    return out;
+  } catch (err) {
+    console.error('[settings] getReplyPromptOverrides failed:', err.message);
+    return empty;
+  }
+}
+
+async function setReplyPromptOverrides(overrides) {
+  const clean = {};
+  const src = overrides && typeof overrides === 'object' ? overrides : {};
+  for (const k of REPLY_NOTE_KEYS) {
+    const v = src[k];
+    clean[k] = typeof v === 'string' ? v : '';
+  }
+  await setSetting(REPLY_OVERRIDES_KEY, JSON.stringify(clean));
+  return clean;
+}
+
 module.exports = {
   getSetting,
   setSetting,
@@ -115,9 +152,12 @@ module.exports = {
   setAiRepliesEnabled,
   getReplyPromptNotes,
   setReplyPromptNotes,
+  getReplyPromptOverrides,
+  setReplyPromptOverrides,
   GUIDELINES_KEY,
   AI_REPLIES_KEY,
   REPLY_NOTES_KEY,
+  REPLY_OVERRIDES_KEY,
   REPLY_NOTE_TYPES,
   REPLY_NOTE_KEYS,
 };
