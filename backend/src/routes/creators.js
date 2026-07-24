@@ -13,6 +13,7 @@ const { findDuplicateCreator, duplicateMatchReason } = require('../services/dupl
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
 const { flagDismissedSql } = require('../db/flagFingerprint');
+const { STALE_REEL_MONTHS, recentReelSql } = require('../db/reelFreshness');
 
 // Assemble the off-Instagram email-enrichment context for a creator: the links
 // captured by the extension (creators.bio_links) plus anything a fresh scrape
@@ -714,12 +715,23 @@ router.patch('/:id', async (req, res, next) => {
     // satisfies it. So we compute offers as soon as we have views — the admin
     // can review / edit / approve them right after scraping, without waiting
     // for the creator to share a rate.
+    // Latest non-pinned reel upload date from the extension scrape. Accepted as
+    // "YYYY-MM-DD" (any parseable date string works) and stored on the stats
+    // JSONB so the reach cell can surface it. Persisted whether or not fresh
+    // reel_views arrived in the same PATCH.
+    let latestReelDateIso = null;
+    if (Object.prototype.hasOwnProperty.call(body, 'latest_reel_date') && body.latest_reel_date) {
+      const d = new Date(body.latest_reel_date);
+      if (!Number.isNaN(d.getTime())) latestReelDateIso = d.toISOString().slice(0, 10);
+    }
+
     if (Array.isArray(body.reel_views)) {
       const views = body.reel_views
         .map((v) => (typeof v === 'number' ? v : parseViewCount(v)))
         .filter((n) => Number.isFinite(n) && n > 0);
       if (views.length) {
         const stats = computeStats(views);
+        if (latestReelDateIso) stats.latest_reel_date = latestReelDateIso;
         params.push(JSON.stringify(stats));
         updates.push(`ig_scraped_data = $${params.length}::jsonb`);
 
@@ -736,6 +748,13 @@ router.patch('/:id', async (req, res, next) => {
         params.push(JSON.stringify(offers));
         updates.push(`suggested_offers = $${params.length}::jsonb`);
       }
+    } else if (latestReelDateIso) {
+      // No new views this PATCH — just splice the date onto the existing stats
+      // JSONB so a re-scrape that only found the date still updates the row.
+      params.push(JSON.stringify({ latest_reel_date: latestReelDateIso }));
+      updates.push(
+        `ig_scraped_data = COALESCE(ig_scraped_data, '{}'::jsonb) || $${params.length}::jsonb`,
+      );
     }
 
     // Off-Instagram links from the extension scrape (external_url + bio-hub
@@ -1030,8 +1049,12 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
          AND ig_dm_sent_at IS NULL
          AND status = ANY($2::text[])`;
     if (scoped) {
+      // Row-level "Send DM" is the manual path — bypass the dormant-reel filter
+      // so an admin can still DM a dormant creator by hand from the row menu.
       params.push(scoped);
       where += ` AND id = ANY($${params.length}::int[])`;
+    } else {
+      where += ` AND ${recentReelSql()}`;
     }
     const targets = await db.many(
       `SELECT * FROM creators WHERE ${where} ORDER BY created_at ASC`,
@@ -1163,12 +1186,15 @@ router.post('/bulk/send-outreach', async (req, res) => {
   try {
     const { campaign_id } = req.body || {};
     if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+    // Dormant creators (newest reel > STALE_REEL_MONTHS old) are excluded from
+    // bulk sends. Row-level "Send outreach" still works — see /:id/send-outreach.
     const pending = await db.many(
       `SELECT id FROM creators
        WHERE campaign_id = $1
          AND status = 'email_found'
          AND email IS NOT NULL
          AND outreach_sent_at IS NULL
+         AND ${recentReelSql()}
        ORDER BY created_at ASC`,
       [campaign_id],
     );
