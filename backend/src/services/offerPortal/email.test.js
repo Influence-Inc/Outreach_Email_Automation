@@ -118,6 +118,32 @@ test('renderOfferWithContactEmail with no numbers reads as a plain offer email',
   assert.doesNotMatch(r.text, /Prefer to chat/);
 });
 
+test('reminder mode softens the subject/opening of both invite and offer emails', () => {
+  const invite = email.renderPortalInviteEmail({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    whatsappNumber: '+18005551234',
+    imessageNumber: null,
+    reminder: true,
+  });
+  assert.match(invite.subject, /Reminder/i);
+  assert.match(invite.text, /following up/i);
+  assert.match(invite.html, /following up/i);
+
+  const offer = email.renderOfferWithContactEmail({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    offerUrl: 'https://portal.example/o/tok123',
+    expiryDate: 'Aug 1',
+    whatsappNumber: null,
+    imessageNumber: null,
+    reminder: true,
+  });
+  assert.match(offer.subject, /Reminder/i);
+  assert.match(offer.text, /still open/i);
+  assert.match(offer.text, /\/o\/tok123/); // the link is still there
+});
+
 test('sendOfferWithContactEmail skips gracefully when RESEND_API_KEY is absent', async () => {
   const saved = process.env.RESEND_API_KEY;
   try {

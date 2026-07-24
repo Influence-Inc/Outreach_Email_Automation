@@ -501,6 +501,99 @@ async function sendUsedCreatorInvite(creatorId) {
   };
 }
 
+// ONE reminder email to a USED creator who got the messaging invite but never
+// engaged (no "Hi", no reply) after USED_INVITE_FOLLOWUP_HOURS. If an admin has
+// already priced an offer, the reminder carries the portal link (view / accept /
+// decline / counter); otherwise it re-nudges them to text "Hi". Idempotent:
+// stamps creators.invite_followup_at on any non-transient outcome (the scheduler
+// only picks rows where it's NULL), so a silent invitee is nudged at most once.
+// A transient send failure is NOT stamped, so it retries next tick. Returns
+// { sent, reason? }.
+async function sendUsedCreatorInviteFollowup(creatorId) {
+  const creator = await db.one(
+    `SELECT c.id, c.email, c.first_name, c.full_name, c.whatsapp, c.imessage,
+            c.messaging_opted_out, c.established_channel, ca.brand_name
+     FROM creators c LEFT JOIN campaigns ca ON ca.id = c.campaign_id
+     WHERE c.id = $1`,
+    [creatorId],
+  );
+  if (!creator) return { sent: false, reason: 'not_found' };
+
+  const stamp = () =>
+    db.query(`UPDATE creators SET invite_followup_at = NOW(), updated_at = NOW() WHERE id = $1`, [creatorId]);
+
+  // Defensive re-checks (the scheduler already filters on these): once a creator
+  // has engaged or opted out there's nothing to nudge — stamp so we don't retry.
+  if (!creator.email) {
+    await stamp();
+    return { sent: false, reason: 'no_email' };
+  }
+  if (creator.messaging_opted_out || creator.established_channel) {
+    await stamp();
+    return { sent: false, reason: creator.established_channel ? 'already_engaged' : 'opted_out' };
+  }
+
+  const { whatsappNumber, imessageNumber } = inviteNumbersFor(creator);
+  const brandName = creator.brand_name || 'INFLUENCE';
+  const firstName = firstNameOf(creator);
+
+  // Include the portal link only if a live (pending) offer already exists.
+  const pending = await db.one(
+    `SELECT token, expires_at FROM offers WHERE creator_id = $1 AND status = 'pending'
+     ORDER BY created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+
+  // Nothing actionable: no live offer link AND no reachable messaging number to
+  // invite them to. Stamp so we stop reconsidering this creator.
+  if (!pending && !whatsappNumber && !imessageNumber) {
+    await stamp();
+    return { sent: false, reason: 'nothing_to_send' };
+  }
+
+  const res = pending
+    ? await email.sendOfferWithContactEmail({
+        to: creator.email,
+        firstName,
+        brandName,
+        offerUrl: offerUrl(pending.token),
+        expiryDate: formatDate(pending.expires_at),
+        whatsappNumber,
+        imessageNumber,
+        reminder: true,
+      })
+    : await email.sendPortalInviteEmail({
+        to: creator.email,
+        firstName,
+        brandName,
+        whatsappNumber,
+        imessageNumber,
+        reminder: true,
+      });
+  if (!res.sent) {
+    // Email provider not configured → nothing will ever send; stamp to stop.
+    // A real transient error → leave unstamped so the next tick retries.
+    if (res.skipped) {
+      await stamp();
+      return { sent: false, reason: 'email_not_configured' };
+    }
+    return { sent: false, reason: res.error || 'send_failed' };
+  }
+
+  await stamp();
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'invite_followup_sent', $2)`,
+    [
+      creatorId,
+      {
+        channels: [whatsappNumber && 'WhatsApp', imessageNumber && 'iMessage'].filter(Boolean),
+        with_offer_link: !!pending,
+      },
+    ],
+  );
+  return { sent: true };
+}
+
 // Follow-up dispatch on accept / decline. Best-effort across all channels.
 //   accept  → email confirmation + WhatsApp/iMessage thank-you
 //   decline → WhatsApp/iMessage polite close
@@ -1186,6 +1279,7 @@ module.exports = {
   establishedMessagingChannel,
   inviteNumbersFor,
   sendUsedCreatorInvite,
+  sendUsedCreatorInviteFollowup,
   sendUsedCreatorBrief,
   sendOfferBriefing,
   deliverOfferOverChannel,

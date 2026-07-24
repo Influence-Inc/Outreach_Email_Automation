@@ -1,5 +1,6 @@
 const db = require('../db');
 const negotiation = require('./negotiation');
+const offers = require('./offers');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const segmentation = require('./segmentation');
@@ -7,6 +8,9 @@ const segmentation = require('./segmentation');
 const intervalMs = () =>
   Number(process.env.SCHEDULER_INTERVAL_MINUTES || 5) * 60 * 1000;
 const negotiationFollowupDays = () => Number(process.env.NEGOTIATION_FOLLOWUP_DAYS || 2);
+// How long after a Used creator's messaging invite we send ONE reminder nudge if
+// they never engage (0 / blank disables it).
+const usedInviteFollowupHours = () => Number(process.env.USED_INVITE_FOLLOWUP_HOURS || 32);
 // How often the new-vs-Used segmentation sweep runs (TTL-gated, default hourly).
 const segmentSweepMs = () => Number(process.env.SEGMENT_SWEEP_MINUTES || 60) * 60 * 1000;
 
@@ -210,8 +214,40 @@ async function maybeSegment() {
   if (r && r.updated) console.log(`[segmentation] scheduled sweep updated ${r.updated} creator(s)`);
 }
 
+// One-time reminder to USED creators who received the messaging invite but never
+// engaged (no "Hi", no reply) after USED_INVITE_FOLLOWUP_HOURS. Only picks rows
+// where invite_followup_at is still NULL; offers.sendUsedCreatorInviteFollowup
+// stamps it (on send OR a config skip) so each silent invitee is nudged at most
+// once. status='outreach_sent' excludes 'stopped' creators; the phone filter
+// scopes to the messaging-invite cohort (email-only Used creators already get
+// the offer email with its link on the normal path).
+async function sendUsedInviteFollowups() {
+  const hours = usedInviteFollowupHours();
+  if (!(hours > 0)) return; // 0 / blank disables the nudge
+  const due = await db.many(
+    `SELECT id FROM creators
+      WHERE creator_segment = 'old'
+        AND status = 'outreach_sent'
+        AND established_channel IS NULL
+        AND messaging_opted_out = FALSE
+        AND invite_followup_at IS NULL
+        AND outreach_sent_at IS NOT NULL
+        AND outreach_sent_at < NOW() - make_interval(hours => $1)
+        AND (whatsapp IS NOT NULL OR imessage IS NOT NULL)`,
+    [hours],
+  );
+  for (const c of due) {
+    try {
+      await offers.sendUsedCreatorInviteFollowup(c.id);
+    } catch (err) {
+      console.error(`used-invite follow-up failed for creator ${c.id}:`, err.message);
+    }
+  }
+}
+
 async function tick() {
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
+  await sendUsedInviteFollowups().catch((err) => console.error('used-invite follow-up tick failed:', err));
   await refreshLearning().catch((err) => console.error('learning tick failed:', err));
   await maybeSegment().catch((err) => console.error('segmentation tick failed:', err));
 }
@@ -245,4 +281,4 @@ function start() {
   }, 5000);
 }
 
-module.exports = { start, pollNegotiations };
+module.exports = { start, pollNegotiations, sendUsedInviteFollowups };

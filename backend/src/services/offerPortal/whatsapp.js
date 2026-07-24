@@ -144,10 +144,12 @@ async function sendWhatsAppText({ to, body }) {
   return result;
 }
 
-// The exact WhatsApp template body — stored in offer_messages so the admin can
-// see what the creator received.
+// The offer-reveal message body (free-form session reply used by
+// deliverOfferOverChannel) — also stored in offer_messages so the admin can see
+// what the creator received. Points them straight at the portal link to view
+// AND accept the offer, so they know exactly what to do next.
 function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate }) {
-  return `Hi ${firstName}, this is INFLUENCE. We have a new collab opportunity for you with ${brandName}. Check out the details here: ${offerUrl} — valid until ${expiryDate}.`;
+  return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
 }
 
 module.exports = {

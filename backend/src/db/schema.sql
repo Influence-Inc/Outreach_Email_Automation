@@ -461,6 +461,11 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS messaging_opted_out_at TIMESTAMPTZ
 -- follow-up in this negotiation from then on, so they're never messaged on both.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS established_channel TEXT;
 CREATE INDEX IF NOT EXISTS idx_creators_segment ON creators(creator_segment);
+-- When a Used creator's messaging INVITE follow-up nudge was sent (or evaluated
+-- and skipped for config reasons). One follow-up per creator: the scheduler only
+-- considers rows where this is NULL, and the helper stamps it once so a silent
+-- invitee is never nudged twice. See offers.sendUsedCreatorInviteFollowup.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS invite_followup_at TIMESTAMPTZ;
 -- Per-campaign Instagram DM template. Renders through the same {firstName}/
 -- {brandName}/{campaignName} placeholders as the email templates. Used by the
 -- Chrome extension's IG DM sender when a creator has no email — the message is
