@@ -165,6 +165,45 @@ test('rate_offer_sent with no fee or CPM degrades to the bare label', () => {
   assert.strictEqual(rateLogEntry('rate_offer_sent', {}).text, 'Offer sent');
 });
 
+test('rate_offer_sent on a per-video offer splits the total views across videos', () => {
+  // A 3-video deal priced at $6 CPM against a 900K total view guarantee reads
+  // as "3 videos x 300K views x $6 CPM", not "900K views x $6 CPM" — the
+  // per-video framing is what the deal was actually priced on.
+  const entry = rateLogEntry('rate_offer_sent', { fee: 5400, cpm: 6, videos: 3, views: 900000 });
+  assert.strictEqual(entry.text, 'Offer sent — $5,400 · 3 videos x 300K views x $6 CPM');
+});
+
+test('rate_offer_sent on a single-video offer keeps the "1 video" singular', () => {
+  const entry = rateLogEntry('rate_offer_sent', { fee: 1500, cpm: 15, videos: 1, views: 100000 });
+  assert.strictEqual(entry.text, 'Offer sent — $1,500 · 1 video x 100K views x $15 CPM');
+});
+
+test('rate_offer_sent on a per-video + bonus offer appends the bonus unlock', () => {
+  const entry = rateLogEntry('rate_offer_sent', {
+    fee: 4000,
+    cpm: 8,
+    videos: 2,
+    views: 400000,
+    bonus_amount: 800,
+    bonus_threshold_views: 600000,
+  });
+  assert.strictEqual(
+    entry.text,
+    'Offer sent — $4,000 · 2 videos x 200K views x $8 CPM · +$800 bonus at 600K views',
+  );
+});
+
+test('rate_offer_sent omits the "at N views" clause when the unlock threshold is missing', () => {
+  const entry = rateLogEntry('rate_offer_sent', {
+    fee: 4000,
+    cpm: 8,
+    videos: 2,
+    views: 400000,
+    bonus_amount: 800,
+  });
+  assert.strictEqual(entry.text, 'Offer sent — $4,000 · 2 videos x 200K views x $8 CPM · +$800 bonus');
+});
+
 // ── "Outreach queued" collapses into "Outreach sent" once the send lands ─────
 
 test('the queued step is dropped once outreach has been sent', () => {

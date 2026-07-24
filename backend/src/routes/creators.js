@@ -206,19 +206,40 @@ function rateLogEntry(type, detail, msg, summary) {
     case 'rate_offer_sent': {
       const fee = d.fee != null ? fmtMoney(d.fee) : null;
       // Views were what the CPM was priced against, so surface both on the same
-      // line: "$4,200 · 700K views x $6 CPM". Prefer a stored views value; else
-      // derive it from fee/CPM (the offer's CPM math is views = fee / cpm × 1000).
+      // line. Prefer a stored views value; else derive it from fee/CPM (the
+      // offer's CPM math is views = fee / cpm × 1000). For a per-video offer,
+      // split the total across the video count so the line reads
+      // "N videos x V per-video views x $C CPM" — a bare "V views" hides that
+      // the deal is priced per video, not against a single-video guarantee.
       let cpm = '';
       if (d.cpm != null) {
-        const views = d.views != null
+        const totalViews = d.views != null
           ? Number(d.views)
           : (d.fee != null ? (Number(d.fee) * 1000) / Number(d.cpm) : null);
-        cpm = views != null && Number.isFinite(views) && views > 0
-          ? ` · ${fmtViews(views)} views x $${d.cpm} CPM`
-          : ` · CPM $${d.cpm}`;
+        const videos = d.videos != null ? Number(d.videos) : null;
+        const validViews = totalViews != null && Number.isFinite(totalViews) && totalViews > 0;
+        if (validViews && videos && Number.isFinite(videos) && videos > 0) {
+          const perVideoViews = totalViews / videos;
+          const noun = videos === 1 ? 'video' : 'videos';
+          cpm = ` · ${videos} ${noun} x ${fmtViews(perVideoViews)} views x $${d.cpm} CPM`;
+        } else if (validViews) {
+          cpm = ` · ${fmtViews(totalViews)} views x $${d.cpm} CPM`;
+        } else {
+          cpm = ` · CPM $${d.cpm}`;
+        }
+      }
+      // Per-video + bonus deals: append the bonus segment so the timeline names
+      // the unlock ("+$500 bonus at 200K views"); base fee stays on the CPM
+      // segment above, aggregate fee is still the headline dollar amount.
+      let bonus = '';
+      if (d.bonus_amount != null) {
+        bonus = ` · +${fmtMoney(d.bonus_amount)} bonus`;
+        if (d.bonus_threshold_views != null) {
+          bonus += ` at ${fmtViews(d.bonus_threshold_views)} views`;
+        }
       }
       const via = d.source === 'delegate' ? ' (from delegate)' : '';
-      return { text: fee ? `Offer sent — ${fee}${cpm}${via}` : `Offer sent${via}`, tone: 'active' };
+      return { text: fee ? `Offer sent — ${fee}${cpm}${bonus}${via}` : `Offer sent${via}`, tone: 'active' };
     }
     case 'rate_counter_requested':
       return { text: 'Asked creator for their counter rate', tone: 'active' };

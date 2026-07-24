@@ -1026,6 +1026,25 @@ async function countSentNegotiation(creatorId) {
   return r ? r.n : 0;
 }
 
+// Timeline detail for a 'rate_offer_sent' event derived from an approved offer.
+// The rate-column renderer uses `videos` + `views` to display per-video offers
+// as "N videos x V per-video views x $C CPM" instead of a single "V views x $C"
+// line that hides how the deal is structured. Bonus deals also carry the unlock
+// so the timeline names the trigger. Callers spread `extras` (source tag, portal
+// token, …) on top.
+function rateOfferSentDetail(offer, extras = {}) {
+  const detail = { fee: offer.flat_fee, cpm: offer.cpm_applied, label: offer.label };
+  if (offer.offer_type === 'video_based' || offer.offer_type === 'video_bonus') {
+    if (offer.num_videos != null) detail.videos = offer.num_videos;
+    if (offer.view_guarantee != null) detail.views = offer.view_guarantee;
+  }
+  if (offer.offer_type === 'video_bonus') {
+    if (offer.bonus_amount != null) detail.bonus_amount = offer.bonus_amount;
+    if (offer.bonus_threshold_views != null) detail.bonus_threshold_views = offer.bonus_threshold_views;
+  }
+  return { ...detail, ...extras };
+}
+
 // How many priced offers have already gone out to this creator (auto-sent or an
 // admin's manual delegate offer — both log 'rate_offer_sent'). >0 means the next
 // offer is a REVISED counter, so its email should present just the new numbers,
@@ -2239,7 +2258,7 @@ async function sendApprovedOfferViaPortal(creatorId, { fromStages = ['AWAITING_A
   try {
     await db.query(
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_offer_sent', $2)`,
-      [creatorId, { fee: offer.flat_fee, cpm: offer.cpm_applied, label: offer.label, via: 'offer_portal', token: result.token }],
+      [creatorId, rateOfferSentDetail(offer, { via: 'offer_portal', token: result.token })],
     );
   } catch (logErr) {
     console.error(`[negotiation] rate_offer_sent (portal) log failed for creator ${creatorId}:`, logErr.message);
@@ -2401,7 +2420,7 @@ async function sendApprovedOffer(
   try {
     await db.query(
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_offer_sent', $2)`,
-      [creatorId, { fee: offer.flat_fee, cpm: offer.cpm_applied, label: offer.label }],
+      [creatorId, rateOfferSentDetail(offer)],
     );
   } catch (logErr) {
     console.error(
