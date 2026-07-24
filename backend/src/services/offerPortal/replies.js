@@ -35,6 +35,44 @@ function classifyReply(body) {
   return 'other';
 }
 
+// The brief stage asks a soft INTEREST question ("interested in hearing more?
+// Reply Yes or No"), not a binding accept — so it reads a wider set of casual
+// affirmatives ("sure", "ok", "tell me more", "how much?") as interested, and
+// their negatives as not. A real creator rarely types the exact word "yes"; the
+// strict classifyReply (used at the binding accept/decline stage) would send too
+// many of them to the clarification nudge. Returns 'accept' (interested) |
+// 'decline' (not) | 'other' (ambiguous → a Yes/No nudge, never a wrong reveal).
+const INTEREST_YES = [
+  'yes', 'yea', 'yeah', 'yep', 'yup', 'ya', 'sure', 'ok', 'okay', 'okk',
+  'interested', 'definitely', 'absolutely', 'sounds good', 'sounds great',
+  'tell me more', 'more details', 'more info', 'how much', 'whats the rate',
+  "what's the rate", 'go ahead', 'lets go', "let's go", 'im in', "i'm in", 'in',
+];
+// Unambiguous multi-word declines — these can't be affirmations, so they win
+// even though some ("not interested") contain a yes-word substring ("interested").
+const INTEREST_NO_STRONG = [
+  'not interested', 'no thanks', 'no thank you', 'not right now', 'not now',
+  'maybe later', 'not a fit', "i'll pass", 'ill pass',
+];
+const INTEREST_NO_WORDS = ['no', 'nope', 'nah', 'pass'];
+function classifyInterest(body) {
+  const text = String(body || '').trim().toLowerCase();
+  if (!text) return 'other';
+
+  // A clear multi-word decline settles it up front.
+  if (INTEREST_NO_STRONG.some((w) => containsPhrase(text, w))) return 'decline';
+
+  const hasYes = INTEREST_YES.some((w) => containsPhrase(text, w));
+  const hasNo = INTEREST_NO_WORDS.some((w) => containsPhrase(text, w));
+
+  // Bare yes/no signals: only act when exactly one is present. A false "decline"
+  // would close a live deal, so anything genuinely mixed falls to 'other' (a
+  // harmless Yes/No nudge) rather than guessing.
+  if (hasNo && !hasYes) return 'decline';
+  if (hasYes && !hasNo) return 'accept';
+  return 'other';
+}
+
 // Canonical bodies — used by both the offer response follow-up and the inbound
 // WhatsApp/iMessage handler. The acceptance message follows the approved
 // reference copy ("We'll be sharing the creative brief shortly.").
@@ -150,6 +188,7 @@ const OPT_IN_CONFIRMATION =
 module.exports = {
   DECLINE_REASONS,
   classifyReply,
+  classifyInterest,
   parseRequestedRate,
   isOptOut,
   isOptIn,

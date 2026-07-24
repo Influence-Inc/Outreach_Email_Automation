@@ -105,8 +105,15 @@ async function sendOfferEmail({ to, firstName, brandName, offerUrl, expiryDate }
 // approval needed, and iMessage never gets an unsolicited first message).
 // whatsappNumber / imessageNumber are our own business numbers (E.164) for
 // each channel that's actually usable for this creator — either may be null.
-function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessageNumber }) {
-  const subject = `A ${brandName} collaboration opportunity for you`;
+// `reminder` softens the subject + opening for the 32h nudge to a creator who
+// went quiet after the first invite (see offers.sendUsedCreatorInviteFollowup).
+function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessageNumber, reminder = false }) {
+  const subject = reminder
+    ? `Reminder: your ${brandName} collaboration opportunity`
+    : `A ${brandName} collaboration opportunity for you`;
+  const opener = reminder
+    ? `Just following up on the collaboration opportunity we shared with ${brandName} — we'd still love to work with you.`
+    : `We have a new collaboration opportunity for you with ${brandName}. Based on your previous work with us, we think this would be a great fit.`;
 
   const lines = [];
   if (whatsappNumber) lines.push(`WhatsApp: ${whatsappNumber}`);
@@ -115,7 +122,7 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
   const text = [
     `Hi ${firstName},`,
     ``,
-    `We have a new collaboration opportunity for you with ${brandName}. Based on your previous work with us, we think this would be a great fit.`,
+    opener,
     ``,
     `If you're interested, send us a quick "Hi" and we'll share the full details and next steps right there:`,
     ...lines.map((l) => `  ${l}`),
@@ -144,7 +151,7 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
   const plainNumbers = lines.map((l) => `<p style="margin:4px 0;color:#525252;">${escapeHtml(l)}</p>`).join('');
 
   const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
-    <p>We have a new collaboration opportunity for you with <strong>${escapeHtml(brandName)}</strong>. Based on your previous work with us, we think this would be a great fit.</p>
+    <p>${escapeHtml(opener)}</p>
     <p>If you're interested, send us a quick "Hi" and we'll share the full details and next steps right there:</p>
     <p style="text-align:center;margin:32px 0;">${buttons}</p>
     ${plainNumbers}
@@ -153,8 +160,14 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
   return { subject, text, html };
 }
 
-async function sendPortalInviteEmail({ to, firstName, brandName, whatsappNumber, imessageNumber }) {
-  const { subject, text, html } = renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessageNumber });
+async function sendPortalInviteEmail({ to, firstName, brandName, whatsappNumber, imessageNumber, reminder = false }) {
+  const { subject, text, html } = renderPortalInviteEmail({
+    firstName,
+    brandName,
+    whatsappNumber,
+    imessageNumber,
+    reminder,
+  });
   return deliver({ to, subject, text, html });
 }
 
@@ -166,8 +179,16 @@ async function sendPortalInviteEmail({ to, firstName, brandName, whatsappNumber,
 // in the outreach itself. whatsappNumber/imessageNumber are our own business
 // numbers for each usable channel and may be null (then no contact block shows,
 // and it reads as a plain offer email).
-function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDate, whatsappNumber, imessageNumber }) {
-  const subject = `New collaboration opportunity — ${brandName}`;
+function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDate, whatsappNumber, imessageNumber, reminder = false }) {
+  const subject = reminder
+    ? `Reminder: your ${brandName} collaboration offer`
+    : `New collaboration opportunity — ${brandName}`;
+  const lead = reminder
+    ? `Just following up — your ${brandName} collaboration offer is still open.`
+    : `We have a new collaboration opportunity for you with ${brandName}. Based on your previous work with us, we think this would be a great fit.`;
+  const leadHtml = reminder
+    ? `Just following up — your <strong>${escapeHtml(brandName)}</strong> collaboration offer is still open.`
+    : `We have a new collaboration opportunity for you with <strong>${escapeHtml(brandName)}</strong>. Based on your previous work with us, we think this would be a great fit.`;
 
   const contactLines = [];
   if (whatsappNumber) contactLines.push(`WhatsApp: ${whatsappNumber}`);
@@ -176,7 +197,7 @@ function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDat
   const text = [
     `Hi ${firstName},`,
     ``,
-    `We have a new collaboration opportunity for you with ${brandName}. Based on your previous work with us, we think this would be a great fit. Here are the full details and terms: ${offerUrl}`,
+    `${lead} Here are the full details and terms: ${offerUrl}`,
     ``,
     `The offer is open until ${expiryDate}. You can accept, decline or counter right there.`,
     ...(contactLines.length
@@ -206,7 +227,7 @@ function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDat
     : '';
 
   const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
-    <p>We have a new collaboration opportunity for you with <strong>${escapeHtml(brandName)}</strong>. Based on your previous work with us, we think this would be a great fit.</p>
+    <p>${leadHtml}</p>
     <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(offerUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">View the offer</a></p>
     <p>The offer is open until <strong>${escapeHtml(expiryDate)}</strong>. You can accept, decline or counter right there.</p>
     ${contactBlock}
@@ -215,7 +236,7 @@ function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDat
   return { subject, text, html };
 }
 
-async function sendOfferWithContactEmail({ to, firstName, brandName, offerUrl, expiryDate, whatsappNumber, imessageNumber }) {
+async function sendOfferWithContactEmail({ to, firstName, brandName, offerUrl, expiryDate, whatsappNumber, imessageNumber, reminder = false }) {
   const { subject, text, html } = renderOfferWithContactEmail({
     firstName,
     brandName,
@@ -223,6 +244,7 @@ async function sendOfferWithContactEmail({ to, firstName, brandName, offerUrl, e
     expiryDate,
     whatsappNumber,
     imessageNumber,
+    reminder,
   });
   return deliver({ to, subject, text, html });
 }

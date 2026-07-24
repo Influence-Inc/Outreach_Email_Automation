@@ -34,6 +34,33 @@ test('classifyReply does not trip on substrings (instagram / notice)', () => {
   assert.strictEqual(replies.classifyReply('I got your notice'), 'other'); // not "no"
 });
 
+// --- classifyInterest (lenient brief-stage yes/no) -------------------------
+
+test('classifyInterest reads casual affirmatives as interested', () => {
+  for (const w of ['yes', 'Sure!', 'ok', 'Okay', 'interested', 'tell me more', 'how much?', "I'm in", 'yeah sounds good']) {
+    assert.strictEqual(replies.classifyInterest(w), 'accept', `"${w}" should be interested`);
+  }
+});
+
+test('classifyInterest reads negatives as not interested', () => {
+  for (const w of ['no', 'Nope', 'nah', 'pass', 'not interested', 'No thanks', 'not a fit', 'maybe later']) {
+    assert.strictEqual(replies.classifyInterest(w), 'decline', `"${w}" should be not interested`);
+  }
+});
+
+test('classifyInterest: "not interested" is a decline despite containing "interested"', () => {
+  // The yes-word "interested" is a substring of "not interested"; the strong
+  // multi-word decline must still win.
+  assert.strictEqual(replies.classifyInterest('not interested'), 'decline');
+});
+
+test('classifyInterest falls to other (a safe Yes/No nudge) when ambiguous', () => {
+  // A false decline would close a live deal, so mixed/unclear stays 'other'.
+  assert.strictEqual(replies.classifyInterest('hmm'), 'other');
+  assert.strictEqual(replies.classifyInterest('what is this'), 'other');
+  assert.strictEqual(replies.classifyInterest(''), 'other');
+});
+
 // --- parseRequestedRate ----------------------------------------------------
 
 test('parseRequestedRate reads a currency-marked amount', () => {

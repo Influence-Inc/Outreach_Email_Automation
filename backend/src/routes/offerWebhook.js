@@ -30,6 +30,7 @@ const offers = require('../services/offers');
 const negotiation = require('../services/negotiation');
 const {
   classifyReply,
+  classifyInterest,
   parseRequestedRate,
   isOptOut,
   isOptIn,
@@ -443,7 +444,9 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   }
 
   if (pendingOffer && pendingOffer.messaging_stage === 'briefed') {
-    const interest = classifyReply(parsed.body);
+    // Soft interest gate — lenient toward casual affirmatives ("sure", "ok",
+    // "tell me more"), not the strict accept/decline classifier.
+    const interest = classifyInterest(parsed.body);
     let outcome;
     let needsReview = false;
     if (interest === 'accept') {

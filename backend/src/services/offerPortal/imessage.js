@@ -81,10 +81,11 @@ async function sendIMessageText({ to, body }) {
   }
 }
 
-// Offer outreach over iMessage — same copy as the WhatsApp template body so the
-// creator gets a consistent message whichever channel reaches them.
+// Offer reveal over iMessage — same copy as the WhatsApp reveal so the creator
+// gets a consistent message whichever channel reaches them. Points them straight
+// at the portal link to view AND accept the offer.
 function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate }) {
-  return `Hi ${firstName}, this is INFLUENCE. We have a new collab opportunity for you with ${brandName}. Check out the details here: ${offerUrl} — valid until ${expiryDate}.`;
+  return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
 }
 
 async function sendOfferOutreachIMessage(params) {
