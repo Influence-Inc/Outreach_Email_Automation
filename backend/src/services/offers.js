@@ -146,42 +146,34 @@ async function establishedMessagingChannel(creatorId) {
   return (row && row.established_channel) || null;
 }
 
-// Whether this creator — the PERSON, keyed on phone — has already messaged us on
-// a channel in ANY campaign ("subscribed"), and which channel to reach them on.
-// established_channel is a per-campaign-row column, so a used creator pulled into
-// a NEW campaign is a fresh row with it unset; we therefore correlate across
-// every creators row that shares the same phone (matched on the last 10 digits,
-// the same way the inbound webhook matches senders). Returns the channel, or null
-// when they've never messaged us — or have opted out on ANY of their rows, which
-// suppresses the proactive push for compliance. `contact` needs whatsapp,
-// imessage, established_channel, messaging_opted_out.
+// Which channel to reach this creator on WITHOUT a fresh "Hi" — i.e. when we can
+// skip the email invite and message them directly. This is scoped to the CURRENT
+// campaign: only THIS campaign row's established_channel counts, so a used creator
+// pulled into a NEW campaign (a fresh row with established_channel unset) is
+// invited by email again rather than silently messaged, EVEN IF they've chatted
+// with us in another campaign. Opt-out, by contrast, stays cross-campaign for
+// compliance: if the PERSON — matched by phone across every row, the same way the
+// inbound webhook matches senders — opted out ANYWHERE, we never proactively
+// message them. Returns the channel, or null. `contact` needs whatsapp, imessage,
+// established_channel, messaging_opted_out.
 async function subscribedChannelFor(contact) {
   const phone = contact.whatsapp || contact.imessage || null;
   const tail = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
-  if (!tail) {
-    // No phone to correlate on — fall back to this row's own state.
-    return contact.established_channel && !contact.messaging_opted_out
-      ? contact.established_channel
-      : null;
+
+  // Compliance opt-out spans all of the person's rows (cross-campaign).
+  if (tail) {
+    const norm = `right(regexp_replace(coalesce(whatsapp, imessage, ''), '[^0-9]', '', 'g'), 10)`;
+    const optOut = await db.one(
+      `SELECT bool_or(messaging_opted_out) AS opted_out FROM creators WHERE ${norm} = $1`,
+      [tail],
+    );
+    if (optOut && optOut.opted_out) return null;
+  } else if (contact.messaging_opted_out) {
+    return null;
   }
 
-  const norm = `right(regexp_replace(coalesce(whatsapp, imessage, ''), '[^0-9]', '', 'g'), 10)`;
-
-  // Opted out on ANY of the person's rows → never proactively message them.
-  const optOut = await db.one(
-    `SELECT bool_or(messaging_opted_out) AS opted_out FROM creators WHERE ${norm} = $1`,
-    [tail],
-  );
-  if (optOut && optOut.opted_out) return null;
-
-  // Most recently established channel across the person's rows.
-  const row = await db.one(
-    `SELECT established_channel FROM creators
-      WHERE established_channel IS NOT NULL AND ${norm} = $1
-      ORDER BY updated_at DESC LIMIT 1`,
-    [tail],
-  );
-  return (row && row.established_channel) || null;
+  // Subscription is SAME-CAMPAIGN: only this campaign row's established_channel.
+  return contact.established_channel || null;
 }
 
 // Which of our own business messaging numbers to show a creator in the invite
@@ -362,7 +354,7 @@ async function sendOfferOutreach(offerId) {
   );
   if (!offer) return;
 
-  // Have they messaged us on a channel before (in this OR an earlier campaign)?
+  // Have they messaged us on a channel in THIS campaign already?
   const subscribedChannel = await subscribedChannelFor(offer);
   if (subscribedChannel) {
     try {
@@ -449,8 +441,10 @@ async function sendUsedCreatorInvite(creatorId) {
   );
   if (!creator) return { sent: false, reason: 'not_found' };
 
-  // Already subscribed on a channel (this OR an earlier campaign) → outreach goes
-  // straight there, no "Hi" needed.
+  // Already messaging us IN THIS campaign → outreach goes straight there, no "Hi"
+  // needed. A used creator pulled into a NEW campaign gets the email invite again
+  // (subscribedChannelFor is same-campaign for the channel, cross-campaign only
+  // for opt-out) so they're re-notified to start iMessage/WhatsApp here.
   const subscribedChannel = await subscribedChannelFor(creator);
   if (subscribedChannel) {
     const channel = subscribedChannel;
@@ -1277,6 +1271,7 @@ module.exports = {
   generateOfferToken,
   offerUrl,
   establishedMessagingChannel,
+  subscribedChannelFor,
   inviteNumbersFor,
   sendUsedCreatorInvite,
   sendUsedCreatorInviteFollowup,
