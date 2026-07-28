@@ -12,7 +12,7 @@ const creatorDb = require('../services/creatorDb');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
-const { flagDismissedSql } = require('../db/flagFingerprint');
+const { flagDismissedSql, flagFingerprintSql } = require('../db/flagFingerprint');
 const { STALE_REEL_MONTHS, recentReelSql } = require('../db/reelFreshness');
 
 // Assemble the off-Instagram email-enrichment context for a creator: the links
@@ -1412,10 +1412,18 @@ router.post('/:id/stop-outreach', async (req, res, next) => {
       }
     }
 
+    // Also snooze whatever flag this creator is currently raising (needs_human
+    // hand-off, awaiting-approval offer, accepted-deal approval, …). Stopping
+    // outreach is a definitive "moving on" action, so a still-flagged row in
+    // the "needs you" list after clicking Stop would be noise. Stamping the
+    // current flag fingerprint (same mechanism as POST /:id/dismiss-flag)
+    // leaves the underlying negotiation state untouched, so nothing is closed
+    // or sent — the row just drops off the flagged section.
     const updated = await db.one(
       `UPDATE creators
          SET status = 'stopped',
              notes = 'outreach stopped',
+             flag_dismissed_fp = ${flagFingerprintSql()},
              updated_at = NOW()
        WHERE id = $1
        RETURNING *`,
