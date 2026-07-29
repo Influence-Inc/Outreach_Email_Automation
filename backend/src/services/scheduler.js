@@ -1,6 +1,7 @@
 const db = require('../db');
 const negotiation = require('./negotiation');
 const offers = require('./offers');
+const graduation = require('./graduation');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const segmentation = require('./segmentation');
@@ -13,10 +14,15 @@ const negotiationFollowupDays = () => Number(process.env.NEGOTIATION_FOLLOWUP_DA
 const usedInviteFollowupHours = () => Number(process.env.USED_INVITE_FOLLOWUP_HOURS || 32);
 // How often the new-vs-Used segmentation sweep runs (TTL-gated, default hourly).
 const segmentSweepMs = () => Number(process.env.SEGMENT_SWEEP_MINUTES || 60) * 60 * 1000;
+// How often we sweep the campaign dashboard for creators who've completed all
+// their deliverables to send the one-time graduation email (TTL-gated, default
+// hourly; 0 disables).
+const graduationSweepMs = () => Number(process.env.GRADUATION_SWEEP_MINUTES || 60) * 60 * 1000;
 
 let timer = null;
 let negRunning = false;
 let lastSegmentSweep = 0;
+let lastGraduationSweep = 0;
 
 // Outreach and follow-up sending is now handled by Instantly.ai.
 // Reply detection arrives via the /webhook/instantly endpoint (reply_received event).
@@ -214,6 +220,19 @@ async function maybeSegment() {
   if (r && r.updated) console.log(`[segmentation] scheduled sweep updated ${r.updated} creator(s)`);
 }
 
+// Periodically sweep the campaign dashboard for creators who've completed all
+// their deliverables and send each their one-time graduation email. TTL-gated
+// (GRADUATION_SWEEP_MINUTES); runGraduationSweep itself no-ops fast when its
+// prerequisites (RESEND / campaigns API / a business number) aren't configured.
+async function maybeGraduate() {
+  const everyMs = graduationSweepMs();
+  if (!(everyMs > 0)) return; // 0 / blank disables the sweep
+  if (Date.now() - lastGraduationSweep < everyMs) return;
+  lastGraduationSweep = Date.now();
+  const r = await graduation.runGraduationSweep();
+  if (r && r.sent) console.log(`[graduation] scheduled sweep sent ${r.sent} graduation email(s)`);
+}
+
 // One-time reminder to USED creators who received the messaging invite but never
 // engaged (no "Hi", no reply) after USED_INVITE_FOLLOWUP_HOURS. Only picks rows
 // where invite_followup_at is still NULL; offers.sendUsedCreatorInviteFollowup
@@ -248,6 +267,7 @@ async function sendUsedInviteFollowups() {
 async function tick() {
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
   await sendUsedInviteFollowups().catch((err) => console.error('used-invite follow-up tick failed:', err));
+  await maybeGraduate().catch((err) => console.error('graduation tick failed:', err));
   await refreshLearning().catch((err) => console.error('learning tick failed:', err));
   await maybeSegment().catch((err) => console.error('segmentation tick failed:', err));
 }
