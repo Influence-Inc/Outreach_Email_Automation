@@ -8,6 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const email = require('./email');
+const { renderOfferEmail, renderOfferConfirmationEmail, renderPortalInviteEmail } = email;
 
 // Set PUBLIC_BASE_URL for the block so the iMessage button resolves to the https
 // redirect page (the production path), and restore it after.
@@ -162,6 +163,56 @@ test('sendOfferWithContactEmail skips gracefully when RESEND_API_KEY is absent',
     if (saved === undefined) delete process.env.RESEND_API_KEY;
     else process.env.RESEND_API_KEY = saved;
   }
+});
+
+// --- Part 3: friendly-but-professional copy pass -------------------------
+
+test('renderOfferEmail is warm, names the creator + brand, and keeps the offer link/expiry', () => {
+  const r = renderOfferEmail({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    offerUrl: 'https://portal.example/o/tok123',
+    expiryDate: 'Aug 1',
+  });
+  assert.match(r.subject, /Acme/);
+  assert.match(r.text, /^Hi Sam,/);
+  assert.match(r.text, /Acme/);
+  assert.match(r.text, /https:\/\/portal\.example\/o\/tok123/);
+  assert.match(r.text, /Aug 1/);
+  assert.match(r.html, /\/o\/tok123/);
+  // Warmer than the old transactional "Please accept or decline through the
+  // above link." closer.
+  assert.doesNotMatch(r.text, /Please accept or decline/);
+});
+
+test('renderOfferConfirmationEmail is celebratory and mentions the follow-up window', () => {
+  const r = renderOfferConfirmationEmail({ firstName: 'Sam', brandName: 'Acme' });
+  assert.match(r.subject, /Sam/);
+  assert.match(r.text, /Acme/);
+  assert.match(r.text, /1–2 business days/);
+  assert.match(r.html, /Acme/);
+});
+
+test('renderPortalInviteEmail body never names a specific channel not offered (WhatsApp-only stays silent on iMessage)', () => {
+  const r = renderPortalInviteEmail({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    whatsappNumber: '+18005551234',
+    imessageNumber: null,
+  });
+  assert.doesNotMatch(r.text, /iMessage/);
+  assert.doesNotMatch(r.html, /iMessage/);
+});
+
+test('renderPortalInviteEmail reminder subject still says "Reminder" (friendlier body, same signal)', () => {
+  const r = renderPortalInviteEmail({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    whatsappNumber: '+18005551234',
+    imessageNumber: null,
+    reminder: true,
+  });
+  assert.match(r.subject, /Reminder/i);
 });
 
 test('sendPortalInviteEmail skips gracefully when RESEND_API_KEY is absent', async () => {
