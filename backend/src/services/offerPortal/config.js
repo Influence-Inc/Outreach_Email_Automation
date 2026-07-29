@@ -65,6 +65,26 @@ function offerPortalConfig() {
     conversationReady: boolEnv('IMESSAGE_API_KEY') && !!imNumber,
   };
 
+  // Base URL used to build offer-portal links (/o/:token — see offers.offerUrl).
+  // CRITICAL: this must be THIS outreach app's OWN public URL, because /o/:token
+  // is served here (server.js). The most common misconfig is pointing it at the
+  // campaigns/stats domain (CAMPAIGNS_API_BASE, e.g. campaigns.influence.technology)
+  // — that domain serves the influence-stats app, which has NO offer portal, so
+  // every link 404s with "This campaign doesn't exist".
+  const normalizeUrl = (u) => u.replace(/\/+$/, '').toLowerCase();
+  const offerBase = strEnv('PUBLIC_BASE_URL') || strEnv('OFFER_PORTAL_BASE_URL');
+  const campaignsBase = strEnv('CAMPAIGNS_API_BASE') || 'https://campaigns.influence.technology';
+  const offerLink = {
+    // The env var whose value is used (PUBLIC_BASE_URL wins), for the message.
+    source: strEnv('PUBLIC_BASE_URL') ? 'PUBLIC_BASE_URL' : strEnv('OFFER_PORTAL_BASE_URL') ? 'OFFER_PORTAL_BASE_URL' : null,
+    baseUrl: offerBase || null,
+    configured: !!offerBase,
+    // True when the offer-link base is the campaigns/stats service instead of
+    // this outreach app — the exact cause of a "This campaign doesn't exist" 404.
+    pointsAtCampaignsService: !!offerBase && normalizeUrl(offerBase) === normalizeUrl(campaignsBase),
+    sampleLink: `${offerBase.replace(/\/+$/, '')}/o/<token>`,
+  };
+
   // The "text us" invite can only be sent when the invite EMAIL can go out
   // (Resend) AND there is at least one business number to put in it.
   const inviteReady = email.configured && (whatsapp.inviteReady || imessage.inviteReady);
@@ -73,7 +93,7 @@ function offerPortalConfig() {
   const conversationReady =
     email.configured && (whatsapp.conversationReady || imessage.conversationReady);
 
-  return { email, whatsapp, imessage, inviteReady, conversationReady };
+  return { email, whatsapp, imessage, offerLink, inviteReady, conversationReady };
 }
 
 // Human-readable list of what's missing for the Used-creator messaging invite to
@@ -96,6 +116,17 @@ function offerPortalConfigIssues() {
   if (c.imessage.inviteReady && !c.imessage.hasApiKey) {
     issues.push('IMESSAGE_API_KEY is not set — the iMessage number is shown but replies can\'t be sent');
   }
+  // Offer-link base URL — a wrong value here means the email/DM sends fine but the
+  // /o/:token link the creator taps is dead.
+  if (!c.offerLink.configured) {
+    issues.push(
+      'PUBLIC_BASE_URL (or OFFER_PORTAL_BASE_URL) is not set — offer-portal links (/o/:token) are built relative and won\'t open from an email',
+    );
+  } else if (c.offerLink.pointsAtCampaignsService) {
+    issues.push(
+      `${c.offerLink.source} is set to the campaigns/stats domain (${c.offerLink.baseUrl}), but /o/:token is served by THIS outreach app — every offer link 404s with "This campaign doesn't exist". Set it to the outreach app's OWN public URL.`,
+    );
+  }
   return issues;
 }
 
@@ -107,6 +138,7 @@ function offerPortalConfigSummary() {
     `email/Resend=${yn(c.email.configured)}; ` +
     `WhatsApp(number=${yn(c.whatsapp.inviteReady)},api=${yn(c.whatsapp.hasApiKey)}); ` +
     `iMessage(number=${yn(c.imessage.inviteReady)},api=${yn(c.imessage.hasApiKey)}); ` +
+    `offerLink=${c.offerLink.pointsAtCampaignsService ? 'WRONG(→campaigns/stats)' : c.offerLink.configured ? 'on' : 'OFF'}; ` +
     `used-creator invite ${c.inviteReady ? 'READY' : 'DISABLED (falls back to Instantly email)'}`
   );
 }
