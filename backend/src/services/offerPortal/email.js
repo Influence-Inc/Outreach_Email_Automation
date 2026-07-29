@@ -249,6 +249,66 @@ async function sendOfferWithContactEmail({ to, firstName, brandName, offerUrl, e
   return deliver({ to, subject, text, html });
 }
 
+// Graduation email — sent ONCE when a creator first completes all the
+// deliverables of a campaign (see graduation.js). Congratulates them and invites
+// them to connect on WhatsApp/iMessage so future collabs run over messaging. The
+// congrats paragraph (`congratsLine`) is personalized by Claude upstream, with a
+// static fallback; this template wraps it with the greeting + the "send Hi"
+// connect buttons to our business numbers (either may be null).
+function renderGraduationEmail({ firstName, brandName, congratsLine, whatsappNumber, imessageNumber }) {
+  const subject = `Congratulations on your ${brandName} collaboration, ${firstName}! 🎉`;
+
+  const lines = [];
+  if (whatsappNumber) lines.push(`WhatsApp: ${whatsappNumber}`);
+  if (imessageNumber) lines.push(`iMessage: ${imessageNumber}`);
+
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    congratsLine,
+    ``,
+    `If you'd like to hear about future collaborations, just send us a quick "Hi" and we'll share the details right there:`,
+    ...lines.map((l) => `  ${l}`),
+    ``,
+    `Thank you,`,
+    `Team INFLUENCE`,
+  ].join('\n');
+
+  const waDigits = whatsappNumber ? whatsappNumber.replace(/[^\d]/g, '') : null;
+  const imE164 = imessageNumber ? `+${imessageNumber.replace(/[^\d]/g, '')}` : null;
+  const buttons = [
+    waDigits
+      ? `<a href="https://wa.me/${waDigits}?text=Hi" style="background:#25D366;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on WhatsApp</a>`
+      : '',
+    imessageNumber
+      ? `<a href="${escapeHtml(imessageButtonHref(imE164))}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;margin:4px;">Text us on iMessage</a>`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('');
+  const plainNumbers = lines.map((l) => `<p style="margin:4px 0;color:#525252;">${escapeHtml(l)}</p>`).join('');
+
+  const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
+    <p>${escapeHtml(congratsLine)}</p>
+    <p>If you'd like to hear about future collaborations, just send us a quick "Hi" and we'll share the details right there:</p>
+    <p style="text-align:center;margin:32px 0;">${buttons}</p>
+    ${plainNumbers}
+    <p style="margin-top:24px;">Thank you,<br/>Team INFLUENCE</p>`);
+
+  return { subject, text, html };
+}
+
+async function sendGraduationEmail({ to, firstName, brandName, congratsLine, whatsappNumber, imessageNumber }) {
+  const { subject, text, html } = renderGraduationEmail({
+    firstName,
+    brandName,
+    congratsLine,
+    whatsappNumber,
+    imessageNumber,
+  });
+  return deliver({ to, subject, text, html });
+}
+
 // Thank-you confirmation email on acceptance.
 async function sendOfferConfirmationEmail({ to, firstName, brandName }) {
   const subject = `Offer confirmed — ${brandName}`;
@@ -271,4 +331,6 @@ module.exports = {
   sendPortalInviteEmail,
   renderOfferWithContactEmail,
   sendOfferWithContactEmail,
+  renderGraduationEmail,
+  sendGraduationEmail,
 };

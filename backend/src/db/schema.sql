@@ -466,6 +466,12 @@ CREATE INDEX IF NOT EXISTS idx_creators_segment ON creators(creator_segment);
 -- considers rows where this is NULL, and the helper stamps it once so a silent
 -- invitee is never nudged twice. See offers.sendUsedCreatorInviteFollowup.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS invite_followup_at TIMESTAMPTZ;
+-- When we sent the creator their one-time "graduation" email — the congrats +
+-- "let's stay in touch on WhatsApp/iMessage" note that fires once a creator first
+-- completes all the deliverables of a campaign (deliverables.allComplete on the
+-- campaign dashboard). One per PERSON: the sweep dedupes on email so someone who
+-- finishes a second campaign isn't congratulated again. See graduation.js.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS graduation_email_at TIMESTAMPTZ;
 -- Per-campaign Instagram DM template. Renders through the same {firstName}/
 -- {brandName}/{campaignName} placeholders as the email templates. Used by the
 -- Chrome extension's IG DM sender when a creator has no email — the message is
