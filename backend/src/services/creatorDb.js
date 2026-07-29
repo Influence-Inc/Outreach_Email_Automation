@@ -220,6 +220,40 @@ async function categorizeCreators(keys) {
   }
 }
 
+// Fetch the master creator record by ID (GET /creator/:id). Returns the full
+// creator row including cpm / acceptedRate / quotedRate — used to price a Used-
+// creator's new-campaign offer at their prior CPM. Returns null on any miss so
+// the caller can fall back gracefully.
+async function getCreatorById(id) {
+  if (!id || !isConfigured()) return null;
+  try {
+    return await request('GET', `/creator/${encodeURIComponent(id)}`);
+  } catch (err) {
+    console.warn(`[creatorDb] getCreatorById(${id}) failed:`, err.message);
+    return null;
+  }
+}
+
+// Prior negotiated CPM for a creator (from Creator-DB), or null. Chains
+// categorize → GET /creator/:id since categorize's response is truncated: the
+// batch call finds a matching creator (email OR IG handle, the same identity
+// keys Creator-DB uses), then we fetch the full record for its cpm. Silent on
+// any miss — Creator-DB is optional, and the caller falls back to other CPM
+// sources when this returns null.
+async function lookupCpmFromCreatorDb({ email, instagramUsername } = {}) {
+  if (!isConfigured()) return null;
+  const em = String(email || '').trim();
+  const un = String(instagramUsername || '').replace(/^@/, '').trim();
+  if (!em && !un) return null;
+  const results = await categorizeCreators([{ email: em || null, instagramUsername: un || null }]);
+  const hit = Array.isArray(results) && results[0];
+  const id = hit && hit.creator && hit.creator.id;
+  if (!id) return null;
+  const record = await getCreatorById(id);
+  const cpm = record && record.cpm != null ? Number(record.cpm) : null;
+  return Number.isFinite(cpm) && cpm > 0 ? cpm : null;
+}
+
 // Search Creator-DB for existing creators to import into a campaign. Passes
 // through the free-text `q` and the Used/Unused `category` filter; returns the
 // raw Creator-DB paginated response {data, meta}. Called by the Deal Studio's
@@ -241,5 +275,7 @@ module.exports = {
   isConfigured,
   lookupParticipation,
   categorizeCreators,
+  getCreatorById,
+  lookupCpmFromCreatorDb,
   searchCreators,
 };
