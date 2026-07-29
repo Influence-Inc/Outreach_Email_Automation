@@ -27,6 +27,7 @@ const whatsapp = require('./offerPortal/whatsapp');
 const imessage = require('./offerPortal/imessage');
 const { offerPortalConfig } = require('./offerPortal/config');
 const { thankYouMessage, politeCloseMessage, renderMessagingBrief } = require('./offerPortal/replies');
+const creatorDb = require('./creatorDb');
 
 const DEFAULT_EXPIRY_DAYS = Number(process.env.OFFER_EXPIRY_DAYS || 7);
 
@@ -493,6 +494,151 @@ async function sendUsedCreatorInvite(creatorId) {
     sent: true,
     channels: [whatsappNumber && 'WhatsApp', imessageNumber && 'iMessage'].filter(Boolean),
   };
+}
+
+// The CPM to auto-price a USED creator's new-campaign offer at. Chains, in the
+// order the user asked for:
+//   1. Creator-DB `cpm` — the canonical negotiated CPM across every campaign
+//      this creator has done with us (creator-database's Creator model)
+//   2. Bot-API `bookedCpm` from THIS creator's row on some campaign we've synced
+//      — a per-campaign snapshot (campaigns.data on the local campaigns row)
+//   3. Campaign `max_cpm` — the campaign's ceiling, our long-standing default
+//      when no per-creator CPM is on file
+// Returns { cpm, source }. cpm is always a positive finite number; source names
+// where it came from for logging + tests.
+async function resolvePriorCpm(creator, campaign) {
+  const record = await creatorDb.lookupCpmFromCreatorDb({
+    email: creator.email,
+    instagramUsername: creator.instagram_username,
+  });
+  if (record != null) return { cpm: record, source: 'creator_db' };
+
+  // campaigns.data may hold the raw bot-API payload with per-creator commercials
+  // (creators[].commercials.bookedCpm). Match by lowercased email OR IG handle.
+  const rows = (campaign && campaign.data && Array.isArray(campaign.data.creators)) ? campaign.data.creators : [];
+  const em = String(creator.email || '').toLowerCase();
+  const un = String(creator.instagram_username || '').toLowerCase().replace(/^@/, '');
+  for (const r of rows) {
+    const rem = String(r.email || '').toLowerCase();
+    const run = String(r.username || '').toLowerCase().replace(/^@/, '');
+    if ((em && rem === em) || (un && run === un)) {
+      const c = r.commercials && r.commercials.bookedCpm;
+      const n = c != null ? Number(c) : null;
+      if (Number.isFinite(n) && n > 0) return { cpm: n, source: 'bot_api_bookedCpm' };
+      break;
+    }
+  }
+
+  const defaultCpm = Number(process.env.TARGET_CPM || 15);
+  const cap = campaign && campaign.max_cpm != null ? Number(campaign.max_cpm) : defaultCpm;
+  return { cpm: Number.isFinite(cap) && cap > 0 ? cap : defaultCpm, source: 'campaign_max_cpm' };
+}
+
+// Build a single auto-approved offer at the given CPM. Deterministic 1-video
+// flat deal (creators can accept, decline, or counter on the portal). Uses p25
+// as the conservative expected-views estimate — same percentile the pricing
+// engine's per-video video-deal path uses (see pricing.computeOffers). Returns
+// null when there are no view stats to price against.
+function computeAutoOffer(stats, cpm) {
+  const p25 = stats && Number(stats.p25);
+  if (!Number.isFinite(p25) || p25 <= 0 || !Number.isFinite(cpm) || cpm <= 0) return null;
+  const flatFee = Math.round((p25 * cpm) / 1000);
+  return {
+    offer_id: 'auto_video_1',
+    offer_type: 'video_based',
+    label: '1 Video Auto-Priced',
+    num_videos: 1,
+    flat_fee: flatFee,
+    flat_per_video: flatFee,
+    view_guarantee: 0,
+    cpm_applied: +cpm.toFixed(2),
+    satisfies_creator_rate: null,
+    notes: '',
+  };
+}
+
+// USED-creator outreach for a NEW campaign (called from outreach.sendOutreach
+// when the "Send email" button fires). This is the auto-priced entry point:
+// clicking IS the approval — no separate offer_approved step for Used creators.
+//   • Load the creator + their campaign, gather the prior CPM.
+//   • Auto-price a 1-video flat offer against their view stats and mint an offer
+//     row (createOffer).
+//   • Already messaging us in THIS campaign → deliver the offer DIRECTLY on that
+//     channel (deliverOfferOverChannel, no "text Hi" step).
+//   • Otherwise → send the friendly new-campaign offer email
+//     (sendNewCampaignOfferEmail): offer link only, no chat buttons. The
+//     graduation email is the one-time WhatsApp/iMessage connect invite; this
+//     email doesn't repeat it.
+// No view stats → this returns { sent: false, reason: 'no_stats' } and the
+// caller (outreach.sendOutreach) falls back to the pre-Part-2 messaging invite
+// so the creator still gets contacted while an admin gets stats + a proper
+// priced offer in place.
+async function sendUsedCreatorOffer(creatorId) {
+  const creator = await db.one(
+    `SELECT c.*, ca.brand_name AS campaign_brand_name, ca.max_cpm, ca.data AS campaign_data
+     FROM creators c LEFT JOIN campaigns ca ON ca.id = c.campaign_id
+     WHERE c.id = $1`,
+    [creatorId],
+  );
+  if (!creator) return { sent: false, reason: 'not_found' };
+  if (creator.messaging_opted_out) return { sent: false, reason: 'opted_out' };
+  if (!creator.ig_scraped_data) return { sent: false, reason: 'no_stats' };
+
+  const campaignForCpm = { max_cpm: creator.max_cpm, data: creator.campaign_data };
+  const { cpm, source } = await resolvePriorCpm(creator, campaignForCpm);
+  const approved = computeAutoOffer(creator.ig_scraped_data, cpm);
+  if (!approved) return { sent: false, reason: 'no_stats' };
+
+  const brandName = creator.campaign_brand_name || 'INFLUENCE';
+  const terms = offerTermsFromApproved(
+    { ...creator, brand_name: brandName, campaign_brand_name: brandName },
+    approved,
+  );
+  const offer = await createOffer({ creatorId, ...terms });
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'offer_auto_priced', $2)`,
+    [creatorId, { offer_id: offer.id, token: offer.token, cpm, cpm_source: source, flat_fee: approved.flat_fee }],
+  );
+
+  const firstName = firstNameOf(creator);
+  const url = offerUrl(offer.token);
+  const expiry = formatDate(offer.expires_at);
+
+  // Already messaging us in THIS campaign → DM the offer directly, no email.
+  const subscribedChannel = await subscribedChannelFor(creator);
+  if (subscribedChannel) {
+    try {
+      await deliverOfferOverChannel(offer.id, subscribedChannel);
+    } catch (err) {
+      console.error('[offers] used-creator direct offer delivery failed', err.message);
+    }
+    return { sent: true, via: 'messaging', channels: [subscribedChannel === 'imessage' ? 'iMessage' : 'WhatsApp'], offerId: offer.id, token: offer.token, url };
+  }
+
+  // Not messaging us yet → friendly offer-link email (no chat CTAs — Used
+  // creators were invited onto WhatsApp/iMessage by the graduation email).
+  if (!creator.email) return { sent: false, reason: 'no_email', offerId: offer.id, token: offer.token };
+
+  const res = await email.sendNewCampaignOfferEmail({
+    to: creator.email,
+    firstName,
+    brandName,
+    offerUrl: url,
+    expiryDate: expiry,
+  });
+  if (!res.sent) {
+    return { sent: false, reason: res.skipped ? 'email_not_configured' : res.error || 'send_failed', offerId: offer.id, token: offer.token };
+  }
+  await db.query(
+    `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
+     VALUES ($1, $2, 'outbound', 'email', $3)`,
+    [creatorId, offer.id, `New-campaign offer email — link (${url})`],
+  );
+  await db.query(
+    `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'sent', 'email')`,
+    [offer.id],
+  );
+  return { sent: true, via: 'email', channels: ['Email'], offerId: offer.id, token: offer.token, url };
 }
 
 // ONE reminder email to a USED creator who got the messaging invite but never
@@ -1274,6 +1420,9 @@ module.exports = {
   subscribedChannelFor,
   inviteNumbersFor,
   sendUsedCreatorInvite,
+  sendUsedCreatorOffer,
+  resolvePriorCpm,
+  computeAutoOffer,
   sendUsedCreatorInviteFollowup,
   sendUsedCreatorBrief,
   sendOfferBriefing,

@@ -249,6 +249,41 @@ async function sendOfferWithContactEmail({ to, firstName, brandName, offerUrl, e
   return deliver({ to, subject, text, html });
 }
 
+// New-campaign offer email for a USED creator whose "Send email" click has
+// auto-priced their offer (see offers.sendUsedCreatorOffer). Deliberately short
+// and offer-portal-focused: a friendly greeting, the new-campaign hook, and the
+// portal link where they can review + accept/decline/counter. NO "text Hi"
+// chat CTAs — a Used creator already knows how to reach us on WhatsApp/iMessage
+// (see graduation.js), and if they're already messaging us in this campaign the
+// offer is delivered directly on that channel instead of by email.
+function renderNewCampaignOfferEmail({ firstName, brandName, offerUrl, expiryDate }) {
+  const subject = `A new ${brandName} collaboration for you, ${firstName}`;
+  const text = [
+    `Hey ${firstName},`,
+    ``,
+    `We're running a new ${brandName} campaign and thought of you right away — it felt like a great fit given how our last collaboration went.`,
+    ``,
+    `If you're up for it, the offer is ready to review: ${offerUrl}`,
+    `It's open until ${expiryDate}, and you can accept, decline, or send a counter right there.`,
+    ``,
+    `Thank you,`,
+    `Team INFLUENCE`,
+  ].join('\n');
+
+  const html = shell(`    <p>Hey ${escapeHtml(firstName)},</p>
+    <p>We're running a new <strong>${escapeHtml(brandName)}</strong> campaign and thought of you right away &mdash; it felt like a great fit given how our last collaboration went.</p>
+    <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(offerUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">Review the offer</a></p>
+    <p>It's open until <strong>${escapeHtml(expiryDate)}</strong>, and you can accept, decline, or send a counter right there.</p>
+    <p style="margin-top:24px;">Thank you,<br/>Team INFLUENCE</p>`);
+
+  return { subject, text, html };
+}
+
+async function sendNewCampaignOfferEmail({ to, firstName, brandName, offerUrl, expiryDate }) {
+  const { subject, text, html } = renderNewCampaignOfferEmail({ firstName, brandName, offerUrl, expiryDate });
+  return deliver({ to, subject, text, html });
+}
+
 // Graduation email — sent ONCE when a creator first completes all the
 // deliverables of a campaign (see graduation.js). Congratulates them and invites
 // them to connect on WhatsApp/iMessage so future collabs run over messaging. The
@@ -331,6 +366,8 @@ module.exports = {
   sendPortalInviteEmail,
   renderOfferWithContactEmail,
   sendOfferWithContactEmail,
+  renderNewCampaignOfferEmail,
+  sendNewCampaignOfferEmail,
   renderGraduationEmail,
   sendGraduationEmail,
 };

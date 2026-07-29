@@ -141,10 +141,26 @@ async function sendOutreach(creatorId) {
   // usable messaging channel (no phone on file / opted out / vendor
   // unconfigured), so they're never left uncontacted.
   if (creator.creator_segment === 'old') {
-    const invite = await offers.sendUsedCreatorInvite(creatorId);
-    if (invite.sent) {
-      // The invite email is sent synchronously via Resend (unlike the Instantly
-      // path, which only queues), so mark it sent outright.
+    // Part 2 of the used-creator workflow: "Send email" auto-prices an offer
+    // from the creator's prior CPM (Creator-DB) and sends the offer directly.
+    // Clicking IS the approval — no separate offer_approved step for Used
+    // creators. Delivery: DM if they're already messaging us in this campaign,
+    // else the friendly new-campaign offer email (offer link only, no "text Hi"
+    // buttons — the graduation email is the one-time connect invite).
+    let handled = await offers.sendUsedCreatorOffer(creatorId);
+    let via = handled.via === 'messaging' ? 'used_creator_offer_messaging' : 'used_creator_offer_email';
+
+    // No view stats yet → no basis to price. Fall back to the pre-Part-2
+    // messaging invite so the creator still gets contacted while an admin scrapes
+    // stats + puts a proper offer together. (opted_out is a compliance-hard stop
+    // — no fallback there, we do NOT invite an opted-out creator to text us.)
+    if (!handled.sent && handled.reason === 'no_stats') {
+      handled = await offers.sendUsedCreatorInvite(creatorId);
+      via = 'portal_invite';
+    }
+    if (handled.sent) {
+      // Synchronous send via Resend / messaging — mark it sent outright (unlike
+      // Instantly, which only queues).
       await db.query(
         `UPDATE creators
             SET status = 'outreach_sent',
@@ -158,12 +174,12 @@ async function sendOutreach(creatorId) {
       await db.query(
         `INSERT INTO email_events (creator_id, type, message_id, detail)
          VALUES ($1, 'sent_outreach', $2, $3)`,
-        [creatorId, trackingId, { via: 'portal_invite', channels: invite.channels }],
+        [creatorId, trackingId, { via, channels: handled.channels || [], offer_token: handled.token || null }],
       );
       console.log(
-        `[outreach] used creator ${creatorId} sent messaging invite (${invite.channels.join(' / ')})`,
+        `[outreach] used creator ${creatorId} sent ${via} (${(handled.channels || []).join(' / ')})`,
       );
-      return { ok: true, trackingId, via: 'portal_invite', channels: invite.channels };
+      return { ok: true, trackingId, via, channels: handled.channels, offerId: handled.offerId, token: handled.token };
     }
     // Falling back to the plain Instantly cold email means this Used creator
     // will NOT be asked to text us on WhatsApp/iMessage. Spell out why: a
@@ -176,7 +192,7 @@ async function sendOutreach(creatorId) {
       ? `offer-portal not fully configured: ${configIssues.join('; ')}`
       : 'creator has no WhatsApp/iMessage number on file or has opted out';
     console.warn(
-      `[outreach] used creator ${creatorId}: messaging invite not sent (${invite.reason}) — ` +
+      `[outreach] used creator ${creatorId}: ${via} not sent (${handled.reason}) — ` +
         `falling back to Instantly cold email. Reason: ${why}.`,
     );
   }
