@@ -740,6 +740,18 @@ function dealSummaryItems(data) {
   return items;
 }
 
+// Parse a human "upfront %" input ("30", "30%", "40 percent") into an integer
+// upfront percentage, or null for blank/zero (meaning "no split — paid in full
+// on completion"). Anything above 99 is clamped to 99 so the remainder stays a
+// positive balance; the backend clamps again as a safety net.
+function parseUpfrontPercentInput(s) {
+  const str = String(s == null ? '' : s).replace(/[^\d.]/g, '');
+  if (!str) return null;
+  const n = Math.round(Number(str));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(99, n);
+}
+
 // Parse a human "min views" input ("100k", "1.2M", "250,000") into a number.
 function parseViewsInput(s) {
   const str = String(s == null ? '' : s).trim().toLowerCase().replace(/,/g, '');
@@ -905,35 +917,29 @@ function renderEditableDeal(cell, r, data) {
     cell.appendChild(bonusLine);
   }
 
-  // Upfront payment is a boolean toggle: ON adds the default 30/70 split, OFF
-  // means paid in full on completion. The payment schedule is only meant to be
-  // on the contract when the creator explicitly demanded upfront payment — this
-  // is the control that adds/removes it by hand.
-  const upfrontLine = document.createElement('div');
-  upfrontLine.className = 'deal-line';
-  const upfrontTag = document.createElement('span');
-  upfrontTag.className = 'deal-tag';
-  upfrontTag.textContent = 'UPFRONT';
-  const upfrontVal = document.createElement('span');
-  upfrontVal.className = 'deal-val deal-toggle';
+  // Upfront payment is an editable percentage: type e.g. "30" (or "30%") to
+  // pay that share up front with the remainder on completion, or clear it to
+  // fall back to paid-in-full-on-completion (no split). The payment schedule is
+  // only meant to be on the contract when the creator demanded upfront payment
+  // — this is the control that adds/removes it AND sets the exact amount by
+  // hand, the manual counterpart to the automatic upfront-demand detection at
+  // contract creation.
   const upPct = Number(data.upfrontPercent);
   const remPct = Number(data.remainderPercent);
   const hasUpfront = upPct > 0 && remPct > 0;
-  upfrontVal.textContent = hasUpfront ? `${upPct}% upfront ✓` : 'On completion';
-  upfrontVal.classList.toggle('on', hasUpfront);
-  upfrontVal.title = 'Click to toggle an upfront payment split';
-  upfrontVal.onclick = async () => {
-    try {
-      await saveContractField(r, { upfrontPayment: !hasUpfront });
-    } catch (err) {
-      alert(err.message);
-    }
-    await refreshCreators();
-    await refreshCampaigns();
-  };
-  upfrontLine.appendChild(upfrontTag);
-  upfrontLine.appendChild(upfrontVal);
-  cell.appendChild(upfrontLine);
+  appendEditableDealLine(cell, r, {
+    label: 'UPFRONT',
+    value: hasUpfront ? `${upPct}%` : '',
+    placeholder: 'e.g. 30% · blank = on completion',
+    onSave: (v) => {
+      const pct = parseUpfrontPercentInput(v);
+      // Blank / zero → remove the split (paid in full on completion). A valid
+      // percentage → turn the split on and pin the upfront share to it.
+      return pct == null
+        ? saveContractField(r, { upfrontPayment: false })
+        : saveContractField(r, { upfrontPayment: true, upfrontPercent: pct });
+    },
+  });
 }
 
 // Rate column ("Deals"): the editable agreed/quoted rate, plus — once the
