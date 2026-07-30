@@ -645,6 +645,20 @@ function mergeContractData(base, out) {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
+// Ranked "find the creator's contract" — prefer completed over signed over
+// pending, breaking ties by newest first. This is the ordering EVERY read in
+// this module uses (attach, create-if-missing, edit, term-resync) so a stale
+// duplicate pending row can never eclipse the one the creator actually signed.
+//
+// The duplicate happens when the acceptance-webhook path and the scheduler's
+// contract-backfill path race — both find no existing contract and both INSERT.
+// Only one URL reaches the creator, so only one is ever signed; the other stays
+// pending forever. Ordering by created_at alone would surface that orphan
+// pending row on the dashboard, hide the signed contract's completed status,
+// and copy-link to the wrong token. Preferring the signed/completed row makes
+// every read pick the one that matters.
+const CONTRACT_STATUS_RANK = "CASE status WHEN 'completed' THEN 0 WHEN 'signed' THEN 1 ELSE 2 END";
+
 // Generate (or reuse) the creator's contract. Idempotent: a creator never gets a
 // second contract, so scheduler retries + the accepted hook can't duplicate.
 async function createContractForCreator(creatorId) {
@@ -652,7 +666,8 @@ async function createContractForCreator(creatorId) {
   if (!creator) throw new Error(`contracts: creator ${creatorId} not found`);
 
   const existing = await db.one(
-    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    `SELECT * FROM contracts WHERE creator_id = $1
+     ORDER BY ${CONTRACT_STATUS_RANK}, created_at DESC LIMIT 1`,
     [creatorId],
   );
   if (existing) {
@@ -716,7 +731,8 @@ async function disputesUsageRights(text) {
 // caller). Returns null if there's no contract or it's already signed.
 async function removeUsageRightsFromContract(creatorId) {
   const existing = await db.one(
-    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    `SELECT * FROM contracts WHERE creator_id = $1
+     ORDER BY ${CONTRACT_STATUS_RANK}, created_at DESC LIMIT 1`,
     [creatorId],
   );
   if (!existing || existing.status !== 'pending') return null;
@@ -948,7 +964,8 @@ function coerceContractPatch(patch) {
 // noop:true} when nothing changed.
 async function updateContractFields(creatorId, patch, { force = false } = {}) {
   const existing = await db.one(
-    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    `SELECT * FROM contracts WHERE creator_id = $1
+     ORDER BY ${CONTRACT_STATUS_RANK}, created_at DESC LIMIT 1`,
     [creatorId],
   );
   if (!existing) return { missing: true };
@@ -1013,7 +1030,8 @@ async function changesContractTerms(text) {
 //   both false    — no contract on file yet
 async function updateContractTermsFromThread(creatorId) {
   const existing = await db.one(
-    `SELECT * FROM contracts WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    `SELECT * FROM contracts WHERE creator_id = $1
+     ORDER BY ${CONTRACT_STATUS_RANK}, created_at DESC LIMIT 1`,
     [creatorId],
   );
   if (!existing) return { updated: false, signed: false, row: null };
@@ -1119,7 +1137,7 @@ async function attachContracts(rows) {
   const contracts = await db.many(
     `SELECT DISTINCT ON (creator_id) creator_id, token, status, data
      FROM contracts WHERE creator_id = ANY($1::int[])
-     ORDER BY creator_id, created_at DESC`,
+     ORDER BY creator_id, ${CONTRACT_STATUS_RANK}, created_at DESC`,
     [ids],
   );
   const byCreator = new Map(contracts.map((c) => [c.creator_id, c]));
