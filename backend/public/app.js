@@ -1578,7 +1578,11 @@ function openEmailModal(email) {
   if (!email) return;
   const m = ensureEmailModal();
   const inbound = email.direction === 'inbound';
-  m.kicker.textContent = inbound ? 'Email from creator' : 'Reply we sent';
+  m.kicker.textContent = inbound
+    ? 'Email from creator'
+    : email.kind === 'offer'
+      ? 'Offer we sent'
+      : 'Reply we sent';
   const subj = (email.subject || '').trim();
   m.subject.textContent = subj;
   m.subject.hidden = !subj;

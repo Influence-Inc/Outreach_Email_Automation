@@ -319,6 +319,24 @@ function collapseSupersededSteps(log) {
 const INBOUND_MSG_EVENTS = new Set(['replied', 'rate_quoted']);
 const OUTBOUND_MSG_EVENTS = new Set(['sent_delegate_reply', 'sent_manual_reply']);
 
+// Which outbound send kind carries the offer email backing a 'rate_offer_sent'
+// step, so the actual priced offer we mailed can be opened from the timeline
+// (same "view full email" affordance the replies already have). Returns null
+// when there's no readable email to pair:
+//   • Structured Approve & send flow → the offer email is recorded as 'offer'.
+//   • Admin's manual delegate offer   → the same reply that named the dollar
+//     amount is recorded as 'delegate_reply' (detail.source === 'delegate').
+//   • Offer-portal delivery           → the offer ships as a portal LINK stored
+//     in offer_messages, not an email_messages row, so nothing to open here.
+// Matching on kind (not just "the latest outbound at send time") keeps a portal
+// offer from mis-pairing to some earlier reply, and pins the email path to the
+// offer email itself.
+function offerEmailBackingKind(detail) {
+  const d = detail || {};
+  if (d.via === 'offer_portal') return null;
+  return d.source === 'delegate' ? 'delegate_reply' : 'offer';
+}
+
 // The events whose timeline label is a free-text recap of an email (as opposed
 // to a mined "Creator quoted $X" label). Only these warrant a Claude summary —
 // 'rate_quoted' is excluded because its label comes from the raw text, not a
@@ -385,7 +403,7 @@ async function attachRateLog(rows) {
     // kind; the templated sends (outreach, follow-up, offer, contract) that have
     // their own descriptive labels simply go unpaired.
     db.many(
-      `SELECT id, creator_id, direction, subject, body, summary, created_at
+      `SELECT id, creator_id, direction, kind, subject, body, summary, created_at
        FROM email_messages
        WHERE creator_id = ANY($1::int[])
        ORDER BY creator_id, created_at ASC`,
@@ -408,20 +426,32 @@ async function attachRateLog(rows) {
   // just before the event's time. A small forward slack absorbs the sub-second
   // gap when the message row is written just after the event row. Returns the
   // full row (id, body, summary) so the caller can both render and cache.
+  //
+  // 'rate_offer_sent' resolves the offer email by its send kind (see
+  // offerEmailBackingKind) rather than "the latest outbound", so the priced
+  // offer email is pinned exactly and a portal-delivered offer — which has no
+  // email_messages row — resolves to nothing instead of a stray earlier reply.
   const msgForEvent = (creatorId, type, detail, at) => {
-    const map = INBOUND_MSG_EVENTS.has(type)
-      ? inboundByCreator
-      : OUTBOUND_MSG_EVENTS.has(type) || isConversationalSend(type, detail)
-        ? outboundByCreator
-        : null;
+    let map = null;
+    let wantKind = null;
+    if (INBOUND_MSG_EVENTS.has(type)) {
+      map = inboundByCreator;
+    } else if (type === 'rate_offer_sent') {
+      wantKind = offerEmailBackingKind(detail);
+      if (wantKind == null) return null;
+      map = outboundByCreator;
+    } else if (OUTBOUND_MSG_EVENTS.has(type) || isConversationalSend(type, detail)) {
+      map = outboundByCreator;
+    }
     if (!map) return null;
     const list = map.get(creatorId);
     if (!list || !list.length) return null;
     const cutoff = new Date(at).getTime() + 2000;
     let found = null;
     for (const m of list) {
-      if (new Date(m.created_at).getTime() <= cutoff) found = m;
-      else break;
+      if (new Date(m.created_at).getTime() > cutoff) break;
+      if (wantKind != null && m.kind !== wantKind) continue;
+      found = m;
     }
     return found || null;
   };
@@ -446,15 +476,18 @@ async function attachRateLog(rows) {
     entry.type = e.type;
     // Attach the full email backing this step (when there is one) so the client
     // can offer an "expand" affordance to read the ACTUAL message — the creator's
-    // inbound reply, or the reply we sent — not just its one-line summary. Only
-    // the message-backed events (replied / rate_quoted / delegate|manual reply)
-    // resolve a message here; templated sends carry no body.
+    // inbound reply, the reply we sent, or the priced offer email — not just its
+    // one-line summary. The message-backed events (replied / rate_quoted /
+    // delegate|manual reply / rate_offer_sent) resolve a message here; templated
+    // sends carry no body. `kind: 'offer'` lets the modal title the priced offer
+    // email as "Offer we sent" rather than a generic "Reply we sent".
     if (m) {
       entry.email = {
         body: m.body,
         subject: m.subject || null,
         at: m.created_at,
         direction: m.direction,
+        kind: e.type === 'rate_offer_sent' ? 'offer' : null,
       };
     }
     // Expose the numeric amount (offer fee / quoted rate) so the client can
@@ -1454,5 +1487,6 @@ router.delete('/:id', async (req, res, next) => {
 // can be asserted without a DB.
 router.rateLogEntry = rateLogEntry;
 router.collapseSupersededSteps = collapseSupersededSteps;
+router.offerEmailBackingKind = offerEmailBackingKind;
 
 module.exports = router;
