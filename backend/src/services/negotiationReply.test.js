@@ -738,3 +738,32 @@ test('describeOffer bolds the header for a video_bonus offer', () => {
   assert.ok(out.includes('$9,000 flat for 3 videos'));
   assert.ok(out.includes('$2,000 bonus'));
 });
+
+// ── Regression: answer_question follow-up must not re-open rate discussion ──
+// Bug the team saw on the anja.oerlemans thread: the rate had already been
+// discussed, an offer was on the table, and the answer_question reply to a
+// creative-freedom question ended with "feel free to reach out whenever
+// you're ready to chat rates!" — reopening a topic that was already closed.
+// The master prompt (canonical rule in negotiation.js + Guidelines-UI mirror
+// in replyPromptSnapshots.js) must forbid re-inviting rate discussion once a
+// rate is on record.
+const replyPromptSnapshots = require('./replyPromptSnapshots');
+
+test('answer_question master prompt forbids re-inviting rate discussion once a rate is on record', () => {
+  const { prompts } = replyPromptSnapshots.getReplyPromptSnapshots();
+  const aq = prompts.answer_question;
+  assert.ok(aq, 'answer_question directive is present in the snapshot');
+  // The prohibition (mentioning "chat rates" as a forbidden phrase) must be
+  // in the prompt so Claude does not produce that exact regression again.
+  assert.ok(/chat rates/i.test(aq), 'answer_question prompt names "chat rates" as a forbidden invite');
+  assert.ok(
+    /already been (shared|quoted|offered|agreed)/i.test(aq),
+    'answer_question prompt gates the rate-reopen prohibition on a rate already being on record',
+  );
+  // And the old "otherwise leave the door open" hedge — which Claude read as
+  // "invite them to chat rates" — must be gone.
+  assert.ok(
+    !/leave the door open/i.test(aq),
+    'answer_question prompt no longer relies on the ambiguous "leave the door open" hedge',
+  );
+});
