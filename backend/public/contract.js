@@ -184,6 +184,18 @@
     // TikTok short" and the numeric count is genuinely extra information.
     var deliverablesText = String(d.deliverables || '');
     var deliverablesHasCount = /\d/.test(deliverablesText);
+    // View-based deals are priced by a guaranteed TOTAL Instagram view count
+    // aggregated across every post the creator publishes on Instagram — the
+    // fee doesn't buy a fixed number of videos, it buys that view total. The
+    // creator's obligation is therefore to KEEP publishing on Instagram until
+    // the combined view count across their Instagram posts meets or exceeds
+    // the guaranteed number. Spell that out as its own row (using ongoing-
+    // obligation phrasing rather than a static "floor") and label the number
+    // itself so it can't be misread as a per-post minimum.
+    var guaranteedViewsLabel = isViewBased ? 'Guaranteed total views' : 'Min. guaranteed views';
+    var guaranteedViewsValue = isViewBased && minViews
+      ? fmtNum(minViews) + ' — combined across all posts on Instagram'
+      : (minViews ? fmtNum(minViews) : null);
     html += section('Campaign & Deliverables', rowsWrap(
       row('Campaign', d.campaignName) +
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
@@ -193,7 +205,20 @@
         : row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos))) +
       // Min. guaranteed views is a view-based term — a flat video-based deal is
       // priced per video and promises no view floor, so never show it there.
-      (!isVideoBased && minViews ? row('Min. guaranteed views', fmtNum(minViews)) : '') +
+      (!isVideoBased && minViews ? row(guaranteedViewsLabel, guaranteedViewsValue) : '') +
+      // Posting obligation for view-based deals: the deal isn't complete when a
+      // single video is posted — the creator must continue publishing short-
+      // form video content on Instagram until the total combined view count
+      // across all of their Instagram posts meets or exceeds the guaranteed
+      // number above. Called out as its own row so it's impossible to miss.
+      (isViewBased && minViews
+        ? row(
+            'Posting obligation',
+            'The creator will continue publishing short-form video content on Instagram until the total view count across all posts on Instagram meets or exceeds ' +
+              fmtNum(minViews) +
+              ' views. The deliverable is not complete until this combined Instagram view total is met or exceeded.'
+          )
+        : '') +
       (d.bonusAmount && d.bonusThresholdViews
         ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
         : '')
