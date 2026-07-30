@@ -206,14 +206,14 @@
       // Min. guaranteed views is a view-based term — a flat video-based deal is
       // priced per video and promises no view floor, so never show it there.
       (!isVideoBased && minViews ? row(guaranteedViewsLabel, guaranteedViewsValue) : '') +
-      // Posting obligation for view-based deals: the deal isn't complete when a
+      // Posting commitment for view-based deals: the deal isn't complete when a
       // single video is posted — the creator must continue publishing short-
       // form video content on Instagram until the total combined view count
       // across all of their Instagram posts meets or exceeds the guaranteed
       // number above. Called out as its own row so it's impossible to miss.
       (isViewBased && minViews
         ? row(
-            'Posting obligation',
+            'Posting commitment',
             'The creator will continue publishing short-form video content on Instagram until the total view count across all posts on Instagram meets or exceeds ' +
               fmtNum(minViews) +
               ' views. The deliverable is not complete until this combined Instagram view total is met or exceeded.'
