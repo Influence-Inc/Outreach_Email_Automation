@@ -384,6 +384,13 @@ ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signed_at   TIMESTAMPTZ;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signer_name TEXT;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signer_ip   TEXT;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_terms       JSONB;
+-- Schedule negotiation (a "Timing" decline). requested_start_date is the date
+-- the creator says they're free to start; when it's within the accommodation
+-- window (SCHEDULE_THRESHOLD_DAYS) we re-offer the same terms carrying that date
+-- (a fresh offer they can accept). When it's further out, schedule_hold parks
+-- the offer for an admin schedule-counter instead of closing the deal.
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS requested_start_date DATE;
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS schedule_hold        BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Append-only audit log. INSERT only — offer history is reconstructed from here.
 CREATE TABLE IF NOT EXISTS offer_events (

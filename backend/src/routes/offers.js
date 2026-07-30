@@ -59,6 +59,19 @@ api.post('/:token/counter', async (req, res, next) => {
   }
 });
 
+// POST /api/offers/:token/schedule — the creator declined for Timing and told
+// us when they're free. Within the window → a fresh same-terms offer on their
+// dates; further out → parked on hold for an admin schedule-counter.
+api.post('/:token/schedule', async (req, res, next) => {
+  try {
+    const availableDate = (req.body || {}).availableDate;
+    const result = await offers.negotiateSchedule({ token: req.params.token, availableDate });
+    return res.status(result.ok ? 200 : 409).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/offers/:token/sign-contract — the creator signs the mini contract
 // (a typed-name signature) after accepting. Returns { ok } or a reason.
 api.post('/:token/sign-contract', async (req, res, next) => {

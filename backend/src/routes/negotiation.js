@@ -5,6 +5,7 @@ const express = require('express');
 const db = require('../db');
 const negotiation = require('../services/negotiation');
 const contracts = require('../services/contracts');
+const offers = require('../services/offers');
 const { computeOffers } = require('../services/pricing');
 const { flagFingerprintSql } = require('../db/flagFingerprint');
 
@@ -294,6 +295,24 @@ router.post('/:id/dismiss-offer', async (req, res, next) => {
       [req.params.id, { by: 'admin' }],
     );
     res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin schedule-counter for a creator whose offer is on hold (their proposed
+// availability was beyond the accommodation window). Sends a fresh same-terms
+// offer on the admin-chosen start date over every available channel and clears
+// the hold. Body: { startDate: 'YYYY-MM-DD' }.
+router.post('/:id/reschedule-offer', async (req, res, next) => {
+  try {
+    const startDate = (req.body || {}).startDate;
+    const result = await offers.sendRescheduledOffer({ creatorId: req.params.id, startDate });
+    if (!result.ok) {
+      const code = result.reason === 'invalid_date' ? 400 : result.reason === 'no_offer' ? 404 : 409;
+      return res.status(code).json(result);
+    }
+    res.json(result);
   } catch (err) {
     next(err);
   }
