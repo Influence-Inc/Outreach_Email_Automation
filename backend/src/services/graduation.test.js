@@ -22,7 +22,8 @@ const origFetch = campaignsApi.fetchUpstreamCampaigns;
 // Env needed for businessConnectNumbers() to report a usable channel, plus the
 // sweep prerequisites. Snapshot + restore so tests don't leak.
 const ENV_KEYS = [
-  'AISENSY_API_KEY', 'AISENSY_WHATSAPP_NUMBER', 'IMESSAGE_API_KEY', 'IMESSAGE_FROM_NUMBER',
+  'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_WHATSAPP_FROM',
+  'IMESSAGE_API_KEY', 'IMESSAGE_FROM_NUMBER',
   'RESEND_API_KEY', 'CAMPAIGNS_API_TOKEN',
 ];
 async function withEnv(overrides, fn) {
@@ -40,8 +41,9 @@ async function withEnv(overrides, fn) {
   }
 }
 const CONFIGURED = {
-  AISENSY_API_KEY: 'wa-key',
-  AISENSY_WHATSAPP_NUMBER: '+12053706046',
+  TWILIO_ACCOUNT_SID: 'ACtest',
+  TWILIO_AUTH_TOKEN: 'twilio-tok',
+  TWILIO_WHATSAPP_FROM: '+12053706046',
   IMESSAGE_API_KEY: 'im-key',
   IMESSAGE_FROM_NUMBER: '+12053706046',
   RESEND_API_KEY: 're-key',

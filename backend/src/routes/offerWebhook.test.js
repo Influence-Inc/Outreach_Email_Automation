@@ -3,7 +3,7 @@
 // Run with: npm test  (node --test)
 //
 // Guards the offer-portal inbound webhook's pure logic: parseInbound (Linq's
-// nested envelope + the flat AiSensy shape, plus the events/echoes it skips) and
+// nested envelope + the flat Twilio/legacy shape, plus the events/echoes it skips) and
 // verifyLinqSignature (Standard Webhooks + X-Linq-Signature HMAC schemes, and
 // the sandbox-friendly "no secret → allow" convention). The DB-touching handler
 // is intentionally not exercised here.
@@ -68,7 +68,20 @@ test('parseInbound renders a placeholder for a non-text part', () => {
   assert.deepStrictEqual(parsed, { from: '15556667777', body: '[non-text message: image]' });
 });
 
-test('parseInbound still handles the flat AiSensy WhatsApp shape', () => {
+test('parseInbound handles the Twilio WhatsApp shape (form-encoded → From/Body)', () => {
+  // What express.urlencoded gives us for a real Twilio inbound POST.
+  assert.deepStrictEqual(
+    webhook.parseInbound({
+      From: 'whatsapp:+15556667777',
+      Body: 'accept',
+      MessageSid: 'SM_1',
+      WaId: '15556667777',
+    }),
+    { from: '15556667777', body: 'accept' },
+  );
+});
+
+test('parseInbound still handles legacy flat WhatsApp shapes (defensive fallback)', () => {
   assert.deepStrictEqual(webhook.parseInbound({ from: '919812345670', message: 'accept' }), {
     from: '919812345670',
     body: 'accept',
@@ -80,7 +93,7 @@ test('parseInbound still handles the flat AiSensy WhatsApp shape', () => {
   });
 });
 
-test('parseInbound does NOT treat AiSensy content type "text" as an event to skip', () => {
+test('parseInbound does NOT treat content type "text" as an event to skip', () => {
   // `type` here is the message CONTENT type, not an event kind — the reply must
   // still be parsed, not ignored.
   assert.deepStrictEqual(webhook.parseInbound({ from: '919812345670', type: 'text', message: 'yes' }), {
@@ -176,6 +189,124 @@ test('verifyLinqSignature rejects when a secret is set but no signature header i
       webhook.verifyLinqSignature({ rawBody: Buffer.from('{}'), headers: {} }),
       false,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifyTwilioSignature — Twilio HMAC-SHA1 over (URL + sorted param k+v concat)
+// `crypto` is already required at the top of the file for the Linq tests.
+// ---------------------------------------------------------------------------
+
+// Build the exact string Twilio hashes so we can generate a real signature to
+// verify against, then hand the (headers, body) to verifyTwilioSignature.
+function makeTwilioReq({ url, params, token, useForwarded = true }) {
+  const keys = Object.keys(params).sort();
+  let signed = url;
+  for (const k of keys) signed += k + String(params[k]);
+  const sig = crypto.createHmac('sha1', token).update(signed).digest('base64');
+
+  // Split URL back into protocol/host/path so the verifier can rebuild it.
+  const u = new URL(url);
+  const headers = { 'x-twilio-signature': sig };
+  if (useForwarded) {
+    headers['x-forwarded-proto'] = u.protocol.replace(':', '');
+    headers['x-forwarded-host'] = u.host;
+  }
+  return {
+    headers,
+    body: params,
+    originalUrl: u.pathname + u.search,
+    protocol: u.protocol.replace(':', ''),
+    get(h) { return h.toLowerCase() === 'host' ? u.host : undefined; },
+  };
+}
+
+function withTwilioToken(token, fn) {
+  const saved = process.env.TWILIO_AUTH_TOKEN;
+  try {
+    if (token === undefined) delete process.env.TWILIO_AUTH_TOKEN;
+    else process.env.TWILIO_AUTH_TOKEN = token;
+    return fn();
+  } finally {
+    if (saved === undefined) delete process.env.TWILIO_AUTH_TOKEN;
+    else process.env.TWILIO_AUTH_TOKEN = saved;
+  }
+}
+
+test('verifyTwilioSignature allows everything when TWILIO_AUTH_TOKEN is not set', () => {
+  withTwilioToken(undefined, () => {
+    assert.strictEqual(
+      webhook.verifyTwilioSignature({ headers: {}, body: {}, get: () => 'x', originalUrl: '/webhook/whatsapp' }),
+      true,
+    );
+  });
+});
+
+test('verifyTwilioSignature accepts a correct signature (using forwarded proto/host)', () => {
+  withTwilioToken('tok_xyz', () => {
+    const req = makeTwilioReq({
+      url: 'https://outreach.example/webhook/whatsapp',
+      params: { From: 'whatsapp:+15556667777', Body: 'yes', MessageSid: 'SM_1' },
+      token: 'tok_xyz',
+    });
+    assert.strictEqual(webhook.verifyTwilioSignature(req), true);
+  });
+});
+
+test('verifyTwilioSignature rejects a tampered body (signature no longer matches)', () => {
+  withTwilioToken('tok_xyz', () => {
+    const req = makeTwilioReq({
+      url: 'https://outreach.example/webhook/whatsapp',
+      params: { From: 'whatsapp:+15556667777', Body: 'yes', MessageSid: 'SM_1' },
+      token: 'tok_xyz',
+    });
+    req.body.Body = 'no'; // tamper AFTER signing
+    assert.strictEqual(webhook.verifyTwilioSignature(req), false);
+  });
+});
+
+test('verifyTwilioSignature rejects when signature header is missing', () => {
+  withTwilioToken('tok_xyz', () => {
+    const req = makeTwilioReq({
+      url: 'https://outreach.example/webhook/whatsapp',
+      params: { Body: 'yes' },
+      token: 'tok_xyz',
+    });
+    delete req.headers['x-twilio-signature'];
+    assert.strictEqual(webhook.verifyTwilioSignature(req), false);
+  });
+});
+
+test('verifyTwilioSignature honors TWILIO_WEBHOOK_URL override (custom domain / rewrite)', () => {
+  const savedOverride = process.env.TWILIO_WEBHOOK_URL;
+  withTwilioToken('tok_xyz', () => {
+    try {
+      // Twilio signed the "real" public URL; the app sees a different
+      // proxied path/host. The override tells the verifier what to hash.
+      process.env.TWILIO_WEBHOOK_URL = 'https://public.example';
+      const url = 'https://public.example/webhook/whatsapp';
+      const params = { Body: 'yes' };
+      const keys = Object.keys(params).sort();
+      let signed = url;
+      for (const k of keys) signed += k + String(params[k]);
+      const sig = crypto.createHmac('sha1', 'tok_xyz').update(signed).digest('base64');
+      const req = {
+        headers: {
+          'x-twilio-signature': sig,
+          // Deliberately WRONG forwarded headers — the override must win.
+          'x-forwarded-proto': 'http',
+          'x-forwarded-host': 'wrong.internal',
+        },
+        body: params,
+        originalUrl: '/webhook/whatsapp',
+        protocol: 'http',
+        get() { return 'wrong.internal'; },
+      };
+      assert.strictEqual(webhook.verifyTwilioSignature(req), true);
+    } finally {
+      if (savedOverride === undefined) delete process.env.TWILIO_WEBHOOK_URL;
+      else process.env.TWILIO_WEBHOOK_URL = savedOverride;
+    }
   });
 });
 

@@ -2,34 +2,22 @@
 
 // Run with: npm test  (node --test)
 //
-// Guards the WhatsApp (AiSensy) channel's 24h-window handling: a free-form
-// session send that fails (e.g. outside Meta's window) falls back to the
-// pre-approved session template, and a successful free-form send never touches
-// the template. Uses a stubbed global.fetch — no network.
+// Guards the WhatsApp (Twilio) channel: the exact form-encoded body Twilio
+// expects, Basic-Auth header shape, graceful-skip when creds are absent,
+// and how outside-24h-window errors (Twilio code 63016) surface. Uses a stubbed
+// global.fetch — no network.
 const test = require('node:test');
 const assert = require('node:assert');
 const whatsapp = require('./whatsapp');
 
-function mockResponse(ok, bodyObj) {
+function mockResponse(ok, status, bodyObj) {
   return {
     ok,
+    status,
     json: async () => bodyObj,
-    text: async () => JSON.stringify(bodyObj),
+    text: async () => (typeof bodyObj === 'string' ? bodyObj : JSON.stringify(bodyObj)),
   };
 }
-
-test('businessNumber reflects AISENSY_WHATSAPP_NUMBER (empty when unset)', () => {
-  const saved = process.env.AISENSY_WHATSAPP_NUMBER;
-  try {
-    delete process.env.AISENSY_WHATSAPP_NUMBER;
-    assert.strictEqual(whatsapp.businessNumber(), '');
-    process.env.AISENSY_WHATSAPP_NUMBER = '+18005551234';
-    assert.strictEqual(whatsapp.businessNumber(), '+18005551234');
-  } finally {
-    if (saved === undefined) delete process.env.AISENSY_WHATSAPP_NUMBER;
-    else process.env.AISENSY_WHATSAPP_NUMBER = saved;
-  }
-});
 
 // Run `fn` with env + global.fetch stubbed, restoring both afterwards.
 async function withStub({ env, fetchFn }, fn) {
@@ -52,64 +40,154 @@ async function withStub({ env, fetchFn }, fn) {
   }
 }
 
-test('sendWhatsAppText falls back to the session template when free-form fails', async () => {
-  const res = await withStub(
-    {
-      env: { AISENSY_API_KEY: 'k', AISENSY_SESSION_CAMPAIGN: 'session_fallback' },
-      fetchFn: async (url) => {
-        if (String(url).includes('direct-apis')) return mockResponse(false, { error: 'outside 24h window' });
-        if (String(url).includes('campaign/t1')) return mockResponse(true, { messageId: 'tmpl_1' });
-        throw new Error(`unexpected url ${url}`);
-      },
-    },
-    () => whatsapp.sendWhatsAppText({ to: '+15556667777', body: 'thanks!' }),
-  );
-  assert.strictEqual(res.sent, true);
-  assert.strictEqual(res.viaTemplate, true);
-  assert.strictEqual(res.id, 'tmpl_1');
+test('businessNumber reflects TWILIO_WHATSAPP_FROM (empty when unset)', () => {
+  const saved = process.env.TWILIO_WHATSAPP_FROM;
+  try {
+    delete process.env.TWILIO_WHATSAPP_FROM;
+    assert.strictEqual(whatsapp.businessNumber(), '');
+    process.env.TWILIO_WHATSAPP_FROM = '+18005551234';
+    assert.strictEqual(whatsapp.businessNumber(), '+18005551234');
+  } finally {
+    if (saved === undefined) delete process.env.TWILIO_WHATSAPP_FROM;
+    else process.env.TWILIO_WHATSAPP_FROM = saved;
+  }
 });
 
-test('sendWhatsAppText uses free-form and does NOT call the template on success', async () => {
-  let templateCalled = false;
-  const res = await withStub(
-    {
-      env: { AISENSY_API_KEY: 'k', AISENSY_SESSION_CAMPAIGN: 'session_fallback' },
-      fetchFn: async (url) => {
-        if (String(url).includes('direct-apis')) return mockResponse(true, { messageId: 'ff_1' });
-        if (String(url).includes('campaign/t1')) {
-          templateCalled = true;
-          return mockResponse(true, {});
-        }
-        throw new Error(`unexpected url ${url}`);
-      },
-    },
-    () => whatsapp.sendWhatsAppText({ to: '+15556667777', body: 'thanks!' }),
-  );
-  assert.strictEqual(res.sent, true);
-  assert.strictEqual(res.id, 'ff_1');
-  assert.strictEqual(res.viaTemplate, undefined);
-  assert.strictEqual(templateCalled, false);
+test('normalizePhone strips non-digits (needed for last-10 webhook matching)', () => {
+  assert.strictEqual(whatsapp.normalizePhone('+1 (800) 555-1234'), '18005551234');
+  assert.strictEqual(whatsapp.normalizePhone(null), '');
 });
 
-test('sendWhatsAppText reports the failure when free-form fails and no fallback is configured', async () => {
+test('buildTwilioForm prefixes both addresses with "whatsapp:+<digits>"', () => {
+  const params = whatsapp.buildTwilioForm({
+    from: '+1 (800) 555-1234',
+    to: '5556667777',
+    body: 'Hello!',
+  });
+  assert.strictEqual(params.get('From'), 'whatsapp:+18005551234');
+  assert.strictEqual(params.get('To'), 'whatsapp:+5556667777');
+  assert.strictEqual(params.get('Body'), 'Hello!');
+});
+
+test('basicAuthHeader base64-encodes SID:token', () => {
+  const saved = { s: process.env.TWILIO_ACCOUNT_SID, t: process.env.TWILIO_AUTH_TOKEN };
+  try {
+    process.env.TWILIO_ACCOUNT_SID = 'ACtest';
+    process.env.TWILIO_AUTH_TOKEN = 'tok';
+    // Buffer.from('ACtest:tok').toString('base64') === 'QUN0ZXN0OnRvaw=='
+    assert.strictEqual(whatsapp.basicAuthHeader(), 'Basic QUN0ZXN0OnRvaw==');
+  } finally {
+    if (saved.s === undefined) delete process.env.TWILIO_ACCOUNT_SID;
+    else process.env.TWILIO_ACCOUNT_SID = saved.s;
+    if (saved.t === undefined) delete process.env.TWILIO_AUTH_TOKEN;
+    else process.env.TWILIO_AUTH_TOKEN = saved.t;
+  }
+});
+
+test('messagesUrl includes the SID (URL-encoded) in the path', () => {
+  const saved = process.env.TWILIO_ACCOUNT_SID;
+  try {
+    process.env.TWILIO_ACCOUNT_SID = 'ACtest';
+    assert.match(whatsapp.messagesUrl(), /\/2010-04-01\/Accounts\/ACtest\/Messages\.json$/);
+  } finally {
+    if (saved === undefined) delete process.env.TWILIO_ACCOUNT_SID;
+    else process.env.TWILIO_ACCOUNT_SID = saved;
+  }
+});
+
+test('sendWhatsAppText skips gracefully when any Twilio cred is missing', async () => {
+  for (const missing of ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_WHATSAPP_FROM']) {
+    const env = {
+      TWILIO_ACCOUNT_SID: 'ACtest',
+      TWILIO_AUTH_TOKEN: 'tok',
+      TWILIO_WHATSAPP_FROM: '+18005551234',
+    };
+    env[missing] = undefined;
+    // eslint-disable-next-line no-await-in-loop
+    const res = await withStub(
+      { env, fetchFn: async () => { throw new Error('should not be called'); } },
+      () => whatsapp.sendWhatsAppText({ to: '+15556667777', body: 'x' }),
+    );
+    assert.deepStrictEqual(res, { sent: false, skipped: true }, `missing ${missing} should skip`);
+  }
+});
+
+test('sendWhatsAppText POSTs form-encoded to Twilio with Basic Auth and returns the sid', async () => {
+  let seenUrl, seenHeaders, seenBody;
   const res = await withStub(
     {
-      env: { AISENSY_API_KEY: 'k', AISENSY_SESSION_CAMPAIGN: undefined },
-      fetchFn: async (url) => {
-        if (String(url).includes('direct-apis')) return mockResponse(false, { error: 'nope' });
-        throw new Error(`unexpected url ${url}`);
+      env: {
+        TWILIO_ACCOUNT_SID: 'ACtest',
+        TWILIO_AUTH_TOKEN: 'tok',
+        TWILIO_WHATSAPP_FROM: '+18005551234',
       },
+      fetchFn: async (url, opts) => {
+        seenUrl = url;
+        seenHeaders = opts.headers;
+        seenBody = opts.body;
+        return mockResponse(true, 201, { sid: 'SM123', status: 'queued' });
+      },
+    },
+    () => whatsapp.sendWhatsAppText({ to: '+15556667777', body: 'hi there' }),
+  );
+  assert.strictEqual(res.sent, true);
+  assert.strictEqual(res.id, 'SM123');
+  assert.match(seenUrl, /\/Accounts\/ACtest\/Messages\.json$/);
+  assert.strictEqual(seenHeaders['Content-Type'], 'application/x-www-form-urlencoded');
+  assert.match(seenHeaders.Authorization, /^Basic /);
+  // Form body must contain From, To, Body — URLSearchParams URL-encodes the "+"
+  // and ":" in the address, so "whatsapp:+18005551234" appears as "whatsapp%3A%2B18005551234".
+  assert.match(seenBody, /From=whatsapp%3A%2B18005551234/);
+  assert.match(seenBody, /To=whatsapp%3A%2B15556667777/);
+  assert.match(seenBody, /Body=hi\+there/);
+});
+
+test('sendWhatsAppText surfaces the Twilio outside-24h-window error (code 63016)', async () => {
+  const res = await withStub(
+    {
+      env: {
+        TWILIO_ACCOUNT_SID: 'ACtest',
+        TWILIO_AUTH_TOKEN: 'tok',
+        TWILIO_WHATSAPP_FROM: '+18005551234',
+      },
+      fetchFn: async () =>
+        mockResponse(false, 400, {
+          code: 63016,
+          message: 'Failed to send freeform message because you are outside the allowed window.',
+        }),
     },
     () => whatsapp.sendWhatsAppText({ to: '+15556667777', body: 'thanks!' }),
   );
   assert.strictEqual(res.sent, false);
-  assert.match(res.error, /nope/);
+  assert.match(res.error, /twilio code 63016/);
+  assert.match(res.error, /400/);
 });
 
-test('sendViaSessionTemplate is a no-op (null) when no fallback campaign is set', async () => {
+test('sendWhatsAppText rejects an unparseable recipient before hitting the network', async () => {
   const res = await withStub(
-    { env: { AISENSY_API_KEY: 'k', AISENSY_SESSION_CAMPAIGN: undefined }, fetchFn: async () => mockResponse(true, {}) },
-    () => whatsapp.sendViaSessionTemplate({ to: '+15556667777', body: 'x' }),
+    {
+      env: {
+        TWILIO_ACCOUNT_SID: 'ACtest',
+        TWILIO_AUTH_TOKEN: 'tok',
+        TWILIO_WHATSAPP_FROM: '+18005551234',
+      },
+      fetchFn: async () => { throw new Error('should not be called'); },
+    },
+    () => whatsapp.sendWhatsAppText({ to: 'not a number', body: 'x' }),
   );
-  assert.strictEqual(res, null);
+  assert.strictEqual(res.sent, false);
+  assert.match(res.error, /invalid recipient/);
+});
+
+test('renderOfferOutreachBody names creator + brand and includes the link + expiry', () => {
+  const body = whatsapp.renderOfferOutreachBody({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    offerUrl: 'https://x.test/o/tok',
+    expiryDate: 'Aug 1',
+  });
+  assert.match(body, /Sam/);
+  assert.match(body, /Acme/);
+  assert.match(body, /https:\/\/x\.test\/o\/tok/);
+  assert.match(body, /Aug 1/);
 });

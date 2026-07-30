@@ -1,6 +1,6 @@
 'use strict';
 
-// Inbound offer-portal webhooks + reply bot. AiSensy (WhatsApp) and Linq (the
+// Inbound offer-portal webhooks + reply bot. Twilio (WhatsApp) and Linq (the
 // iMessage gateway) POST each creator reply here; we:
 //   1. match the sender to a creator by their WhatsApp / iMessage number
 //   2. a pending offer's conversation runs in stages (offers.messaging_stage —
@@ -18,10 +18,11 @@
 //      Accept can never drift apart)
 //   5. anything else → send the deflection reply and flag needs_review so it
 //      surfaces for a human in the dashboard.
-// Ported from Influence-CDB-portal (api/webhooks/aisensy/route.ts), generalised
-// to both channels. Linq nests the reply differently from AiSensy (its content
-// lives in message.parts[].value and the sender in sender_handle, under an
-// event envelope), so parseInbound handles both shapes.
+// Ported originally from Influence-CDB-portal (api/webhooks/aisensy/route.ts),
+// generalised to both channels. Linq nests the reply under an event envelope
+// (message.parts[].value / sender_handle), while Twilio POSTs a flat
+// application/x-www-form-urlencoded body with `From`/`Body`/`MessageSid` — so
+// parseInbound handles both shapes.
 
 const express = require('express');
 const crypto = require('crypto');
@@ -75,12 +76,15 @@ function eventType(payload) {
 }
 
 // The sender's phone/handle. Linq puts it in sender_handle ({ handle, service }
-// or a bare string); other gateways use one of several flat aliases.
+// or a bare string). Twilio uses `From` (title case, e.g. "whatsapp:+15…") and
+// also exposes just the digits as `WaId`. Others use one of several flat aliases.
 function extractSender(d) {
   const sh = d.sender_handle;
   if (sh && typeof sh === 'object' && typeof sh.handle === 'string') return sh.handle;
   if (typeof sh === 'string') return sh;
   return (
+    getString(d, 'From') ||        // Twilio form field
+    getString(d, 'WaId') ||        // Twilio's bare-digits alias
     getString(d, 'from') ||
     getString(d, 'handle') ||
     getString(d, 'phoneNumber') ||
@@ -114,6 +118,7 @@ function extractBody(d) {
   }
   const textField = d.text;
   return (
+    getString(d, 'Body') ||        // Twilio form field
     getString(d, 'message') ||
     getString(d, 'body') ||
     getString(d, 'content') ||
@@ -210,7 +215,54 @@ function verifyLinqSignature(req) {
   return false;
 }
 
-// Shared-secret check for the AiSensy WhatsApp webhook (header or query param).
+// Verify a Twilio inbound webhook's signature against TWILIO_AUTH_TOKEN. Twilio
+// signs each POST as HMAC-SHA1(URL + concat of sorted POST param name+value
+// pairs), base64-encoded, delivered in `X-Twilio-Signature`. Verification is
+// disabled when the auth token isn't set (dev mode), matching the convention
+// used for the Linq iMessage webhook.
+//
+// The URL Twilio signs is the exact URL it POSTed to — protocol + host + path
+// + query string — so behind a reverse proxy (Railway/Heroku/etc.) we must
+// reconstruct it from X-Forwarded-Proto / X-Forwarded-Host, otherwise the
+// signature won't match. TWILIO_WEBHOOK_URL is an explicit override for edge
+// cases (custom domain, path rewrite) where the forwarded headers still don't
+// reflect what Twilio saw.
+function verifyTwilioSignature(req) {
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!token) return true;
+
+  const provided = req.headers['x-twilio-signature'];
+  if (!provided) {
+    console.warn('[offer-webhook] Twilio auth token set but X-Twilio-Signature header missing');
+    return false;
+  }
+
+  const url = twilioWebhookUrl(req);
+
+  // Twilio's canonical string: URL immediately followed by each POST parameter
+  // (sorted by name) as `${name}${value}` concatenation — no separators.
+  const params = req.body && typeof req.body === 'object' ? req.body : {};
+  const keys = Object.keys(params).sort();
+  let signed = url;
+  for (const k of keys) signed += k + String(params[k] == null ? '' : params[k]);
+
+  const expected = crypto.createHmac('sha1', token).update(signed).digest('base64');
+  return safeEqual(provided, expected);
+}
+
+// Reconstruct the exact URL Twilio POSTed to. TWILIO_WEBHOOK_URL wins when set;
+// otherwise pick protocol/host from the standard forwarded-headers first, then
+// fall back to what Express sees locally.
+function twilioWebhookUrl(req) {
+  const override = process.env.TWILIO_WEBHOOK_URL;
+  if (override) return override.replace(/\/$/, '') + (req.originalUrl || req.url || '');
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  return `${proto}://${host}${req.originalUrl || req.url || ''}`;
+}
+
+// Shared-secret check kept for any other webhook that still uses it. Not used
+// by the Twilio WhatsApp route — see verifyTwilioSignature above.
 function authorizedSecret(req, secretEnv) {
   const secret = process.env[secretEnv];
   if (!secret) return true; // dev mode — no secret configured
@@ -531,10 +583,14 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   return res.json({ ok: true, intent, outcome, needsReview });
 }
 
-// POST /webhook/aisensy — inbound WhatsApp.
-router.post('/aisensy', async (req, res, next) => {
+// POST /webhook/whatsapp — inbound WhatsApp (Twilio). The path is CHANNEL-named
+// (not vendor-named) to match /webhook/imessage — a future vendor swap changes
+// the auth + parser under the hood without moving the URL. NOTE: this route
+// receives Twilio's application/x-www-form-urlencoded body; server.js registers
+// express.urlencoded() globally so the parsed fields land on req.body.
+router.post('/whatsapp', async (req, res, next) => {
   try {
-    await handleInbound('whatsapp', 'whatsapp', (r) => authorizedSecret(r, 'AISENSY_WEBHOOK_SECRET'), req, res);
+    await handleInbound('whatsapp', 'whatsapp', verifyTwilioSignature, req, res);
   } catch (err) {
     next(err);
   }
@@ -553,6 +609,8 @@ router.post('/imessage', async (req, res, next) => {
 // `app.use('/webhook', offerWebhook)` still works) so they can be unit-tested.
 router.parseInbound = parseInbound;
 router.verifyLinqSignature = verifyLinqSignature;
+router.verifyTwilioSignature = verifyTwilioSignature;
+router.twilioWebhookUrl = twilioWebhookUrl;
 router.eventType = eventType;
 router.pickMatch = pickMatch;
 router.decideInboundAction = decideInboundAction;
