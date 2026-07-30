@@ -183,7 +183,7 @@ async function sendOutreach(creatorId) {
     }
     // Falling back to the plain Instantly cold email means this Used creator
     // will NOT be asked to text us on WhatsApp/iMessage. Spell out why: a
-    // deploy-level config gap (Resend/AiSensy/Linq not set) is very different
+    // deploy-level config gap (Resend/Twilio/Linq not set) is very different
     // from a per-creator gap (no phone on file / opted out), and the two need
     // different fixes. The config issues below are global (same for everyone);
     // if there are none, it's a per-creator reason.

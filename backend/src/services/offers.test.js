@@ -17,17 +17,21 @@ const offers = require('./offers');
 // waKey/imKey: undefined to simulate a half-configured channel (number set, key
 // missing) — the dead-end case inviteNumbersFor must withhold.
 function withBusinessNumbers(opts, fn) {
-  const NAMES = {
-    wa: 'AISENSY_WHATSAPP_NUMBER',
-    im: 'IMESSAGE_FROM_NUMBER',
-    waKey: 'AISENSY_API_KEY',
-    imKey: 'IMESSAGE_API_KEY',
-  };
+  // `waKey` fans out to Twilio's TWO required creds (SID + auth token) — both
+  // must be set for a Twilio send to authenticate; either alone is a 401 in
+  // production and reads as `conversationReady: false` in config.
+  const VARS = [
+    'TWILIO_WHATSAPP_FROM',
+    'IMESSAGE_FROM_NUMBER',
+    'TWILIO_ACCOUNT_SID',
+    'TWILIO_AUTH_TOKEN',
+    'IMESSAGE_API_KEY',
+  ];
   // A destructuring default (`waKey = ...`) would also fire on an explicit
   // `waKey: undefined`, so we can't tell "omitted" from "unset" that way. Use the
   // `in` operator: absent ⇒ default test key; present-but-undefined ⇒ unset.
   const { wa, im } = opts;
-  const waKey = 'waKey' in opts ? opts.waKey : 'ai_test_key';
+  const waKey = 'waKey' in opts ? opts.waKey : 'twilio_test_creds';
   const imKey = 'imKey' in opts ? opts.imKey : 'im_test_key';
   const saved = {};
   const setOrDel = (name, val) => {
@@ -35,14 +39,16 @@ function withBusinessNumbers(opts, fn) {
     else process.env[name] = val;
   };
   try {
-    for (const key of Object.keys(NAMES)) saved[key] = process.env[NAMES[key]];
-    setOrDel(NAMES.wa, wa);
-    setOrDel(NAMES.im, im);
-    setOrDel(NAMES.waKey, waKey);
-    setOrDel(NAMES.imKey, imKey);
+    for (const v of VARS) saved[v] = process.env[v];
+    setOrDel('TWILIO_WHATSAPP_FROM', wa);
+    setOrDel('IMESSAGE_FROM_NUMBER', im);
+    // waKey === undefined ⇒ clear BOTH Twilio creds (dead-end simulated).
+    setOrDel('TWILIO_ACCOUNT_SID', waKey);
+    setOrDel('TWILIO_AUTH_TOKEN', waKey);
+    setOrDel('IMESSAGE_API_KEY', imKey);
     return fn();
   } finally {
-    for (const key of Object.keys(NAMES)) setOrDel(NAMES[key], saved[key]);
+    for (const v of VARS) setOrDel(v, saved[v]);
   }
 }
 
@@ -76,7 +82,7 @@ test('inviteNumbersFor omits a channel whose business number is not configured',
 
 test('inviteNumbersFor omits a channel whose provider API key is missing (dead-end guard)', () => {
   // Production state that motivated this: the WhatsApp business number is set but
-  // AISENSY_API_KEY is not, so a reply on WhatsApp can't be answered. Showing it
+  // Twilio SID/token isn't, so a reply on WhatsApp can't be answered. Showing it
   // would route the creator into a dead end, so it's withheld; iMessage (fully
   // wired) is still offered.
   withBusinessNumbers({ wa: '+18005551234', im: '+18005555678', waKey: undefined }, () => {

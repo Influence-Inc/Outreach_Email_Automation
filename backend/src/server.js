@@ -36,6 +36,12 @@ app.use(express.json({
     req.rawBody = buf;
   },
 }));
+// Twilio POSTs its inbound WhatsApp messages + status callbacks as
+// application/x-www-form-urlencoded (see /webhook/whatsapp). express.json
+// above only parses application/json bodies, so add urlencoded parsing so the
+// form fields (`From`, `Body`, `MessageSid`, `MessageStatus`, …) land on
+// req.body for verifyTwilioSignature and the handler.
+app.use(express.urlencoded({ limit: '1mb', extended: false }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

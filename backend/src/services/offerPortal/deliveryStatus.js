@@ -2,10 +2,11 @@
 
 // Delivery-status plumbing for the offer-portal messaging channels. Providers
 // report delivered/read/failed differently: Linq (iMessage) emits a
-// message.<status> event, while AiSensy/Meta (WhatsApp) send an explicit
-// `status` field. Both the send-response message id and the status callbacks are
-// parsed defensively — like inbound replies, the exact schema isn't stable, so
-// the raw payload is captured (see offer_messages.raw_payload) for verification.
+// message.<status> event, while Twilio (WhatsApp) POSTs a form-encoded status
+// callback with `MessageStatus` + `MessageSid`. Both the send-response message
+// id and the status callbacks are parsed defensively — like inbound replies,
+// the exact schema isn't stable, so the raw payload is captured (see
+// offer_messages.raw_payload) for verification.
 
 // Linq message.<status> event → our canonical status.
 const STATUS_BY_EVENT = {
@@ -24,27 +25,44 @@ const KNOWN_STATUSES = new Set(['sent', 'delivered', 'read', 'failed']);
 const getStr = (o, k) => (o && typeof o === 'object' && typeof o[k] === 'string' ? o[k] : null);
 
 function eventOf(payload) {
-  // Only event_type/event — never the bare `type` (AiSensy's message content
-  // type, e.g. "text"), which is not an event kind.
+  // Only event_type/event — never the bare `type` (a message content type, e.g.
+  // "text"), which is not an event kind.
   return getStr(payload, 'event_type') || getStr(payload, 'event') || null;
 }
 
 // The provider's id for a message we SENT, read from the send-response body so a
-// later status callback can be correlated back to the outbound offer_messages row.
+// later status callback can be correlated back to the outbound offer_messages
+// row. Twilio's Messages endpoint returns `sid` (e.g. "SMxxxx…") — that's what
+// the later status callback quotes as `MessageSid`, so it's the canonical id.
 function extractProviderMessageId(data) {
   if (!data || typeof data !== 'object') return null;
   const d = data.data && typeof data.data === 'object' ? data.data : data;
   const msg = d.message && typeof d.message === 'object' ? d.message : null;
   return (
+    getStr(d, 'sid') ||
     getStr(d, 'id') ||
     getStr(d, 'message_id') ||
     getStr(d, 'messageId') ||
     (msg && (getStr(msg, 'id') || getStr(msg, 'message_id'))) ||
+    getStr(data, 'sid') ||
     getStr(data, 'id') ||
     getStr(data, 'message_id') ||
     null
   );
 }
+
+// Twilio's MessageStatus values → our canonical set. "queued" is Twilio's
+// pre-send acceptance state — we collapse it into 'sent' (nothing to do with
+// it separately in the dashboard). "undelivered" collapses into 'failed'.
+const TWILIO_STATUS_MAP = {
+  queued: 'sent',
+  sending: 'sent',
+  sent: 'sent',
+  delivered: 'delivered',
+  read: 'read',
+  failed: 'failed',
+  undelivered: 'failed',
+};
 
 // A delivery-status callback → { providerMessageId, status }, or null when the
 // payload is not a status event (e.g. it's an inbound reply, which the caller
@@ -60,7 +78,16 @@ function parseStatusEvent(payload) {
   // Linq-style: a message.<status> event.
   let status = evt ? STATUS_BY_EVENT[evt.toLowerCase()] || null : null;
 
-  // Meta/AiSensy-style: an explicit status field.
+  // Twilio-style: form-encoded (already parsed by express.urlencoded) with a
+  // `MessageStatus` field. Inbound Twilio POSTs do NOT carry MessageStatus, so
+  // its presence is what distinguishes a status callback from a message.
+  if (!status) {
+    const twilioStatus = (getStr(payload, 'MessageStatus') || getStr(payload, 'SmsStatus') || '').toLowerCase();
+    if (twilioStatus && TWILIO_STATUS_MAP[twilioStatus]) status = TWILIO_STATUS_MAP[twilioStatus];
+  }
+
+  // Generic lowercase-`status` field (kept for defensive parsing of any legacy
+  // or vendor-specific payloads still in flight during rollover).
   if (!status) {
     const s = (getStr(d, 'status') || getStr(payload, 'status') || '').toLowerCase();
     if (KNOWN_STATUSES.has(s)) status = s;
@@ -69,6 +96,9 @@ function parseStatusEvent(payload) {
 
   const msg = d.message && typeof d.message === 'object' ? d.message : null;
   const providerMessageId =
+    // Twilio uses `MessageSid` (or `SmsSid`) in status callbacks — check first.
+    getStr(payload, 'MessageSid') ||
+    getStr(payload, 'SmsSid') ||
     getStr(d, 'message_id') ||
     getStr(d, 'messageId') ||
     getStr(d, 'id') ||
@@ -82,6 +112,7 @@ function parseStatusEvent(payload) {
 
 module.exports = {
   STATUS_BY_EVENT,
+  TWILIO_STATUS_MAP,
   NEW_MESSAGE_EVENTS,
   KNOWN_STATUSES,
   eventOf,

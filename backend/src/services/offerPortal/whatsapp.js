@@ -1,162 +1,139 @@
 'use strict';
 
-// Offer-portal WhatsApp channel via AiSensy. Ported from Influence-CDB-portal
-// (src/lib/whatsapp.ts). AiSensy uses a pre-approved template referenced by
-// `campaignName` with 4 ordered params: {{1}} First Name, {{2}} Brand Name,
-// {{3}} Offer Link, {{4}} Expiry Date. Sends are skipped gracefully when
-// AISENSY_API_KEY is absent, so dev never breaks.
+// Offer-portal WhatsApp channel via Twilio's REST API. Ported over from AiSensy;
+// same public surface (businessNumber / sendWhatsAppText / normalizePhone /
+// renderOfferOutreachBody) so callers (offers.js, outreach.js, offerWebhook.js)
+// don't change. Sends are skipped gracefully when TWILIO_* creds are absent, so
+// dev never breaks.
+//
+// Twilio's Messages endpoint:
+//   POST {TWILIO_API_BASE}/2010-04-01/Accounts/{SID}/Messages.json
+//   Authorization: Basic base64(SID:AUTH_TOKEN)
+//   Content-Type: application/x-www-form-urlencoded
+//   From=whatsapp:+18005551234&To=whatsapp:+15556667777&Body=...
+// (see https://www.twilio.com/docs/whatsapp/api).
+//
+// 24h window: Meta rejects free-form text sent to a user who hasn't messaged us
+// in the last 24 hours; Twilio surfaces this as HTTP 400 with `code: 63016`.
+// The AiSensy-era session-template fallback (AISENSY_SESSION_CAMPAIGN) was
+// deliberately dropped as part of this swap; a send outside the window will
+// fail with a clear error and the message can be retried once the creator
+// messages us again. To re-enable a template fallback later, wire a Twilio
+// Content Template send here (Content API with ContentSid/ContentVariables) —
+// no other file needs to change.
 
 const { extractProviderMessageId } = require('./deliveryStatus');
 
-function apiKey() {
-  return process.env.AISENSY_API_KEY || '';
+function accountSid() {
+  return process.env.TWILIO_ACCOUNT_SID || '';
 }
-// Our own WhatsApp Business number (E.164), shown in the invite email so a
-// creator knows what to text. This is a display value only — AiSensy's
-// campaign/text APIs route through whichever number is tied to AISENSY_API_KEY
-// on their end regardless of what's configured here.
+function authToken() {
+  return process.env.TWILIO_AUTH_TOKEN || '';
+}
+// Our own WhatsApp Business number (E.164 with leading "+"), shown in the invite
+// email so a creator knows what to text, AND used as the `From` on every send.
+// Unlike AiSensy — where the sender number was implicit in the API key — Twilio
+// requires an explicit `From` per request, so a wrong/missing value here fails
+// the send loudly instead of silently routing elsewhere.
 function businessNumber() {
-  return process.env.AISENSY_WHATSAPP_NUMBER || '';
+  return process.env.TWILIO_WHATSAPP_FROM || '';
 }
-function campaignName() {
-  return process.env.AISENSY_CAMPAIGN_NAME || 'offer_outreach';
+function apiBase() {
+  return (process.env.TWILIO_API_BASE || 'https://api.twilio.com').replace(/\/$/, '');
 }
-function apiUrl() {
-  return process.env.AISENSY_API_URL || 'https://backend.aisensy.com/campaign/t1/api/v2';
-}
-// AiSensy's free-form session-message endpoint (within the 24h customer window).
-function textApiUrl() {
-  return process.env.AISENSY_TEXT_API_URL || 'https://backend.aisensy.com/direct-apis/t1/messages';
+function messagesUrl() {
+  return `${apiBase()}/2010-04-01/Accounts/${encodeURIComponent(accountSid())}/Messages.json`;
 }
 
-// Strip "+" / spaces / dashes — AiSensy + Meta want bare digits ("919812345670").
+// Bare digits — used to match inbound sender numbers (last-10-digit fallback in
+// the webhook) and to normalise stored numbers before wrapping with "whatsapp:".
 function normalizePhone(raw) {
   return String(raw || '').replace(/\D/g, '');
 }
 
-async function sendOfferOutreachWhatsApp({ to, firstName, brandName, offerUrl, expiryDate }) {
-  if (!apiKey()) {
-    console.warn(`[offer-whatsapp] AISENSY_API_KEY not set — skipping outreach to ${to}`);
-    return { sent: false, skipped: true };
-  }
+// Twilio requires the address prefixed with "whatsapp:" and in E.164 with a "+".
+function toWhatsAppAddr(raw) {
+  const digits = normalizePhone(raw);
+  return digits ? `whatsapp:+${digits}` : '';
+}
+
+function basicAuthHeader() {
+  return `Basic ${Buffer.from(`${accountSid()}:${authToken()}`).toString('base64')}`;
+}
+
+function buildTwilioForm({ from, to, body }) {
+  const params = new URLSearchParams();
+  params.set('From', toWhatsAppAddr(from));
+  params.set('To', toWhatsAppAddr(to));
+  params.set('Body', body);
+  return params;
+}
+
+// Extract Twilio's error code from a JSON error body so callers/logs can spot
+// the 63016 (outside-24h-window) case without regex-matching the message text.
+function extractTwilioErrorCode(bodyText) {
   try {
-    const res = await fetch(apiUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey: apiKey(),
-        campaignName: campaignName(),
-        destination: normalizePhone(to),
-        userName: 'INFLUENCE',
-        templateParams: [firstName, brandName, offerUrl, expiryDate],
-        source: 'deal-studio',
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
-    }
-    const data = await res.json().catch(() => null);
-    return { sent: true, id: extractProviderMessageId(data) };
-  } catch (err) {
-    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
+    const parsed = JSON.parse(bodyText);
+    return parsed && typeof parsed.code === 'number' ? parsed.code : null;
+  } catch (_) {
+    return null;
   }
 }
 
-// A pre-approved "utility" template whose single body param {{1}} carries an
-// arbitrary message — used to reach a creator OUTSIDE Meta's 24h session window,
-// where free-form session text is rejected.
-function sessionFallbackCampaign() {
-  return process.env.AISENSY_SESSION_CAMPAIGN || '';
-}
-
-// Deliver `body` through the session-fallback template. Returns null when no
-// fallback template is configured (so the caller keeps the original error).
-async function sendViaSessionTemplate({ to, body }) {
-  const campaign = sessionFallbackCampaign();
-  if (!campaign) return null;
-  try {
-    const res = await fetch(apiUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey: apiKey(),
-        campaignName: campaign,
-        destination: normalizePhone(to),
-        userName: 'INFLUENCE',
-        templateParams: [body],
-        source: 'deal-studio',
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
-    }
-    const data = await res.json().catch(() => null);
-    return { sent: true, id: extractProviderMessageId(data), viaTemplate: true };
-  } catch (err) {
-    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
-  }
-}
-
-// Free-form session text (within the 24h window after the creator messages us).
-// Used for thank-you / polite-close / deflection / too-high / review replies.
-// Outside the 24h window Meta rejects free-form text, so a failed send falls back
-// to the session template (when AISENSY_SESSION_CAMPAIGN is configured) which
-// carries the same body — so a delayed reply still reaches the creator.
+// Free-form session text (within Meta's 24h window after the creator messages
+// us). Used for the brand brief, thank-you, polite-close, deflection, too-high,
+// and manual review replies. Outside the window Twilio returns HTTP 400 with
+// code 63016 — surfaced verbatim in the error so the reason is visible in logs.
 async function sendWhatsAppText({ to, body }) {
-  if (!apiKey()) {
-    console.warn(`[offer-whatsapp] AISENSY_API_KEY not set — skipping text to ${to}`);
+  if (!accountSid() || !authToken() || !businessNumber()) {
+    console.warn(
+      `[offer-whatsapp] TWILIO_ACCOUNT_SID/AUTH_TOKEN/WHATSAPP_FROM not set — skipping text to ${to}`,
+    );
     return { sent: false, skipped: true };
   }
-  let result;
+  const recipient = toWhatsAppAddr(to);
+  if (!recipient) return { sent: false, error: 'invalid recipient number' };
+
   try {
-    const res = await fetch(textApiUrl(), {
+    const res = await fetch(messagesUrl(), {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey()}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: basicAuthHeader(),
       },
-      body: JSON.stringify({
-        to: normalizePhone(to),
-        type: 'text',
-        recipient_type: 'individual',
-        text: { body },
-      }),
+      body: buildTwilioForm({ from: businessNumber(), to, body }).toString(),
     });
     if (res.ok) {
       const data = await res.json().catch(() => null);
       return { sent: true, id: extractProviderMessageId(data) };
     }
     const text = await res.text().catch(() => '');
-    result = { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
+    const code = extractTwilioErrorCode(text);
+    const suffix = code ? ` (twilio code ${code})` : '';
+    return { sent: false, error: `${res.status} ${text.slice(0, 200)}${suffix}` };
   } catch (err) {
-    result = { sent: false, error: err && err.message ? err.message : 'unknown error' };
+    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
   }
-
-  // Free-form failed (commonly: outside the 24h window) — try the template.
-  const fallback = await sendViaSessionTemplate({ to, body });
-  if (fallback && fallback.sent) {
-    console.warn(`[offer-whatsapp] free-form text failed (${result.error}); delivered via session template`);
-    return fallback;
-  }
-  if (fallback) return { sent: false, error: `session: ${result.error}; template: ${fallback.error}` };
-  return result;
 }
 
 // The offer-reveal message body (free-form session reply used by
 // deliverOfferOverChannel) — also stored in offer_messages so the admin can see
 // what the creator received. Points them straight at the portal link to view
-// AND accept the offer, so they know exactly what to do next.
+// AND accept the offer, so they know exactly what to do next. Unchanged from
+// the AiSensy era — this is copy, not vendor-specific plumbing.
 function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate }) {
   return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
 }
 
 module.exports = {
   normalizePhone,
+  toWhatsAppAddr,
   businessNumber,
-  sendOfferOutreachWhatsApp,
   sendWhatsAppText,
-  sendViaSessionTemplate,
   renderOfferOutreachBody,
+  // Exposed for tests.
+  buildTwilioForm,
+  basicAuthHeader,
+  extractTwilioErrorCode,
+  messagesUrl,
 };

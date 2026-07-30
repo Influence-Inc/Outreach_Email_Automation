@@ -11,8 +11,9 @@ const {
 // Snapshot + restore every env var the module reads, so tests don't leak state.
 const VARS = [
   'RESEND_API_KEY',
-  'AISENSY_WHATSAPP_NUMBER',
-  'AISENSY_API_KEY',
+  'TWILIO_ACCOUNT_SID',
+  'TWILIO_AUTH_TOKEN',
+  'TWILIO_WHATSAPP_FROM',
   'IMESSAGE_FROM_NUMBER',
   'IMESSAGE_API_KEY',
   'PUBLIC_BASE_URL',
@@ -48,17 +49,18 @@ test('nothing configured → invite disabled and every issue reported', () => {
     // when all is blank.
     assert.equal(issues.length, 3);
     assert.equal(issues.some((i) => /RESEND_API_KEY/.test(i)), true);
-    assert.equal(issues.some((i) => /AISENSY_WHATSAPP_NUMBER|IMESSAGE_FROM_NUMBER/.test(i)), true);
+    assert.equal(issues.some((i) => /TWILIO_WHATSAPP_FROM|IMESSAGE_FROM_NUMBER/.test(i)), true);
     assert.equal(issues.some((i) => /PUBLIC_BASE_URL/.test(i)), true);
   });
 });
 
-test('Resend + a WhatsApp number + AiSensy key → invite and conversation ready', () => {
+test('Resend + a WhatsApp number + Twilio SID/token → invite and conversation ready', () => {
   withEnv(
     {
       RESEND_API_KEY: 're_test',
-      AISENSY_WHATSAPP_NUMBER: '+18005551234',
-      AISENSY_API_KEY: 'ai_test',
+      TWILIO_WHATSAPP_FROM: '+18005551234',
+      TWILIO_ACCOUNT_SID: 'ACtest',
+      TWILIO_AUTH_TOKEN: 'tok_test',
       PUBLIC_BASE_URL: 'https://outreach.example', // the outreach app's own URL
     },
     () => {
@@ -71,12 +73,36 @@ test('Resend + a WhatsApp number + AiSensy key → invite and conversation ready
   );
 });
 
+test('a WhatsApp number with only ONE of SID/token → invite ready but conversation not', () => {
+  // Twilio Basic Auth needs BOTH; either alone is a 401. The invite still shows
+  // WhatsApp (the number is public), but the "reply" side is not ready and a
+  // TWILIO_ACCOUNT_SID/TOKEN issue is surfaced.
+  withEnv(
+    {
+      RESEND_API_KEY: 're_test',
+      TWILIO_WHATSAPP_FROM: '+18005551234',
+      TWILIO_ACCOUNT_SID: 'ACtest',
+      // TWILIO_AUTH_TOKEN intentionally missing
+      PUBLIC_BASE_URL: 'https://outreach.example',
+    },
+    () => {
+      const c = offerPortalConfig();
+      assert.equal(c.whatsapp.inviteReady, true);
+      assert.equal(c.whatsapp.hasApiKey, false);
+      assert.equal(c.whatsapp.conversationReady, false);
+      const issues = offerPortalConfigIssues();
+      assert.equal(issues.some((i) => /TWILIO_ACCOUNT_SID/.test(i) && /TWILIO_AUTH_TOKEN/.test(i)), true);
+    },
+  );
+});
+
 test('offer-link base pointing at the campaigns/stats domain is flagged (the "This campaign doesn\'t exist" bug)', () => {
   withEnv(
     {
       RESEND_API_KEY: 're_test',
-      AISENSY_WHATSAPP_NUMBER: '+18005551234',
-      AISENSY_API_KEY: 'ai_test',
+      TWILIO_WHATSAPP_FROM: '+18005551234',
+      TWILIO_ACCOUNT_SID: 'ACtest',
+      TWILIO_AUTH_TOKEN: 'tok_test',
       // The misconfig: offer links built against the campaigns/stats domain,
       // which serves influence-stats (no offer portal), not this outreach app.
       PUBLIC_BASE_URL: 'https://campaigns.influence.technology',
@@ -98,8 +124,9 @@ test('offer-link base set to the outreach app\'s own URL is clean (trailing slas
   withEnv(
     {
       RESEND_API_KEY: 're_test',
-      AISENSY_WHATSAPP_NUMBER: '+18005551234',
-      AISENSY_API_KEY: 'ai_test',
+      TWILIO_WHATSAPP_FROM: '+18005551234',
+      TWILIO_ACCOUNT_SID: 'ACtest',
+      TWILIO_AUTH_TOKEN: 'tok_test',
       PUBLIC_BASE_URL: 'https://outreach.influence.technology/',
       CAMPAIGNS_API_BASE: 'https://campaigns.influence.technology',
     },
@@ -131,7 +158,7 @@ test('a business number without its API key surfaces a send-side issue', () => {
 
 test('Resend missing is reported even when a channel is fully wired', () => {
   withEnv(
-    { AISENSY_WHATSAPP_NUMBER: '+18005551234', AISENSY_API_KEY: 'ai_test' },
+    { TWILIO_WHATSAPP_FROM: '+18005551234', TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'tok_test' },
     () => {
       const c = offerPortalConfig();
       // No invite email can be sent, so the whole invite is disabled.

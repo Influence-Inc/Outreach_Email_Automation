@@ -4,8 +4,8 @@
 //
 // Guards the delivery-status plumbing: extracting the provider message id from a
 // send response, and classifying delivery/read/failed status callbacks across
-// the Linq (message.<status> event) and AiSensy/Meta (status field) shapes,
-// without mistaking an inbound reply for a status update.
+// the Linq (message.<status> event) and Twilio (MessageStatus + MessageSid)
+// shapes, without mistaking an inbound reply for a status update.
 const test = require('node:test');
 const assert = require('node:assert');
 const ds = require('./deliveryStatus');
@@ -20,6 +20,10 @@ test('extractProviderMessageId reads flat id / message_id aliases', () => {
   assert.strictEqual(ds.extractProviderMessageId({ id: 'm_2' }), 'm_2');
   assert.strictEqual(ds.extractProviderMessageId({ message_id: 'm_3' }), 'm_3');
   assert.strictEqual(ds.extractProviderMessageId({ data: { id: 'm_4' } }), 'm_4');
+});
+
+test('extractProviderMessageId reads Twilio-style sid (the canonical id for a Messages send)', () => {
+  assert.strictEqual(ds.extractProviderMessageId({ sid: 'SM123', status: 'queued' }), 'SM123');
 });
 
 test('extractProviderMessageId returns null when absent / not an object', () => {
@@ -44,7 +48,28 @@ test('parseStatusEvent classifies a Linq message.<status> event', () => {
   );
 });
 
-test('parseStatusEvent classifies an AiSensy/Meta status field', () => {
+test('parseStatusEvent classifies a Twilio MessageStatus callback (form-encoded body)', () => {
+  // What express.urlencoded gives us for a real Twilio status callback POST.
+  assert.deepStrictEqual(
+    ds.parseStatusEvent({ MessageSid: 'SM_100', MessageStatus: 'delivered' }),
+    { providerMessageId: 'SM_100', status: 'delivered' },
+  );
+  assert.deepStrictEqual(
+    ds.parseStatusEvent({ MessageSid: 'SM_101', MessageStatus: 'read' }),
+    { providerMessageId: 'SM_101', status: 'read' },
+  );
+  // Twilio "queued" collapses to our canonical "sent"; "undelivered" → "failed".
+  assert.deepStrictEqual(
+    ds.parseStatusEvent({ MessageSid: 'SM_102', MessageStatus: 'queued' }),
+    { providerMessageId: 'SM_102', status: 'sent' },
+  );
+  assert.deepStrictEqual(
+    ds.parseStatusEvent({ MessageSid: 'SM_103', MessageStatus: 'undelivered' }),
+    { providerMessageId: 'SM_103', status: 'failed' },
+  );
+});
+
+test('parseStatusEvent classifies a generic lowercase-status callback (defensive parsing)', () => {
   assert.deepStrictEqual(ds.parseStatusEvent({ status: 'delivered', id: 'm_4' }), {
     providerMessageId: 'm_4',
     status: 'delivered',
@@ -61,7 +86,12 @@ test('parseStatusEvent returns null for an inbound reply (not a status update)',
     ds.parseStatusEvent({ event_type: 'message.created', data: { message: { parts: [{ type: 'text', value: 'yes' }] } } }),
     null,
   );
-  // Flat AiSensy reply
+  // Twilio inbound: has From/Body but NO MessageStatus → not a status update.
+  assert.strictEqual(
+    ds.parseStatusEvent({ From: 'whatsapp:+15556667777', Body: 'yes', MessageSid: 'SM_x' }),
+    null,
+  );
+  // Flat foreign-shape reply with no status
   assert.strictEqual(ds.parseStatusEvent({ from: '919812345670', message: 'yes' }), null);
   // A reaction with no status field
   assert.strictEqual(ds.parseStatusEvent({ event_type: 'reaction.created', data: {} }), null);
