@@ -26,7 +26,7 @@ const email = require('./offerPortal/email');
 const whatsapp = require('./offerPortal/whatsapp');
 const imessage = require('./offerPortal/imessage');
 const { offerPortalConfig } = require('./offerPortal/config');
-const { thankYouMessage, politeCloseMessage, renderMessagingBrief } = require('./offerPortal/replies');
+const { thankYouMessage, politeCloseMessage, notAFitCloseMessage, renderMessagingBrief } = require('./offerPortal/replies');
 const creatorDb = require('./creatorDb');
 
 const DEFAULT_EXPIRY_DAYS = Number(process.env.OFFER_EXPIRY_DAYS || 7);
@@ -774,7 +774,15 @@ async function onOfferResponded(offerId, response) {
     // only over an ALREADY-established channel. A web response with no prior
     // messaging contact has nowhere to send this (nothing to establish it with
     // — the email confirmation above already covers the accept case).
-    let body = response === 'accepted' ? thankYouMessage(firstName) : politeCloseMessage(firstName);
+    let body;
+    if (response === 'accepted') {
+      body = thankYouMessage(firstName);
+    } else if (offer.decline_reason === 'Not a fit') {
+      // "Not a fit" gets the warmer, forward-looking close (see notAFitCloseMessage).
+      body = notAFitCloseMessage(firstName);
+    } else {
+      body = politeCloseMessage(firstName);
+    }
     // A creator who accepted by text still needs to review + sign the mini
     // contract — send them the link (accept over the web page goes straight to
     // the contract view, so this only matters for a messaged accept).
@@ -869,15 +877,21 @@ async function recordDeliveryStatus({ channel, providerMessageId, status }) {
 
 function cpmToleranceAbs() {
   const raw = Number(process.env.COUNTER_CPM_TOLERANCE);
-  return Number.isFinite(raw) && raw >= 0 ? raw : 1.5;
+  return Number.isFinite(raw) && raw >= 0 ? raw : 2.5;
 }
 function legacyRateTolerancePct() {
   const raw = Number(process.env.COUNTER_RATE_TOLERANCE_PCT);
   return Number.isFinite(raw) && raw >= 0 ? raw : 0.15;
 }
-function maxCpmMultiple() {
-  const raw = Number(process.env.MAX_CPM_MULTIPLE);
-  return Number.isFinite(raw) && raw > 0 ? raw : 2;
+// How far above the creator's established PRIOR-campaign CPM a counter-ask may
+// reach before we decline it outright. Default 0.5 → a request more than 50%
+// over their prior CPM is "too high" (the standing offer stays live so they can
+// still take it). Anchored to the prior CPM — not the current offer's — so the
+// ceiling doesn't creep upward across a chain of counters. Overridable via
+// MAX_CPM_INCREASE_PCT.
+function maxCpmIncreasePct() {
+  const raw = Number(process.env.MAX_CPM_INCREASE_PCT);
+  return Number.isFinite(raw) && raw > 0 ? raw : 0.5;
 }
 function computeCounterRate(originalRate, requestedRate) {
   if (process.env.COUNTER_STRATEGY === 'match') return requestedRate;
@@ -929,17 +943,51 @@ async function negotiateBudget({ token, requestedRate }) {
   const impressions = offer.expected_impressions != null ? Number(offer.expected_impressions) : null;
   const deliverablesArr = Array.isArray(offer.deliverables) ? offer.deliverables : [];
 
+  // The creator's established prior-campaign CPM sets the hard ceiling for how
+  // far a counter can push (see maxCpmIncreasePct). Best-effort: if we can't
+  // resolve it, the ceiling falls back to the current offer's own CPM below.
+  let priorCpm = null;
+  try {
+    const ctx = await db.one(
+      `SELECT c.email, c.instagram_username, ca.max_cpm, ca.data AS campaign_data
+         FROM creators c
+         LEFT JOIN campaigns ca ON ca.id = $2
+        WHERE c.id = $1`,
+      [offer.creator_id, offer.campaign_id],
+    );
+    if (ctx) {
+      const resolved = await resolvePriorCpm(
+        { email: ctx.email, instagram_username: ctx.instagram_username },
+        { max_cpm: ctx.max_cpm, data: ctx.campaign_data },
+      );
+      if (resolved && Number.isFinite(resolved.cpm) && resolved.cpm > 0) priorCpm = resolved.cpm;
+    }
+  } catch (err) {
+    console.error('[offers] prior-CPM ceiling lookup failed', err.message);
+  }
+
   let plan;
   if (impressions && impressions > 0) {
     const cpmOriginal = (originalRate / impressions) * 1000;
     const cpmRequested = (requestedRate / impressions) * 1000;
     const cpmTolerance = cpmToleranceAbs();
 
-    if (cpmRequested - cpmOriginal <= cpmTolerance) {
-      plan = { kind: 'same_terms', rate: computeCounterRate(originalRate, requestedRate) };
-    } else if (cpmRequested > cpmOriginal * maxCpmMultiple()) {
+    // Hard ceiling first: a counter more than maxCpmIncreasePct above the
+    // creator's prior-campaign CPM is declined outright — the standing offer
+    // stays live so they can go back to it. Anchor to the prior CPM (not the
+    // current offer's, so the ceiling can't creep up a chain of counters), but
+    // never below "our own offer + tolerance" so a small ask over a standing
+    // offer we already priced high is never rejected as too-high.
+    const ceilingBaseCpm = priorCpm != null ? priorCpm : cpmOriginal;
+    const ceilingCpm = Math.max(ceilingBaseCpm * (1 + maxCpmIncreasePct()), cpmOriginal + cpmTolerance);
+
+    if (cpmRequested > ceilingCpm) {
       plan = { kind: 'too_high' };
+    } else if (cpmRequested - cpmOriginal <= cpmTolerance) {
+      // Within tolerance of our offer → counter at (roughly) their rate.
+      plan = { kind: 'same_terms', rate: computeCounterRate(originalRate, requestedRate) };
     } else {
+      // Higher, but under the ceiling → hold CPM by expanding deliverables.
       const capCpm = cpmOriginal + cpmTolerance;
       const requiredImpressions = (requestedRate * 1000) / capCpm;
       const extraImpressions = requiredImpressions - impressions;
@@ -1334,6 +1382,13 @@ async function attachOffers(rows) {
       rate: Number(o.rate),
       currency: o.currency,
       rateFormatted: formatMoney(o.rate, o.currency),
+      // The creator's higher counter-ask recorded on a still-live offer (a
+      // "too high" pushback) — so the admin can see what they wanted vs. what's
+      // on the table. Null unless they've pushed back.
+      requestedRate: o.requested_rate != null ? Number(o.requested_rate) : null,
+      requestedRateFormatted: o.requested_rate != null ? formatMoney(o.requested_rate, o.currency) : null,
+      // Why they declined (Budget / Timing / Not a fit), when they told us.
+      declineReason: o.decline_reason || null,
       expiresAt: o.expires_at,
       isCounter: o.parent_offer_id != null,
       viewed,

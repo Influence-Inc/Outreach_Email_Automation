@@ -140,3 +140,9 @@ test('thankYouMessage and politeCloseMessage include the creator name', () => {
   assert.match(replies.thankYouMessage('Sam'), /Sam/);
   assert.match(replies.politeCloseMessage('Sam'), /Sam/);
 });
+
+test('notAFitCloseMessage is warm, forward-looking, and names the creator', () => {
+  const msg = replies.notAFitCloseMessage('Sam');
+  assert.match(msg, /Sam/);
+  assert.match(msg, /better fit/i); // promises to come back with a better match
+});
