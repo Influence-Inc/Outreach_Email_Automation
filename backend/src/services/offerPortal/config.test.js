@@ -15,6 +15,9 @@ const VARS = [
   'AISENSY_API_KEY',
   'IMESSAGE_FROM_NUMBER',
   'IMESSAGE_API_KEY',
+  'PUBLIC_BASE_URL',
+  'OFFER_PORTAL_BASE_URL',
+  'CAMPAIGNS_API_BASE',
 ];
 function withEnv(overrides, fn) {
   const saved = {};
@@ -41,10 +44,12 @@ test('nothing configured → invite disabled and every issue reported', () => {
     assert.equal(c.conversationReady, false);
 
     const issues = offerPortalConfigIssues();
-    // Resend + "no number to show" are the two blockers when all is blank.
-    assert.equal(issues.length, 2);
-    assert.match(issues[0], /RESEND_API_KEY/);
-    assert.match(issues[1], /AISENSY_WHATSAPP_NUMBER|IMESSAGE_FROM_NUMBER/);
+    // Resend, "no number to show", and "no offer-link base URL" are the blockers
+    // when all is blank.
+    assert.equal(issues.length, 3);
+    assert.equal(issues.some((i) => /RESEND_API_KEY/.test(i)), true);
+    assert.equal(issues.some((i) => /AISENSY_WHATSAPP_NUMBER|IMESSAGE_FROM_NUMBER/.test(i)), true);
+    assert.equal(issues.some((i) => /PUBLIC_BASE_URL/.test(i)), true);
   });
 });
 
@@ -54,12 +59,54 @@ test('Resend + a WhatsApp number + AiSensy key → invite and conversation ready
       RESEND_API_KEY: 're_test',
       AISENSY_WHATSAPP_NUMBER: '+18005551234',
       AISENSY_API_KEY: 'ai_test',
+      PUBLIC_BASE_URL: 'https://outreach.example', // the outreach app's own URL
     },
     () => {
       const c = offerPortalConfig();
       assert.equal(c.inviteReady, true);
       assert.equal(c.conversationReady, true);
       assert.equal(c.whatsapp.conversationReady, true);
+      assert.deepEqual(offerPortalConfigIssues(), []);
+    },
+  );
+});
+
+test('offer-link base pointing at the campaigns/stats domain is flagged (the "This campaign doesn\'t exist" bug)', () => {
+  withEnv(
+    {
+      RESEND_API_KEY: 're_test',
+      AISENSY_WHATSAPP_NUMBER: '+18005551234',
+      AISENSY_API_KEY: 'ai_test',
+      // The misconfig: offer links built against the campaigns/stats domain,
+      // which serves influence-stats (no offer portal), not this outreach app.
+      PUBLIC_BASE_URL: 'https://campaigns.influence.technology',
+      CAMPAIGNS_API_BASE: 'https://campaigns.influence.technology',
+    },
+    () => {
+      const c = offerPortalConfig();
+      assert.equal(c.offerLink.configured, true);
+      assert.equal(c.offerLink.pointsAtCampaignsService, true);
+      const issues = offerPortalConfigIssues();
+      assert.equal(issues.some((i) => /campaigns\/stats domain/.test(i) && /outreach app/.test(i)), true);
+      // The one-line summary flags it too.
+      assert.match(offerPortalConfigSummary(), /offerLink=WRONG/);
+    },
+  );
+});
+
+test('offer-link base set to the outreach app\'s own URL is clean (trailing slash tolerated)', () => {
+  withEnv(
+    {
+      RESEND_API_KEY: 're_test',
+      AISENSY_WHATSAPP_NUMBER: '+18005551234',
+      AISENSY_API_KEY: 'ai_test',
+      PUBLIC_BASE_URL: 'https://outreach.influence.technology/',
+      CAMPAIGNS_API_BASE: 'https://campaigns.influence.technology',
+    },
+    () => {
+      const c = offerPortalConfig();
+      assert.equal(c.offerLink.pointsAtCampaignsService, false);
+      assert.equal(c.offerLink.sampleLink, 'https://outreach.influence.technology/o/<token>');
       assert.deepEqual(offerPortalConfigIssues(), []);
     },
   );

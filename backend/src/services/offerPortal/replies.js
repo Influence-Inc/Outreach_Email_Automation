@@ -84,6 +84,13 @@ function politeCloseMessage(firstName) {
   return `No problem at all, ${firstName}. Thanks for letting us know. We will keep you in mind for future opportunities. Have a great day.`;
 }
 
+// Sent when a creator declines specifically because this collaboration isn't a
+// fit (decline reason "Not a fit") — a warmer, forward-looking close than the
+// generic politeCloseMessage: we'll come back when there's a better match.
+function notAFitCloseMessage(firstName) {
+  return `Totally understand, ${firstName} — thanks for taking a look. This one may not be the right match, but we'll reach out when we have a campaign that's a better fit for you.`;
+}
+
 const DEFLECTION_MESSAGE =
   'Thanks for the message. For any questions or doubts, please contact our support team at jennifer@useinfluence.xyz and they will get back to you.';
 
@@ -194,6 +201,7 @@ module.exports = {
   isOptIn,
   thankYouMessage,
   politeCloseMessage,
+  notAFitCloseMessage,
   tooHighReply,
   renderMessagingBrief,
   interestClarificationMessage,

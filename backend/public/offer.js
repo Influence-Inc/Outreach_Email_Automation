@@ -16,6 +16,7 @@
   var countered = false;
   var addedLabel = null;
   var tooHighRequested = null;
+  var declinedReason = null; // remembered so the declined view can tailor its copy
   var submitting = false;
   var error = null;
   var rateInput = '';
@@ -77,8 +78,7 @@
         'Thanks, ' + offer.firstName + '. We are looking forward to working with you on ' + offer.brandName +
         '. Our team will reach out shortly with the next steps.');
     } else if (view === 'declined') {
-      root = centered('', '', 'Thanks for letting us know',
-        'No problem at all, ' + offer.firstName + '. We will keep you in mind for future opportunities. Have a great day.');
+      root = renderDeclined();
     } else if (view === 'expired') {
       root = centered('neutral', '⏳', 'This offer has expired',
         'Sorry, ' + offer.firstName + ' — this offer is no longer available. If you are still interested, reply to your INFLUENCE contact and we will sort it out.');
@@ -161,15 +161,30 @@
     return wrap;
   }
 
+  // Decline confirmation — "Not a fit" gets a warmer, forward-looking close
+  // (mirrors notAFitCloseMessage on the backend); anything else is the neutral
+  // "we'll keep you in mind" message.
+  function renderDeclined() {
+    if (declinedReason === 'Not a fit') {
+      return centered('', '', 'Thanks for the honesty',
+        'No worries at all, ' + offer.firstName + ". This one may not be the right match — but we'll reach out when we've got a campaign that's a better fit for you.");
+    }
+    return centered('', '', 'Thanks for letting us know',
+      'No problem at all, ' + offer.firstName + '. We will keep you in mind for future opportunities. Have a great day.');
+  }
+
+  // "Too high" — the counter-ask is above the ceiling. We DON'T take the ask,
+  // but the most recent offer stays live, so the primary action is going back to
+  // it (Accept). They can also re-propose a lower rate, or decline outright.
   function renderTooHigh() {
     return h('div', { class: 'fade' },
       h('div', { class: 'state', style: 'padding:18px 6px 20px' },
         h('h1', {}, "We can't match that one"),
         h('p', {}, 'Thanks for the proposal, ' + offer.firstName + ". We can't stretch to " +
-          (tooHighRequested || 'that rate') + ' on this brief — but the original offer of ' +
+          (tooHighRequested || 'that rate') + ' on this brief — but your current offer of ' +
           offer.rateFormatted + " still stands if you'd like to go ahead.")),
       h('div', { class: 'btns' },
-        btn('Accept ' + offer.rateFormatted, { onClick: function () { respond('accepted'); } }),
+        btn('← Go back to ' + offer.rateFormatted + ' offer', { onClick: function () { respond('accepted'); } }),
         btn('Propose a different rate', { variant: 'outline', onClick: function () { error = null; mode = 'budget'; view = 'active'; render(); } }),
         h('button', { class: 'linkbtn center-link', type: 'button', onclick: function () { respond('declined', 'Budget'); } }, 'No thanks, decline')),
       errNode());
@@ -270,6 +285,7 @@
   function setSubmitting(v) { submitting = v; render(); }
 
   async function respond(response, reason) {
+    if (response === 'declined') declinedReason = reason || null;
     setSubmitting(true);
     error = null;
     try {

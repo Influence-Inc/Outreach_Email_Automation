@@ -1153,8 +1153,17 @@ function makeDismissFlagButton(r) {
 // across the portal + messaging channels.
 function portalPillFor(p) {
   if (p.status === 'accepted') return { cls: 'accepted', text: 'offer accepted' };
-  if (p.status === 'declined') return { cls: 'declined', text: 'offer declined' };
+  if (p.status === 'declined') {
+    // Surface WHY they declined (Budget / Timing / Not a fit) when we know it.
+    const why = p.declineReason ? ' · ' + String(p.declineReason).toLowerCase() : '';
+    return { cls: 'declined', text: 'offer declined' + why };
+  }
   const kind = p.isCounter ? 'counter' : 'offer';
+  // Still live, but the creator pushed back above our ceiling (recorded ask) —
+  // the offer stands and they can still take it. Amber, not red: not a decline.
+  if (p.requestedRateFormatted) {
+    return { cls: 'pushback', text: kind + ' live · they asked ' + p.requestedRateFormatted };
+  }
   if (p.viewed) return { cls: 'viewed', text: kind + ' viewed' };
   return { cls: 'sent', text: kind + ' sent' };
 }
