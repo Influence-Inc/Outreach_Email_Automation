@@ -1159,6 +1159,11 @@ function portalPillFor(p) {
     return { cls: 'declined', text: 'offer declined' + why };
   }
   const kind = p.isCounter ? 'counter' : 'offer';
+  // Parked on a Timing decline: the creator's availability is beyond our window,
+  // awaiting an admin schedule-counter. Not a decline — the deal's still open.
+  if (p.scheduleHold) {
+    return { cls: 'hold', text: 'on hold' + (p.requestedStartFormatted ? ' · avail ' + p.requestedStartFormatted : ' · schedule') };
+  }
   // Still live, but the creator pushed back above our ceiling (recorded ask) —
   // the offer stands and they can still take it. Amber, not red: not a decline.
   if (p.requestedRateFormatted) {
@@ -1246,6 +1251,45 @@ function renderPortalOfferBlock(r) {
     nr.className = 'po-review';
     nr.textContent = '⚠ Reply needs review';
     box.appendChild(nr);
+  }
+
+  // On a schedule hold (Timing decline beyond our window): let the admin send a
+  // fresh same-terms offer on a start date that works, right from the row.
+  if (p.scheduleHold) {
+    const hold = document.createElement('div');
+    hold.className = 'po-hold';
+    const info = document.createElement('span');
+    info.className = 'po-hold-info';
+    info.textContent = p.requestedStartFormatted
+      ? '🗓 Creator free from ' + p.requestedStartFormatted
+      : '🗓 Awaiting a workable schedule';
+    hold.appendChild(info);
+    const send = document.createElement('button');
+    send.type = 'button';
+    send.className = 'ghost small';
+    send.textContent = 'Send revised offer';
+    send.title = 'Send a fresh same-terms offer on a start date that works';
+    send.onclick = async () => {
+      const date = window.prompt('Send a revised-schedule offer — start date (YYYY-MM-DD):', p.requestedStartISO || '');
+      if (!date || !date.trim()) return;
+      send.disabled = true;
+      const prev = send.textContent;
+      send.textContent = 'Sending…';
+      try {
+        await api(`/api/creators/${r.id}/reschedule-offer`, {
+          method: 'POST',
+          body: JSON.stringify({ startDate: date.trim() }),
+        });
+        send.textContent = 'Sent ✓';
+        await refreshCreators();
+      } catch (err) {
+        alert(err.message);
+        send.textContent = prev;
+        send.disabled = false;
+      }
+    };
+    hold.appendChild(send);
+    box.appendChild(hold);
   }
   return box;
 }

@@ -11,10 +11,13 @@
   var DECLINE_REASONS = ['Budget', 'Timing', 'Not a fit'];
 
   var offer = null; // { token, firstName, brandName, deliverables, rate, currency, rateFormatted, expiresFormatted }
-  var view = 'loading'; // loading | active | accepted | declined | expired | too_high | notfound
-  var mode = 'cta'; // cta | reasons | budget
+  var view = 'loading'; // loading | active | accepted | declined | expired | too_high | on_hold | notfound
+  var mode = 'cta'; // cta | reasons | budget | schedule
   var countered = false;
   var addedLabel = null;
+  var rescheduledDate = null; // set when a "Timing" re-offer switched us to a fresh offer on the creator's dates
+  var holdDateFormatted = null; // the date shown on the on-hold "we'll be in touch" view
+  var scheduleInput = ''; // the date the creator typed in the schedule step
   var tooHighRequested = null;
   var declinedReason = null; // remembered so the declined view can tailor its copy
   var submitting = false;
@@ -84,6 +87,8 @@
         'Sorry, ' + offer.firstName + ' — this offer is no longer available. If you are still interested, reply to your INFLUENCE contact and we will sort it out.');
     } else if (view === 'too_high') {
       root = renderTooHigh();
+    } else if (view === 'on_hold') {
+      root = renderOnHold();
     } else if (view === 'contract') {
       root = renderContract();
     } else if (view === 'signed') {
@@ -98,11 +103,15 @@
     var wrap = h('div', { class: 'fade' });
 
     if (countered) {
-      wrap.appendChild(h('div', { class: 'note' },
-        h('span', { class: 'spark' }, '✨'),
-        h('span', {}, addedLabel
-          ? "Good news — we've added " + addedLabel + ' and matched your rate. Have another look.'
-          : "Good news — we've updated the offer to match your rate. Have another look.")));
+      var noteMsg;
+      if (rescheduledDate) {
+        noteMsg = "Great — we've set this to start around " + rescheduledDate + '. Have another look.';
+      } else if (addedLabel) {
+        noteMsg = "Good news — we've added " + addedLabel + ' and matched your rate. Have another look.';
+      } else {
+        noteMsg = "Good news — we've updated the offer to match your rate. Have another look.";
+      }
+      wrap.appendChild(h('div', { class: 'note' }, h('span', { class: 'spark' }, '✨'), h('span', {}, noteMsg)));
     }
 
     wrap.appendChild(h('div', { class: 'eyebrow' }, h('span', { class: 'dot' }), 'New collaboration'));
@@ -131,7 +140,9 @@
         chips.appendChild(btn(reason, {
           variant: 'outline', sm: true,
           onClick: function () {
-            if (reason === 'Budget') { error = null; mode = 'budget'; render(); }
+            error = null;
+            if (reason === 'Budget') { mode = 'budget'; render(); }
+            else if (reason === 'Timing') { mode = 'schedule'; render(); }
             else respond('declined', reason);
           },
         }));
@@ -141,6 +152,19 @@
         h('p', { class: 'ask-sub' }, 'Mind sharing why? (optional)'),
         chips,
         h('button', { class: 'linkbtn', type: 'button', onclick: function () { mode = 'cta'; render(); } }, '← Back')));
+    } else if (mode === 'schedule') {
+      var dateInput = h('input', {
+        type: 'date', value: scheduleInput,
+        oninput: function (e) { scheduleInput = e.target.value; },
+        onkeydown: function (e) { if (e.key === 'Enter') proposeSchedule(); },
+      });
+      wrap.appendChild(h('div', {},
+        h('p', { class: 'ask' }, 'When are you free to start?'),
+        h('p', { class: 'ask-sub' }, "Pick the date you could begin, and we'll fit the offer around it."),
+        h('div', { class: 'rate-input' },
+          h('div', { class: 'box' }, dateInput),
+          btn(submitting ? '…' : 'Send', { onClick: proposeSchedule })),
+        h('button', { class: 'linkbtn', type: 'button', onclick: function () { scheduleInput = ''; mode = 'reasons'; render(); } }, '← Back')));
     } else {
       var input = h('input', {
         type: 'number', min: '1', inputmode: 'numeric', placeholder: 'Your rate', value: rateInput,
@@ -171,6 +195,14 @@
     }
     return centered('', '', 'Thanks for letting us know',
       'No problem at all, ' + offer.firstName + '. We will keep you in mind for future opportunities. Have a great day.');
+  }
+
+  // On hold — the creator's availability is further out than we can auto-fit, so
+  // an admin will follow up with a schedule that works (their deal isn't closed).
+  function renderOnHold() {
+    return centered('neutral', '🗓️', 'Thanks — we\'ll be in touch',
+      'Got it, ' + offer.firstName + (holdDateFormatted ? ' — noted that you\'re free from ' + holdDateFormatted + '.' : '.') +
+      ' That\'s a little further out than this brief\'s window, so your INFLUENCE contact will follow up shortly with a schedule that works for you.');
   }
 
   // "Too high" — the counter-ask is above the ceiling. We DON'T take the ask,
@@ -296,7 +328,18 @@
       });
       var data = await res.json();
       // Accepting doesn't finish the flow — it opens the mini contract to sign.
-      if (data.ok) { view = data.status === 'accepted' ? 'contract' : data.status; }
+      if (data.ok) {
+        if (data.status === 'accepted') {
+          // A client-swapped offer (after a counter / reschedule) has no contract
+          // loaded AND the browser URL still points at the old (now-declined)
+          // token — navigate to the accepted offer's own page so it loads fresh
+          // with its contract. A freshly-loaded offer already has its contract.
+          if (!offer.contract) { location.href = '/o/' + encodeURIComponent(offer.token); return; }
+          view = 'contract';
+        } else {
+          view = data.status;
+        }
+      }
       else if (data.reason === 'expired') { view = 'expired'; }
       else if (data.reason === 'already_responded') { return location.reload(); }
       else { error = 'Something went wrong. Please try again.'; }
@@ -330,9 +373,49 @@
         countered = true;
         addedLabel = c.deliverablesChanged ? c.addedLabel : null;
         mode = 'cta'; rateInput = ''; view = 'active';
+        // Keep the URL on the live offer so a manual reload loads it, not the old one.
+        try { history.replaceState(null, '', '/o/' + encodeURIComponent(c.token)); } catch (e) {}
       } else if (data.ok && data.outcome === 'too_high') {
         tooHighRequested = data.requestedRateFormatted; rateInput = ''; view = 'too_high';
       } else if (data.reason === 'expired') { view = 'expired'; }
+      else if (data.reason === 'already_responded') { return location.reload(); }
+      else { error = 'Something went wrong. Please try again.'; }
+    } catch (e) {
+      error = 'Network error. Please try again.';
+    } finally {
+      submitting = false;
+      render();
+    }
+  }
+
+  async function proposeSchedule() {
+    var date = (scheduleInput || '').trim();
+    if (!date) { error = 'Please pick a date.'; render(); return; }
+    setSubmitting(true);
+    error = null;
+    try {
+      var res = await fetch('/api/offers/' + encodeURIComponent(offer.token) + '/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ availableDate: date }),
+      });
+      var data = await res.json();
+      if (data.ok && data.outcome === 'rescheduled') {
+        // Within the window — a fresh same-terms offer on their dates. Swap to it.
+        var c = data.counter;
+        offer = {
+          token: c.token, firstName: offer.firstName, brandName: c.brandName,
+          deliverables: c.deliverables, rate: c.rate, currency: c.currency,
+          rateFormatted: c.rateFormatted, expiresFormatted: c.expiresFormatted,
+        };
+        countered = true; addedLabel = null; rescheduledDate = c.startDateFormatted;
+        mode = 'cta'; scheduleInput = ''; view = 'active';
+        // Keep the URL on the live offer so a manual reload loads it, not the old one.
+        try { history.replaceState(null, '', '/o/' + encodeURIComponent(c.token)); } catch (e) {}
+      } else if (data.ok && data.outcome === 'on_hold') {
+        holdDateFormatted = data.startDateFormatted || null; scheduleInput = ''; view = 'on_hold';
+      } else if (data.reason === 'invalid_date') { error = 'Please pick a valid date (today or later).'; }
+      else if (data.reason === 'expired') { view = 'expired'; }
       else if (data.reason === 'already_responded') { return location.reload(); }
       else { error = 'Something went wrong. Please try again.'; }
     } catch (e) {
@@ -361,7 +444,9 @@
       };
       // Prefill the signature field with the creator's name (still editable).
       signerName = (data.contract && data.contract.creatorName) || '';
-      view = data.initialState; // active | contract | signed | declined | expired
+      // A schedule-held offer reopens on the "we'll be in touch" view.
+      if (data.initialState === 'on_hold') holdDateFormatted = data.startDateFormatted || null;
+      view = data.initialState; // active | contract | signed | declined | expired | on_hold
       render();
     } catch (e) {
       view = 'notfound';

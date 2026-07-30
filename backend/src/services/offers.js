@@ -1116,6 +1116,229 @@ async function negotiateBudget({ token, requestedRate }) {
 }
 
 // ---------------------------------------------------------------------------
+// Schedule negotiation (a "Timing" decline) — ask the creator when they're free
+// and either re-offer for their dates or park the deal for an admin follow-up.
+// ---------------------------------------------------------------------------
+
+// How soon a proposed start date must be for us to accommodate it automatically
+// (re-offer the same terms on their dates). Beyond this the deal goes on hold
+// for an admin schedule-counter. Default 14 days; override SCHEDULE_THRESHOLD_DAYS.
+function scheduleThresholdDays() {
+  const raw = Number(process.env.SCHEDULE_THRESHOLD_DAYS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 14;
+}
+
+// Parse a creator-supplied availability date. Accepts an ISO 'YYYY-MM-DD' (what
+// <input type="date"> posts) or anything Date.parse understands. Returns a Date
+// at local midnight, or null when unparseable.
+function parseAvailableDate(input) {
+  if (input == null) return null;
+  const s = String(input).trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(Date.parse(s));
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// Whole days from local today to `date` (negative when in the past).
+function daysUntil(date) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((date.getTime() - today.getTime()) / 86400000);
+}
+
+function isoDate(date) {
+  const y = date.getFullYear();
+  const mo = String(date.getMonth() + 1).padStart(2, '0');
+  const da = String(date.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${da}`;
+}
+
+// Decline `offer` for Timing and mint a fresh SAME-terms offer carrying the
+// creator's requested start date, atomically. Mirrors negotiateBudget's
+// counter-mint (retry on token collision). Returns { raced, counterId }.
+async function mintScheduledOffer(offer, startDateIso) {
+  const deliverables = Array.isArray(offer.deliverables) ? offer.deliverables : [];
+  let counterId = null;
+  let raced = false;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const counterToken = generateOfferToken();
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await db.withTransaction(async (client) => {
+        const declined = await client.query(
+          `UPDATE offers SET status = 'declined', decline_reason = 'Timing', schedule_hold = FALSE
+           WHERE id = $1 AND status = 'pending'`,
+          [offer.id],
+        );
+        if (declined.rowCount === 0) return { raced: true, counterId: null };
+        await client.query(
+          `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'declined', 'web')`,
+          [offer.id],
+        );
+        const { rows } = await client.query(
+          `INSERT INTO offers
+             (creator_id, campaign_id, token, brand_name, deliverables, rate, currency, expected_impressions, parent_offer_id, requested_start_date, expires_at)
+           VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
+           RETURNING id`,
+          [
+            offer.creator_id,
+            offer.campaign_id,
+            counterToken,
+            offer.brand_name,
+            JSON.stringify(deliverables),
+            offer.rate,
+            offer.currency,
+            offer.expected_impressions != null ? offer.expected_impressions : null,
+            offer.id,
+            startDateIso,
+            new Date(Date.now() + DEFAULT_EXPIRY_DAYS * 86400000),
+          ],
+        );
+        await client.query(
+          `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'sent', 'web')`,
+          [rows[0].id],
+        );
+        return { raced: false, counterId: rows[0].id };
+      });
+      raced = result.raced;
+      counterId = result.counterId;
+      break;
+    } catch (err) {
+      if (err && err.code === '23505' && attempt < 4) continue; // token collision — retry
+      throw err;
+    }
+  }
+  return { raced, counterId };
+}
+
+// The creator picked "Timing" and told us when they're free. Within the
+// accommodation window → re-offer the same terms on their dates (a fresh offer
+// they can accept right on the portal). Further out → park the deal on hold and
+// flag Deal Studio so an admin can send a schedule-counter.
+async function negotiateSchedule({ token, availableDate }) {
+  const date = parseAvailableDate(availableDate);
+  if (!date) return { ok: false, reason: 'invalid_date' };
+  if (daysUntil(date) < 0) return { ok: false, reason: 'invalid_date' };
+
+  const offer = await db.one(`SELECT * FROM offers WHERE token = $1`, [token]);
+  if (!offer) return { ok: false, reason: 'not_found' };
+  if (offer.status !== 'pending') return { ok: false, reason: 'already_responded' };
+  if (new Date(offer.expires_at).getTime() < Date.now()) return { ok: false, reason: 'expired' };
+
+  // Within the window → accommodate automatically with a fresh same-terms offer.
+  if (daysUntil(date) <= scheduleThresholdDays()) {
+    const { raced, counterId } = await mintScheduledOffer(offer, isoDate(date));
+    if (raced || !counterId) return { ok: false, reason: 'already_responded' };
+
+    // Deliver directly only over an already-established messaging channel — a
+    // web-originated re-offer is already shown on the page the creator is on.
+    try {
+      const channel = await establishedMessagingChannel(offer.creator_id);
+      if (channel) await deliverOfferOverChannel(counterId, channel);
+    } catch (err) {
+      console.error('[offers] rescheduled offer delivery failed', err.message);
+    }
+
+    const counter = await db.one(`SELECT * FROM offers WHERE id = $1`, [counterId]);
+    if (!counter) return { ok: false, reason: 'already_responded' };
+    return {
+      ok: true,
+      outcome: 'rescheduled',
+      counter: {
+        token: counter.token,
+        brandName: counter.brand_name,
+        deliverables: counter.deliverables,
+        rate: Number(counter.rate),
+        currency: counter.currency,
+        rateFormatted: formatMoney(counter.rate, counter.currency),
+        expiresFormatted: formatDate(counter.expires_at),
+        startDateFormatted: counter.requested_start_date ? formatDate(counter.requested_start_date) : null,
+      },
+    };
+  }
+
+  // Further out than the window → park on hold (NOT closed) for an admin
+  // schedule-counter, and surface it in Deal Studio.
+  const held = await db.one(
+    `UPDATE offers SET schedule_hold = TRUE, requested_start_date = $2
+     WHERE id = $1 AND status = 'pending'
+     RETURNING id`,
+    [offer.id, isoDate(date)],
+  );
+  if (!held) return { ok: false, reason: 'already_responded' };
+  await db.query(
+    `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'schedule_hold', 'web')`,
+    [offer.id],
+  );
+  // Bridge to Deal Studio: park the deal on hold (never over an ACCEPTED one).
+  try {
+    await db.query(
+      `UPDATE creators SET negotiation_status = 'ON_HOLD', updated_at = NOW()
+       WHERE id = $1 AND negotiation_status IS DISTINCT FROM 'ACCEPTED'`,
+      [offer.creator_id],
+    );
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'schedule_hold', $2)`,
+      [offer.creator_id, { available_date: isoDate(date), via: 'offer_portal' }],
+    );
+  } catch (err) {
+    console.error('[offers] schedule-hold bridge failed', err.message);
+  }
+  return { ok: true, outcome: 'on_hold', startDateFormatted: formatDate(date) };
+}
+
+// Admin action from Deal Studio for an on-hold (or any latest) offer: send the
+// creator a fresh same-terms offer on a revised start date the admin chooses.
+// Reuses mintScheduledOffer, then delivers over every available channel
+// (email + WhatsApp/iMessage) via sendOfferOutreach so a parked creator is
+// actually re-contacted. Clears the hold + ON_HOLD deal state.
+async function sendRescheduledOffer({ creatorId, startDate }) {
+  const date = parseAvailableDate(startDate);
+  if (!date) return { ok: false, reason: 'invalid_date' };
+  if (daysUntil(date) < 0) return { ok: false, reason: 'invalid_date' };
+
+  const offer = await db.one(
+    `SELECT * FROM offers WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+  if (!offer) return { ok: false, reason: 'no_offer' };
+  if (offer.status !== 'pending') return { ok: false, reason: 'already_responded' };
+
+  const { raced, counterId } = await mintScheduledOffer(offer, isoDate(date));
+  if (raced || !counterId) return { ok: false, reason: 'already_responded' };
+
+  // The parked deal is live again — clear the hold state.
+  try {
+    await db.query(
+      `UPDATE creators SET negotiation_status = NULL, updated_at = NOW()
+       WHERE id = $1 AND negotiation_status = 'ON_HOLD'`,
+      [creatorId],
+    );
+  } catch (err) {
+    console.error('[offers] reschedule state clear failed', err.message);
+  }
+
+  let sendResult = null;
+  try {
+    sendResult = await sendOfferOutreach(counterId);
+  } catch (err) {
+    console.error('[offers] rescheduled offer send failed', err.message);
+  }
+
+  const counter = await db.one(`SELECT * FROM offers WHERE id = $1`, [counterId]);
+  return {
+    ok: true,
+    token: counter.token,
+    url: offerUrl(counter.token),
+    startDateFormatted: counter.requested_start_date ? formatDate(counter.requested_start_date) : null,
+    send_result: sendResult,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Page data + Deal Studio entry point
 // ---------------------------------------------------------------------------
 
@@ -1138,13 +1361,16 @@ function creatorFullName(creator) {
 }
 
 function miniContractTerms(offer) {
+  // A schedule-negotiated offer (requested_start_date set) carries the agreed
+  // start date into the contract timeline instead of the standard boilerplate.
+  const startDate = offer.requested_start_date ? formatDate(offer.requested_start_date) : null;
   return {
     creatorName: creatorFullName(offer),
     brandName: offer.brand_name,
     campaignName: (offer.campaign_name && String(offer.campaign_name).trim()) || null,
     deliverables: Array.isArray(offer.deliverables) ? offer.deliverables : [],
     platforms: CONTRACT_PLATFORMS_DEFAULT.slice(),
-    timeline: CONTRACT_TIMELINE_DEFAULT,
+    timeline: startDate ? `Content to be posted around ${startDate}.` : CONTRACT_TIMELINE_DEFAULT,
   };
 }
 
@@ -1167,6 +1393,7 @@ async function getOfferForPage(token) {
   }
 
   const expired = offer.status === 'pending' && new Date(offer.expires_at).getTime() < Date.now();
+  const onHold = offer.status === 'pending' && offer.schedule_hold;
   const signed = !!offer.contract_signed_at;
   // After acceptance the creator reviews + signs the mini contract; only once
   // signed is the deal fully confirmed on the page.
@@ -1177,9 +1404,11 @@ async function getOfferForPage(token) {
         : 'contract'
       : offer.status === 'declined'
         ? 'declined'
-        : expired
-          ? 'expired'
-          : 'active';
+        : onHold
+          ? 'on_hold'
+          : expired
+            ? 'expired'
+            : 'active';
 
   // The signed snapshot (immutable) wins over the live-computed terms once signed.
   const contract =
@@ -1197,6 +1426,11 @@ async function getOfferForPage(token) {
     rateFormatted: formatMoney(offer.rate, offer.currency),
     expiresFormatted: formatDate(offer.expires_at),
     initialState,
+    // When this offer is a schedule-negotiated one, the date the creator asked
+    // for (so the active view can reassure them it's on their dates), plus the
+    // on-hold flag for the "we'll be in touch" view.
+    scheduleHold: !!offer.schedule_hold,
+    startDateFormatted: offer.requested_start_date ? formatDate(offer.requested_start_date) : null,
     contract,
     contractSigned: signed,
     signerName: offer.contract_signer_name || null,
@@ -1389,6 +1623,14 @@ async function attachOffers(rows) {
       requestedRateFormatted: o.requested_rate != null ? formatMoney(o.requested_rate, o.currency) : null,
       // Why they declined (Budget / Timing / Not a fit), when they told us.
       declineReason: o.decline_reason || null,
+      // Schedule negotiation: a still-live offer parked because the creator's
+      // availability is beyond the accommodation window (awaiting an admin
+      // schedule-counter), plus the date they asked for.
+      scheduleHold: !!o.schedule_hold,
+      requestedStartFormatted: o.requested_start_date ? formatDate(o.requested_start_date) : null,
+      requestedStartISO: o.requested_start_date
+        ? String(o.requested_start_date instanceof Date ? o.requested_start_date.toISOString() : o.requested_start_date).slice(0, 10)
+        : null,
       expiresAt: o.expires_at,
       isCounter: o.parent_offer_id != null,
       viewed,
@@ -1491,6 +1733,8 @@ module.exports = {
   sendOfferOutreach,
   recordDeliveryStatus,
   negotiateBudget,
+  negotiateSchedule,
+  sendRescheduledOffer,
   getOfferForPage,
   miniContractTerms,
   signMiniContract,
