@@ -1745,7 +1745,10 @@ function renderTimeline(log, r) {
     return cls;
   };
 
-  groups.forEach((g, gi) => {
+  // Build a single timeline step (one group). Extracted so the assembly below
+  // can render the head + tail steps directly and tuck the middle ones inside a
+  // collapsed container without duplicating the per-step markup.
+  const buildStep = (g, gi) => {
     const isLast = gi === groups.length - 1;
     const newest = g.entries[g.entries.length - 1]; // group's representative
     // Two ways a step collapses into a "label + count + chevron" group:
@@ -1880,8 +1883,87 @@ function renderTimeline(log, r) {
     }
 
     step.append(rail, body);
-    wrap.appendChild(step);
-  });
+    return step;
+  };
+
+  // Short timelines render in full. Long ones get truncated: the very first
+  // step (the "Outreach sent" origin) and the latest TAIL steps stay visible,
+  // and everything between them folds behind a single expander in the middle —
+  // so a deal with dozens of back-and-forth updates doesn't run the column on
+  // forever. Only collapse when it actually saves space (≥2 hidden); hiding a
+  // lone middle step behind a button would just trade one row for another.
+  const HEAD = 1; // the origin step ("Outreach sent")
+  const TAIL = 4; // the most recent activity
+  if (groups.length <= HEAD + TAIL + 1) {
+    groups.forEach((g, gi) => wrap.appendChild(buildStep(g, gi)));
+    return wrap;
+  }
+
+  const hiddenCount = groups.length - HEAD - TAIL;
+
+  // Origin step(s).
+  for (let i = 0; i < HEAD; i++) wrap.appendChild(buildStep(groups[i], i));
+
+  // The hidden middle, built up front but folded away until expanded. Each
+  // step keeps its real index so its connecting line / "current" state stay
+  // correct once revealed.
+  const midWrap = document.createElement('div');
+  midWrap.className = 'timeline-collapsed-group';
+  midWrap.hidden = true;
+  for (let i = HEAD; i < groups.length - TAIL; i++) {
+    midWrap.appendChild(buildStep(groups[i], i));
+  }
+
+  // The expander itself is a timeline node, sitting on the same rail so the
+  // vertical line stays unbroken whether it's open or closed.
+  const moreStep = document.createElement('div');
+  moreStep.className = 'timeline-step timeline-more';
+  const moreRail = document.createElement('div');
+  moreRail.className = 'timeline-rail';
+  const moreDot = document.createElement('div');
+  moreDot.className = 'timeline-dot timeline-dot-more';
+  const moreLine = document.createElement('div');
+  moreLine.className = 'timeline-line';
+  moreRail.append(moreDot, moreLine);
+
+  const moreBody = document.createElement('div');
+  moreBody.className = 'timeline-body';
+  moreBody.style.paddingBottom = '4px';
+  const moreBtn = document.createElement('button');
+  moreBtn.type = 'button';
+  moreBtn.className = 'timeline-more-btn';
+  moreBtn.setAttribute('aria-expanded', 'false');
+  const moreLabel = document.createElement('span');
+  moreLabel.className = 'timeline-more-label';
+  const moreChev = document.createElement('span');
+  moreChev.className = 'timeline-chevron';
+  moreChev.textContent = '▾';
+  const setMoreLabel = (open) => {
+    moreLabel.textContent = open
+      ? 'Hide earlier activity'
+      : `Show ${hiddenCount} earlier ${hiddenCount === 1 ? 'update' : 'updates'}`;
+  };
+  setMoreLabel(false);
+  moreBtn.append(moreLabel, moreChev);
+  moreBody.appendChild(moreBtn);
+  moreStep.append(moreRail, moreBody);
+
+  const toggleMore = () => {
+    const open = midWrap.hidden;
+    midWrap.hidden = !open;
+    moreStep.classList.toggle('open', open);
+    moreBtn.setAttribute('aria-expanded', String(open));
+    setMoreLabel(open);
+  };
+  moreBtn.addEventListener('click', toggleMore);
+
+  wrap.append(moreStep, midWrap);
+
+  // Tail: the most recent activity.
+  for (let i = groups.length - TAIL; i < groups.length; i++) {
+    wrap.appendChild(buildStep(groups[i], i));
+  }
+
   return wrap;
 }
 
