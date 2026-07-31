@@ -42,7 +42,7 @@ const {
   OPT_OUT_CONFIRMATION,
   OPT_IN_CONFIRMATION,
 } = require('../services/offerPortal/replies');
-const { normalizePhone, sendWhatsAppText } = require('../services/offerPortal/whatsapp');
+const { normalizePhone, sendWhatsAppText, whatsappProvider } = require('../services/offerPortal/whatsapp');
 const { sendIMessageText } = require('../services/offerPortal/imessage');
 const {
   parseStatusEvent,
@@ -259,6 +259,71 @@ function twilioWebhookUrl(req) {
   const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
   const host = req.headers['x-forwarded-host'] || req.get('host');
   return `${proto}://${host}${req.originalUrl || req.url || ''}`;
+}
+
+// --- Meta WhatsApp Cloud API webhook --------------------------------------
+
+// Verify a Meta Cloud API webhook POST. Meta signs the RAW JSON body as
+// HMAC-SHA256 with the App Secret, delivered as `X-Hub-Signature-256:
+// sha256=<hex>`. Verification is disabled when WHATSAPP_CLOUD_APP_SECRET isn't
+// set (dev), matching the Twilio/Linq convention.
+function verifyMetaSignature(req) {
+  const secret = process.env.WHATSAPP_CLOUD_APP_SECRET;
+  if (!secret) return true;
+  const provided = req.headers['x-hub-signature-256'];
+  if (!provided) {
+    console.warn('[offer-webhook] WHATSAPP_CLOUD_APP_SECRET set but X-Hub-Signature-256 header missing');
+    return false;
+  }
+  // HMAC the raw bytes (captured in server.js), not a re-serialized copy.
+  const raw = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  return safeEqual(provided, expected);
+}
+
+// Flatten a Meta Cloud API webhook (entry[].changes[].value) into the flat shape
+// the shared parsers already understand — a Twilio-style delivery-status object
+// ({ MessageStatus, MessageSid }) or an inbound message ({ from, body, id }) —
+// so the existing handleInbound pipeline runs unchanged. Returns null for
+// payloads carrying neither (e.g. contacts-only, or a non-`messages` field).
+function normalizeMetaWebhook(payload) {
+  try {
+    const entry = Array.isArray(payload && payload.entry) ? payload.entry : [];
+    for (const e of entry) {
+      const changes = Array.isArray(e && e.changes) ? e.changes : [];
+      for (const ch of changes) {
+        const value = ch && ch.value;
+        if (!value || typeof value !== 'object') continue;
+        // Delivery/read/failed status → Twilio-shaped fields parseStatusEvent reads.
+        if (Array.isArray(value.statuses) && value.statuses.length) {
+          const s = value.statuses[0];
+          return { MessageStatus: s.status, MessageSid: s.id };
+        }
+        // Inbound message → { from, body, id } the flat parsers read.
+        if (Array.isArray(value.messages) && value.messages.length) {
+          const m = value.messages[0];
+          let body;
+          if (m.type === 'text' && m.text && typeof m.text.body === 'string') {
+            body = m.text.body;
+          } else if (m.type === 'button' && m.button && typeof m.button.text === 'string') {
+            body = m.button.text;
+          } else if (m.type === 'interactive' && m.interactive) {
+            const i = m.interactive;
+            body =
+              (i.button_reply && i.button_reply.title) ||
+              (i.list_reply && i.list_reply.title) ||
+              '[interactive]';
+          } else {
+            body = `[non-text message: ${m.type || 'unknown'}]`;
+          }
+          return { from: m.from, body, id: m.id };
+        }
+      }
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
 }
 
 // Shared-secret check kept for any other webhook that still uses it. Not used
@@ -583,14 +648,42 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   return res.json({ ok: true, intent, outcome, needsReview });
 }
 
-// POST /webhook/whatsapp — inbound WhatsApp (Twilio). The path is CHANNEL-named
-// (not vendor-named) to match /webhook/imessage — a future vendor swap changes
-// the auth + parser under the hood without moving the URL. NOTE: this route
-// receives Twilio's application/x-www-form-urlencoded body; server.js registers
-// express.urlencoded() globally so the parsed fields land on req.body.
+// GET /webhook/whatsapp — Meta Cloud API verification handshake: echo
+// hub.challenge when hub.verify_token matches WHATSAPP_CLOUD_VERIFY_TOKEN. Meta
+// calls this once when you save the webhook URL. Harmless under provider=twilio
+// (Twilio never GETs this path).
+router.get('/whatsapp', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  const expected = process.env.WHATSAPP_CLOUD_VERIFY_TOKEN;
+  if (mode === 'subscribe' && expected && token === expected) {
+    return res.status(200).send(String(challenge == null ? '' : challenge));
+  }
+  return res.sendStatus(403);
+});
+
+// POST /webhook/whatsapp — inbound WhatsApp. CHANNEL-named (not vendor-named) so
+// a provider swap changes the auth + parser under the hood without moving the
+// URL. Twilio POSTs application/x-www-form-urlencoded (From/Body/MessageSid);
+// Meta Cloud API POSTs application/json (entry[].changes[].value.messages[]),
+// which we normalise into the same flat shape before the shared pipeline.
 router.post('/whatsapp', async (req, res, next) => {
   try {
-    await handleInbound('whatsapp', 'whatsapp', verifyTwilioSignature, req, res);
+    if (whatsappProvider() === 'cloud') {
+      if (!verifyMetaSignature(req)) return res.status(401).json({ ok: false });
+      try {
+        console.log('[offer-webhook] inbound whatsapp (cloud) raw:', JSON.stringify(req.body).slice(0, 1000));
+      } catch (_) {
+        /* body not serialisable — ignore */
+      }
+      const flat = normalizeMetaWebhook(req.body);
+      if (!flat) return res.json({ ok: true, ignored: 'no_message' });
+      req.body = flat; // hand the shared pipeline a shape it understands
+      await handleInbound('whatsapp', 'whatsapp', () => true, req, res);
+    } else {
+      await handleInbound('whatsapp', 'whatsapp', verifyTwilioSignature, req, res);
+    }
   } catch (err) {
     next(err);
   }
@@ -610,6 +703,8 @@ router.post('/imessage', async (req, res, next) => {
 router.parseInbound = parseInbound;
 router.verifyLinqSignature = verifyLinqSignature;
 router.verifyTwilioSignature = verifyTwilioSignature;
+router.verifyMetaSignature = verifyMetaSignature;
+router.normalizeMetaWebhook = normalizeMetaWebhook;
 router.twilioWebhookUrl = twilioWebhookUrl;
 router.eventType = eventType;
 router.pickMatch = pickMatch;
