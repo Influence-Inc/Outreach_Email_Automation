@@ -96,23 +96,23 @@ const baseOffer = {
   campaign_id: 1,
 };
 
-test('within $2.5 CPM of our offer → counter at (roughly) their rate, same deliverables', async () => {
-  // $1,700 → CPM 17, only +2 over our 15 (≤ 2.5 tolerance).
+test('within $1.5 CPM of our offer → counter at (roughly) their rate, same deliverables', async () => {
+  // $1,600 → CPM 16, only +1 over our 15 (≤ 1.5 tolerance).
   install({ offer: { ...baseOffer }, priorCpm: 15 });
   try {
-    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 1700 });
+    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 1600 });
     assert.strictEqual(r.ok, true);
     assert.strictEqual(r.outcome, 'countered');
     assert.strictEqual(r.counter.deliverablesChanged, false);
-    // midpoint(1500,1700)=1600, capped at their ask.
-    assert.strictEqual(r.counter.rate, 1600);
+    // midpoint(1500,1600)=1550, capped at their ask.
+    assert.strictEqual(r.counter.rate, 1550);
   } finally {
     restoreAll();
   }
 });
 
-test('more than $2.5 CPM over but under the ceiling → expand deliverables, hold CPM', async () => {
-  // $2,000 → CPM 20: +5 over our 15 (> 2.5), still ≤ 22.5 ceiling.
+test('more than $1.5 CPM over but under the ceiling → expand deliverables, hold CPM', async () => {
+  // $2,000 → CPM 20: +5 over our 15 (> 1.5), still ≤ 22.5 ceiling.
   install({ offer: { ...baseOffer }, priorCpm: 15 });
   try {
     const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 2000 });
@@ -157,12 +157,13 @@ test('ceiling is anchored to the PRIOR CPM, not the current (already-high) offer
 });
 
 test('a small ask over an offer we priced high is never rejected as too-high', async () => {
-  // Offer CPM 20, prior CPM 15 (ceiling floor is offer CPM + 2.5 = 22.5). A
-  // +$200 ask (CPM 22) is within tolerance and honored, not declined.
-  const highOffer = { ...baseOffer, rate: 2000 };
+  // Offer CPM 22 ($2,200/100k), prior CPM 15. The prior-CPM ceiling alone (15 ×
+  // 1.5 = 22.5) would decline a CPM-23 ask, but the floor keeps it ≥ our own
+  // offer + tolerance (22 + 1.5 = 23.5), so a +$100 ask (CPM 23) is honored.
+  const highOffer = { ...baseOffer, rate: 2200 };
   install({ offer: highOffer, priorCpm: 15 });
   try {
-    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 2200 });
+    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 2300 });
     assert.strictEqual(r.outcome, 'countered');
     assert.strictEqual(r.counter.deliverablesChanged, false);
   } finally {

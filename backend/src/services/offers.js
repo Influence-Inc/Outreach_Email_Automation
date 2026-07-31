@@ -877,7 +877,7 @@ async function recordDeliveryStatus({ channel, providerMessageId, status }) {
 
 function cpmToleranceAbs() {
   const raw = Number(process.env.COUNTER_CPM_TOLERANCE);
-  return Number.isFinite(raw) && raw >= 0 ? raw : 2.5;
+  return Number.isFinite(raw) && raw >= 0 ? raw : 1.5;
 }
 function legacyRateTolerancePct() {
   const raw = Number(process.env.COUNTER_RATE_TOLERANCE_PCT);
