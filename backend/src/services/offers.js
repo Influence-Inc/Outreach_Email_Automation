@@ -1441,9 +1441,14 @@ async function getOfferForPage(token) {
 // Record the creator's signature on the mini contract. Guarded: the offer must
 // be accepted and not already signed. Snapshots the exact terms shown at signing
 // into contract_terms (immutable record). Best-effort event logging.
-async function signMiniContract({ token, signerName, ip }) {
-  const name = String(signerName || '').trim();
-  if (!name) return { ok: false, reason: 'name_required' };
+async function signMiniContract({ token, signature, signerName, ip }) {
+  // The signature is the creator's drawn image (a data:image/png|jpeg URL, same
+  // as the full contract's signature pad). Guard its shape and cap its size so
+  // an oversized / foreign payload can't be stored.
+  const sig = typeof signature === 'string' ? signature : '';
+  if (!/^data:image\/(png|jpe?g);base64,/i.test(sig) || sig.length > 2000000) {
+    return { ok: false, reason: 'signature_required' };
+  }
 
   const offer = await db.one(
     `SELECT o.*, c.first_name, c.full_name, ca.name AS campaign_name
@@ -1457,13 +1462,18 @@ async function signMiniContract({ token, signerName, ip }) {
   if (offer.status !== 'accepted') return { ok: false, reason: 'not_accepted' };
   if (offer.contract_signed_at) return { ok: false, reason: 'already_signed' };
 
+  // Signer name for the record: an explicitly provided name wins, else the known
+  // creator name (returning creators are already identified) — no typing needed.
+  const name = String(signerName || offer.full_name || offer.first_name || '').trim() || 'Creator';
+
   const terms = miniContractTerms(offer);
   const upd = await db.query(
     `UPDATE offers
         SET contract_signed_at = NOW(), contract_signer_name = $2,
-            contract_signer_ip = $3, contract_terms = $4::jsonb
+            contract_signer_ip = $3, contract_terms = $4::jsonb,
+            contract_signature = $5
       WHERE id = $1 AND status = 'accepted' AND contract_signed_at IS NULL`,
-    [offer.id, name, ip || null, JSON.stringify(terms)],
+    [offer.id, name, ip || null, JSON.stringify(terms), sig],
   );
   if (upd.rowCount === 0) return { ok: false, reason: 'already_signed' };
 

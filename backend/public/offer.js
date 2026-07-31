@@ -23,7 +23,9 @@
   var submitting = false;
   var error = null;
   var rateInput = '';
-  var signerName = ''; // typed-name signature on the mini contract
+  var signatureDataUrl = null; // the creator's drawn signature (data:image/png URL)
+  var sigPad = null; // the active signature-pad controller (see initSigPad)
+  var signBtnRef = null; // the "Sign & agree" button, toggled as the pad fills
 
   // Tiny DOM helper. h('div', {class:'x', onclick:fn}, child, child…)
   function h(tag, props) {
@@ -67,6 +69,85 @@
       h('p', {}, body));
   }
 
+  // Drawn signature pad — the same click-and-sign interaction as the full
+  // contract's signature tab (ported from contract.js). onChange fires after
+  // each stroke / clear so the caller can capture the image + toggle the button.
+  function initSigPad(canvas, onChange) {
+    var ctx = canvas.getContext('2d');
+    var dirty = false;
+    function resize() {
+      var dpr = Math.max(1, window.devicePixelRatio || 1);
+      var box = canvas.getBoundingClientRect();
+      var w = Math.floor(box.width * dpr);
+      var hgt = Math.floor(box.height * dpr);
+      if (w === 0 || hgt === 0) return;
+      if (canvas.width === w && canvas.height === hgt) return;
+      var snapshot = dirty ? canvas.toDataURL('image/png') : null;
+      canvas.width = w;
+      canvas.height = hgt;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#101010';
+      if (snapshot) {
+        var img = new Image();
+        img.onload = function () { ctx.drawImage(img, 0, 0, box.width, box.height); };
+        img.src = snapshot;
+      }
+    }
+    window.addEventListener('resize', resize);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(canvas);
+    resize();
+
+    var drawing = false, lastP = null;
+    function pos(e) {
+      var box = canvas.getBoundingClientRect();
+      var p = e.touches ? e.touches[0] : e;
+      return { x: p.clientX - box.left, y: p.clientY - box.top };
+    }
+    function start(e) { drawing = true; lastP = pos(e); e.preventDefault(); }
+    function move(e) {
+      if (!drawing) return;
+      var p = pos(e);
+      ctx.beginPath(); ctx.moveTo(lastP.x, lastP.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      lastP = p; dirty = true; e.preventDefault();
+    }
+    function end() { if (!drawing) return; drawing = false; lastP = null; if (onChange) onChange(); }
+    canvas.addEventListener('mousedown', start);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    canvas.addEventListener('touchstart', start, { passive: false });
+    canvas.addEventListener('touchmove', move, { passive: false });
+    canvas.addEventListener('touchend', end);
+
+    return {
+      isEmpty: function () { return !dirty; },
+      clear: function () { ctx.clearRect(0, 0, canvas.width, canvas.height); dirty = false; if (onChange) onChange(); },
+      toDataUrl: function () { return dirty ? canvas.toDataURL('image/png') : null; },
+      load: function (dataUrl) {
+        if (!dataUrl) return;
+        var img = new Image();
+        img.onload = function () {
+          var box = canvas.getBoundingClientRect();
+          ctx.drawImage(img, 0, 0, box.width, box.height);
+          dirty = true;
+        };
+        img.src = dataUrl;
+      },
+    };
+  }
+
+  // Wire the signature pad to the canvas the contract view just rendered, and
+  // repaint any signature already drawn (so an error re-render never loses it).
+  function mountSigPad() {
+    var canvas = CARD.querySelector('canvas.sig');
+    if (!canvas) { sigPad = null; return; }
+    sigPad = initSigPad(canvas, function () {
+      signatureDataUrl = sigPad.toDataUrl();
+      if (signBtnRef) signBtnRef.disabled = submitting || !signatureDataUrl;
+    });
+    if (signatureDataUrl) sigPad.load(signatureDataUrl);
+  }
+
   function render() {
     CARD.innerHTML = '';
     var root;
@@ -97,6 +178,8 @@
       root = renderActive();
     }
     CARD.appendChild(root);
+    // The signature canvas must be initialised after it's attached to the DOM.
+    if (view === 'contract') mountSigPad();
   }
 
   function renderActive() {
@@ -252,18 +335,30 @@
     wrap.appendChild(h('p', { class: 'lede' }, 'Please review the details below and sign to confirm.'));
     wrap.appendChild(contractTermsBlock(c));
 
-    var signBtn;
-    var input = h('input', {
-      type: 'text', placeholder: 'Type your full name', value: signerName,
-      oninput: function (e) { signerName = e.target.value; if (signBtn) signBtn.disabled = submitting || !signerName.trim(); },
-      onkeydown: function (e) { if (e.key === 'Enter' && signerName.trim()) signContract(); },
-    });
-    signBtn = btn('Sign & agree', { onClick: signContract, disabled: !signerName.trim() });
+    // Draw-on-screen signature (replaces the old typed-name signature) — the
+    // same click-and-sign experience as the full contract. The pad itself is
+    // wired up in mountSigPad() once this canvas is attached to the DOM.
+    var canvas = h('canvas', { class: 'sig', width: '1200', height: '300' });
+    var clearBtn = h('button', {
+      type: 'button',
+      onclick: function () {
+        if (sigPad) sigPad.clear();
+        signatureDataUrl = null;
+        if (signBtnRef) signBtnRef.disabled = true;
+      },
+    }, 'Clear');
+    signBtnRef = btn('Sign & agree', { onClick: signContract, disabled: !signatureDataUrl });
     wrap.appendChild(h('div', {},
       h('p', { class: 'ask' }, 'Sign to agree'),
-      h('p', { class: 'ask-sub' }, 'By tapping “Sign & agree”, you confirm you agree to the terms above.'),
-      h('div', { class: 'sign-input' }, input),
-      signBtn));
+      h('p', { class: 'ask-sub' }, 'Draw your signature below to confirm you agree to the terms above.'),
+      h('div', { class: 'sig-wrap' },
+        canvas,
+        h('div', { class: 'sig-baseline' }),
+        h('div', { class: 'sig-caption' }, 'Signature')),
+      h('div', { class: 'sig-tools' },
+        h('span', {}, 'Draw with your mouse or finger'),
+        clearBtn),
+      signBtnRef));
 
     var e = errNode();
     if (e) wrap.appendChild(e);
@@ -279,32 +374,32 @@
       h('p', {}, 'Thanks, ' + (offer.serverSignerName || offer.firstName) +
         '. Your agreement is confirmed — our team will be in touch with next steps.')));
     var box = contractTermsBlock(c);
-    box.appendChild(contractRow('Signed by', offer.serverSignerName || signerName));
+    box.appendChild(contractRow('Signed by', offer.serverSignerName || offer.firstName));
     if (offer.signedAtFormatted) box.appendChild(contractRow('Signed on', offer.signedAtFormatted));
     wrap.appendChild(box);
     return wrap;
   }
 
   async function signContract() {
-    var name = (signerName || '').trim();
-    if (!name) { error = 'Please type your name to sign.'; render(); return; }
+    var sig = signatureDataUrl || (sigPad && sigPad.toDataUrl());
+    if (!sig) { error = 'Please draw your signature to sign.'; render(); return; }
     setSubmitting(true);
     error = null;
     try {
       var res = await fetch('/api/offers/' + encodeURIComponent(offer.token) + '/sign-contract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ signerName: name }),
+        body: JSON.stringify({ signature: sig }),
       });
       var data = await res.json();
       if (data.ok) {
-        offer.serverSignerName = data.signerName || name;
+        offer.serverSignerName = data.signerName || offer.firstName;
         offer.signedAtFormatted = data.signedAtFormatted || null;
         offer.contractSigned = true;
         view = 'signed';
       } else if (data.reason === 'already_signed') { return location.reload(); }
       else if (data.reason === 'not_accepted') { error = 'Please accept the offer first.'; }
-      else if (data.reason === 'name_required') { error = 'Please type your name to sign.'; }
+      else if (data.reason === 'signature_required') { error = 'Please draw your signature to sign.'; }
       else { error = 'Something went wrong. Please try again.'; }
     } catch (e) {
       error = 'Network error. Please try again.';
@@ -442,8 +537,8 @@
         serverSignerName: data.signerName || null,
         signedAtFormatted: data.signedAtFormatted || null,
       };
-      // Prefill the signature field with the creator's name (still editable).
-      signerName = (data.contract && data.contract.creatorName) || '';
+      // The signature is drawn on-screen (no pre-filled text field).
+      signatureDataUrl = null;
       // A schedule-held offer reopens on the "we'll be in touch" view.
       if (data.initialState === 'on_hold') holdDateFormatted = data.startDateFormatted || null;
       view = data.initialState; // active | contract | signed | declined | expired | on_hold

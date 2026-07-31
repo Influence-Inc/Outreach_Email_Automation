@@ -73,15 +73,20 @@ api.post('/:token/schedule', async (req, res, next) => {
 });
 
 // POST /api/offers/:token/sign-contract — the creator signs the mini contract
-// (a typed-name signature) after accepting. Returns { ok } or a reason.
+// with a drawn on-screen signature after accepting. Returns { ok } or a reason.
 api.post('/:token/sign-contract', async (req, res, next) => {
   try {
-    const signerName = (req.body || {}).signerName;
+    const body = req.body || {};
     const ip =
       (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
       (req.socket && req.socket.remoteAddress) ||
       null;
-    const result = await offers.signMiniContract({ token: req.params.token, signerName, ip });
+    const result = await offers.signMiniContract({
+      token: req.params.token,
+      signature: body.signature,
+      signerName: body.signerName,
+      ip,
+    });
     return res.status(result.ok ? 200 : 400).json(result);
   } catch (err) {
     next(err);

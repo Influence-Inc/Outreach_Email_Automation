@@ -377,13 +377,16 @@ CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status);
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS messaging_stage TEXT;
 -- Lightweight "mini contract" the creator signs on the offer page right after
 -- accepting (name / brand / campaign / deliverables / platforms / timeline +
--- a typed-name signature — deliberately NO contact or bank details, unlike the
--- full contracts table). Self-contained here: contract_terms is the immutable
--- snapshot of exactly what was shown at signing.
+-- a drawn on-screen signature — deliberately NO contact or bank details, unlike
+-- the full contracts table). Self-contained here: contract_terms is the
+-- immutable snapshot of exactly what was shown at signing; contract_signature is
+-- the creator's drawn signature as a data:image/png URL (same as the full
+-- contract's signature pad).
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signed_at   TIMESTAMPTZ;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signer_name TEXT;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signer_ip   TEXT;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_terms       JSONB;
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signature   TEXT;
 -- Schedule negotiation (a "Timing" decline). requested_start_date is the date
 -- the creator says they're free to start; when it's within the accommodation
 -- window (SCHEDULE_THRESHOLD_DAYS) we re-offer the same terms carrying that date
