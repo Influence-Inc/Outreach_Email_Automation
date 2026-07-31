@@ -11,6 +11,10 @@ const {
 // Snapshot + restore every env var the module reads, so tests don't leak state.
 const VARS = [
   'RESEND_API_KEY',
+  'WHATSAPP_PROVIDER',
+  'WHATSAPP_CLOUD_ACCESS_TOKEN',
+  'WHATSAPP_CLOUD_PHONE_NUMBER_ID',
+  'WHATSAPP_CLOUD_DISPLAY_NUMBER',
   'TWILIO_ACCOUNT_SID',
   'TWILIO_AUTH_TOKEN',
   'TWILIO_WHATSAPP_FROM',
@@ -69,6 +73,40 @@ test('Resend + a WhatsApp number + Twilio SID/token → invite and conversation 
       assert.equal(c.conversationReady, true);
       assert.equal(c.whatsapp.conversationReady, true);
       assert.deepEqual(offerPortalConfigIssues(), []);
+    },
+  );
+});
+
+test('Cloud API provider auto-detects when its access token is set and reports readiness', () => {
+  withEnv(
+    {
+      RESEND_API_KEY: 're_test',
+      WHATSAPP_CLOUD_ACCESS_TOKEN: 'EAAG_test',
+      WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1234567890',
+      WHATSAPP_CLOUD_DISPLAY_NUMBER: '+18005551234',
+      PUBLIC_BASE_URL: 'https://outreach.example',
+    },
+    () => {
+      const c = offerPortalConfig();
+      assert.equal(c.whatsapp.provider, 'cloud'); // auto-detected, no explicit flag
+      assert.equal(c.whatsapp.conversationReady, true);
+      assert.equal(c.conversationReady, true);
+      assert.deepEqual(offerPortalConfigIssues(), []);
+      assert.match(offerPortalConfigSummary(), /WhatsApp\/cloud/);
+    },
+  );
+});
+
+test('Cloud provider with a number but no token flags a send-side issue naming the Cloud var', () => {
+  withEnv(
+    { RESEND_API_KEY: 're_test', WHATSAPP_PROVIDER: 'cloud', WHATSAPP_CLOUD_DISPLAY_NUMBER: '+18005551234' },
+    () => {
+      const c = offerPortalConfig();
+      assert.equal(c.whatsapp.provider, 'cloud');
+      assert.equal(c.whatsapp.inviteReady, true); // number shows in the invite…
+      assert.equal(c.whatsapp.conversationReady, false); // …but replies can't send
+      const issues = offerPortalConfigIssues();
+      assert.equal(issues.some((i) => /WHATSAPP_CLOUD_ACCESS_TOKEN/.test(i)), true);
     },
   );
 });

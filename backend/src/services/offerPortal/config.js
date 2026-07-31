@@ -19,17 +19,27 @@
 //   RESEND_API_KEY           → offerPortal/email.js deliver(): with it blank,
 //                              EVERY offer-portal email (invite, full offer,
 //                              confirmation) is skipped. Master switch.
-//   TWILIO_WHATSAPP_FROM     → the WhatsApp number printed in the invite email
-//                              (offers.js inviteNumbersFor) AND the `From` on
-//                              every send. No number → invite can't mention
-//                              WhatsApp and no send can go out.
-//   TWILIO_ACCOUNT_SID       → Basic-Auth SID for the Twilio Messages API.
-//   TWILIO_AUTH_TOKEN        → Basic-Auth token + HMAC key that verifies the
-//                              inbound webhook's X-Twilio-Signature.
+//
+// WhatsApp runs on one of two providers (WHATSAPP_PROVIDER, auto-detected to
+// 'cloud' when WHATSAPP_CLOUD_ACCESS_TOKEN is set, else 'twilio'):
+//   Meta Cloud API (direct):
+//     WHATSAPP_CLOUD_DISPLAY_NUMBER   → the WhatsApp number printed in the invite.
+//     WHATSAPP_CLOUD_ACCESS_TOKEN     → Bearer token for the Graph send API.
+//     WHATSAPP_CLOUD_PHONE_NUMBER_ID  → the sender bound to that token.
+//     WHATSAPP_CLOUD_VERIFY_TOKEN     → GET webhook verification handshake.
+//     WHATSAPP_CLOUD_APP_SECRET       → verifies inbound X-Hub-Signature-256.
+//   Twilio (BSP):
+//     TWILIO_WHATSAPP_FROM → the WhatsApp number printed in the invite AND the
+//                            `From` on every send.
+//     TWILIO_ACCOUNT_SID   → Basic-Auth SID for the Twilio Messages API.
+//     TWILIO_AUTH_TOKEN    → Basic-Auth token + HMAC key that verifies the
+//                            inbound webhook's X-Twilio-Signature.
 //   IMESSAGE_FROM_NUMBER     → the iMessage number printed in the invite email,
 //                              and the Linq `from` on every send.
 //   IMESSAGE_API_KEY         → offerPortal/imessage.js: actually sending over
 //                              iMessage.
+
+const { whatsappProvider } = require('./whatsapp');
 
 function boolEnv(name) {
   return !!(process.env[name] && String(process.env[name]).trim());
@@ -47,20 +57,36 @@ function offerPortalConfig() {
     configured: boolEnv('RESEND_API_KEY'),
   };
 
-  const waNumber = strEnv('TWILIO_WHATSAPP_FROM');
-  // Twilio needs BOTH SID and auth token to authenticate a Messages request —
-  // one without the other is a Basic-Auth 401. `hasApiKey` is true only when
-  // both are set, matching the send-side gate in whatsapp.js.
-  const hasTwilioCreds = boolEnv('TWILIO_ACCOUNT_SID') && boolEnv('TWILIO_AUTH_TOKEN');
-  const whatsapp = {
-    provider: 'twilio',
-    businessNumber: waNumber,
-    hasApiKey: hasTwilioCreds,
-    // Enough to NAME WhatsApp in the invite (the number is the display value).
-    inviteReady: !!waNumber,
-    // Enough to actually run the conversation after the creator replies.
-    conversationReady: hasTwilioCreds && !!waNumber,
-  };
+  // WhatsApp: 'cloud' (Meta Cloud API direct) or 'twilio' (BSP). Each gates on
+  // its own number + creds; `hasApiKey` is true only when the send-side creds
+  // are fully present, matching the gate in whatsapp.js.
+  const waProvider = whatsappProvider();
+  let whatsapp;
+  if (waProvider === 'cloud') {
+    const waNumber = strEnv('WHATSAPP_CLOUD_DISPLAY_NUMBER');
+    const hasCloudCreds = boolEnv('WHATSAPP_CLOUD_ACCESS_TOKEN') && boolEnv('WHATSAPP_CLOUD_PHONE_NUMBER_ID');
+    whatsapp = {
+      provider: 'cloud',
+      businessNumber: waNumber,
+      hasApiKey: hasCloudCreds,
+      inviteReady: !!waNumber,
+      conversationReady: hasCloudCreds && !!waNumber,
+    };
+  } else {
+    const waNumber = strEnv('TWILIO_WHATSAPP_FROM');
+    // Twilio needs BOTH SID and auth token to authenticate a Messages request —
+    // one without the other is a Basic-Auth 401.
+    const hasTwilioCreds = boolEnv('TWILIO_ACCOUNT_SID') && boolEnv('TWILIO_AUTH_TOKEN');
+    whatsapp = {
+      provider: 'twilio',
+      businessNumber: waNumber,
+      hasApiKey: hasTwilioCreds,
+      // Enough to NAME WhatsApp in the invite (the number is the display value).
+      inviteReady: !!waNumber,
+      // Enough to actually run the conversation after the creator replies.
+      conversationReady: hasTwilioCreds && !!waNumber,
+    };
+  }
 
   const imNumber = strEnv('IMESSAGE_FROM_NUMBER');
   const imessage = {
@@ -111,15 +137,18 @@ function offerPortalConfigIssues() {
   if (!c.email.configured) {
     issues.push('RESEND_API_KEY is not set — all offer-portal emails (invite/offer/confirmation) are skipped');
   }
+  const waNumberVar = c.whatsapp.provider === 'cloud' ? 'WHATSAPP_CLOUD_DISPLAY_NUMBER' : 'TWILIO_WHATSAPP_FROM';
+  const waCredsHint =
+    c.whatsapp.provider === 'cloud'
+      ? 'WHATSAPP_CLOUD_ACCESS_TOKEN and/or WHATSAPP_CLOUD_PHONE_NUMBER_ID not set'
+      : 'TWILIO_ACCOUNT_SID and/or TWILIO_AUTH_TOKEN not set';
   if (!c.whatsapp.inviteReady && !c.imessage.inviteReady) {
     issues.push(
-      'neither TWILIO_WHATSAPP_FROM nor IMESSAGE_FROM_NUMBER is set — the invite has no "text us" number to show',
+      `neither ${waNumberVar} nor IMESSAGE_FROM_NUMBER is set — the invite has no "text us" number to show`,
     );
   }
   if (c.whatsapp.inviteReady && !c.whatsapp.hasApiKey) {
-    issues.push(
-      'TWILIO_ACCOUNT_SID and/or TWILIO_AUTH_TOKEN not set — the WhatsApp number is shown but replies can\'t be sent',
-    );
+    issues.push(`${waCredsHint} — the WhatsApp number is shown but replies can't be sent`);
   }
   if (c.imessage.inviteReady && !c.imessage.hasApiKey) {
     issues.push('IMESSAGE_API_KEY is not set — the iMessage number is shown but replies can\'t be sent');
@@ -144,7 +173,7 @@ function offerPortalConfigSummary() {
   const yn = (b) => (b ? 'on' : 'OFF');
   return (
     `email/Resend=${yn(c.email.configured)}; ` +
-    `WhatsApp(number=${yn(c.whatsapp.inviteReady)},api=${yn(c.whatsapp.hasApiKey)}); ` +
+    `WhatsApp/${c.whatsapp.provider}(number=${yn(c.whatsapp.inviteReady)},api=${yn(c.whatsapp.hasApiKey)}); ` +
     `iMessage(number=${yn(c.imessage.inviteReady)},api=${yn(c.imessage.hasApiKey)}); ` +
     `offerLink=${c.offerLink.pointsAtCampaignsService ? 'WRONG(→campaigns/stats)' : c.offerLink.configured ? 'on' : 'OFF'}; ` +
     `used-creator invite ${c.inviteReady ? 'READY' : 'DISABLED (falls back to Instantly email)'}`

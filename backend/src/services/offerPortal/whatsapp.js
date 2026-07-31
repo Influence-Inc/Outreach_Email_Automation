@@ -1,42 +1,44 @@
 'use strict';
 
-// Offer-portal WhatsApp channel via Twilio's REST API. Ported over from AiSensy;
-// same public surface (businessNumber / sendWhatsAppText / normalizePhone /
-// renderOfferOutreachBody) so callers (offers.js, outreach.js, offerWebhook.js)
-// don't change. Sends are skipped gracefully when TWILIO_* creds are absent, so
-// dev never breaks.
+// Offer-portal WhatsApp channel. Supports two backends behind one surface
+// (businessNumber / sendWhatsAppText / normalizePhone / renderOfferOutreachBody)
+// so callers (offers.js, outreach.js, offerWebhook.js) never change:
 //
-// Twilio's Messages endpoint:
-//   POST {TWILIO_API_BASE}/2010-04-01/Accounts/{SID}/Messages.json
-//   Authorization: Basic base64(SID:AUTH_TOKEN)
-//   Content-Type: application/x-www-form-urlencoded
-//   From=whatsapp:+18005551234&To=whatsapp:+15556667777&Body=...
-// (see https://www.twilio.com/docs/whatsapp/api).
+//   • 'cloud'  — Meta WhatsApp Cloud API, DIRECT (no BSP markup). Sends via
+//                Graph API: POST {BASE}/{VERSION}/{PHONE_NUMBER_ID}/messages
+//                with `Authorization: Bearer {ACCESS_TOKEN}` and a JSON body.
+//                Our creator-initiated flow (creator texts "Hi" first) runs in
+//                Meta's free 24h service window, so replies cost nothing.
+//   • 'twilio' — Twilio's REST Messages API (BSP). Basic-Auth SID:token, a
+//                form-encoded From/To/Body body.
 //
-// 24h window: Meta rejects free-form text sent to a user who hasn't messaged us
-// in the last 24 hours; Twilio surfaces this as HTTP 400 with `code: 63016`.
-// The AiSensy-era session-template fallback (AISENSY_SESSION_CAMPAIGN) was
-// deliberately dropped as part of this swap; a send outside the window will
-// fail with a clear error and the message can be retried once the creator
-// messages us again. To re-enable a template fallback later, wire a Twilio
-// Content Template send here (Content API with ContentSid/ContentVariables) —
-// no other file needs to change.
+// Which one is chosen: WHATSAPP_PROVIDER ('cloud' | 'twilio') wins; unset, we
+// auto-detect Cloud when its access token is present, else Twilio — so simply
+// setting the WHATSAPP_CLOUD_* vars flips the provider. Sends are skipped
+// gracefully when the active provider's creds are absent, so dev never breaks.
+//
+// 24h window: both providers reject free-form text sent to a user who hasn't
+// messaged us in the last 24h (Twilio HTTP 400 code 63016; Meta 4xx code
+// 131047/131026). The AiSensy-era session-template fallback was dropped on the
+// Twilio swap and is not reintroduced here — a send outside the window fails
+// with a clear error and can be retried once the creator messages us again.
 
 const { extractProviderMessageId } = require('./deliveryStatus');
 
+// --- Provider selection ----------------------------------------------------
+function whatsappProvider() {
+  const explicit = String(process.env.WHATSAPP_PROVIDER || '').trim().toLowerCase();
+  if (explicit === 'cloud' || explicit === 'twilio') return explicit;
+  // Auto-detect: Cloud when its access token is set, else fall back to Twilio.
+  return process.env.WHATSAPP_CLOUD_ACCESS_TOKEN ? 'cloud' : 'twilio';
+}
+
+// --- Twilio config ---------------------------------------------------------
 function accountSid() {
   return process.env.TWILIO_ACCOUNT_SID || '';
 }
 function authToken() {
   return process.env.TWILIO_AUTH_TOKEN || '';
-}
-// Our own WhatsApp Business number (E.164 with leading "+"), shown in the invite
-// email so a creator knows what to text, AND used as the `From` on every send.
-// Unlike AiSensy — where the sender number was implicit in the API key — Twilio
-// requires an explicit `From` per request, so a wrong/missing value here fails
-// the send loudly instead of silently routing elsewhere.
-function businessNumber() {
-  return process.env.TWILIO_WHATSAPP_FROM || '';
 }
 function apiBase() {
   return (process.env.TWILIO_API_BASE || 'https://api.twilio.com').replace(/\/$/, '');
@@ -45,8 +47,35 @@ function messagesUrl() {
   return `${apiBase()}/2010-04-01/Accounts/${encodeURIComponent(accountSid())}/Messages.json`;
 }
 
+// --- Meta WhatsApp Cloud API config ---------------------------------------
+function cloudToken() {
+  return process.env.WHATSAPP_CLOUD_ACCESS_TOKEN || '';
+}
+function cloudPhoneNumberId() {
+  return process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID || '';
+}
+function cloudApiBase() {
+  return (process.env.WHATSAPP_CLOUD_API_BASE || 'https://graph.facebook.com').replace(/\/$/, '');
+}
+function cloudApiVersion() {
+  return process.env.WHATSAPP_CLOUD_API_VERSION || 'v21.0';
+}
+function cloudMessagesUrl() {
+  return `${cloudApiBase()}/${cloudApiVersion()}/${encodeURIComponent(cloudPhoneNumberId())}/messages`;
+}
+
+// Our own WhatsApp Business number (E.164 with leading "+"), shown in the invite
+// email so a creator knows what to text. For Twilio it doubles as the `From` on
+// every send; for Cloud API the sender is bound to PHONE_NUMBER_ID, so this is a
+// display value only.
+function businessNumber() {
+  return whatsappProvider() === 'cloud'
+    ? process.env.WHATSAPP_CLOUD_DISPLAY_NUMBER || ''
+    : process.env.TWILIO_WHATSAPP_FROM || '';
+}
+
 // Bare digits — used to match inbound sender numbers (last-10-digit fallback in
-// the webhook) and to normalise stored numbers before wrapping with "whatsapp:".
+// the webhook) and to normalise stored numbers before wrapping/sending.
 function normalizePhone(raw) {
   return String(raw || '').replace(/\D/g, '');
 }
@@ -80,12 +109,19 @@ function extractTwilioErrorCode(bodyText) {
   }
 }
 
-// Free-form session text (within Meta's 24h window after the creator messages
-// us). Used for the brand brief, thank-you, polite-close, deflection, too-high,
-// and manual review replies. Outside the window Twilio returns HTTP 400 with
-// code 63016 — surfaced verbatim in the error so the reason is visible in logs.
-async function sendWhatsAppText({ to, body }) {
-  if (!accountSid() || !authToken() || !businessNumber()) {
+// Meta Cloud API returns { messages: [{ id: 'wamid...' }] } on a successful
+// send — that wamid is what later status webhooks quote, so it's the id we store
+// to correlate the outbound offer_messages row with its delivery callbacks.
+function extractCloudMessageId(data) {
+  if (!data || typeof data !== 'object') return null;
+  const m = Array.isArray(data.messages) ? data.messages[0] : null;
+  return m && typeof m.id === 'string' ? m.id : null;
+}
+
+// Free-form session text via Twilio (within Meta's 24h window). Outside the
+// window Twilio returns HTTP 400 code 63016 — surfaced verbatim in the error.
+async function sendTwilioText({ to, body }) {
+  if (!accountSid() || !authToken() || !process.env.TWILIO_WHATSAPP_FROM) {
     console.warn(
       `[offer-whatsapp] TWILIO_ACCOUNT_SID/AUTH_TOKEN/WHATSAPP_FROM not set — skipping text to ${to}`,
     );
@@ -101,7 +137,7 @@ async function sendWhatsAppText({ to, body }) {
         'Content-Type': 'application/x-www-form-urlencoded',
         Authorization: basicAuthHeader(),
       },
-      body: buildTwilioForm({ from: businessNumber(), to, body }).toString(),
+      body: buildTwilioForm({ from: process.env.TWILIO_WHATSAPP_FROM, to, body }).toString(),
     });
     if (res.ok) {
       const data = await res.json().catch(() => null);
@@ -116,16 +152,60 @@ async function sendWhatsAppText({ to, body }) {
   }
 }
 
+// Free-form session text via Meta WhatsApp Cloud API (within the 24h window).
+// Outside it Meta returns a 4xx (error code 131047/131026) — surfaced verbatim.
+async function sendCloudText({ to, body }) {
+  if (!cloudToken() || !cloudPhoneNumberId()) {
+    console.warn(
+      `[offer-whatsapp] WHATSAPP_CLOUD_ACCESS_TOKEN/PHONE_NUMBER_ID not set — skipping text to ${to}`,
+    );
+    return { sent: false, skipped: true };
+  }
+  const recipient = normalizePhone(to);
+  if (!recipient) return { sent: false, error: 'invalid recipient number' };
+
+  try {
+    const res = await fetch(cloudMessagesUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cloudToken()}`,
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipient,
+        type: 'text',
+        text: { preview_url: false, body },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      return { sent: true, id: extractCloudMessageId(data) };
+    }
+    const text = await res.text().catch(() => '');
+    return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
+  } catch (err) {
+    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
+  }
+}
+
+// The public send used by offers.js / offerWebhook.js — dispatches to whichever
+// provider is configured so callers stay vendor-agnostic.
+async function sendWhatsAppText({ to, body }) {
+  return whatsappProvider() === 'cloud' ? sendCloudText({ to, body }) : sendTwilioText({ to, body });
+}
+
 // The offer-reveal message body (free-form session reply used by
 // deliverOfferOverChannel) — also stored in offer_messages so the admin can see
 // what the creator received. Points them straight at the portal link to view
-// AND accept the offer, so they know exactly what to do next. Unchanged from
-// the AiSensy era — this is copy, not vendor-specific plumbing.
+// AND accept the offer. Copy, not vendor-specific plumbing — unchanged.
 function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate }) {
   return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
 }
 
 module.exports = {
+  whatsappProvider,
   normalizePhone,
   toWhatsAppAddr,
   businessNumber,
@@ -135,5 +215,9 @@ module.exports = {
   buildTwilioForm,
   basicAuthHeader,
   extractTwilioErrorCode,
+  extractCloudMessageId,
   messagesUrl,
+  cloudMessagesUrl,
+  sendTwilioText,
+  sendCloudText,
 };
