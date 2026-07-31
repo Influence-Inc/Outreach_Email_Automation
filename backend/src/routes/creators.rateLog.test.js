@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { rateLogEntry, collapseSupersededSteps } = require('./creators');
+const { rateLogEntry, collapseSupersededSteps, offerEmailBackingKind } = require('./creators');
 
 // ── replies summarize what was said, never a bare "Creator replied" ─────────
 
@@ -202,6 +202,33 @@ test('rate_offer_sent omits the "at N views" clause when the unlock threshold is
     bonus_amount: 800,
   });
   assert.strictEqual(entry.text, 'Offer sent — $4,000 · 2 videos x 200K views x $8 CPM · +$800 bonus');
+});
+
+// ── the "Offer sent" step pairs to the priced offer email so it can be read ──
+
+test('a structured offer pairs to the outbound "offer" email', () => {
+  // The Approve & send flow records the priced offer email with kind 'offer';
+  // that's the message the timeline's "view full email" affordance opens.
+  assert.strictEqual(offerEmailBackingKind({ fee: 600, cpm: 2 }), 'offer');
+});
+
+test('a manual delegate offer pairs to the "delegate_reply" email that named the amount', () => {
+  assert.strictEqual(
+    offerEmailBackingKind({ fee: 4200, cpm: 6, source: 'delegate' }),
+    'delegate_reply',
+  );
+});
+
+test('a portal-delivered offer has no readable email to pair', () => {
+  // Portal offers ship a link stored in offer_messages, not an email_messages
+  // row — nothing to open, so no email is attached (and no stray earlier reply
+  // is mis-paired to the "Offer sent" step).
+  assert.strictEqual(offerEmailBackingKind({ fee: 600, cpm: 2, via: 'offer_portal' }), null);
+});
+
+test('offerEmailBackingKind tolerates a missing detail', () => {
+  assert.strictEqual(offerEmailBackingKind(null), 'offer');
+  assert.strictEqual(offerEmailBackingKind(undefined), 'offer');
 });
 
 // ── "Outreach queued" collapses into "Outreach sent" once the send lands ─────
