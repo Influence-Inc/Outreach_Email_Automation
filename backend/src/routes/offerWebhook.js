@@ -547,6 +547,7 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
     const neg = await offers.negotiateBudget({
       token: pendingOffer.token,
       requestedRate: decision.requestedRate,
+      channel, // 'whatsapp'/'imessage' → single-counter path (two-option deals are web-only)
     });
     if (neg && neg.ok && neg.outcome === 'countered') {
       outcome = 'countered'; // negotiateBudget already delivered the counter link

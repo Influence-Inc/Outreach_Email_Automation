@@ -11,9 +11,10 @@
   var DECLINE_REASONS = ['Budget', 'Timing', 'Not a fit'];
 
   var offer = null; // { token, firstName, brandName, deliverables, rate, currency, rateFormatted, expiresFormatted }
-  var view = 'loading'; // loading | active | accepted | declined | expired | too_high | on_hold | notfound
+  var view = 'loading'; // loading | active | options | accepted | declined | expired | too_high | on_hold | notfound
   var mode = 'cta'; // cta | reasons | budget | schedule
   var countered = false;
+  var options = null; // the two typed counter deals (view-based + video-based) to choose between
   var addedLabel = null;
   var rescheduledDate = null; // set when a "Timing" re-offer switched us to a fresh offer on the creator's dates
   var holdDateFormatted = null; // the date shown on the on-hold "we'll be in touch" view
@@ -166,6 +167,8 @@
     } else if (view === 'expired') {
       root = centered('neutral', '⏳', 'This offer has expired',
         'Sorry, ' + offer.firstName + ' — this offer is no longer available. If you are still interested, reply to your INFLUENCE contact and we will sort it out.');
+    } else if (view === 'options') {
+      root = renderOptions();
     } else if (view === 'too_high') {
       root = renderTooHigh();
     } else if (view === 'on_hold') {
@@ -266,6 +269,58 @@
     var e = errNode();
     if (e) wrap.appendChild(e);
     return wrap;
+  }
+
+  // Two typed counter deals — a view-based and a video-based shape, both paying
+  // the creator's requested rate (we size the guarantee / video count so our CPM
+  // holds). They pick the one they prefer and it locks on tap, exactly like
+  // accepting any offer. "No thanks" declines the whole set (siblings expire).
+  function renderOptions() {
+    var wrap = h('div', { class: 'fade' });
+    wrap.appendChild(h('div', { class: 'note' }, h('span', { class: 'spark' }, '✨'),
+      h('span', {}, "Good news — we can do " + (offer.rateFormatted || 'your rate') +
+        '. Pick the deal that works best for you.')));
+    wrap.appendChild(h('div', { class: 'eyebrow' }, h('span', { class: 'dot' }), 'Choose your deal'));
+    wrap.appendChild(h('h1', { class: 'brand' }, offer.brandName));
+
+    var grid = h('div', { class: 'opt-grid' });
+    (options || []).forEach(function (opt) {
+      var pills = h('div', { class: 'pill-list' });
+      (opt.deliverables || []).forEach(function (d) { pills.appendChild(h('span', { class: 'pill' }, d)); });
+      var sub = opt.dealType === 'view_based'
+        ? 'We guarantee the views — however many Reels it takes.'
+        : 'A set number of Reels at your rate.';
+      grid.appendChild(h('div', { class: 'opt-card' },
+        h('div', { class: 'opt-type' }, opt.label),
+        h('p', { class: 'opt-sub' }, sub),
+        pills,
+        h('div', { class: 'opt-rate' },
+          h('div', { class: 'rate-cap' }, 'Your rate'),
+          h('div', { class: 'rate num' }, opt.rateFormatted)),
+        btn('Choose this deal', { onClick: function () { acceptOption(opt); } })));
+    });
+    wrap.appendChild(grid);
+
+    wrap.appendChild(h('p', { class: 'ask-sub center' },
+      'Respond by ' + ((options && options[0]) ? options[0].expiresFormatted : offer.expiresFormatted)));
+    wrap.appendChild(h('div', { class: 'btns' },
+      h('button', { class: 'linkbtn center-link', type: 'button', onclick: function () { respond('declined', 'Budget'); } },
+        'None of these work — decline')));
+
+    var e = errNode();
+    if (e) wrap.appendChild(e);
+    return wrap;
+  }
+
+  // Lock the chosen deal: swap the live offer to that child's terms + token, then
+  // accept it exactly like any offer. The backend expires the sibling on accept.
+  function acceptOption(opt) {
+    offer = {
+      token: opt.token, firstName: offer.firstName, brandName: opt.brandName,
+      deliverables: opt.deliverables, rate: opt.rate, currency: opt.currency,
+      rateFormatted: opt.rateFormatted, expiresFormatted: opt.expiresFormatted,
+    };
+    respond('accepted');
   }
 
   // Decline confirmation — "Not a fit" gets a warmer, forward-looking close
@@ -470,6 +525,17 @@
         mode = 'cta'; rateInput = ''; view = 'active';
         // Keep the URL on the live offer so a manual reload loads it, not the old one.
         try { history.replaceState(null, '', '/o/' + encodeURIComponent(c.token)); } catch (e) {}
+      } else if (data.ok && data.outcome === 'options') {
+        // Two typed deals at their rate — present the choice. Point the live
+        // offer at the first child so a decline (or reload) routes through a real
+        // pending offer; accepting either child retires its sibling server-side.
+        options = data.options;
+        offer = {
+          token: options[0].token, firstName: offer.firstName, brandName: options[0].brandName,
+          rateFormatted: options[0].rateFormatted, expiresFormatted: options[0].expiresFormatted,
+        };
+        rateInput = ''; view = 'options';
+        try { history.replaceState(null, '', '/o/' + encodeURIComponent(options[0].token)); } catch (e) {}
       } else if (data.ok && data.outcome === 'too_high') {
         tooHighRequested = data.requestedRateFormatted; rateInput = ''; view = 'too_high';
       } else if (data.reason === 'expired') { view = 'expired'; }

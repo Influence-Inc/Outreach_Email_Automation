@@ -748,6 +748,23 @@ async function onOfferResponded(offerId, response) {
     );
     if (!offer) return;
 
+    // Responding to one deal-option counter retires its siblings: a two-option
+    // counter mints view-based + video-based children under one parent, and
+    // acting on either (accept OR decline) resolves the whole set — the creator
+    // can't then accept a leftover shape. Idempotent, and a no-op for a
+    // single-counter child (no siblings). Covers web + WhatsApp/iMessage alike.
+    if (offer.parent_offer_id != null) {
+      try {
+        await db.query(
+          `UPDATE offers SET status = 'expired'
+           WHERE parent_offer_id = $1 AND status = 'pending' AND id <> $2`,
+          [offer.parent_offer_id, offer.id],
+        );
+      } catch (err) {
+        console.error('[offers] sibling-option expiry failed', err.message);
+      }
+    }
+
     const firstName = firstNameOf(offer);
     const logSend = (channel, body, providerMessageId = null) =>
       db.query(
@@ -884,14 +901,14 @@ function legacyRateTolerancePct() {
   return Number.isFinite(raw) && raw >= 0 ? raw : 0.15;
 }
 // How far above the creator's established PRIOR-campaign CPM a counter-ask may
-// reach before we decline it outright. Default 0.5 → a request more than 50%
-// over their prior CPM is "too high" (the standing offer stays live so they can
-// still take it). Anchored to the prior CPM — not the current offer's — so the
-// ceiling doesn't creep upward across a chain of counters. Overridable via
-// MAX_CPM_INCREASE_PCT.
+// reach before we decline it outright. Default 1.0 → a request more than 2× the
+// prior CPM is "too high" (the standing offer stays live so they can still take
+// it); anything at or under 2× is answered with counter deal options. Anchored
+// to the prior CPM — not the current offer's — so the ceiling doesn't creep
+// upward across a chain of counters. Overridable via MAX_CPM_INCREASE_PCT.
 function maxCpmIncreasePct() {
   const raw = Number(process.env.MAX_CPM_INCREASE_PCT);
-  return Number.isFinite(raw) && raw > 0 ? raw : 0.5;
+  return Number.isFinite(raw) && raw > 0 ? raw : 1.0;
 }
 function computeCounterRate(originalRate, requestedRate) {
   if (process.env.COUNTER_STRATEGY === 'match') return requestedRate;
@@ -928,8 +945,62 @@ function expandDeliverables(deliverables, extraUnits) {
   };
 }
 
+// Round a view count to a clean number for display + guarantee. Rounds UP to the
+// nearest 5,000 (min 5,000) so the guaranteed impressions are always >= what the
+// CPM math requires — i.e. our effective CPM lands at or below the cap, never above.
+function roundViewsUp(views) {
+  const step = 5000;
+  return Math.max(step, Math.ceil(views / step) * step);
+}
+// Compact human view label, e.g. 250000 -> "250K", 1500000 -> "1.5M".
+function formatViews(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e6) return `${+(v / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+  if (v >= 1e3) return `${Math.round(v / 1e3)}K`;
+  return String(Math.round(v));
+}
+
+// Pure. Express ONE "pay the creator their requestedRate while holding OUR CPM at
+// capCpm" deal two ways so the creator can choose the shape they prefer:
+//   • view_based  — we guarantee the impressions needed to hit capCpm at that rate
+//   • video_based — that same impression target expressed as whole Reels at the
+//                   creator's CURRENT median per-video views (medianViews)
+// Both carry the same rate; only the deliverable shape differs. Returns
+// [viewOption, videoOption], each { dealType, label, deliverables[], rate,
+// expectedImpressions, viewGuarantee|null, numVideos|null }. Unit-testable with no
+// DB — mirrors the requiredImpressions math already used by expand_deliverables.
+function buildCounterOptions({ requestedRate, capCpm, medianViews }) {
+  const requiredImpressions = (requestedRate * 1000) / capCpm;
+  const viewGuarantee = roundViewsUp(requiredImpressions);
+  const numVideos = Math.max(1, Math.ceil(requiredImpressions / medianViews));
+  const noun = numVideos === 1 ? 'Reel' : 'Reels';
+  return [
+    {
+      dealType: 'view_based',
+      label: 'View-based',
+      deliverables: [`Guaranteed ${formatViews(viewGuarantee)} views`],
+      rate: requestedRate,
+      expectedImpressions: viewGuarantee,
+      viewGuarantee,
+      numVideos: null,
+    },
+    {
+      dealType: 'video_based',
+      label: 'Video-based',
+      deliverables: [`${numVideos} ${noun}`],
+      rate: requestedRate,
+      expectedImpressions: Math.round(numVideos * medianViews),
+      viewGuarantee: null,
+      numVideos,
+    },
+  ];
+}
+
 // Judge a creator's counter-ask by CPM (see offers.ts for the full rationale).
-async function negotiateBudget({ token, requestedRate }) {
+// `channel` scopes the two-deal-option flow to the web offer page ('web'); a
+// counter that arrives over WhatsApp/iMessage keeps the single-counter behavior
+// (options need the interactive portal to choose between).
+async function negotiateBudget({ token, requestedRate, channel = 'web' }) {
   if (!Number.isFinite(requestedRate) || requestedRate <= 0) {
     return { ok: false, reason: 'invalid_rate' };
   }
@@ -947,9 +1018,10 @@ async function negotiateBudget({ token, requestedRate }) {
   // far a counter can push (see maxCpmIncreasePct). Best-effort: if we can't
   // resolve it, the ceiling falls back to the current offer's own CPM below.
   let priorCpm = null;
+  let medianViews = null;
   try {
     const ctx = await db.one(
-      `SELECT c.email, c.instagram_username, ca.max_cpm, ca.data AS campaign_data
+      `SELECT c.email, c.instagram_username, c.ig_scraped_data, ca.max_cpm, ca.data AS campaign_data
          FROM creators c
          LEFT JOIN campaigns ca ON ca.id = $2
         WHERE c.id = $1`,
@@ -961,6 +1033,13 @@ async function negotiateBudget({ token, requestedRate }) {
         { max_cpm: ctx.max_cpm, data: ctx.campaign_data },
       );
       if (resolved && Number.isFinite(resolved.cpm) && resolved.cpm > 0) priorCpm = resolved.cpm;
+      // Current per-video views from Deal Studio stats — median (p50), then p25 —
+      // used to size the video-based counter option. Null → no options, single
+      // counter fallback.
+      const stats = ctx.ig_scraped_data;
+      const p50 = stats && Number(stats.p50);
+      const p25 = stats && Number(stats.p25);
+      medianViews = Number.isFinite(p50) && p50 > 0 ? p50 : Number.isFinite(p25) && p25 > 0 ? p25 : null;
     }
   } catch (err) {
     console.error('[offers] prior-CPM ceiling lookup failed', err.message);
@@ -987,21 +1066,34 @@ async function negotiateBudget({ token, requestedRate }) {
       // Within tolerance of our offer → counter at (roughly) their rate.
       plan = { kind: 'same_terms', rate: computeCounterRate(originalRate, requestedRate) };
     } else {
-      // Higher, but under the ceiling → hold CPM by expanding deliverables.
+      // Higher than our offer, but at/under 2× the prior CPM. Hold OUR CPM at the
+      // cap while paying their rate.
       const capCpm = cpmOriginal + cpmTolerance;
-      const requiredImpressions = (requestedRate * 1000) / capCpm;
-      const extraImpressions = requiredImpressions - impressions;
-      const totalUnits = totalDeliverableUnits(deliverablesArr);
-      const perUnitImpressions = impressions / totalUnits;
-      const extraUnits = Math.ceil(extraImpressions / perUnitImpressions);
-      const { deliverables, addedLabel } = expandDeliverables(deliverablesArr, extraUnits);
-      plan = {
-        kind: 'expand_deliverables',
-        rate: requestedRate,
-        deliverables,
-        expectedImpressions: Math.round(impressions + extraUnits * perUnitImpressions),
-        addedLabel,
-      };
+      // On the web portal, when we have current view stats, present the deal as a
+      // CHOICE between a view-based and a video-based shape (sized from the
+      // creator's median views). Otherwise (messaging counter, or no stats) keep
+      // the single "match the rate, add a deliverable" counter.
+      if (channel === 'web' && medianViews != null) {
+        plan = {
+          kind: 'offer_options',
+          rate: requestedRate,
+          options: buildCounterOptions({ requestedRate, capCpm, medianViews }),
+        };
+      } else {
+        const requiredImpressions = (requestedRate * 1000) / capCpm;
+        const extraImpressions = requiredImpressions - impressions;
+        const totalUnits = totalDeliverableUnits(deliverablesArr);
+        const perUnitImpressions = impressions / totalUnits;
+        const extraUnits = Math.ceil(extraImpressions / perUnitImpressions);
+        const { deliverables, addedLabel } = expandDeliverables(deliverablesArr, extraUnits);
+        plan = {
+          kind: 'expand_deliverables',
+          rate: requestedRate,
+          deliverables,
+          expectedImpressions: Math.round(impressions + extraUnits * perUnitImpressions),
+          addedLabel,
+        };
+      }
     }
   } else {
     const maxAcceptableRate = originalRate * (1 + legacyRateTolerancePct());
@@ -1023,6 +1115,12 @@ async function negotiateBudget({ token, requestedRate }) {
       originalRateFormatted: formatMoney(offer.rate, offer.currency),
       requestedRateFormatted: formatMoney(requestedRate, offer.currency),
     };
+  }
+
+  // Two-option counter (web portal): decline the original and mint one child
+  // offer per deal shape (view-based + video-based); the creator picks on the page.
+  if (plan.kind === 'offer_options') {
+    return mintCounterOptions(offer, requestedRate, plan.options);
   }
 
   // Otherwise → decline the original (recording the ask) and mint a counter-offer
@@ -1112,6 +1210,90 @@ async function negotiateBudget({ token, requestedRate }) {
       deliverablesChanged: plan.kind === 'expand_deliverables',
       addedLabel: plan.kind === 'expand_deliverables' ? plan.addedLabel : null,
     },
+  };
+}
+
+// Web-portal two-option counter. Decline the parent offer (recording the ask)
+// and mint ONE child offer per deal shape (view-based + video-based) — both
+// carrying the creator's requested rate, differing only in deliverables. The
+// creator picks one on the offer page; accepting it retires the sibling (see the
+// parent_offer_id sweep in onOfferResponded). Every row shares the parent's
+// brand/currency/campaign and a single expiry. The whole mint is one transaction
+// retried as a unit on a token collision, so the two children are always created
+// together (never a half-set). Returns { ok, outcome:'options', options:[…] }.
+async function mintCounterOptions(offer, requestedRate, options) {
+  const expiresAt = new Date(Date.now() + DEFAULT_EXPIRY_DAYS * 86400000);
+  let minted = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const withTokens = options.map((opt) => ({ ...opt, token: generateOfferToken() }));
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await db.withTransaction(async (client) => {
+        const declined = await client.query(
+          `UPDATE offers SET status = 'declined', decline_reason = 'Budget', requested_rate = $2
+           WHERE id = $1 AND status = 'pending'`,
+          [offer.id, requestedRate],
+        );
+        if (declined.rowCount === 0) return { raced: true, options: null };
+        await client.query(
+          `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'declined', 'web')`,
+          [offer.id],
+        );
+        for (const opt of withTokens) {
+          // eslint-disable-next-line no-await-in-loop
+          const { rows } = await client.query(
+            `INSERT INTO offers
+               (creator_id, campaign_id, token, brand_name, deliverables, rate, currency, expected_impressions, parent_offer_id, expires_at)
+             VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10)
+             RETURNING id`,
+            [
+              offer.creator_id,
+              offer.campaign_id,
+              opt.token,
+              offer.brand_name,
+              JSON.stringify(opt.deliverables),
+              opt.rate,
+              offer.currency,
+              opt.expectedImpressions != null ? opt.expectedImpressions : null,
+              offer.id,
+              expiresAt,
+            ],
+          );
+          // eslint-disable-next-line no-await-in-loop
+          await client.query(
+            `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'sent', 'web')`,
+            [rows[0].id],
+          );
+        }
+        return { raced: false, options: withTokens };
+      });
+      if (result.raced) return { ok: false, reason: 'already_responded' };
+      minted = result.options;
+      break;
+    } catch (err) {
+      if (err && err.code === '23505' && attempt < 4) continue; // token collision — retry
+      throw err;
+    }
+  }
+
+  if (!minted) return { ok: false, reason: 'already_responded' };
+
+  return {
+    ok: true,
+    outcome: 'options',
+    options: minted.map((opt) => ({
+      token: opt.token,
+      dealType: opt.dealType,
+      label: opt.label,
+      brandName: offer.brand_name,
+      deliverables: opt.deliverables,
+      rate: Number(opt.rate),
+      currency: offer.currency,
+      rateFormatted: formatMoney(opt.rate, offer.currency),
+      expiresFormatted: formatDate(expiresAt),
+      viewGuarantee: opt.viewGuarantee,
+      numVideos: opt.numVideos,
+    })),
   };
 }
 
@@ -1743,6 +1925,7 @@ module.exports = {
   sendOfferOutreach,
   recordDeliveryStatus,
   negotiateBudget,
+  buildCounterOptions,
   negotiateSchedule,
   sendRescheduledOffer,
   getOfferForPage,
