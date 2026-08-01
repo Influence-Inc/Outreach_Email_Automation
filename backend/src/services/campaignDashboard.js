@@ -92,6 +92,20 @@ const clean = (o) => {
 function buildPayload(contract, creator) {
   const d = (contract && contract.data) || {};
   const igHandle = resolveHandle(d, creator);
+  // The dashboard normalizes platform tokens case-insensitively and accepts
+  // "Instagram" / "TikTok" / "YouTube Shorts" verbatim; only send the array
+  // when it's actually populated so the dashboard falls back to its default
+  // form layout when the contract never narrowed the platform list.
+  const platforms = Array.isArray(d.platforms) && d.platforms.length ? d.platforms : undefined;
+  // Dashboard's paidAdRights: strictly "Included" / "Not included". Omit
+  // entirely when the contract doesn't state it, so the submission form
+  // won't ask for a partnership ad code by default.
+  const paidAdRights =
+    typeof d.paidAdsIncluded === 'boolean'
+      ? d.paidAdsIncluded
+        ? 'Included'
+        : 'Not included'
+      : undefined;
   // Video-based deals name a fixed video count; view-based deals have no
   // video count and instead carry a total-views target (see baseContractData
   // in contracts.js) — never send both.
@@ -102,6 +116,8 @@ function buildPayload(contract, creator) {
     deadline: ymdOrUndef(d.postingDeadline || d.deadline),
     delMinVideos: intOrUndef(d.numberOfVideos),
     delMinViews: intOrUndef(d.minTotalViews ?? d.guaranteedViews),
+    platforms,
+    paidAdRights,
     contractRef: contract.token,
   });
 }
