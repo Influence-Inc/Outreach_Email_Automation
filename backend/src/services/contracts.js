@@ -399,6 +399,7 @@ Rules:
 - Use ONLY facts supported by the EMAIL THREAD, the negotiation timeline, and the provided KNOWN VALUES. Never invent numbers.
 - "platforms" are the platforms the CREATOR agreed to post the content on. REPLY 1 proposes all three — Instagram, TikTok and YouTube Shorts — but the creator decides: return only the platforms the creator actually agreed to. DEFAULT to all three ["Instagram","TikTok","YouTube Shorts"] whenever the creator never restricted them in the thread; return a subset ONLY when the creator explicitly chose or limited which platforms they'll post on. Note: a view-based deal counts guaranteed views "on Instagram" for PRICING only — that view-counting reference does NOT limit the posting platforms, so never narrow to Instagram-only because of it.
 - "deliverables": when KNOWN VALUES.acceptedOffer.offer_type is "view_based", the deal is priced by TOTAL guaranteed views reached across as many posts as the creator needs — describe the content WITHOUT any video count (e.g. "Short-form video content") and set numberOfDeliverables and numberOfVideos to null. Never write "1 video" / "1 Reel" for a view-based deal. For flat (video-based) deals, state the agreed number of videos.
+- "deliverables" describes WHAT the creator produces — never the posting rhythm. Do NOT tack a cadence, posting rhythm, or per-week/day/month frequency onto this field (no "posted at a cadence of 1-2 videos per week", no "1 per week", no "posted weekly"). Cadence lives in the "timeline" field only. Keep "deliverables" as a bare content description like "3 short-form videos" or "Short-form video content".
 - "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
 - "currency" is a 3-letter ISO code (default "USD").
 - "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
@@ -499,6 +500,10 @@ async function extractContractData(creator, opts = {}) {
   if (Number(merged.numberOfDeliverables || merged.numberOfVideos) <= 1) {
     merged.timeline = null;
   }
+  // Cadence lives in the Timeline section only — never inside the Deliverables
+  // value. Strip any "posted at a cadence of 1-2 videos per week" tail the
+  // extraction has stitched onto deliverables so the two rows don't duplicate.
+  merged.deliverables = stripCadenceFromDeliverables(merged.deliverables);
   // Paid-ad-rights inclusion is a high-stakes, policy-governed term and must NOT
   // be left to the free-form extraction, which can misfire and silently drop
   // rights the campaign is entitled to (the reported free_only bug: the creator
@@ -621,6 +626,27 @@ async function requestedUpfrontPayment(transcript) {
     if (n >= 1 && n <= 99) pct = n;
   }
   return { upfront, pct };
+}
+
+// Strip any cadence / posting-rhythm clause the extraction has tacked onto a
+// deliverables string. Cadence has its own Timeline row on the contract page,
+// so a phrase like ", posted at a cadence of 1-2 videos per week" duplicates
+// that row inside the Deliverables value. Applied defensively after Claude's
+// merge (and again when reading legacy rows) so we don't rely on the prompt
+// rule alone. Only touches trailing clauses introduced by a comma / dash /
+// connector — the leading content description ("3 short-form videos featuring
+// Reve") is preserved.
+function stripCadenceFromDeliverables(text) {
+  if (text == null) return text;
+  const s = String(text);
+  let out = s
+    .replace(/\s*[,;—–\-]\s*(?:posted\s+)?(?:at\s+)?(?:a\s+)?(?:cadence|rhythm|frequency)\s+of[^.,;]*$/i, '')
+    .replace(/\s*[,;—–\-]\s*posted\s+[^,;]*\bper\s+(?:week|day|month)\b[^.,;]*$/i, '')
+    .replace(/\s*[,;—–\-]\s*(?:posted\s+)?(?:weekly|bi-?weekly|monthly|daily)\b[^.,;]*$/i, '')
+    .replace(/\s*[,;—–\-]\s*[^,;]*\bper\s+(?:week|day|month)\b[^.,;]*$/i, '')
+    .replace(/\s*[,;]+\s*$/, '')
+    .trim();
+  return out || s;
 }
 
 function isMeaningful(v) {
@@ -1177,4 +1203,5 @@ module.exports = {
   negotiatedSeparateUsageRightsPayment,
   requestedUpfrontPayment,
   resolvePaymentSchedule,
+  stripCadenceFromDeliverables,
 };
