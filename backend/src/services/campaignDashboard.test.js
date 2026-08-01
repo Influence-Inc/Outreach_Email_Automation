@@ -21,6 +21,8 @@ test('buildPayload maps a signed video-based contract to the dashboard DTO', () 
       guaranteedViews: null,
       deadline: 'Monday, August 10, 2026',
       postingDeadline: 'Monday, August 10, 2026',
+      platforms: ['Instagram'],
+      paidAdsIncluded: true,
     },
   };
   const creator = { campaign_id: 'fc6cd16f226f', full_name: 'Alex Lee', email: 'alex@example.com', instagram_username: 'alexcreates' };
@@ -32,7 +34,36 @@ test('buildPayload maps a signed video-based contract to the dashboard DTO', () 
   assert.strictEqual(p.delMinVideos, 2);
   assert.strictEqual(p.deadline, '2026-08-10');
   assert.strictEqual(p.contractRef, 'tok123');
+  assert.deepStrictEqual(p.platforms, ['Instagram']);
+  assert.strictEqual(p.paidAdRights, 'Included');
   assert.ok(!('delMinViews' in p), 'a video-based deal has no view floor to sync');
+});
+
+test('buildPayload maps paidAdsIncluded=false to "Not included"', () => {
+  const contract = {
+    token: 'tok111',
+    data: {
+      email: 'a@b.com', instagramUsername: 'a', numberOfVideos: 1,
+      platforms: ['Instagram', 'TikTok', 'YouTube Shorts'],
+      paidAdsIncluded: false,
+    },
+  };
+  const p = campaignDashboard.buildPayload(contract, { campaign_id: 'c1', email: 'a@b.com', instagram_username: 'a' });
+  assert.strictEqual(p.paidAdRights, 'Not included');
+  assert.deepStrictEqual(p.platforms, ['Instagram', 'TikTok', 'YouTube Shorts']);
+});
+
+test('buildPayload omits platforms and paidAdRights when the contract does not state them', () => {
+  const contract = { token: 'tok222', data: { email: 'a@b.com', instagramUsername: 'a', numberOfVideos: 1 } };
+  const p = campaignDashboard.buildPayload(contract, { campaign_id: 'c1', email: 'a@b.com', instagram_username: 'a' });
+  assert.ok(!('platforms' in p), 'no platforms field means the dashboard falls back to its own default');
+  assert.ok(!('paidAdRights' in p), 'no paidAdRights field means the submission form skips the ad code');
+});
+
+test('buildPayload omits platforms when the contract has an empty array', () => {
+  const contract = { token: 'tok333', data: { platforms: [], numberOfVideos: 1 } };
+  const p = campaignDashboard.buildPayload(contract, { campaign_id: 'c1', email: 'a@b.com', instagram_username: 'a' });
+  assert.ok(!('platforms' in p));
 });
 
 test('buildPayload maps a signed view-based contract without a video count', () => {
