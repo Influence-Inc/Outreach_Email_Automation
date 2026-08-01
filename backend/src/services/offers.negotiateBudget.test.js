@@ -126,14 +126,14 @@ test('more than $1.5 CPM over but under the ceiling → expand deliverables, hol
   }
 });
 
-test('more than 50% above the prior-campaign CPM → too high, offer stays live', async () => {
-  // $2,500 → CPM 25, above the $22.5 ceiling (prior CPM 15 × 1.5).
+test('more than 2× the prior-campaign CPM → too high, offer stays live', async () => {
+  // $3,100 → CPM 31, above the $30 ceiling (prior CPM 15 × 2).
   const { writes } = install({ offer: { ...baseOffer }, priorCpm: 15 });
   try {
-    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 2500 });
+    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 3100 });
     assert.strictEqual(r.ok, true);
     assert.strictEqual(r.outcome, 'too_high');
-    assert.match(r.requestedRateFormatted, /2,500/);
+    assert.match(r.requestedRateFormatted, /3,100/);
     // The standing offer is NOT declined — only the ask is recorded on it.
     assert.ok(writes.some((w) => /UPDATE offers SET requested_rate/i.test(w.sql)));
     assert.ok(!writes.some((w) => /status = 'declined'/i.test(w.sql)));
@@ -142,14 +142,28 @@ test('more than 50% above the prior-campaign CPM → too high, offer stays live'
   }
 });
 
+test('a counter at exactly 2× the prior CPM is answered, just over it declines', async () => {
+  // Ceiling = 15 × 2 = 30. $3,000 → CPM 30 (== ceiling) is honored (no stats in
+  // this stub → single expand-deliverables counter); $3,001 → CPM 30.01 declines.
+  install({ offer: { ...baseOffer }, priorCpm: 15 });
+  try {
+    const at = await offers.negotiateBudget({ token: 'tok', requestedRate: 3000 });
+    assert.strictEqual(at.outcome, 'countered');
+    const over = await offers.negotiateBudget({ token: 'tok', requestedRate: 3001 });
+    assert.strictEqual(over.outcome, 'too_high');
+  } finally {
+    restoreAll();
+  }
+});
+
 test('ceiling is anchored to the PRIOR CPM, not the current (already-high) offer', async () => {
-  // Offer already at CPM 20 ($2,000/100k). Old logic (2× the offer CPM = 40)
-  // would have expanded a CPM-24 ask; the prior-CPM ceiling (15 × 1.5 = 22.5)
-  // declines it.
+  // Offer already at CPM 20 ($2,000/100k). Old offer-relative logic (2× the offer
+  // CPM = 40) would have answered a CPM-35 ask; the prior-CPM ceiling (15 × 2 =
+  // 30) declines it.
   const highOffer = { ...baseOffer, rate: 2000 };
   install({ offer: highOffer, priorCpm: 15 });
   try {
-    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 2400 });
+    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 3500 });
     assert.strictEqual(r.outcome, 'too_high');
   } finally {
     restoreAll();

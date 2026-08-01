@@ -68,6 +68,20 @@
       font-size: 13.5px; color: var(--ink-2); }
     .note .spark { flex: none; }
 
+    /* Two typed counter deals to choose between (view-based / video-based). */
+    .opt-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 16px; }
+    @media (min-width: 440px) { .opt-grid { grid-template-columns: 1fr 1fr; } }
+    .opt-card { display: flex; flex-direction: column; border: 1px solid var(--line-2);
+      background: var(--surface-2); border-radius: var(--radius-md); padding: 16px; }
+    .opt-card .opt-type { font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+      color: var(--ink); margin-bottom: 4px; }
+    .opt-card .opt-sub { font-size: 12px; color: var(--muted); margin: 0 0 12px; line-height: 1.4; }
+    .opt-card .pill-list { margin-bottom: 12px; }
+    .opt-card .opt-rate { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line);
+      margin-bottom: 12px; }
+    .opt-card .opt-rate .rate { font-size: 22px; }
+    .opt-card .btn { font-size: 13.5px; padding: 10px 14px; }
+
     .btns { display: flex; flex-direction: column; gap: 9px; }
     .btn { appearance: none; border: 1px solid transparent; cursor: pointer; font-family: var(--font);
       font-weight: 600; font-size: 15px; padding: 12px 18px; border-radius: var(--radius-sm);
