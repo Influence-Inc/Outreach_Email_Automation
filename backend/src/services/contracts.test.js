@@ -213,6 +213,29 @@ test('mergeContractData: Claude overrides base, but never wipes known values', (
   assert.strictEqual(out.creatorName, 'Alex Lee'); // untouched base identity
 });
 
+test('stripCadenceFromDeliverables: cadence tails never ride along on the deliverables value', () => {
+  // The Cadence row lives in the Timeline section on its own; a phrase like
+  // "posted at a cadence of 1-2 videos per week" tacked onto the deliverables
+  // string duplicates that row inside the Deliverables value on the contract
+  // page. The sanitizer drops trailing cadence / posting-rhythm clauses while
+  // preserving the leading content description.
+  const s = contracts.stripCadenceFromDeliverables;
+  assert.strictEqual(
+    s('3 short-form videos featuring Reve, posted at a cadence of 1-2 videos per week'),
+    '3 short-form videos featuring Reve',
+  );
+  assert.strictEqual(s('2 short-form videos, 1 per week'), '2 short-form videos');
+  assert.strictEqual(s('2 short-form videos, posted weekly'), '2 short-form videos');
+  assert.strictEqual(s('3 short-form videos — at a cadence of 2 per week'), '3 short-form videos');
+  // Bare content descriptions must be left alone — no cadence to strip.
+  assert.strictEqual(s('3 short-form videos'), '3 short-form videos');
+  assert.strictEqual(s('Short-form video content'), 'Short-form video content');
+  assert.strictEqual(s('1 short-form video featuring Reve'), '1 short-form video featuring Reve');
+  // Nullish / empty input passes through unchanged.
+  assert.strictEqual(s(null), null);
+  assert.strictEqual(s(''), '');
+});
+
 test('mergeContractData: platforms follow the creator — subset wins, default kept when unspecified', () => {
   const base = contracts.baseContractData({ full_name: 'Vo Anh Duy' }, 300, { num_videos: 1 });
   assert.deepStrictEqual(base.platforms, ['Instagram', 'TikTok', 'YouTube Shorts']);

@@ -139,6 +139,25 @@
     return n == null || isNaN(Number(n)) ? null : Number(n).toLocaleString('en-US');
   }
 
+  // Cadence / posting-rhythm clauses ("posted at a cadence of 1-2 videos per
+  // week", ", 2 per week") sometimes rode along on the extracted deliverables
+  // string. They already have their own Cadence row in the Timeline section,
+  // so keep them out of the Deliverables value. Mirrors the server-side
+  // stripCadenceFromDeliverables applied at extraction time — this is the
+  // defensive read-side pass that fixes contracts stored before that change.
+  function stripCadenceFromDeliverables(text) {
+    if (text == null) return text;
+    var s = String(text);
+    var out = s
+      .replace(/\s*[,;—–\-]\s*(?:posted\s+)?(?:at\s+)?(?:a\s+)?(?:cadence|rhythm|frequency)\s+of[^.,;]*$/i, '')
+      .replace(/\s*[,;—–\-]\s*posted\s+[^,;]*\bper\s+(?:week|day|month)\b[^.,;]*$/i, '')
+      .replace(/\s*[,;—–\-]\s*(?:posted\s+)?(?:weekly|bi-?weekly|monthly|daily)\b[^.,;]*$/i, '')
+      .replace(/\s*[,;—–\-]\s*[^,;]*\bper\s+(?:week|day|month)\b[^.,;]*$/i, '')
+      .replace(/\s*[,;]+\s*$/, '')
+      .trim();
+    return out || s;
+  }
+
   // ── Row helpers (grey label + bold value pairs, v1 card style) ─────────
   function row(k, v, opts) {
     if (v == null || v === '') return '';
@@ -182,7 +201,12 @@
     // doesn't already carry a number — the edge case where a Claude
     // extraction produced a count-less description like "Instagram Reel and
     // TikTok short" and the numeric count is genuinely extra information.
-    var deliverablesText = String(d.deliverables || '');
+    // Cadence lives in the Timeline section only — never inside the Deliverables
+    // value. Strip any "posted at a cadence of 1-2 videos per week" tail that
+    // was stitched onto deliverables by an older extraction so already-stored
+    // contracts stop duplicating the Cadence row inside this value.
+    var deliverablesText = stripCadenceFromDeliverables(String(d.deliverables || ''));
+    d.deliverables = deliverablesText;
     var deliverablesHasCount = /\d/.test(deliverablesText);
     // View-based deals are priced by a guaranteed TOTAL Instagram view count
     // aggregated across every post the creator publishes on Instagram — the
