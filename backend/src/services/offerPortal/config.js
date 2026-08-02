@@ -20,8 +20,13 @@
 //                              EVERY offer-portal email (invite, full offer,
 //                              confirmation) is skipped. Master switch.
 //
-// WhatsApp runs on one of two providers (WHATSAPP_PROVIDER, auto-detected to
-// 'cloud' when WHATSAPP_CLOUD_ACCESS_TOKEN is set, else 'twilio'):
+// WhatsApp runs on one of three providers (WHATSAPP_PROVIDER, auto-detected in
+// order: 'aisensy' if AISENSY_API_KEY, else 'cloud' if WHATSAPP_CLOUD_ACCESS_TOKEN,
+// else 'twilio'):
+//   AiSensy (BSP):
+//     AISENSY_WHATSAPP_NUMBER → the WhatsApp number printed in the invite.
+//     AISENSY_API_KEY         → Bearer key for AiSensy's send API.
+//     AISENSY_WEBHOOK_SECRET  → optional shared secret to gate the inbound webhook.
 //   Meta Cloud API (direct):
 //     WHATSAPP_CLOUD_DISPLAY_NUMBER   → the WhatsApp number printed in the invite.
 //     WHATSAPP_CLOUD_ACCESS_TOKEN     → Bearer token for the Graph send API.
@@ -57,12 +62,22 @@ function offerPortalConfig() {
     configured: boolEnv('RESEND_API_KEY'),
   };
 
-  // WhatsApp: 'cloud' (Meta Cloud API direct) or 'twilio' (BSP). Each gates on
-  // its own number + creds; `hasApiKey` is true only when the send-side creds
-  // are fully present, matching the gate in whatsapp.js.
+  // WhatsApp: 'aisensy' (BSP), 'cloud' (Meta Cloud API direct) or 'twilio' (BSP).
+  // Each gates on its own number + creds; `hasApiKey` is true only when the
+  // send-side creds are fully present, matching the gate in whatsapp.js.
   const waProvider = whatsappProvider();
   let whatsapp;
-  if (waProvider === 'cloud') {
+  if (waProvider === 'aisensy') {
+    const waNumber = strEnv('AISENSY_WHATSAPP_NUMBER');
+    const hasAisensyKey = boolEnv('AISENSY_API_KEY');
+    whatsapp = {
+      provider: 'aisensy',
+      businessNumber: waNumber,
+      hasApiKey: hasAisensyKey,
+      inviteReady: !!waNumber,
+      conversationReady: hasAisensyKey && !!waNumber,
+    };
+  } else if (waProvider === 'cloud') {
     const waNumber = strEnv('WHATSAPP_CLOUD_DISPLAY_NUMBER');
     const hasCloudCreds = boolEnv('WHATSAPP_CLOUD_ACCESS_TOKEN') && boolEnv('WHATSAPP_CLOUD_PHONE_NUMBER_ID');
     whatsapp = {
@@ -137,11 +152,18 @@ function offerPortalConfigIssues() {
   if (!c.email.configured) {
     issues.push('RESEND_API_KEY is not set — all offer-portal emails (invite/offer/confirmation) are skipped');
   }
-  const waNumberVar = c.whatsapp.provider === 'cloud' ? 'WHATSAPP_CLOUD_DISPLAY_NUMBER' : 'TWILIO_WHATSAPP_FROM';
+  const waNumberVar =
+    c.whatsapp.provider === 'aisensy'
+      ? 'AISENSY_WHATSAPP_NUMBER'
+      : c.whatsapp.provider === 'cloud'
+        ? 'WHATSAPP_CLOUD_DISPLAY_NUMBER'
+        : 'TWILIO_WHATSAPP_FROM';
   const waCredsHint =
-    c.whatsapp.provider === 'cloud'
-      ? 'WHATSAPP_CLOUD_ACCESS_TOKEN and/or WHATSAPP_CLOUD_PHONE_NUMBER_ID not set'
-      : 'TWILIO_ACCOUNT_SID and/or TWILIO_AUTH_TOKEN not set';
+    c.whatsapp.provider === 'aisensy'
+      ? 'AISENSY_API_KEY not set'
+      : c.whatsapp.provider === 'cloud'
+        ? 'WHATSAPP_CLOUD_ACCESS_TOKEN and/or WHATSAPP_CLOUD_PHONE_NUMBER_ID not set'
+        : 'TWILIO_ACCOUNT_SID and/or TWILIO_AUTH_TOKEN not set';
   if (!c.whatsapp.inviteReady && !c.imessage.inviteReady) {
     issues.push(
       `neither ${waNumberVar} nor IMESSAGE_FROM_NUMBER is set — the invite has no "text us" number to show`,
