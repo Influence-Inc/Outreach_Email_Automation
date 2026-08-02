@@ -4,6 +4,11 @@
 // (businessNumber / sendWhatsAppText / normalizePhone / renderOfferOutreachBody)
 // so callers (offers.js, outreach.js, offerWebhook.js) never change:
 //
+//   • 'aisensy' — AiSensy (WhatsApp BSP on top of Meta). Free-form session text
+//                 via its direct-messages endpoint (`Authorization: Bearer
+//                 {AISENSY_API_KEY}`); the sender is bound to the number tied to
+//                 the API key. Keeps a session-template fallback for reaching a
+//                 creator OUTSIDE the 24h window (AISENSY_SESSION_CAMPAIGN).
 //   • 'cloud'  — Meta WhatsApp Cloud API, DIRECT (no BSP markup). Sends via
 //                Graph API: POST {BASE}/{VERSION}/{PHONE_NUMBER_ID}/messages
 //                with `Authorization: Bearer {ACCESS_TOKEN}` and a JSON body.
@@ -12,25 +17,27 @@
 //   • 'twilio' — Twilio's REST Messages API (BSP). Basic-Auth SID:token, a
 //                form-encoded From/To/Body body.
 //
-// Which one is chosen: WHATSAPP_PROVIDER ('cloud' | 'twilio') wins; unset, we
-// auto-detect Cloud when its access token is present, else Twilio — so simply
-// setting the WHATSAPP_CLOUD_* vars flips the provider. Sends are skipped
+// Which one is chosen: WHATSAPP_PROVIDER ('aisensy' | 'cloud' | 'twilio') wins;
+// unset, we auto-detect by whichever creds are present (AiSensy → Cloud →
+// Twilio) — so setting a provider's vars flips to it. Sends are skipped
 // gracefully when the active provider's creds are absent, so dev never breaks.
 //
-// 24h window: both providers reject free-form text sent to a user who hasn't
-// messaged us in the last 24h (Twilio HTTP 400 code 63016; Meta 4xx code
-// 131047/131026). The AiSensy-era session-template fallback was dropped on the
-// Twilio swap and is not reintroduced here — a send outside the window fails
-// with a clear error and can be retried once the creator messages us again.
+// 24h window: Meta rejects free-form text sent to a user who hasn't messaged us
+// in the last 24h (Twilio HTTP 400 code 63016; Meta 4xx code 131047/131026).
+// AiSensy retries such a send through a session template (AISENSY_SESSION_CAMPAIGN)
+// so a delayed reply still lands; Twilio/Cloud surface the error to retry once
+// the creator messages us again.
 
 const { extractProviderMessageId } = require('./deliveryStatus');
 
 // --- Provider selection ----------------------------------------------------
 function whatsappProvider() {
   const explicit = String(process.env.WHATSAPP_PROVIDER || '').trim().toLowerCase();
-  if (explicit === 'cloud' || explicit === 'twilio') return explicit;
-  // Auto-detect: Cloud when its access token is set, else fall back to Twilio.
-  return process.env.WHATSAPP_CLOUD_ACCESS_TOKEN ? 'cloud' : 'twilio';
+  if (explicit === 'aisensy' || explicit === 'cloud' || explicit === 'twilio') return explicit;
+  // Auto-detect by whichever provider's creds are present.
+  if (process.env.AISENSY_API_KEY) return 'aisensy';
+  if (process.env.WHATSAPP_CLOUD_ACCESS_TOKEN) return 'cloud';
+  return 'twilio';
 }
 
 // --- Twilio config ---------------------------------------------------------
@@ -69,9 +76,10 @@ function cloudMessagesUrl() {
 // every send; for Cloud API the sender is bound to PHONE_NUMBER_ID, so this is a
 // display value only.
 function businessNumber() {
-  return whatsappProvider() === 'cloud'
-    ? process.env.WHATSAPP_CLOUD_DISPLAY_NUMBER || ''
-    : process.env.TWILIO_WHATSAPP_FROM || '';
+  const p = whatsappProvider();
+  if (p === 'aisensy') return process.env.AISENSY_WHATSAPP_NUMBER || '';
+  if (p === 'cloud') return process.env.WHATSAPP_CLOUD_DISPLAY_NUMBER || '';
+  return process.env.TWILIO_WHATSAPP_FROM || '';
 }
 
 // Bare digits — used to match inbound sender numbers (last-10-digit fallback in
@@ -190,10 +198,103 @@ async function sendCloudText({ to, body }) {
   }
 }
 
+// --- AiSensy config (WhatsApp BSP) ----------------------------------------
+function aisensyApiKey() {
+  return process.env.AISENSY_API_KEY || '';
+}
+function aisensyApiUrl() {
+  return process.env.AISENSY_API_URL || 'https://backend.aisensy.com/campaign/t1/api/v2';
+}
+// AiSensy's free-form session-message endpoint (within the 24h customer window).
+function aisensyTextApiUrl() {
+  return process.env.AISENSY_TEXT_API_URL || 'https://backend.aisensy.com/direct-apis/t1/messages';
+}
+// A pre-approved "utility" template whose single {{1}} body param carries an
+// arbitrary message — the only way to reach a creator OUTSIDE the 24h window.
+function aisensySessionCampaign() {
+  return process.env.AISENSY_SESSION_CAMPAIGN || '';
+}
+
+// Deliver `body` through the AiSensy session-fallback template. Returns null when
+// no fallback template is configured (so the caller keeps the original error).
+async function aisensySendViaSessionTemplate({ to, body }) {
+  const campaign = aisensySessionCampaign();
+  if (!campaign) return null;
+  try {
+    const res = await fetch(aisensyApiUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiKey: aisensyApiKey(),
+        campaignName: campaign,
+        destination: normalizePhone(to),
+        userName: 'INFLUENCE',
+        templateParams: [body],
+        source: 'deal-studio',
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
+    }
+    const data = await res.json().catch(() => null);
+    return { sent: true, id: extractProviderMessageId(data), viaTemplate: true };
+  } catch (err) {
+    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
+  }
+}
+
+// Free-form session text via AiSensy's direct-messages endpoint (within Meta's
+// 24h window). Outside the window Meta rejects free-form text, so a failed send
+// falls back to the session template (AISENSY_SESSION_CAMPAIGN) which carries the
+// same body — so a delayed reply still reaches the creator.
+async function sendAisensyText({ to, body }) {
+  if (!aisensyApiKey()) {
+    console.warn(`[offer-whatsapp] AISENSY_API_KEY not set — skipping text to ${to}`);
+    return { sent: false, skipped: true };
+  }
+  let result;
+  try {
+    const res = await fetch(aisensyTextApiUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${aisensyApiKey()}`,
+      },
+      body: JSON.stringify({
+        to: normalizePhone(to),
+        type: 'text',
+        recipient_type: 'individual',
+        text: { body },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      return { sent: true, id: extractProviderMessageId(data) };
+    }
+    const text = await res.text().catch(() => '');
+    result = { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
+  } catch (err) {
+    result = { sent: false, error: err && err.message ? err.message : 'unknown error' };
+  }
+
+  // Free-form failed (commonly: outside the 24h window) — try the template.
+  const fallback = await aisensySendViaSessionTemplate({ to, body });
+  if (fallback && fallback.sent) {
+    console.warn(`[offer-whatsapp] free-form text failed (${result.error}); delivered via session template`);
+    return fallback;
+  }
+  if (fallback) return { sent: false, error: `session: ${result.error}; template: ${fallback.error}` };
+  return result;
+}
+
 // The public send used by offers.js / offerWebhook.js — dispatches to whichever
 // provider is configured so callers stay vendor-agnostic.
 async function sendWhatsAppText({ to, body }) {
-  return whatsappProvider() === 'cloud' ? sendCloudText({ to, body }) : sendTwilioText({ to, body });
+  const p = whatsappProvider();
+  if (p === 'aisensy') return sendAisensyText({ to, body });
+  if (p === 'cloud') return sendCloudText({ to, body });
+  return sendTwilioText({ to, body });
 }
 
 // The offer-reveal message body (free-form session reply used by
@@ -220,4 +321,6 @@ module.exports = {
   cloudMessagesUrl,
   sendTwilioText,
   sendCloudText,
+  sendAisensyText,
+  aisensySendViaSessionTemplate,
 };
