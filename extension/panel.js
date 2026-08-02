@@ -66,12 +66,31 @@
   }
 
   // ---- API ----------------------------------------------------------------
+  // The dashboard's admin API sits behind SITE_PASSWORD (see backend
+  // services/siteAuth.js). Its login cookie is same-origin to the dashboard, so
+  // this panel — served from the extension origin — sends the password header
+  // instead. It's read from extension storage (set in the popup) rather than
+  // passed through the iframe URL, so it never lands in the DOM of the
+  // Instagram page hosting us.
+  let sitePassword = null;
+  const sitePasswordReady = chrome.storage.local
+    .get(['infSitePassword'])
+    .then((v) => { sitePassword = (v && v.infSitePassword) || null; })
+    .catch(() => {});
+
   async function api(path, options = {}) {
     if (!apiBase) throw new Error('Dashboard URL not set. Open the extension popup to set it.');
+    await sitePasswordReady;
     const res = await fetch(apiBase + path, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sitePassword ? { 'x-site-password': sitePassword } : {}),
+      },
       ...options,
     });
+    if (res.status === 401) {
+      throw new Error('Dashboard password required. Open the extension popup and set the site password.');
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `${res.status} ${res.statusText}`);

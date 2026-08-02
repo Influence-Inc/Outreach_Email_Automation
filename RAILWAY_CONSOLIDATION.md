@@ -172,7 +172,10 @@ Full inventory:
   `NEGOTIATION_MAX_FOLLOWUPS`, `BRAND_NAME`, `MANAGER_NAME`, `CAMPAIGN_DEADLINE`,
   `CONTENT_CADENCE`, `LEARN_FROM_DELEGATE`, `LEARN_HARVEST_HOURS`,
   `LEARN_HARVEST_MAX_EMAILS`, `SENDER_EMAIL`, `CREATOR_DB_URL`,
-  `CREATOR_DB_API_KEY`, `CREATOR_DB_TIMEOUT_MS`, `OUTREACH_BOT_TOKEN`, `DRY_RUN`.
+  `CREATOR_DB_API_KEY`, `CREATOR_DB_TIMEOUT_MS`, `OUTREACH_BOT_TOKEN`, `DRY_RUN`,
+  `SITE_PASSWORD` (shared login for the Deal Studio dashboard + admin API —
+  **if unset the dashboard is publicly reachable at the Railway URL**; creator
+  pages, webhooks and `/api/bot/*` stay open either way).
   - **Offer portal (Used-creator WhatsApp/iMessage negotiation) — required for
     the "text us on WhatsApp/iMessage" invite to fire; if any are unset the
     Used-creator flow silently falls back to the plain Instantly cold email:**

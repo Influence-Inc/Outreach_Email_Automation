@@ -142,11 +142,20 @@ async function emitProgress(senderTabId, payload) {
   }
 }
 
+// The dashboard's admin API sits behind SITE_PASSWORD (see backend
+// services/siteAuth.js). Its session cookie is same-origin only, so extension
+// requests authenticate with the password header instead — saved in the popup
+// under "Site password". Returns {} when unset (backend with the gate off).
+async function authHeaders() {
+  const { infSitePassword } = await chrome.storage.local.get(['infSitePassword']);
+  return infSitePassword ? { 'x-site-password': infSitePassword } : {};
+}
+
 async function patchCreator(apiBase, id, body) {
   const url = `${apiBase}/api/creators/${id}`;
   const resp = await fetch(url, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -345,7 +354,7 @@ async function postIgDmResult(apiBase, creatorId, { ok, error }) {
   const url = `${apiBase}/api/creators/${creatorId}/ig-dm-result`;
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
     body: JSON.stringify(ok ? { ok: true } : { ok: false, error: error || 'unknown' }),
   });
   if (!resp.ok) {

@@ -88,6 +88,9 @@ a { color: var(--ink); }
 }
 .auth b { color: var(--accent); font-weight: 600; }
 .auth a { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+/* Ends the site-password session (GET /logout clears the cookie). */
+.auth .logout-link { color: var(--muted); text-decoration: none; }
+.auth .logout-link:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 .live-dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--green-live); box-shadow: 0 0 0 3px rgba(63, 174, 116, 0.16);
