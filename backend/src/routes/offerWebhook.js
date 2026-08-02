@@ -671,13 +671,7 @@ router.get('/whatsapp', (req, res) => {
 // which we normalise into the same flat shape before the shared pipeline.
 router.post('/whatsapp', async (req, res, next) => {
   try {
-    const provider = whatsappProvider();
-    if (provider === 'aisensy') {
-      // AiSensy POSTs a flat JSON body parseInbound already understands. It does
-      // not HMAC-sign inbound, so we gate on an OPTIONAL shared secret
-      // (AISENSY_WEBHOOK_SECRET header/query) — accepted when none is configured.
-      await handleInbound('whatsapp', 'whatsapp', (r) => authorizedSecret(r, 'AISENSY_WEBHOOK_SECRET'), req, res);
-    } else if (provider === 'cloud') {
+    if (whatsappProvider() === 'cloud') {
       if (!verifyMetaSignature(req)) return res.status(401).json({ ok: false });
       try {
         console.log('[offer-webhook] inbound whatsapp (cloud) raw:', JSON.stringify(req.body).slice(0, 1000));
