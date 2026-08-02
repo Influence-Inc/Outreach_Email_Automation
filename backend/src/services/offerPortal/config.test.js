@@ -12,8 +12,6 @@ const {
 const VARS = [
   'RESEND_API_KEY',
   'WHATSAPP_PROVIDER',
-  'AISENSY_API_KEY',
-  'AISENSY_WHATSAPP_NUMBER',
   'WHATSAPP_CLOUD_ACCESS_TOKEN',
   'WHATSAPP_CLOUD_PHONE_NUMBER_ID',
   'WHATSAPP_CLOUD_DISPLAY_NUMBER',
@@ -75,39 +73,6 @@ test('Resend + a WhatsApp number + Twilio SID/token → invite and conversation 
       assert.equal(c.conversationReady, true);
       assert.equal(c.whatsapp.conversationReady, true);
       assert.deepEqual(offerPortalConfigIssues(), []);
-    },
-  );
-});
-
-test('AiSensy provider auto-detects when its API key is set and reports readiness', () => {
-  withEnv(
-    {
-      RESEND_API_KEY: 're_test',
-      AISENSY_API_KEY: 'ai_test',
-      AISENSY_WHATSAPP_NUMBER: '+13322879678',
-      PUBLIC_BASE_URL: 'https://outreach.example',
-    },
-    () => {
-      const c = offerPortalConfig();
-      assert.equal(c.whatsapp.provider, 'aisensy'); // auto-detected, no explicit flag
-      assert.equal(c.whatsapp.conversationReady, true);
-      assert.equal(c.conversationReady, true);
-      assert.deepEqual(offerPortalConfigIssues(), []);
-      assert.match(offerPortalConfigSummary(), /WhatsApp\/aisensy/);
-    },
-  );
-});
-
-test('AiSensy provider with a number but no key flags a send-side issue naming AISENSY_API_KEY', () => {
-  withEnv(
-    { RESEND_API_KEY: 're_test', WHATSAPP_PROVIDER: 'aisensy', AISENSY_WHATSAPP_NUMBER: '+13322879678' },
-    () => {
-      const c = offerPortalConfig();
-      assert.equal(c.whatsapp.provider, 'aisensy');
-      assert.equal(c.whatsapp.inviteReady, true);
-      assert.equal(c.whatsapp.conversationReady, false);
-      const issues = offerPortalConfigIssues();
-      assert.equal(issues.some((i) => /AISENSY_API_KEY/.test(i)), true);
     },
   );
 });
