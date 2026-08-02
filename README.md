@@ -64,6 +64,24 @@ open http://localhost:3000               # dashboard
 open http://localhost:3000/auth/google   # one-time Gmail auth as Jennifer
 ```
 
+## Dashboard access (site password)
+
+The dashboard is internal-only. Set `SITE_PASSWORD` and every dashboard page and
+admin `/api/*` route sits behind a login: `POST /login` issues a signed, HttpOnly
+session cookie (30 days), `GET /logout` clears it, and the topbar carries a
+"Log out" link. Scripts can skip the form with `x-site-password: <password>` or
+HTTP Basic auth (any username).
+
+Creator-facing and machine surfaces stay public — they're resolved by unguessable
+token or carry their own secret: `/contract/:token`, `/o/:token`, `/go/imessage`,
+`/api/contracts/*`, `/api/offers/*`, `/webhook/*`, `/api/bot/*` (`x-bot-token`)
+and `/health`.
+
+**With `SITE_PASSWORD` unset the gate is off** and the dashboard is reachable by
+anyone with the URL — boot logs a warning to that effect. Set the var in Railway
+to turn protection on. The allowlist and session logic live in
+[`backend/src/services/siteAuth.js`](./backend/src/services/siteAuth.js).
+
 ## Instagram scraping (two strategies)
 
 The backend tries:

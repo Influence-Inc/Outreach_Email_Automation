@@ -31,3 +31,22 @@ document.getElementById('save-url').addEventListener('click', () => {
     setTimeout(() => { saved.textContent = ''; }, 1600);
   });
 });
+
+// Site password — the backend's SITE_PASSWORD. The dashboard authenticates with
+// a same-origin session cookie, which extension-origin requests can't use, so
+// the offer panel and the scrape/DM queues send this as an `x-site-password`
+// header instead. Blank means the backend has no password gate.
+const pwInput = document.getElementById('site-password');
+const pwSaved = document.getElementById('password-saved');
+
+chrome.storage.local.get(['infSitePassword'], (v) => {
+  if (v && v.infSitePassword) pwInput.value = v.infSitePassword;
+});
+
+document.getElementById('save-password').addEventListener('click', () => {
+  const val = pwInput.value.trim();
+  chrome.storage.local.set({ infSitePassword: val }, () => {
+    pwSaved.textContent = val ? 'Saved ✓' : 'Cleared.';
+    setTimeout(() => { pwSaved.textContent = ''; }, 1600);
+  });
+});

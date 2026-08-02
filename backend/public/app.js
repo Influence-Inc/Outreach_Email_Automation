@@ -59,6 +59,13 @@ async function api(path, options = {}) {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
+  // Session expired (or the site password was rotated) — bounce to the login
+  // page and come back to whatever the user was looking at. See
+  // services/siteAuth.js.
+  if (res.status === 401) {
+    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+    throw new Error('Session expired');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `${res.status} ${res.statusText}`);

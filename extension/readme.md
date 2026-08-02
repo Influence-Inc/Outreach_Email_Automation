@@ -30,7 +30,17 @@ You can also open the panel manually on any creator's profile via the slim **"De
 | `panel.html` / `panel.css` / `panel.js` | The panel itself: rate timeline, safe floor, and the offer configurator (ported from the dashboard). Fetches + posts to the dashboard API. |
 | `background.js` | `openDecideOffer`: stores the one-shot target (creator id + dashboard URL) and opens the profile tab. |
 | `dashboard-bridge.js` | Forwards the dashboard's `OEA_OPEN_DECIDE_OFFER` message and remembers the dashboard URL. |
-| `popup.html` / `popup.js` | Lets you set the Dashboard URL used by the panel when opened standalone. |
+| `popup.html` / `popup.js` | Lets you set the Dashboard URL used by the panel when opened standalone, and the site password below. |
+
+### Site password
+
+If the backend has `SITE_PASSWORD` set, its admin API requires a login. The
+dashboard uses a same-origin session cookie, which extension-origin requests
+can't send — so open the extension popup and save the same password under **Site
+password**. It's kept in `chrome.storage.local` and sent as an `x-site-password`
+header on every API call the panel, the scrape queue and the DM queue make.
+Without it those calls fail with "Dashboard password required". Leave it blank
+for a backend that has no password set.
 
 The panel is an **extension-origin** iframe (listed in `web_accessible_resources`) rather than a dashboard-origin frame: extension frames are CSS-isolated from Instagram and aren't blocked by Instagram's page CSP. It reaches the API using the dashboard URL captured when you open the dashboard (or set in the popup); no offers are ever sent by the extension itself — it calls the same server endpoints the dashboard does, which remain the single source of truth for pricing and sending.
 

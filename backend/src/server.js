@@ -24,8 +24,13 @@ const {
   logOfferPortalConfig,
 } = require('./services/offerPortal/config');
 const offerImessage = require('./services/offerPortal/imessage');
+const siteAuth = require('./services/siteAuth');
 
 const app = express();
+// Railway terminates TLS in front of us, so req.secure / req.ip are only
+// correct once the proxy headers are trusted. The site-password gate uses both
+// (Secure cookie flag, per-IP login throttle).
+app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json({
   limit: '1mb',
@@ -44,6 +49,19 @@ app.use(express.json({
 app.use(express.urlencoded({ limit: '1mb', extended: false }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+// --- Site password gate ----------------------------------------------------
+// Everything below is private-by-default: the dashboard shell, its assets and
+// every admin API route require the SITE_PASSWORD session cookie. Creator-facing
+// pages (/contract/:token, /o/:token), the data they fetch, the inbound webhooks
+// and the token-authenticated /api/bot/* endpoints stay open — the allowlist
+// lives in services/siteAuth.js. With SITE_PASSWORD unset the gate is a no-op
+// (a warning is logged at boot).
+app.get('/login', siteAuth.showLogin);
+app.post('/login', siteAuth.handleLogin);
+app.get('/logout', siteAuth.handleLogout);
+app.post('/logout', siteAuth.handleLogout);
+app.use(siteAuth.gate);
 
 app.get('/api/debug/ig-probe', async (req, res) => {
   const username = String(req.query.username || '').trim();
@@ -137,6 +155,10 @@ const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
   console.log(`Backend listening on http://localhost:${port}`);
   scheduler.start();
+
+  // Say plainly whether the dashboard is behind the password or wide open, so a
+  // deploy that forgot SITE_PASSWORD is visible in the logs.
+  siteAuth.logSiteAuthConfig();
 
   // Surface offer-portal channel config at boot so a half-configured deploy (the
   // Used-creator messaging invite silently falling back to Instantly email) is
