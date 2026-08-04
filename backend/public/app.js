@@ -265,11 +265,12 @@ async function selectCampaign(id) {
   state.searchQuery = '';
   const searchInput = el('creator-search');
   if (searchInput) searchInput.value = '';
-  // Reply rate: of the creators we actually reached (outreach_sent_count),
-  // how many replied. Shown next to the Replied number. Null when nobody has
-  // been reached yet, so we don't render a meaningless "0%" (or divide by 0).
-  const reached = Number(c.outreach_sent_count) || 0;
-  const repliedPct = reached > 0 ? Math.round((Number(c.replied_count) || 0) / reached * 100) : null;
+  // Reply rate: of the creators we emailed (email_sent_count, excluding IG
+  // DMs), how many replied. Shown next to the Replied number. Null when no
+  // email has gone out yet, so we don't render a meaningless "0%" (or divide
+  // by 0).
+  const emailsSent = Number(c.email_sent_count) || 0;
+  const repliedPct = emailsSent > 0 ? Math.round((Number(c.replied_count) || 0) / emailsSent * 100) : null;
   const stats = [
     { stage: 'creators', label: 'Creators', value: c.creator_count },
     { stage: 'pending', label: 'Pending', value: c.pending_count },
@@ -286,7 +287,7 @@ async function selectCampaign(id) {
         <div class="stat-label">${s.label}</div>
         <div class="stat-value num${s.accent && Number(s.value) > 0 ? ' accent' : ''}">${s.value}${
           s.pct != null
-            ? `<span class="stat-pct" title="Reply rate — replied of reached">${s.pct}%</span>`
+            ? `<span class="stat-pct" title="Reply rate — replied of emails sent">${s.pct}%</span>`
             : ''
         }</div>
       </button>`,

@@ -45,6 +45,10 @@ router.get('/', async (_req, res, next) => {
               -- creator is deliberately not counted here — it still reads as
               -- pending until the send truly lands.
               COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL OR cr.ig_dm_sent_at IS NOT NULL)::int AS outreach_sent_count,
+              -- Email-only send count, used as the reply-rate denominator in the
+              -- Deal Studio stats box (replies ÷ emails sent). Excludes IG DMs on
+              -- purpose so the percentage reflects email outreach specifically.
+              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS email_sent_count,
               -- Pending: creators we haven't reached yet on any channel — no
               -- email sent AND no IG DM sent. This includes 'outreach_queued'
               -- leads (enrolled in Instantly, email not yet confirmed) and
