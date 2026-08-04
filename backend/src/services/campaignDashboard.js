@@ -131,4 +131,17 @@ async function syncSignedCreator(contract, creator) {
   return request('POST', '/api/external/deal-studio/creators', buildPayload(contract, creator));
 }
 
-module.exports = { syncSignedCreator, buildPayload, isConfigured };
+// Mint (or fetch) the per-creator tracked website link on the dashboard. The
+// dashboard hosts the redirect + counts the clicks and shows them next to the
+// contract column; we just hand it the destination (the brand website) and get
+// back a stable short link to embed in the creator's brief. Idempotent on the
+// dashboard side — same creator keeps the same code.
+async function mintTrackedLink({ campaignId, username, destinationUrl }) {
+  return request(
+    'POST',
+    '/api/external/deal-studio/track-link',
+    clean({ campaignId, username: username ? String(username).replace(/^@/, '') : undefined, destinationUrl }),
+  );
+}
+
+module.exports = { syncSignedCreator, mintTrackedLink, buildPayload, isConfigured };

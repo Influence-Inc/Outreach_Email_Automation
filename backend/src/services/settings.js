@@ -10,6 +10,29 @@ const GUIDELINES_KEY = 'negotiation_guidelines';
 const AI_REPLIES_KEY = 'ai_replies_enabled';
 const REPLY_NOTES_KEY = 'reply_prompt_notes';
 const REPLY_OVERRIDES_KEY = 'reply_prompt_overrides';
+const BRIEF_BOILERPLATE_KEY = 'brief_boilerplate';
+
+// Universal "same for every campaign" section of the creator content brief —
+// INFLUENCE's standard filming + posting rules. Editable on the Guidelines
+// page; this constant is the sensible default shown until an admin overrides it.
+const DEFAULT_BRIEF_BOILERPLATE = [
+  'Before you film',
+  '• Show the product within the first 15–20 seconds.',
+  "• Keep it in your natural style — prioritise transformation moments so the viewer can't believe it was edited so easily.",
+  "• Viewers shouldn't be able to tell it's an ad — treat the mention as something you'd share anyway. The more organic the integration, the better it performs.",
+  '',
+  'What to avoid',
+  '• No IP content — no famous brands, people, or characters (well-known-inspired styles are fine as long as the name is never mentioned).',
+  '• No commercial images — use brand-generated images or license-free / Unsplash images.',
+  '• No copyrighted songs — please use license-free music.',
+  '',
+  'After you film',
+  "• Don't explicitly mark the post as “Paid promotion” on Instagram — it hurts performance. Disclosure via the partner hashtag is sufficient.",
+  "• Don't hide views, likes, or comments.",
+  '• If your audio becomes unavailable within 7 days of posting, re-upload the video with new audio.',
+  '• Reply to any positive comments about the brand so those comments rank higher.',
+].join('\n');
+
 
 // Reply types the admin can steer with per-reply notes. Keys are injected into
 // Claude prompts as action-specific guidance; labels are the UI headings.
@@ -69,6 +92,23 @@ async function getAiRepliesEnabled() {
 
 async function setAiRepliesEnabled(enabled) {
   await setSetting(AI_REPLIES_KEY, !!enabled);
+}
+
+// Universal content-brief boilerplate (layer 1 of the creator briefing). Falls
+// back to DEFAULT_BRIEF_BOILERPLATE when unset. Never throws — a DB hiccup
+// degrades to the default so a brief always has its standard rules.
+async function getBriefBoilerplate() {
+  try {
+    const v = await getSetting(BRIEF_BOILERPLATE_KEY);
+    return typeof v === 'string' && v.trim() ? v : DEFAULT_BRIEF_BOILERPLATE;
+  } catch (err) {
+    console.error('[settings] getBriefBoilerplate failed:', err.message);
+    return DEFAULT_BRIEF_BOILERPLATE;
+  }
+}
+
+async function setBriefBoilerplate(value) {
+  await setSetting(BRIEF_BOILERPLATE_KEY, typeof value === 'string' ? value : '');
 }
 
 // Per-reply prompt notes: a {key: string} map the admin fills in on the
@@ -154,10 +194,14 @@ module.exports = {
   setReplyPromptNotes,
   getReplyPromptOverrides,
   setReplyPromptOverrides,
+  getBriefBoilerplate,
+  setBriefBoilerplate,
   GUIDELINES_KEY,
   AI_REPLIES_KEY,
   REPLY_NOTES_KEY,
   REPLY_OVERRIDES_KEY,
+  BRIEF_BOILERPLATE_KEY,
+  DEFAULT_BRIEF_BOILERPLATE,
   REPLY_NOTE_TYPES,
   REPLY_NOTE_KEYS,
 };

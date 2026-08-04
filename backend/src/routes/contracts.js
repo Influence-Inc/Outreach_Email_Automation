@@ -10,6 +10,7 @@ const db = require('../db');
 const contracts = require('../services/contracts');
 const creatorDb = require('../services/creatorDb');
 const campaignDashboard = require('../services/campaignDashboard');
+const briefs = require('../services/briefs');
 
 const api = express.Router();
 
@@ -100,6 +101,14 @@ api.post('/:token/submit', async (req, res, next) => {
       }
     } else {
       console.warn('[contracts] CAMPAIGN_DASHBOARD_URL not set — skipping dashboard sync');
+    }
+
+    // Flag a personalised content brief for the team to complete (best-effort —
+    // the signature already stuck; a failure here never blocks signing).
+    try {
+      await briefs.flagBriefPending(row.creator_id);
+    } catch (err) {
+      console.error(`[contracts] flagBriefPending failed for token ${token}:`, err.message);
     }
 
     res.json({ status: synced ? 'completed' : 'signed', synced });

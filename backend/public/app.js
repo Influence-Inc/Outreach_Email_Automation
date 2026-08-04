@@ -295,6 +295,7 @@ async function selectCampaign(id) {
   syncSendEmailsBtn(c);
   syncIgDmTemplateUI(c);
   syncMessagingBriefUI(c);
+  syncContentBriefUI(c);
   syncStageFilterUI();
   await refreshCreators();
 }
@@ -349,6 +350,34 @@ function syncMessagingBriefUI(c) {
   text.value = c.messaging_brief || '';
   el('messaging-brief-status').textContent = '';
   hint.textContent = c.messaging_brief ? 'custom' : 'using generic fallback';
+  card.open = false;
+}
+
+// Render the per-campaign Content brief card — the master brief (layer 2) that
+// seeds each creator's personalised brief hand-off after they sign. All fields
+// are optional; empty ones fall back at assembly time.
+function syncContentBriefUI(c) {
+  const card = el('content-brief-card');
+  if (!card) return;
+  card.hidden = false;
+  const cb = c && c.content_brief && typeof c.content_brief === 'object' ? c.content_brief : {};
+  const cap = cb.caption && typeof cb.caption === 'object' ? cb.caption : {};
+  const set = (id, v) => { const e = el(id); if (e) e.value = v == null ? '' : v; };
+  set('cb-what-is-it', cb.what_is_it);
+  set('cb-pronunciation', cb.pronunciation);
+  set('cb-website', cb.website);
+  set('cb-demo-link', cb.demo_link);
+  set('cb-free-account-link', cb.free_account_link);
+  set('cb-expected-views', cb.expected_views_default);
+  set('cb-dm-keyword', cb.dm_keyword);
+  set('cb-cap-mention', cap.mention_handle);
+  set('cb-cap-comment', cap.comment_word);
+  set('cb-cap-via', cap.via_tag);
+  set('cb-cap-hashtags', cap.hashtags);
+  set('cb-review-link', cb.review_upload_link);
+  set('cb-submit-links', cb.submit_links_url);
+  el('content-brief-status').textContent = '';
+  el('content-brief-hint').textContent = Object.keys(cb).length ? 'configured' : 'not set';
   card.open = false;
 }
 
@@ -1523,6 +1552,8 @@ function renderStatusCell(r, cell) {
     cell.appendChild(makeInterveneButton(r, { label: 'Approve deal' }));
   } else if (r.needs_human) {
     cell.appendChild(makeInterveneButton(r, { label: 'Reply hand-off' }));
+  } else if (isBriefActionable(r)) {
+    cell.appendChild(makeInterveneButton(r, { label: 'Brief hand-off' }));
   }
 
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
@@ -1748,7 +1779,14 @@ function openInterventionModal(r) {
   const handle = r.instagram_username ? `@${r.instagram_username}` : r.full_name || 'Creator';
   const offer = isOfferActionable(r);
   const contract = isContractApprovalPending(r);
-  m.kicker.textContent = offer ? 'Configure offer' : contract ? 'Approve deal' : 'Reply hand-off';
+  const brief = !offer && !contract && !r.needs_human && isBriefActionable(r);
+  m.kicker.textContent = offer
+    ? 'Configure offer'
+    : contract
+      ? 'Approve deal'
+      : brief
+        ? 'Content brief'
+        : 'Reply hand-off';
   m.subject.textContent = r.first_name ? `${handle} · ${r.first_name}` : handle;
   m.subject.hidden = false;
   m.meta.textContent = r.email || 'no email';
@@ -1775,6 +1813,8 @@ function openInterventionModal(r) {
       if (msg) m.bodyEl.appendChild(msg);
       m.bodyEl.appendChild(buildReplyBlock(r));
     }
+  } else if (brief) {
+    m.bodyEl.appendChild(buildBriefBlock(r));
   } else {
     const msg = buildHandoffMessage(r);
     if (msg) m.bodyEl.appendChild(msg);
@@ -3268,6 +3308,49 @@ el('save-messaging-brief-btn').addEventListener('click', async () => {
   }
 });
 
+// --- Content brief (per campaign) ------------------------------------------
+// Gather the structured master-brief fields and save them as one JSONB object.
+el('save-content-brief-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('save-content-brief-btn');
+  const status = el('content-brief-status');
+  const val = (id) => { const e = el(id); return e ? e.value.trim() : ''; };
+  const numVal = (id) => { const v = val(id); const n = Number(v); return v && Number.isFinite(n) ? n : null; };
+  const content_brief = {
+    what_is_it: val('cb-what-is-it'),
+    pronunciation: val('cb-pronunciation'),
+    website: val('cb-website'),
+    demo_link: val('cb-demo-link'),
+    free_account_link: val('cb-free-account-link'),
+    expected_views_default: numVal('cb-expected-views'),
+    dm_keyword: val('cb-dm-keyword'),
+    caption: {
+      mention_handle: val('cb-cap-mention'),
+      comment_word: val('cb-cap-comment'),
+      via_tag: val('cb-cap-via'),
+      hashtags: val('cb-cap-hashtags'),
+    },
+    review_upload_link: val('cb-review-link'),
+    submit_links_url: val('cb-submit-links'),
+  };
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ content_brief }),
+    });
+    status.textContent = 'Saved.';
+    await refreshCampaigns();
+    const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+    if (c) syncContentBriefUI(c);
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 el('send-ig-dms-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
   const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
@@ -3875,6 +3958,8 @@ async function refreshSettings() {
   try {
     const s = await api('/api/settings');
     el('guidelines-text').value = s.guidelines || '';
+    const bb = el('brief-boilerplate-text');
+    if (bb) bb.value = s.brief_boilerplate || '';
     el('ai-replies-toggle').checked = s.ai_replies_enabled !== false;
     el('ai-replies-status').textContent = '';
     renderReplyNotes(
@@ -3907,6 +3992,25 @@ el('save-guidelines-btn').addEventListener('click', async () => {
       body: JSON.stringify({ guidelines: el('guidelines-text').value }),
     });
     status.textContent = 'Saved.';
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Save the universal content-brief standard rules (layer 1 of every brief).
+el('save-brief-boilerplate-btn').addEventListener('click', async () => {
+  const btn = el('save-brief-boilerplate-btn');
+  const status = el('brief-boilerplate-status');
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api('/api/settings/brief-boilerplate', {
+      method: 'PUT',
+      body: JSON.stringify({ brief_boilerplate: el('brief-boilerplate-text').value }),
+    });
+    status.textContent = el('brief-boilerplate-text').value.trim() ? 'Saved.' : 'Cleared — using the default.';
   } catch (err) {
     status.textContent = `Failed: ${err.message}`;
   } finally {
@@ -4011,9 +4115,17 @@ function isContractApprovalPending(r) {
 // accepted deal awaiting the brand POC's contract approval. Drives the top-of-
 // table sort, the row highlight, and the banner count. A flag the admin has
 // temporarily dismissed (Dismiss button) is suppressed until it re-surfaces.
+// A signed creator whose personalised content brief is waiting for the team to
+// complete + publish. Set on signing (either contract path), cleared on publish
+// or dismiss — post-signing only, so it never collides with the pre-contract
+// offer / approval states.
+function isBriefActionable(r) {
+  return !!r.brief_pending;
+}
+
 function isDelegateActionable(r) {
   if (isFlagDismissed(r)) return false;
-  return !!r.needs_human || isOfferActionable(r) || isContractApprovalPending(r);
+  return !!r.needs_human || isOfferActionable(r) || isContractApprovalPending(r) || isBriefActionable(r);
 }
 
 // The "Approve & send contract" block on a pending-approval intervention pop-up.
@@ -4154,6 +4266,138 @@ function buildReplyBlock(r) {
     }
   };
   return block;
+}
+
+// The "Content brief" hand-off block: shows the auto-assembled parts as a quick
+// preview, takes the two curated fields (content direction + example videos),
+// and publishes — returning a shareable /brief/:token link to send the creator.
+function buildBriefBlock(r) {
+  const block = document.createElement('div');
+  block.className = 'delegate-brief-block';
+  const who = r.first_name || (r.instagram_username ? '@' + r.instagram_username : 'this creator');
+  block.innerHTML = `
+    <div class="delegate-question">A content brief for <b>${escapeHtml(who)}</b> is ready to finish. Brand info, expected views, usage rights and the tracked link fill in automatically — add the two creative parts below, then publish and send the link.</div>
+    <div class="brief-preview io-scroll"><span class="hint">Loading preview…</span></div>
+    <label class="brief-label">Content direction</label>
+    <textarea class="brief-direction io-scroll" rows="4" placeholder="The creative angle for this creator — which features to show, the vibe, must-hit moments…"></textarea>
+    <label class="brief-label">Example video links <span class="hint">— one per line, optional &ldquo;Label | https://…&rdquo;</span></label>
+    <textarea class="brief-videos io-scroll" rows="3" placeholder="https://www.instagram.com/reel/…&#10;Great hook | https://…"></textarea>
+    <div class="delegate-reply-foot">
+      <span class="delegate-status hint"></span>
+      <button class="ghost small brief-dismiss" type="button">Dismiss</button>
+      <button class="btn-primary brief-publish" type="button">Publish &amp; get link</button>
+    </div>
+    <div class="brief-link-out" hidden></div>`;
+
+  const previewEl = block.querySelector('.brief-preview');
+  const dirEl = block.querySelector('.brief-direction');
+  const vidEl = block.querySelector('.brief-videos');
+  const statusEl = block.querySelector('.delegate-status');
+  const publishBtn = block.querySelector('.brief-publish');
+  const dismissBtn = block.querySelector('.brief-dismiss');
+  const linkOut = block.querySelector('.brief-link-out');
+
+  dirEl.value = r.brief_content_direction || '';
+  vidEl.value = videoLinksToText(r.brief_video_links);
+
+  api(`/api/creators/${r.id}/brief`)
+    .then((b) => { previewEl.innerHTML = renderBriefPreview(b); })
+    .catch(() => { previewEl.innerHTML = '<span class="hint">Preview unavailable — the brief will still assemble on publish.</span>'; });
+
+  publishBtn.onclick = async () => {
+    const contentDirection = dirEl.value.trim();
+    const videoLinks = parseVideoLines(vidEl.value);
+    publishBtn.disabled = true; dismissBtn.disabled = true;
+    statusEl.textContent = 'Publishing…';
+    try {
+      const res = await api(`/api/creators/${r.id}/brief/publish`, {
+        method: 'POST',
+        body: JSON.stringify({ contentDirection, videoLinks }),
+      });
+      const url = res && res.brief_result && res.brief_result.url;
+      statusEl.textContent = 'Published ✓';
+      if (url) showBriefLink(linkOut, url);
+      // Refresh the table/counts in the background but keep the pop-up open so
+      // the admin can copy the link before closing.
+      await refreshCreators();
+      await refreshCampaigns();
+      publishBtn.disabled = false; dismissBtn.disabled = false;
+      publishBtn.textContent = 'Re-publish';
+    } catch (err) {
+      statusEl.textContent = `Failed: ${err.message}`;
+      publishBtn.disabled = false; dismissBtn.disabled = false;
+    }
+  };
+
+  dismissBtn.onclick = async () => {
+    if (!confirm('Dismiss without publishing? The brief hand-off clears from the list.')) return;
+    publishBtn.disabled = true; dismissBtn.disabled = true;
+    try {
+      await api(`/api/creators/${r.id}/brief/dismiss`, { method: 'POST' });
+      await refreshAfterIntervention();
+    } catch (err) {
+      statusEl.textContent = `Failed: ${err.message}`;
+      publishBtn.disabled = false; dismissBtn.disabled = false;
+    }
+  };
+  return block;
+}
+
+// Show the published brief's shareable link with a copy button.
+function showBriefLink(container, url) {
+  container.hidden = false;
+  container.innerHTML =
+    '<div class="brief-link-row"><input class="brief-link-input" type="text" readonly></div>' +
+    '<div class="hint">Send this link to the creator. Re-open anytime to edit and re-publish.</div>';
+  container.querySelector('.brief-link-input').value = url;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small';
+  btn.textContent = 'Copy link';
+  btn.onclick = () => {
+    navigator.clipboard.writeText(url).then(() => {
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy link'; }, 1200);
+    });
+  };
+  container.querySelector('.brief-link-row').appendChild(btn);
+}
+
+// Compact read-only preview of the auto-filled parts of the brief.
+function renderBriefPreview(b) {
+  if (!b) return '<span class="hint">Preview unavailable.</span>';
+  const rows = [];
+  if (b.brand && b.brand.name) rows.push(['Brand', b.brand.name]);
+  if (b.expectedViews && b.expectedViews.display) rows.push(['Expected views', b.expectedViews.display]);
+  if (b.usageRights) rows.push(['Usage rights', b.usageRights]);
+  const link = (b.posting && b.posting.caption && b.posting.caption.link) || b.trackedUrl;
+  rows.push(['Tracked link', link ? 'ready' : 'minted on publish']);
+  return '<div class="brief-preview-grid">' +
+    rows.map(([k, v]) => `<div class="bp-k">${escapeHtml(k)}</div><div class="bp-v">${escapeHtml(v)}</div>`).join('') +
+    '</div>';
+}
+
+// [{label,url}] → editable text (one per line, "Label | url" or "url").
+function videoLinksToText(v) {
+  if (!Array.isArray(v)) return '';
+  return v
+    .map((x) => (x && typeof x === 'object' ? (x.label ? `${x.label} | ${x.url}` : x.url || '') : String(x || '')))
+    .filter(Boolean)
+    .join('\n');
+}
+
+// Editable text → [{label,url}] (splits "Label | url"; a bare line is url-only).
+function parseVideoLines(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const i = line.indexOf('|');
+      if (i > -1) return { label: line.slice(0, i).trim(), url: line.slice(i + 1).trim() };
+      return { label: '', url: line };
+    })
+    .filter((x) => x.url);
 }
 
 // ---------------------------------------------------------------------------

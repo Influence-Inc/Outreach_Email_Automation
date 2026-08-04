@@ -152,6 +152,50 @@
             </div>
           </details>
 
+          <!-- Content brief (per campaign). The "same for everyone" master brief
+               that seeds each creator's personalised brief hand-off after they
+               sign. Only the two creative fields (content direction + example
+               videos) are added per creator; everything here fills in for all. -->
+          <details id="content-brief-card" class="card" hidden>
+            <summary class="ig-dm-summary">
+              <h2>Content brief</h2>
+              <span id="content-brief-hint" class="hint"></span>
+            </summary>
+            <p class="hint subhead">
+              The master brief for this campaign — the parts that are the same for
+              every creator. After a creator signs, this merges with their name,
+              usage rights and a tracked link into a ready-to-send brief; the team
+              only adds the content direction &amp; example videos in the hand-off.
+            </p>
+            <div class="brief-fields">
+              <label class="field-label">What is it <span class="hint">— one line describing the product</span></label>
+              <input id="cb-what-is-it" type="text" placeholder="An AI tool for generating and editing images." />
+              <div class="brief-grid">
+                <div><label class="field-label">Brand pronunciation</label><input id="cb-pronunciation" type="text" placeholder="rev" /></div>
+                <div><label class="field-label">Website <span class="hint">(tracked-link destination)</span></label><input id="cb-website" type="text" placeholder="reve.com" /></div>
+                <div><label class="field-label">Quick demo link</label><input id="cb-demo-link" type="text" placeholder="https://…" /></div>
+                <div><label class="field-label">Free-account / coupon link</label><input id="cb-free-account-link" type="text" placeholder="https://…" /></div>
+                <div><label class="field-label">Expected views default <span class="hint">(fallback, per video)</span></label><input id="cb-expected-views" class="num" type="number" min="0" placeholder="60000" /></div>
+                <div><label class="field-label">DM automation keyword</label><input id="cb-dm-keyword" type="text" placeholder="Reve" /></div>
+              </div>
+              <label class="field-label">Caption</label>
+              <div class="brief-grid">
+                <div><label class="field-label">Mention handle</label><input id="cb-cap-mention" type="text" placeholder="@reve_image" /></div>
+                <div><label class="field-label">Comment word for the link</label><input id="cb-cap-comment" type="text" placeholder="Reve" /></div>
+                <div><label class="field-label">Via tag</label><input id="cb-cap-via" type="text" placeholder="via @influence__inc" /></div>
+                <div><label class="field-label">Hashtags</label><input id="cb-cap-hashtags" type="text" placeholder="#reveimage #revepartner" /></div>
+              </div>
+              <div class="brief-grid">
+                <div><label class="field-label">Upload-for-review link</label><input id="cb-review-link" type="text" placeholder="https://…" /></div>
+                <div><label class="field-label">Share-your-links URL</label><input id="cb-submit-links" type="text" placeholder="https://content.influence.technology/live-videos" /></div>
+              </div>
+            </div>
+            <div class="form-foot end">
+              <span id="content-brief-status" class="hint push"></span>
+              <button id="save-content-brief-btn" class="btn-primary" type="button">Save content brief</button>
+            </div>
+          </details>
+
           <div id="creator-table-wrap" class="card" hidden>
             <div class="card-header">
               <h2>Creators</h2>
@@ -238,6 +282,16 @@
             <div class="form-foot end">
               <span id="guidelines-status" class="hint push"></span>
               <button id="save-guidelines-btn" class="btn-primary" type="button">Save guidelines</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <label for="brief-boilerplate-text" class="field-label">Content brief — standard rules</label>
+            <p class="hint subhead">The universal filming &amp; posting rules included in every creator's content brief (the same across all campaigns). Campaign-specific details live on each campaign's Content brief card; the creative direction is added per creator at the brief hand-off. Leave blank to use the built-in default.</p>
+            <textarea id="brief-boilerplate-text" class="io-scroll" rows="12" placeholder="Standard filming and posting rules shown to every creator…"></textarea>
+            <div class="form-foot end">
+              <span id="brief-boilerplate-status" class="hint push"></span>
+              <button id="save-brief-boilerplate-btn" class="btn-primary" type="button">Save standard rules</button>
             </div>
           </div>
 

@@ -125,10 +125,14 @@ router.patch('/:id', async (req, res, next) => {
     const hasUsageRights = Object.prototype.hasOwnProperty.call(body, 'usage_rights_policy');
     const hasIgDm = Object.prototype.hasOwnProperty.call(body, 'ig_dm_body');
     const hasMessagingBrief = Object.prototype.hasOwnProperty.call(body, 'messaging_brief');
-    if (!hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm && !hasMessagingBrief) {
+    const hasContentBrief = Object.prototype.hasOwnProperty.call(body, 'content_brief');
+    if (
+      !hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm &&
+      !hasMessagingBrief && !hasContentBrief
+    ) {
       return res.status(400).json({
         error:
-          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body or messaging_brief is required',
+          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body, messaging_brief or content_brief is required',
       });
     }
 
@@ -194,6 +198,15 @@ router.patch('/:id', async (req, res, next) => {
       const value = raw == null ? null : String(raw).trim() || null;
       params.push(value);
       sets.push(`messaging_brief = $${params.length}`);
+    }
+
+    if (hasContentBrief) {
+      const raw = body.content_brief;
+      if (raw != null && (typeof raw !== 'object' || Array.isArray(raw))) {
+        return res.status(400).json({ error: 'content_brief must be an object or null' });
+      }
+      params.push(raw == null ? null : JSON.stringify(raw));
+      sets.push(`content_brief = $${params.length}::jsonb`);
     }
 
     const row = await db.one(

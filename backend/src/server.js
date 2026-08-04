@@ -11,6 +11,7 @@ const webhook = require('./routes/webhook');
 const offerWebhook = require('./routes/offerWebhook');
 const { api: contractsApi, page: contractPage } = require('./routes/contracts');
 const { api: offersApi, page: offerPage } = require('./routes/offers');
+const { api: briefsApi, page: briefPage } = require('./routes/briefs');
 const offerReview = require('./routes/offerReview');
 const bot = require('./routes/bot');
 const creatorDbRoutes = require('./routes/creatorDb');
@@ -119,6 +120,12 @@ app.get('/contracts/:token', contractPage);
 // handler so /o/:token serves the offer shell, not the dashboard.
 app.get('/o/:token', offerPage);
 
+// Public content-brief page. The brief link handed to a signed creator resolves
+// here (proxied through campaigns.influence.technology, like /contract/). The
+// page fetches its snapshot from /api/briefs/:token.
+app.use('/api/briefs', briefsApi);
+app.get('/brief/:token', briefPage);
+
 // Public iMessage redirect. The email "Text us on iMessage" button links here
 // (an https link email clients keep clickable, unlike a raw sms: link Gmail
 // strips); this opens the visitor's Messages app to our business number.
@@ -137,6 +144,7 @@ app.get('*', (req, res, next) => {
     req.path.startsWith('/api/') ||
     req.path.startsWith('/webhook') ||
     req.path.startsWith('/contract') ||
+    req.path.startsWith('/brief') ||
     req.path.startsWith('/o/') ||
     req.path.startsWith('/go/') ||
     req.path === '/health'

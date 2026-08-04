@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Content Brief &amp; Guidelines — INFLUENCE</title>
+  <style>
+    :root {
+      --bg: #191919; --surface: #212121; --surface-2: #262626; --callout: #2b2a26;
+      --ink: #ededec; --ink-2: #c6c6c3; --muted: #9a9a96; --faint: #6f6f6b;
+      --line: #333331; --line-2: #3d3d3a;
+      --accent: #e8b84b; --accent-bg: #2c2717; --accent-line: #4a3f20;
+      --link: #86a9ff; --green: #6fce9a; --green-bg: #17281f;
+      --radius: 14px; --radius-sm: 10px;
+      --font: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--font); color: var(--ink); background: var(--bg);
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; line-height: 1.6;
+    }
+    a { color: var(--link); text-decoration: none; word-break: break-word; }
+    a:hover { text-decoration: underline; }
+    .num { font-variant-numeric: tabular-nums; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 44px 20px 90px; }
+
+    .brandbar { font-size: 13px; font-weight: 700; letter-spacing: .26em; color: var(--muted); margin-bottom: 26px; }
+    h1 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 8px; text-wrap: balance; }
+    .prepared { color: var(--muted); font-size: 13.5px; margin: 0 0 4px; }
+    .for { color: var(--ink-2); font-size: 14px; margin: 0; }
+
+    .callout {
+      background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 18px 20px; margin: 26px 0;
+    }
+    .callout.star { background: var(--surface-2); }
+    .callout .c-title {
+      display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;
+      letter-spacing: .04em; text-transform: uppercase; color: var(--accent); margin-bottom: 12px;
+    }
+    .kv { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+    .kv li { font-size: 14.5px; color: var(--ink-2); }
+    .kv li b { color: var(--ink); font-weight: 650; }
+
+    .views { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .views .big { font-size: 22px; font-weight: 800; color: var(--ink); letter-spacing: -.01em; }
+    .views .sub { color: var(--muted); font-size: 13.5px; }
+
+    section.blk { margin: 30px 0; }
+    section.blk > h2 {
+      font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--faint); margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
+    }
+    .lead-in { font-size: 15px; color: var(--ink-2); margin: 0 0 10px; }
+    .prose { font-size: 15px; color: var(--ink-2); white-space: pre-wrap; margin: 0; }
+    .rules { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+      padding: 16px 18px; font-size: 14.5px; color: var(--ink-2); white-space: pre-wrap; }
+
+    .vids { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+    .vids li { font-size: 14.5px; }
+    .vids .lbl { color: var(--muted); margin-right: 6px; }
+
+    .checklist { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
+    .checklist > li {
+      display: grid; grid-template-columns: 20px 1fr; gap: 12px; align-items: start;
+      font-size: 14.5px; color: var(--ink-2);
+    }
+    .checklist .box {
+      width: 17px; height: 17px; border: 1.5px solid var(--line-2); border-radius: 5px; margin-top: 3px;
+    }
+    .checklist .ci b { color: var(--ink); font-weight: 650; display: block; margin-bottom: 2px; }
+    .chip {
+      font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); color: var(--ink);
+      border: 1px solid var(--line-2); border-radius: 6px; padding: 1px 6px;
+    }
+    .usage { background: var(--green-bg); border: 1px solid #244233; border-radius: var(--radius-sm);
+      padding: 13px 16px; font-size: 14px; color: var(--green); }
+
+    .foot { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+    .foot b { color: var(--ink-2); }
+
+    .state { max-width: 460px; margin: 90px auto; text-align: center; color: var(--muted); }
+    .state h2 { color: var(--ink); font-size: 20px; margin: 0 0 8px; }
+    .spinner { width: 26px; height: 26px; border: 3px solid var(--line-2); border-top-color: var(--muted);
+      border-radius: 50%; margin: 0 auto 16px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+    @media (max-width: 520px) { .wrap { padding: 30px 16px 70px; } h1 { font-size: 25px; } }
+  </style>
+</head>
+<body>
+  <div id="loading" class="state">
+    <div class="spinner"></div>
+    <p>Loading your brief…</p>
+  </div>
+  <div id="notfound" class="state" hidden>
+    <h2>Brief not found</h2>
+    <p>This link may be incorrect or the brief hasn't been published yet. Please check with your INFLUENCE contact.</p>
+  </div>
+  <div id="root" class="wrap" hidden></div>
+  <script src="/brief.js"></script>
+</body>
+</html>

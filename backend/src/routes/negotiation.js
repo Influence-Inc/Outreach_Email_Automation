@@ -6,6 +6,7 @@ const db = require('../db');
 const negotiation = require('../services/negotiation');
 const contracts = require('../services/contracts');
 const offers = require('../services/offers');
+const briefs = require('../services/briefs');
 const { computeOffers } = require('../services/pricing');
 const { flagFingerprintSql } = require('../db/flagFingerprint');
 
@@ -361,6 +362,48 @@ router.post('/:id/dismiss-flag', async (req, res, next) => {
     );
     res.json(row);
   } catch (err) {
+    next(err);
+  }
+});
+
+// ── Content brief hand-off ──────────────────────────────────────────────────
+// The personalised brief that surfaces after a creator signs. GET returns the
+// assembled draft (with any unsaved content direction / video links merged in
+// live for the preview); publish saves the two curated fields, mints the
+// tracked link, and returns the shareable /brief/:token URL; dismiss clears the
+// pending flag without publishing.
+router.get('/:id/brief', async (req, res, next) => {
+  try {
+    const brief = await briefs.assembleBrief(req.params.id, {
+      contentDirection: req.query.contentDirection,
+      videoLinks: req.query.videoLinks ? JSON.parse(req.query.videoLinks) : undefined,
+    });
+    res.json(brief);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+router.post('/:id/brief/publish', async (req, res, next) => {
+  try {
+    const { contentDirection, videoLinks } = req.body || {};
+    const result = await briefs.publishBrief(req.params.id, { contentDirection, videoLinks });
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, brief_result: result });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+router.post('/:id/brief/dismiss', async (req, res, next) => {
+  try {
+    const result = await briefs.dismissBrief(req.params.id);
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, brief_result: result });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 });
