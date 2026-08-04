@@ -88,7 +88,9 @@ a { color: var(--ink); }
 }
 .auth b { color: var(--accent); font-weight: 600; }
 .auth a { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
-/* Ends the site-password session (GET /logout clears the cookie). */
+/* The signed-in Slack user, populated by loadSignedInUser() in app.js. */
+.auth .signed-in-as { color: var(--ink-2); font-weight: 500; }
+/* Ends the Slack sign-in session (GET /logout clears the cookie). */
 .auth .logout-link { color: var(--muted); text-decoration: none; }
 .auth .logout-link:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 .live-dot {

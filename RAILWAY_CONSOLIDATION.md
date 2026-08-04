@@ -173,9 +173,14 @@ Full inventory:
   `CONTENT_CADENCE`, `LEARN_FROM_DELEGATE`, `LEARN_HARVEST_HOURS`,
   `LEARN_HARVEST_MAX_EMAILS`, `SENDER_EMAIL`, `CREATOR_DB_URL`,
   `CREATOR_DB_API_KEY`, `CREATOR_DB_TIMEOUT_MS`, `OUTREACH_BOT_TOKEN`, `DRY_RUN`,
-  `SITE_PASSWORD` (shared login for the Deal Studio dashboard + admin API —
-  **if unset the dashboard is publicly reachable at the Railway URL**; creator
-  pages, webhooks and `/api/bot/*` stay open either way).
+  `SLACK_CLIENT_ID` + `SLACK_CLIENT_SECRET` (Sign in with Slack for the Deal
+  Studio dashboard + admin API — **if unset the dashboard is publicly reachable
+  at the Railway URL**; creator pages, webhooks and `/api/bot/*` stay open
+  either way), `SLACK_ALLOWED_TEAM_ID` + `SLACK_ALLOWED_EMAIL_DOMAINS` (lock
+  sign-in to your workspace/domain — without either, any Slack account can sign
+  in), optional `SLACK_REDIRECT_URI` / `SITE_SESSION_SECRET`, and optional
+  `DASHBOARD_API_TOKEN` (machine credential for the Chrome extension + scripts,
+  sent as `x-api-token`).
   - **Offer portal (Used-creator WhatsApp/iMessage negotiation) — required for
     the "text us on WhatsApp/iMessage" invite to fire; if any are unset the
     Used-creator flow silently falls back to the plain Instantly cold email:**

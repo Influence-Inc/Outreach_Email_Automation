@@ -29,8 +29,8 @@ const siteAuth = require('./services/siteAuth');
 
 const app = express();
 // Railway terminates TLS in front of us, so req.secure / req.ip are only
-// correct once the proxy headers are trusted. The site-password gate uses both
-// (Secure cookie flag, per-IP login throttle).
+// correct once the proxy headers are trusted. The Slack sign-in gate relies on
+// them (Secure cookie flag, request-derived OAuth redirect URI).
 app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json({
@@ -51,18 +51,24 @@ app.use(express.urlencoded({ limit: '1mb', extended: false }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// --- Site password gate ----------------------------------------------------
+// --- Sign in with Slack gate -----------------------------------------------
 // Everything below is private-by-default: the dashboard shell, its assets and
-// every admin API route require the SITE_PASSWORD session cookie. Creator-facing
-// pages (/contract/:token, /o/:token), the data they fetch, the inbound webhooks
-// and the token-authenticated /api/bot/* endpoints stay open — the allowlist
-// lives in services/siteAuth.js. With SITE_PASSWORD unset the gate is a no-op
-// (a warning is logged at boot).
+// every admin API route require a Slack session cookie. Team members sign in
+// with their Slack account (Slack OpenID Connect); creator-facing pages
+// (/contract/:token, /o/:token), the data they fetch, the inbound webhooks and
+// the token-authenticated /api/bot/* endpoints stay open — the allowlist lives
+// in services/siteAuth.js. With SLACK_CLIENT_ID / SLACK_CLIENT_SECRET unset the
+// gate is a no-op (a warning is logged at boot).
 app.get('/login', siteAuth.showLogin);
-app.post('/login', siteAuth.handleLogin);
+app.get('/auth/slack', siteAuth.beginSlackLogin);
+app.get('/auth/slack/callback', siteAuth.handleSlackCallback);
 app.get('/logout', siteAuth.handleLogout);
 app.post('/logout', siteAuth.handleLogout);
 app.use(siteAuth.gate);
+
+// Who's signed in (drives the "signed in as …" chip in the topbar). Behind the
+// gate above, so it only answers for an authenticated browser session.
+app.get('/api/me', siteAuth.handleMe);
 
 app.get('/api/debug/ig-probe', async (req, res) => {
   const username = String(req.query.username || '').trim();
@@ -164,8 +170,8 @@ app.listen(port, () => {
   console.log(`Backend listening on http://localhost:${port}`);
   scheduler.start();
 
-  // Say plainly whether the dashboard is behind the password or wide open, so a
-  // deploy that forgot SITE_PASSWORD is visible in the logs.
+  // Say plainly whether the dashboard requires Slack sign-in or is wide open, so
+  // a deploy that forgot the Slack credentials is visible in the logs.
   siteAuth.logSiteAuthConfig();
 
   // Surface offer-portal channel config at boot so a half-configured deploy (the

@@ -66,12 +66,12 @@
   }
 
   // ---- API ----------------------------------------------------------------
-  // The dashboard's admin API sits behind SITE_PASSWORD (see backend
-  // services/siteAuth.js). Its login cookie is same-origin to the dashboard, so
-  // this panel — served from the extension origin — sends the password header
-  // instead. It's read from extension storage (set in the popup) rather than
-  // passed through the iframe URL, so it never lands in the DOM of the
-  // Instagram page hosting us.
+  // The dashboard's admin API sits behind Sign in with Slack (see backend
+  // services/siteAuth.js). Its session cookie is same-origin to the dashboard,
+  // so this panel — served from the extension origin — sends the machine token
+  // header (DASHBOARD_API_TOKEN) instead. It's read from extension storage (set
+  // in the popup) rather than passed through the iframe URL, so it never lands
+  // in the DOM of the Instagram page hosting us.
   let sitePassword = null;
   const sitePasswordReady = chrome.storage.local
     .get(['infSitePassword'])
@@ -89,7 +89,7 @@
       ...options,
     });
     if (res.status === 401) {
-      throw new Error('Dashboard password required. Open the extension popup and set the site password.');
+      throw new Error('Dashboard token required. Open the extension popup and set the Dashboard API token.');
     }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

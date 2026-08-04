@@ -64,22 +64,41 @@ open http://localhost:3000               # dashboard
 open http://localhost:3000/auth/google   # one-time Gmail auth as Jennifer
 ```
 
-## Dashboard access (site password)
+## Dashboard access (Sign in with Slack)
 
-The dashboard is internal-only. Set `SITE_PASSWORD` and every dashboard page and
-admin `/api/*` route sits behind a login: `POST /login` issues a signed, HttpOnly
-session cookie (30 days), `GET /logout` clears it, and the topbar carries a
-"Log out" link. Scripts can skip the form with `x-site-password: <password>` or
-HTTP Basic auth (any username).
+The dashboard is internal-only. Team members **sign in with their Slack account**
+(Slack's OpenID Connect flow) — no shared password. Set `SLACK_CLIENT_ID` and
+`SLACK_CLIENT_SECRET` and every dashboard page and admin `/api/*` route sits
+behind sign-in: `GET /auth/slack` bounces to Slack, `/auth/slack/callback` issues
+a signed, HttpOnly session cookie (30 days), `GET /logout` clears it, and the
+topbar shows who's signed in with a "Sign out" link.
+
+Lock it down with `SLACK_ALLOWED_TEAM_ID` (your workspace) and/or
+`SLACK_ALLOWED_EMAIL_DOMAINS` (e.g. `useinfluence.xyz`) — **without either, any
+Slack account can sign in** (boot logs a warning).
+
+Set-up in the Slack app config (https://api.slack.com/apps):
+
+1. **OAuth & Permissions → Redirect URLs** → add
+   `{this backend's origin}/auth/slack/callback` (this backend's own URL, not
+   `campaigns.influence.technology` — that proxy only forwards creator pages).
+2. Enable **Sign in with Slack** (the `openid`, `email`, `profile` scopes).
+3. Copy the **Client ID + Client Secret** into the env vars above.
+
+Non-browser clients (the Chrome extension, curl, cron scripts) can't ride the
+session cookie, so they authenticate with a machine token instead: set
+`DASHBOARD_API_TOKEN` and send it as `x-api-token: <token>` (the legacy
+`x-site-password` header and HTTP Basic auth also work).
 
 Creator-facing and machine surfaces stay public — they're resolved by unguessable
 token or carry their own secret: `/contract/:token`, `/o/:token`, `/go/imessage`,
 `/api/contracts/*`, `/api/offers/*`, `/webhook/*`, `/api/bot/*` (`x-bot-token`)
 and `/health`.
 
-**With `SITE_PASSWORD` unset the gate is off** and the dashboard is reachable by
-anyone with the URL — boot logs a warning to that effect. Set the var in Railway
-to turn protection on. The allowlist and session logic live in
+**With `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` unset the gate is off** and the
+dashboard is reachable by anyone with the URL — boot logs a warning to that
+effect. Set the vars in Railway to turn protection on. The allowlist and session
+logic live in
 [`backend/src/services/siteAuth.js`](./backend/src/services/siteAuth.js).
 
 ## Instagram scraping (two strategies)

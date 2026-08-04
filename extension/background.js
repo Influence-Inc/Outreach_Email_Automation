@@ -142,10 +142,11 @@ async function emitProgress(senderTabId, payload) {
   }
 }
 
-// The dashboard's admin API sits behind SITE_PASSWORD (see backend
+// The dashboard's admin API sits behind Sign in with Slack (see backend
 // services/siteAuth.js). Its session cookie is same-origin only, so extension
-// requests authenticate with the password header instead — saved in the popup
-// under "Site password". Returns {} when unset (backend with the gate off).
+// requests authenticate with the machine token header instead — the backend's
+// DASHBOARD_API_TOKEN, saved in the popup under "Dashboard API token". Returns
+// {} when unset (backend with the gate off).
 async function authHeaders() {
   const { infSitePassword } = await chrome.storage.local.get(['infSitePassword']);
   return infSitePassword ? { 'x-site-password': infSitePassword } : {};

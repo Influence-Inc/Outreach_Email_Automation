@@ -80,13 +80,13 @@
   </div>
 
   <div class="field">
-    <label for="site-password">Site password</label>
+    <label for="site-password">Dashboard API token</label>
     <div class="row">
-      <input id="site-password" type="password" placeholder="Deal Studio password" />
+      <input id="site-password" type="password" placeholder="Deal Studio API token" />
       <button id="save-password" type="button">Save</button>
     </div>
     <div class="saved" id="password-saved"></div>
-    <p class="hint">The same password you use to log into the dashboard (its <code>SITE_PASSWORD</code>). Stored locally and sent with the extension&rsquo;s API calls, which can&rsquo;t use the dashboard&rsquo;s login cookie. Leave blank if your backend has no password set.</p>
+    <p class="hint">The backend&rsquo;s <code>DASHBOARD_API_TOKEN</code>. The dashboard signs humans in with Slack, but extension calls can&rsquo;t use that session cookie, so they send this machine token instead. Stored locally. Leave blank if your backend has no gate set.</p>
   </div>
 
   <script src="popup.js"></script>
