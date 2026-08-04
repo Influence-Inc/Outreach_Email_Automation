@@ -1426,28 +1426,48 @@ function renderStatusCell(r, cell) {
   if (r.status === 'duplicate' && r.notes) pillEl.title = r.notes;
   left.appendChild(pillEl);
 
-  // Contract link — shown once a contract exists, next to the status pill so
-  // the same Status column carries the signing link (no dedicated column).
-  // Copies the public URL.
+  // Contract action — shown once a contract exists, next to the status pill so
+  // the same Status column carries it (no dedicated column). Once the creator
+  // has signed (status signed/completed) it becomes a "Contract" download that
+  // opens the executed agreement and triggers the browser's Print → Save as
+  // PDF; while the contract is still pending signature it stays a copy-link for
+  // the signing URL.
   if (r.contract && r.contract.url) {
-    const copy = document.createElement('button');
-    copy.type = 'button';
-    copy.className = 'ghost small cr-copy-contract';
-    copy.textContent = 'Copy link';
-    copy.title = r.contract.url;
-    copy.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(r.contract.url);
-        const prev = copy.textContent;
-        copy.textContent = 'Copied ✓';
-        setTimeout(() => {
-          copy.textContent = prev;
-        }, 1400);
-      } catch (e) {
-        window.prompt('Contract link', r.contract.url);
-      }
-    };
-    left.appendChild(copy);
+    const signed = r.contract.status === 'signed' || r.contract.status === 'completed';
+    if (signed) {
+      const dl = document.createElement('button');
+      dl.type = 'button';
+      dl.className = 'ghost small cr-download-contract';
+      dl.textContent = 'Contract';
+      dl.title = 'Download the signed contract (opens, then Print → Save as PDF)';
+      dl.onclick = () => {
+        // Open the signed contract in print mode; it auto-invokes the browser's
+        // Print → Save as PDF dialog on load. Opened synchronously in the click
+        // handler so popup blockers allow it.
+        const sep = r.contract.url.indexOf('?') === -1 ? '?' : '&';
+        window.open(r.contract.url + sep + 'print=1', '_blank', 'noopener');
+      };
+      left.appendChild(dl);
+    } else {
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'ghost small cr-copy-contract';
+      copy.textContent = 'Copy link';
+      copy.title = r.contract.url;
+      copy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(r.contract.url);
+          const prev = copy.textContent;
+          copy.textContent = 'Copied ✓';
+          setTimeout(() => {
+            copy.textContent = prev;
+          }, 1400);
+        } catch (e) {
+          window.prompt('Contract link', r.contract.url);
+        }
+      };
+      left.appendChild(copy);
+    }
   }
 
   top.appendChild(left);

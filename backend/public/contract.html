@@ -31,6 +31,15 @@
     .num { font-variant-numeric: tabular-nums; }
     .wrap { max-width: 760px; margin: 0 auto; padding: 40px 22px 80px; }
 
+    /* Print / Save as PDF — flatten the on-screen card chrome so the executed
+       contract reads as a clean document, and keep the signed banner's colour. */
+    @media print {
+      body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .wrap { max-width: none; padding: 0; }
+      .doc { border: 0; box-shadow: none; margin: 0; border-radius: 0; }
+    }
+    @page { margin: 0.7in; }
+
     /* Brand bar */
     .brandbar { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 30px; }
     .brandbar svg { height: 20px; width: auto; fill: var(--ink); }
