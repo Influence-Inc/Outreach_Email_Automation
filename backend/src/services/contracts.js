@@ -158,6 +158,35 @@ function bonusOf(offer) {
   return { amount: null, threshold: null };
 }
 
+// Default view-counting window: for how many days AFTER a post is published its
+// views are counted toward the deal's view target / bonus. 30 days is the
+// standing assumption when nothing else is set.
+const DEFAULT_VIEW_COUNTING_DAYS = 30;
+
+// Whether a deal carries a VIEW requirement at all — the two shapes where a
+// view-counting window is meaningful: a view-based deal (priced on a guaranteed
+// TOTAL view count) or a video-based deal that carries a views bonus (paid when
+// views cross a threshold). A flat video deal with no views target/bonus has
+// nothing to count, so it has no window.
+function hasViewRequirement(offer) {
+  if (!offer) return false;
+  if (offer.offer_type === 'view_based') return true;
+  if (offer.offer_type === 'video_bonus' && offer.bonus_threshold_views != null) return true;
+  return false;
+}
+
+// The view-counting window in DAYS for a deal with a view requirement — the
+// number of days from each post's publish date over which its views count
+// toward the guaranteed total (view-based) or the performance bonus threshold
+// (video_bonus). Defaults to 30 when the offer doesn't name its own. Returns
+// null for any deal WITHOUT a view requirement so the contract renders no
+// counting-window row there.
+function viewCountingDaysOf(offer) {
+  if (!hasViewRequirement(offer)) return null;
+  const n = Number(offer.view_counting_days);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : DEFAULT_VIEW_COUNTING_DAYS;
+}
+
 // Usage-rights fields derived from the campaign's usage_rights_policy (see
 // schema.sql for the 3 values):
 //   no_rights  — ad rights never requested
@@ -275,6 +304,7 @@ function baseContractData(creator, fee, offer) {
   const minViews = guaranteedViewsOf(offer);
   const minVideos = minVideosOf(offer);
   const bonus = bonusOf(offer);
+  const viewCountingDays = viewCountingDaysOf(offer);
   // Best-guess hard deadline: N weeks out from today, matching the cadence.
   const weeks = Math.max(n, 3);
   const deadlineDate = new Date(Date.now() + weeks * 7 * 24 * 3600 * 1000);
@@ -360,7 +390,14 @@ function baseContractData(creator, fee, offer) {
     // Bonus (present for video_bonus offer types).
     bonusAmount: bonus.amount,
     bonusThresholdViews: bonus.threshold,
-    bonusWindowDays: 30,
+    // View-counting window: for how many days from each post's publish date its
+    // views count toward the deal's view target / bonus. Present on any deal
+    // WITH a view requirement (view-based, or a video deal with a views bonus),
+    // defaulting to 30; null otherwise. bonusWindowDays is the legacy alias the
+    // bonus row reads — keep it in lockstep with the canonical window so the two
+    // never disagree.
+    viewCountingDays,
+    bonusWindowDays: viewCountingDays != null ? viewCountingDays : DEFAULT_VIEW_COUNTING_DAYS,
 
     guaranteedViews: minViews,
     specialNotes: null,
@@ -412,6 +449,7 @@ Return ONLY a JSON object — no prose, no markdown fences — with EXACTLY thes
   "bonusAmount": number|null,
   "bonusThresholdViews": number|null,
   "bonusWindowDays": number|null,
+  "viewCountingDays": number|null,
   "guaranteedViews": number|null,
 
   "specialNotes": string|null,
@@ -424,6 +462,7 @@ Rules:
 - "deliverables": when KNOWN VALUES.acceptedOffer.offer_type is "view_based", the deal is priced by TOTAL guaranteed views reached across as many posts as the creator needs — describe the content WITHOUT any video count (e.g. "Short-form video content") and set numberOfDeliverables and numberOfVideos to null. Never write "1 video" / "1 Reel" for a view-based deal. For flat (video-based) deals, state the agreed number of videos.
 - "deliverables" describes WHAT the creator produces — never the posting rhythm. Do NOT tack a cadence, posting rhythm, or per-week/day/month frequency onto this field (no "posted at a cadence of 1-2 videos per week", no "1 per week", no "posted weekly"). Cadence lives in the "timeline" field only. Keep "deliverables" as a bare content description like "3 short-form videos" or "Short-form video content".
 - "minVideos" applies ONLY to view-based deals (KNOWN VALUES.acceptedOffer.offer_type is "view_based"). A view-based deal is priced by the TOTAL guaranteed views and normally has NO minimum number of videos — the creator posts as many as needed to reach the view total — so "minVideos" is null in the overwhelming majority of cases. Set it to a number ONLY when the thread explicitly states a MINIMUM count of videos/posts the creator must publish (e.g. "at least 3 videos", "a minimum of 2 posts", "you'll need to post at least 4 times"). Do NOT infer a minimum from the guaranteed-view number, from a single-post assumption, or from anything short of an explicit minimum-count statement. Always null for video-based or bonus deals — they already name an exact video count.
+- "viewCountingDays" is the number of days AFTER a post is published during which its views are counted toward the deal's guaranteed-view total or performance-bonus threshold. It applies ONLY to a deal WITH a view requirement — a view-based deal, or a video-based deal that carries a views bonus. Default to 30: return 30 unless the thread EXPLICITLY names a different counting window (e.g. "views counted over 60 days", "measured across the first 14 days from posting"). Return null for a flat video-based deal with no views target or bonus.
 - "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
 - "currency" is a 3-letter ISO code (default "USD").
 - "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
@@ -526,6 +565,19 @@ async function extractContractData(creator, opts = {}) {
   // the extraction stamp one onto a non-view-based deal.
   if (base.offerType !== 'view_based') {
     merged.minVideos = null;
+  }
+  // The view-counting window is meaningful ONLY for a deal WITH a view
+  // requirement — a view-based deal, or a video deal that carries a views bonus.
+  // A flat video-based deal has no views target, so never let the extraction
+  // stamp a window onto it. Keep the legacy bonusWindowDays alias in lockstep
+  // with the canonical window so the bonus row and the counting-window row can
+  // never disagree.
+  const mergedHasBonus = merged.bonusAmount != null && merged.bonusThresholdViews != null;
+  if (base.offerType !== 'view_based' && !mergedHasBonus) {
+    merged.viewCountingDays = null;
+  }
+  if (merged.viewCountingDays != null) {
+    merged.bonusWindowDays = merged.viewCountingDays;
   }
   // Cadence never applies to a single-video (or view-based) deal, no matter
   // what Claude extracted from the thread — keep it out of the stored contract.
@@ -903,6 +955,7 @@ const EDITABLE_CONTRACT_FIELDS = [
   'numberOfVideos',
   'minTotalViews',
   'minVideos',
+  'viewCountingDays',
   'platforms',
   'postingDeadline',
   'paidAdsIncluded',
@@ -1003,6 +1056,20 @@ function coerceContractPatch(patch, existing = {}) {
     const raw = patch.minVideos;
     const n = raw == null || raw === '' ? null : Math.round(Number(raw));
     out.minVideos = Number.isFinite(n) && n > 0 ? n : null;
+  }
+  if (has('viewCountingDays')) {
+    // The view-counting window in days — for how many days after each post its
+    // views are counted toward the deal's view target / bonus. Blank / zero
+    // falls back to the default (30, so the contract still reads a definite
+    // window); a positive integer sets it. Kept in lockstep with bonusWindowDays
+    // (the legacy field the bonus row reads) so the two never disagree. Only
+    // meaningful on a deal WITH a view requirement — the Deals column exposes it
+    // there only.
+    const raw = patch.viewCountingDays;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    const val = Number.isFinite(n) && n > 0 ? n : null;
+    out.viewCountingDays = val;
+    out.bonusWindowDays = val != null ? val : DEFAULT_VIEW_COUNTING_DAYS;
   }
   if (has('platforms')) {
     const arr = Array.isArray(patch.platforms)
@@ -1259,6 +1326,7 @@ module.exports = {
   mergeContractData,
   usageRightsFor,
   minVideosOf,
+  viewCountingDaysOf,
   paymentTermsFor,
   paymentScheduleFor,
   negotiatedSeparateUsageRightsPayment,

@@ -151,6 +151,56 @@ test('baseContractData surfaces video_bonus offer terms in the contract', () => 
   assert.strictEqual(d.bonusWindowDays, 30);
 });
 
+test('viewCountingDaysOf: only deals with a view requirement carry a window', () => {
+  // View-based deal → the default 30-day window.
+  assert.strictEqual(contracts.viewCountingDaysOf({ offer_type: 'view_based', view_guarantee: 100000 }), 30);
+  // A video deal with a views bonus also counts views over a window.
+  assert.strictEqual(
+    contracts.viewCountingDaysOf({ offer_type: 'video_bonus', bonus_threshold_views: 550000 }),
+    30,
+  );
+  // An offer that names its own window overrides the default.
+  assert.strictEqual(contracts.viewCountingDaysOf({ offer_type: 'view_based', view_counting_days: 60 }), 60);
+  assert.strictEqual(contracts.viewCountingDaysOf({ offer_type: 'view_based', view_counting_days: '14' }), 14);
+  // Bad / zero window on a view-requirement deal falls back to the default.
+  assert.strictEqual(contracts.viewCountingDaysOf({ offer_type: 'view_based', view_counting_days: 0 }), 30);
+  // No view requirement → no window at all.
+  assert.strictEqual(contracts.viewCountingDaysOf({ offer_type: 'video_based', num_videos: 2 }), null);
+  assert.strictEqual(contracts.viewCountingDaysOf({ offer_type: 'video_bonus' }), null); // no threshold
+  assert.strictEqual(contracts.viewCountingDaysOf(null), null);
+});
+
+test('baseContractData: a view-based deal defaults the view-counting window to 30 days', () => {
+  const offer = { offer_type: 'view_based', view_guarantee: 100000, flat_fee: 300 };
+  const d = contracts.baseContractData({ full_name: 'Vo Anh Duy' }, 300, offer);
+  assert.strictEqual(d.viewCountingDays, 30);
+});
+
+test('baseContractData: a view-based deal honours an offer-set view-counting window', () => {
+  const offer = { offer_type: 'view_based', view_guarantee: 100000, view_counting_days: 45, flat_fee: 300 };
+  const d = contracts.baseContractData({ full_name: 'Vo Anh Duy' }, 300, offer);
+  assert.strictEqual(d.viewCountingDays, 45);
+});
+
+test('baseContractData: a video_bonus deal keeps viewCountingDays and bonusWindowDays in lockstep', () => {
+  const offer = {
+    offer_type: 'video_bonus', num_videos: 3, flat_fee: 2500,
+    bonus_amount: 750, bonus_threshold_views: 550000, view_counting_days: 14,
+  };
+  const d = contracts.baseContractData({ full_name: 'Sam' }, 2500, offer);
+  assert.strictEqual(d.viewCountingDays, 14);
+  // The legacy bonus-window alias mirrors the canonical window.
+  assert.strictEqual(d.bonusWindowDays, 14);
+});
+
+test('baseContractData: a flat video-based deal has no view-counting window', () => {
+  const offer = { offer_type: 'video_based', num_videos: 2, flat_fee: 900 };
+  const d = contracts.baseContractData({ full_name: 'Alex' }, 900, offer);
+  assert.strictEqual(d.viewCountingDays, null);
+  // bonusWindowDays still defaults to 30 (harmless — no bonus row renders).
+  assert.strictEqual(d.bonusWindowDays, 30);
+});
+
 test('agreedFeeFor: an admin-accepted creator rate wins over the last offer we sent', async () => {
   // Scenario: we countered at $3,000 (logged rate_offer_sent), then the admin
   // clicked "Accept creator's rate" and we agreed to the creator's own $3,500
@@ -578,6 +628,25 @@ test('coerceContractPatch: flipping to video_based clears any minimum-video floo
   // exact count, so the flip drops any leftover minimum.
   const out = contracts.coerceContractPatch({ offerType: 'video_based' });
   assert.strictEqual(out.minVideos, null);
+});
+
+test('coerceContractPatch: viewCountingDays sets the window and mirrors bonusWindowDays', () => {
+  const set = contracts.coerceContractPatch({ viewCountingDays: '60' });
+  assert.strictEqual(set.viewCountingDays, 60);
+  // The legacy bonus-window alias tracks the canonical window so the bonus row
+  // and the counting-window row can never disagree.
+  assert.strictEqual(set.bonusWindowDays, 60);
+  assert.strictEqual(contracts.coerceContractPatch({ viewCountingDays: 14 }).viewCountingDays, 14);
+});
+
+test('coerceContractPatch: clearing viewCountingDays falls back to the 30-day default', () => {
+  // Blank / zero / negative → null (so the contract still reads a definite
+  // window: the standing 30-day default), and the bonus-window alias resets too.
+  for (const v of ['', 0, -5]) {
+    const out = contracts.coerceContractPatch({ viewCountingDays: v });
+    assert.strictEqual(out.viewCountingDays, null, `viewCountingDays for ${JSON.stringify(v)}`);
+    assert.strictEqual(out.bonusWindowDays, 30, `bonusWindowDays for ${JSON.stringify(v)}`);
+  }
 });
 
 test('coerceContractPatch: platforms accept a comma string or an array', () => {
