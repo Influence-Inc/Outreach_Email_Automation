@@ -886,9 +886,16 @@ function deliverablesFor(offerType, num) {
   return `${n} short-form video${n === 1 ? '' : 's'}`;
 }
 
-function coerceContractPatch(patch) {
+// `existing` is the contract's CURRENT data (when known), used so an edit that
+// touches only one field can still keep a paired field consistent with the
+// contract's committed shape — chiefly: bumping the video count on an already-
+// video-based deal must rewrite the deliverables text, even though this patch
+// carries no offerType of its own. Called with just the patch (tests, and any
+// caller without the row) it falls back to same-patch signals only.
+function coerceContractPatch(patch, existing = {}) {
   const out = {};
   const has = (k) => Object.prototype.hasOwnProperty.call(patch, k);
+  const existingData = existing && typeof existing === 'object' ? existing : {};
   // Offer type is a manual repair for a contract the extraction misclassified
   // — the reported case: admin accepted the creator's per-video rate, but the
   // pre-fix pipeline stamped the contract as "View-based deal" with no video
@@ -930,11 +937,17 @@ function coerceContractPatch(patch) {
     const val = Number.isFinite(n) && n >= 0 ? n : null;
     out.numberOfVideos = val;
     out.numberOfDeliverables = val;
-    // When the caller is flipping the deal to video_based in the same patch,
-    // keep the "N short-form videos" wording in sync with the new count.
-    // Pre-existing edits that only change the count on an already-video-based
-    // deal leave the deliverables text as-is (the same behaviour as before).
-    if (val != null && out.offerType === 'video_based') {
+    // Keep the "N short-form videos" deliverables wording in sync with the new
+    // count. The count applies whenever the deal is video-based — either this
+    // same patch is flipping it there (out.offerType), or the contract being
+    // edited is ALREADY video-based (existingData.offerType). The reported bug
+    // was exactly the second case: an admin set VIDEOS to 3 on an existing
+    // video-based deal, but the deliverables text stayed "1 short-form video"
+    // because the count edit carried no offerType and so never rewrote it. A
+    // view-based deal is priced by guaranteed views and has no video count, so
+    // its count-less deliverables text is deliberately left untouched.
+    const effectiveOfferType = out.offerType || existingData.offerType || null;
+    if (val != null && effectiveOfferType !== 'view_based') {
       out.deliverables = deliverablesFor('video_based', val);
     }
   }
@@ -997,7 +1010,7 @@ async function updateContractFields(creatorId, patch, { force = false } = {}) {
   if (!existing) return { missing: true };
   if (existing.status !== 'pending' && !force) return { signed: true, row: existing };
 
-  const changes = coerceContractPatch(patch || {});
+  const changes = coerceContractPatch(patch || {}, existing.data || {});
   if (!Object.keys(changes).length) return { updated: false, noop: true, row: existing };
 
   const data = { ...existing.data, ...changes };

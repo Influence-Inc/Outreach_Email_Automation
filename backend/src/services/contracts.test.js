@@ -466,6 +466,43 @@ test('coerceContractPatch: videos sets both numberOfVideos and numberOfDeliverab
   assert.strictEqual(cleared.numberOfDeliverables, null);
 });
 
+test('coerceContractPatch: editing videos on an already-video-based deal rewrites the deliverables text', () => {
+  // The reported bug: an admin set VIDEOS to 3 on an existing video-based
+  // contract, but the deliverables stayed "1 short-form video" because the
+  // count edit carried no offerType of its own. Given the existing contract's
+  // committed shape, the deliverables text must now follow the new count.
+  const out = contracts.coerceContractPatch(
+    { numberOfVideos: 3 },
+    { offerType: 'video_based', deliverables: '1 short-form video' },
+  );
+  assert.strictEqual(out.numberOfVideos, 3);
+  assert.strictEqual(out.numberOfDeliverables, 3);
+  assert.match(out.deliverables, /3 short-form videos/);
+});
+
+test('coerceContractPatch: editing videos on a legacy deal with no stored offerType still rewrites deliverables', () => {
+  // Legacy deals carry no offerType; the dashboard renders them as video-based
+  // and exposes the VIDEOS field, so a count edit must rewrite the deliverables
+  // text there too (only a view-based deal is left count-less).
+  const out = contracts.coerceContractPatch(
+    { numberOfVideos: 2 },
+    { deliverables: '1 short-form video' },
+  );
+  assert.strictEqual(out.numberOfVideos, 2);
+  assert.match(out.deliverables, /2 short-form videos/);
+});
+
+test('coerceContractPatch: editing videos on a view-based deal leaves the count-less deliverables text', () => {
+  // A view-based deal is priced by guaranteed views and names no video count —
+  // its "Short-form video content" deliverables text must never be overwritten
+  // with an "N short-form videos" string.
+  const out = contracts.coerceContractPatch(
+    { numberOfVideos: 3 },
+    { offerType: 'view_based', deliverables: 'Short-form video content' },
+  );
+  assert.ok(!('deliverables' in out), 'view-based deliverables text is left untouched');
+});
+
 test('coerceContractPatch: min views mirrors into guaranteedViews', () => {
   const out = contracts.coerceContractPatch({ minTotalViews: 100000 });
   assert.strictEqual(out.minTotalViews, 100000);
