@@ -265,11 +265,16 @@ async function selectCampaign(id) {
   state.searchQuery = '';
   const searchInput = el('creator-search');
   if (searchInput) searchInput.value = '';
+  // Reply rate: of the creators we actually reached (outreach_sent_count),
+  // how many replied. Shown next to the Replied number. Null when nobody has
+  // been reached yet, so we don't render a meaningless "0%" (or divide by 0).
+  const reached = Number(c.outreach_sent_count) || 0;
+  const repliedPct = reached > 0 ? Math.round((Number(c.replied_count) || 0) / reached * 100) : null;
   const stats = [
     { stage: 'creators', label: 'Creators', value: c.creator_count },
     { stage: 'pending', label: 'Pending', value: c.pending_count },
     { stage: 'outreach', label: 'Outreach', value: c.outreach_sent_count },
-    { stage: 'replied', label: 'Replied', value: c.replied_count, accent: true },
+    { stage: 'replied', label: 'Replied', value: c.replied_count, accent: true, pct: repliedPct },
     { stage: 'contracted', label: 'Contracted', value: c.contracted_count },
     { stage: 'removed', label: 'Removed', value: c.stopped_count },
   ];
@@ -279,7 +284,11 @@ async function selectCampaign(id) {
     .map(
       (s) => `<button type="button" class="stat-cell" data-stage="${s.stage}" aria-pressed="false">
         <div class="stat-label">${s.label}</div>
-        <div class="stat-value num${s.accent && Number(s.value) > 0 ? ' accent' : ''}">${s.value}</div>
+        <div class="stat-value num${s.accent && Number(s.value) > 0 ? ' accent' : ''}">${s.value}${
+          s.pct != null
+            ? `<span class="stat-pct" title="Reply rate — replied of reached">${s.pct}%</span>`
+            : ''
+        }</div>
       </button>`,
     )
     .join('');

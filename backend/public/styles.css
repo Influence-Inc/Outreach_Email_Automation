@@ -212,6 +212,9 @@ a { color: var(--ink); }
 .stats .stat-cell.active .stat-label { color: var(--ink-2); }
 .stats .stat-value { font-size: 22px; font-weight: 600; line-height: 1; color: var(--ink); }
 .stats .stat-value.accent { color: var(--green); }
+/* Reply-rate percentage that trails the Replied number — smaller and muted so
+   it reads as a qualifier on the count, not a second figure. */
+.stats .stat-pct { margin-left: 6px; font-size: 12px; font-weight: 600; color: var(--faint); }
 
 /* --- Cards --------------------------------------------------------------- */
 .card {
