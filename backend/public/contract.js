@@ -233,12 +233,14 @@
     var viewDays = d.viewCountingDays != null
       ? Number(d.viewCountingDays)
       : (d.bonusWindowDays != null ? Number(d.bonusWindowDays) : 30);
-    // Always spell the window out as PER-POST — the count runs from the date
-    // each piece of content is posted, not a single shared window from one
-    // posting date — so a multi-post deal can't be misread (e.g. "in 14 days"
-    // sounds like 14 days total across all posts).
+    // A full, self-contained sentence spelling the window out as PER-POST — each
+    // post has its own count starting the day it goes live, NOT one shared
+    // window across every post — so a multi-post deal can't be misread (e.g.
+    // "in 14 days" sounds like 14 days total). Reused verbatim as the view-based
+    // counting-window row and as the second sentence of the bonus row, so it
+    // starts with a capital and reads correctly in either place.
     var countingWindowText =
-      'counted over ' + viewDays + ' days from the date each piece of content is posted';
+      'Views for each post are counted for ' + viewDays + ' days from the day it is posted.';
     html += section('Campaign & Deliverables', rowsWrap(
       row('Campaign', d.campaignName) +
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
@@ -263,9 +265,9 @@
       (isViewBased && minViews
         ? row(
             'Posting commitment',
-            'The creator will continue publishing short-form video content on Instagram until the total view count across all posts on Instagram meets or exceeds ' +
+            'The creator keeps posting short-form videos on Instagram until the combined views across all their posts reach at least ' +
               fmtNum(minViews) +
-              ' views. The deliverable is not complete until this combined Instagram view total is met or exceeded.'
+              '. The deliverable is complete only once that combined total is reached.'
           )
         : '') +
       // View-counting window for a view-based deal: the time bound on the views
@@ -273,10 +275,10 @@
       // live. A bonus deal shows the same window inline in its Performance bonus
       // row below, so it isn't repeated here.
       (isViewBased && minViews
-        ? row('View counting window', 'Views are ' + countingWindowText)
+        ? row('View counting window', countingWindowText)
         : '') +
       (d.bonusAmount && d.bonusThresholdViews
-        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ', ' + countingWindowText)
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if total views reach ' + fmtNum(d.bonusThresholdViews) + '. ' + countingWindowText)
         : '')
     ));
 
@@ -312,7 +314,7 @@
     html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(baseComp, d.currency), { big: true }) +
       (hasBonus
-        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ', ' + countingWindowText)
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if total views reach ' + fmtNum(d.bonusThresholdViews) + '. ' + countingWindowText)
         : '') +
       (hasBonus
         ? row('Total (incl. bonus)', fmtMoney(compensation, d.currency))
