@@ -697,6 +697,7 @@ function dealSummaryItems(data) {
   const isVideoBased = data.offerType === 'video_based';
   const n = data.numberOfVideos != null ? Number(data.numberOfVideos) : null;
   const minViews = data.minTotalViews != null ? Number(data.minTotalViews) : null;
+  const minVideos = data.minVideos != null ? Number(data.minVideos) : null;
 
   // Videos — hidden for view-based deals (priced by guaranteed views, not by a
   // fixed post count).
@@ -707,6 +708,11 @@ function dealSummaryItems(data) {
   // floor, so never surface it there.
   if (!isVideoBased && minViews && Number.isFinite(minViews) && minViews > 0) {
     items.push({ label: 'MIN VIEWS', value: fmtViews(minViews) });
+  }
+  // Min videos — a view-based-only floor, usually absent. Surfaced only when
+  // the deal set a minimum number of posts on top of the guaranteed views.
+  if (isViewBased && minVideos && Number.isFinite(minVideos) && minVideos > 0) {
+    items.push({ label: 'MIN VIDEOS', value: String(minVideos) });
   }
 
   if (Array.isArray(data.platforms) && data.platforms.length) {
@@ -757,6 +763,15 @@ function parseUpfrontPercentInput(s) {
   const n = Math.round(Number(str));
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.min(99, n);
+}
+
+// Parse a human "min videos" input into a whole number, or null for
+// blank/zero (meaning "no minimum" — the usual case, no row on the contract).
+function parseVideosInput(s) {
+  const str = String(s == null ? '' : s).replace(/[^\d.]/g, '');
+  if (!str) return null;
+  const n = Math.round(Number(str));
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 // Parse a human "min views" input ("100k", "1.2M", "250,000") into a number.
@@ -860,6 +875,15 @@ function renderEditableDeal(cell, r, data) {
       value: data.minTotalViews > 0 ? fmtViews(data.minTotalViews) : '',
       placeholder: 'e.g. 100k',
       onSave: (v) => saveContractField(r, { minTotalViews: parseViewsInput(v) }),
+    });
+    // Optional minimum-video floor — view-based deals usually have none, so this
+    // is blank by default. Type a whole number to require at least that many
+    // posts on top of the guaranteed views; clear it to drop the requirement.
+    appendEditableDealLine(cell, r, {
+      label: 'MIN VIDEOS',
+      value: data.minVideos > 0 ? Number(data.minVideos) : '',
+      placeholder: 'optional · e.g. 3',
+      onSave: (v) => saveContractField(r, { minVideos: parseVideosInput(v) }),
     });
   }
   appendEditableDealLine(cell, r, {

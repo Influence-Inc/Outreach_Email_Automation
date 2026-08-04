@@ -99,6 +99,46 @@ test('baseContractData: a view-based deal names no video count', () => {
   assert.deepStrictEqual(d.platforms, ['Instagram', 'TikTok', 'YouTube Shorts']);
 });
 
+test('minVideosOf: a view-based-only floor, ignored elsewhere', () => {
+  // Present only on a view-based offer that actually names a minimum.
+  assert.strictEqual(contracts.minVideosOf({ offer_type: 'view_based', min_videos: 3 }), 3);
+  assert.strictEqual(contracts.minVideosOf({ offer_type: 'view_based', min_videos: '2' }), 2);
+  // No minimum set → null (the usual case).
+  assert.strictEqual(contracts.minVideosOf({ offer_type: 'view_based' }), null);
+  assert.strictEqual(contracts.minVideosOf({ offer_type: 'view_based', min_videos: 0 }), null);
+  // Never a view-based term on any other deal shape, even if a number leaks on.
+  assert.strictEqual(contracts.minVideosOf({ offer_type: 'video_based', min_videos: 3 }), null);
+  assert.strictEqual(contracts.minVideosOf({ offer_type: 'video_bonus', min_videos: 3 }), null);
+  assert.strictEqual(contracts.minVideosOf(null), null);
+});
+
+test('baseContractData: a view-based deal carries no minimum videos by default', () => {
+  // The overwhelmingly common case — the creator posts as many videos as needed
+  // to hit the guaranteed view total, with no minimum count. minVideos is null,
+  // so the contract renders no "Minimum videos" row.
+  const offer = { offer_type: 'view_based', view_guarantee: 100000, flat_fee: 300 };
+  const d = contracts.baseContractData({ full_name: 'Vo Anh Duy' }, 300, offer);
+  assert.strictEqual(d.minVideos, null);
+});
+
+test('baseContractData: a view-based deal surfaces a minimum-video floor when the offer sets one', () => {
+  const offer = { offer_type: 'view_based', view_guarantee: 100000, min_videos: 3, flat_fee: 300 };
+  const d = contracts.baseContractData({ full_name: 'Vo Anh Duy' }, 300, offer);
+  assert.strictEqual(d.minVideos, 3);
+  // It sits ALONGSIDE the guaranteed view total — the deal is still priced on views.
+  assert.strictEqual(d.minTotalViews, 100000);
+  // And it never introduces a fixed video count.
+  assert.strictEqual(d.numberOfVideos, null);
+});
+
+test('baseContractData: a video-based deal never carries a minimum-video floor', () => {
+  // A flat video-based deal already names an exact count, so "minimum videos"
+  // is meaningless — never surfaced, even if the offer object leaks one.
+  const offer = { offer_type: 'video_based', num_videos: 2, min_videos: 5, flat_fee: 900 };
+  const d = contracts.baseContractData({ full_name: 'Alex' }, 900, offer);
+  assert.strictEqual(d.minVideos, null);
+});
+
 test('baseContractData surfaces video_bonus offer terms in the contract', () => {
   const creator = { full_name: 'Sam', brand_name: 'Reve' };
   const offer = {
@@ -211,6 +251,21 @@ test('mergeContractData: Claude overrides base, but never wipes known values', (
   assert.deepStrictEqual(out.additionalTerms, ['2 rounds of revisions']);
   assert.strictEqual(out.compensation, 900, 'bad compensation falls back to the known fee');
   assert.strictEqual(out.creatorName, 'Alex Lee'); // untouched base identity
+});
+
+test('mergeContractData: an extracted minimum-video floor overrides the base null', () => {
+  // The floor is ingested from the email thread by the extraction; the merge
+  // must let a meaningful extracted number win over the "no minimum" base.
+  const base = contracts.baseContractData(
+    { full_name: 'Vo Anh Duy' },
+    300,
+    { offer_type: 'view_based', view_guarantee: 100000, flat_fee: 300 },
+  );
+  assert.strictEqual(base.minVideos, null);
+  assert.strictEqual(contracts.mergeContractData(base, { minVideos: 3 }).minVideos, 3);
+  // A null / absent extraction leaves the "no minimum" base untouched.
+  assert.strictEqual(contracts.mergeContractData(base, { minVideos: null }).minVideos, null);
+  assert.strictEqual(contracts.mergeContractData(base, {}).minVideos, null);
 });
 
 test('stripCadenceFromDeliverables: cadence tails never ride along on the deliverables value', () => {
@@ -507,6 +562,22 @@ test('coerceContractPatch: min views mirrors into guaranteedViews', () => {
   const out = contracts.coerceContractPatch({ minTotalViews: 100000 });
   assert.strictEqual(out.minTotalViews, 100000);
   assert.strictEqual(out.guaranteedViews, 100000);
+});
+
+test('coerceContractPatch: minVideos sets a positive floor and clears on blank/zero', () => {
+  assert.strictEqual(contracts.coerceContractPatch({ minVideos: '3' }).minVideos, 3);
+  assert.strictEqual(contracts.coerceContractPatch({ minVideos: 4 }).minVideos, 4);
+  // Blank / zero / negative → null (no minimum, the usual case; no contract row).
+  assert.strictEqual(contracts.coerceContractPatch({ minVideos: '' }).minVideos, null);
+  assert.strictEqual(contracts.coerceContractPatch({ minVideos: 0 }).minVideos, null);
+  assert.strictEqual(contracts.coerceContractPatch({ minVideos: -2 }).minVideos, null);
+});
+
+test('coerceContractPatch: flipping to video_based clears any minimum-video floor', () => {
+  // Min videos is a view-based-only term; a video-based deal already names an
+  // exact count, so the flip drops any leftover minimum.
+  const out = contracts.coerceContractPatch({ offerType: 'video_based' });
+  assert.strictEqual(out.minVideos, null);
 });
 
 test('coerceContractPatch: platforms accept a comma string or an array', () => {
