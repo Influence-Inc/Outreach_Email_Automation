@@ -1439,13 +1439,14 @@ function renderStatusCell(r, cell) {
       dl.type = 'button';
       dl.className = 'ghost small cr-download-contract';
       dl.textContent = 'Contract';
-      dl.title = 'Download the signed contract (opens, then Print → Save as PDF)';
+      dl.title = 'Download the legal contract (opens, then Print → Save as PDF)';
       dl.onclick = () => {
-        // Open the signed contract in print mode; it auto-invokes the browser's
-        // Print → Save as PDF dialog on load. Opened synchronously in the click
-        // handler so popup blockers allow it.
-        const sep = r.contract.url.indexOf('?') === -1 ? '?' : '&';
-        window.open(r.contract.url + sep + 'print=1', '_blank', 'noopener');
+        // Open the compliant legal contract document — the "Creator Services
+        // Agreement" rendered by the Creator Database, proxied same-origin — in
+        // print mode; it auto-invokes the browser's Print → Save as PDF dialog
+        // on load. Opened synchronously in the click handler so popup blockers
+        // allow it.
+        window.open('/api/creators/' + r.id + '/contract-document?print=1', '_blank', 'noopener');
       };
       left.appendChild(dl);
     } else {
