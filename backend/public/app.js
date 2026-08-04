@@ -740,6 +740,17 @@ function dealSummaryItems(data) {
   if (bonusAmt && bonusViews) {
     items.push({ label: 'BONUS', value: `$${fmtNum(bonusAmt)} if ${fmtViews(bonusViews)}+ views` });
   }
+  // View-counting window (days from posting over which views count toward the
+  // deal's guaranteed total / bonus) — shown on any deal with a view
+  // requirement: a view-based deal with a guaranteed total, or a bonus deal.
+  // Legacy rows carry only bonusWindowDays; fall back to it, then to 30.
+  const hasViewReq = (isViewBased && minViews && Number.isFinite(minViews) && minViews > 0) || (bonusAmt && bonusViews);
+  if (hasViewReq) {
+    const viewDays = data.viewCountingDays != null
+      ? Number(data.viewCountingDays)
+      : (data.bonusWindowDays != null ? Number(data.bonusWindowDays) : 30);
+    items.push({ label: 'VIEW WINDOW', value: `${viewDays}d` });
+  }
 
   // Payment schedule — only shown when an upfront split actually applies (the
   // creator demanded upfront payment). No split means "paid in full on
@@ -768,6 +779,16 @@ function parseUpfrontPercentInput(s) {
 // Parse a human "min videos" input into a whole number, or null for
 // blank/zero (meaning "no minimum" — the usual case, no row on the contract).
 function parseVideosInput(s) {
+  const str = String(s == null ? '' : s).replace(/[^\d.]/g, '');
+  if (!str) return null;
+  const n = Math.round(Number(str));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Parse a human "view counting window" input ("30", "30 days", "60d") into a
+// whole number of days, or null for blank/zero (meaning "use the default"). The
+// contract still reads a definite window — 30 days — when it's null.
+function parseDaysInput(s) {
   const str = String(s == null ? '' : s).replace(/[^\d.]/g, '');
   if (!str) return null;
   const n = Math.round(Number(str));
@@ -946,6 +967,23 @@ function renderEditableDeal(cell, r, data) {
     bonusLine.appendChild(bonusTag);
     bonusLine.appendChild(bonusVal);
     cell.appendChild(bonusLine);
+  }
+
+  // View-counting window — for how many days from posting a post's views count
+  // toward the deal's guaranteed total / bonus. Editable on any deal WITH a view
+  // requirement: a view-based deal, or a video deal with a views bonus. Shows
+  // the effective value (default 30); clearing it falls back to that default.
+  const hasViewReq = isViewBased || (bonusAmt && bonusViews);
+  if (hasViewReq) {
+    const viewDays = data.viewCountingDays != null
+      ? Number(data.viewCountingDays)
+      : (data.bonusWindowDays != null ? Number(data.bonusWindowDays) : 30);
+    appendEditableDealLine(cell, r, {
+      label: 'VIEW WINDOW',
+      value: `${viewDays} days`,
+      placeholder: 'e.g. 30 days',
+      onSave: (v) => saveContractField(r, { viewCountingDays: parseDaysInput(v) }),
+    });
   }
 
   // Upfront payment is an editable percentage: type e.g. "30" (or "30%") to

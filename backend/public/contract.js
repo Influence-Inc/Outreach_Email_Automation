@@ -226,6 +226,13 @@
     var guaranteedViewsValue = isViewBased && minViews
       ? fmtNum(minViews) + ' — combined across all posts on Instagram'
       : (minViews ? fmtNum(minViews) : null);
+    // View-counting window: how many days from each post's publish date its
+    // views count toward the deal's view target / bonus. Legacy contracts carry
+    // only bonusWindowDays, so fall back to it, then to the standing 30-day
+    // default, so every view-requirement deal reads a definite window.
+    var viewDays = d.viewCountingDays != null
+      ? Number(d.viewCountingDays)
+      : (d.bonusWindowDays != null ? Number(d.bonusWindowDays) : 30);
     html += section('Campaign & Deliverables', rowsWrap(
       row('Campaign', d.campaignName) +
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
@@ -255,8 +262,15 @@
               ' views. The deliverable is not complete until this combined Instagram view total is met or exceeded.'
           )
         : '') +
+      // View-counting window for a view-based deal: the time bound on the views
+      // above — each post's views count for this many days from when it goes
+      // live. A bonus deal shows the same window inline in its Performance bonus
+      // row below, so it isn't repeated here.
+      (isViewBased && minViews
+        ? row('View counting window', 'Views are counted for ' + viewDays + ' days from each post’s publish date')
+        : '') +
       (d.bonusAmount && d.bonusThresholdViews
-        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + viewDays + ' days')
         : '')
     ));
 
@@ -292,7 +306,7 @@
     html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(baseComp, d.currency), { big: true }) +
       (hasBonus
-        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + (d.bonusWindowDays || 30) + ' days')
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + viewDays + ' days')
         : '') +
       (hasBonus
         ? row('Total (incl. bonus)', fmtMoney(compensation, d.currency))
