@@ -194,6 +194,12 @@
     // (it's just "at least 1 post"), so omit it entirely for view_based.
     var isViewBased = d.offerType === 'view_based';
     var isVideoBased = d.offerType === 'video_based';
+    // Optional minimum-video floor — a view-based-only term that is USUALLY
+    // absent (the creator posts as many videos as needed to hit the guaranteed
+    // view total, with no minimum count). Only render a "Minimum videos" row
+    // when the negotiation actually set one; a null / zero minimum shows nothing.
+    var minVideos = d.minVideos != null ? Number(d.minVideos) : null;
+    var hasMinVideos = isViewBased && Number.isFinite(minVideos) && minVideos > 0;
     // For flat video-based deals the base extraction always writes the count
     // into the deliverables string itself ("1 short-form video", "3 short-form
     // videos"), so a separate "Number of deliverables: N" row just repeats
@@ -227,6 +233,12 @@
       (isViewBased || deliverablesHasCount
         ? ''
         : row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos))) +
+      // Minimum-video floor: only shown for a view-based deal that actually set
+      // one (the usual case has none). It's a floor on the number of posts, on
+      // top of the guaranteed view total below.
+      (hasMinVideos
+        ? row('Minimum videos', 'At least ' + fmtNum(minVideos) + ' video' + (minVideos === 1 ? '' : 's'))
+        : '') +
       // Min. guaranteed views is a view-based term — a flat video-based deal is
       // priced per video and promises no view floor, so never show it there.
       (!isVideoBased && minViews ? row(guaranteedViewsLabel, guaranteedViewsValue) : '') +

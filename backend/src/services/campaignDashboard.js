@@ -106,15 +106,20 @@ function buildPayload(contract, creator) {
         ? 'Included'
         : 'Not included'
       : undefined;
-  // Video-based deals name a fixed video count; view-based deals have no
-  // video count and instead carry a total-views target (see baseContractData
-  // in contracts.js) — never send both.
+  // Video-based deals name a fixed video count; view-based deals have no fixed
+  // count and instead carry a total-views target, plus an OPTIONAL minimum
+  // number of videos (usually absent) — see baseContractData in contracts.js.
+  // The dashboard's delMinVideos is the minimum posts for the deliverable, so a
+  // video-based deal maps its exact count and a view-based deal maps its
+  // optional minimum (numberOfVideos is null there, so the ?? falls through).
+  // Either way at most one is present, and delMinViews is omitted for
+  // video-based deals (they promise no view floor).
   return clean({
     campaignId: creator.campaign_id,
     username: igHandle,
     email: d.email || creator.email,
     deadline: ymdOrUndef(d.postingDeadline || d.deadline),
-    delMinVideos: intOrUndef(d.numberOfVideos),
+    delMinVideos: intOrUndef(d.numberOfVideos ?? d.minVideos),
     delMinViews: intOrUndef(d.minTotalViews ?? d.guaranteedViews),
     platforms,
     paidAdRights,

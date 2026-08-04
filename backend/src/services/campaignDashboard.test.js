@@ -86,6 +86,29 @@ test('buildPayload maps a signed view-based contract without a video count', () 
   assert.ok(!('delMinVideos' in p), 'a view-based deal has no fixed video count to sync');
 });
 
+test('buildPayload syncs a view-based deal\'s optional minimum-video floor as delMinVideos', () => {
+  // A view-based deal has no fixed count, but the negotiation can set a MINIMUM
+  // number of posts on top of the guaranteed views. The dashboard's
+  // delMinVideos is the deliverable's minimum posts, so that floor maps to it.
+  const contract = {
+    token: 'tok457',
+    data: {
+      email: 'alex@example.com',
+      instagramUsername: 'alexcreates',
+      offerType: 'view_based',
+      numberOfVideos: null,
+      minVideos: 3,
+      minTotalViews: 200000,
+      guaranteedViews: 200000,
+    },
+  };
+  const creator = { campaign_id: 'fc6cd16f226f', email: 'alex@example.com', instagram_username: 'alexcreates' };
+  const p = campaignDashboard.buildPayload(contract, creator);
+
+  assert.strictEqual(p.delMinVideos, 3, 'the optional minimum-video floor is synced');
+  assert.strictEqual(p.delMinViews, 200000, 'alongside the guaranteed view total');
+});
+
 test('buildPayload falls back to the creator row when contract data is missing identity fields', () => {
   const contract = { token: 'tok789', data: {} };
   const creator = {

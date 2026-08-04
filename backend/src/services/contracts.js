@@ -133,6 +133,20 @@ function guaranteedViewsOf(offer) {
   return null;
 }
 
+// Optional minimum-video floor — a VIEW-BASED concept only. A view-based deal
+// is priced by a guaranteed TOTAL view count reached across as many posts as
+// the creator needs, so it usually has NO minimum number of videos. When the
+// negotiation set one ("at least 3 videos", "minimum of 2 posts"), the brand
+// requires that many posts on top of the view guarantee. A flat video-based
+// deal already names an exact video count, so a "minimum" is meaningless there
+// — never surface one, even if a number leaked onto the offer object.
+function minVideosOf(offer) {
+  if (!offer) return null;
+  if (offer.offer_type !== 'view_based') return null;
+  if (offer.min_videos != null && Number(offer.min_videos) > 0) return Math.round(Number(offer.min_videos));
+  return null;
+}
+
 function bonusOf(offer) {
   if (!offer) return { amount: null, threshold: null };
   if (offer.offer_type === 'video_bonus') {
@@ -259,6 +273,7 @@ function baseContractData(creator, fee, offer) {
     : (process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week');
   const brandName = creator.brand_name || process.env.BRAND_NAME || null;
   const minViews = guaranteedViewsOf(offer);
+  const minVideos = minVideosOf(offer);
   const bonus = bonusOf(offer);
   // Best-guess hard deadline: N weeks out from today, matching the cadence.
   const weeks = Math.max(n, 3);
@@ -301,6 +316,13 @@ function baseContractData(creator, fee, offer) {
     numberOfDeliverables: isViewBased ? null : n,
     numberOfVideos: isViewBased ? null : n,
     minTotalViews: minViews,
+    // Optional minimum-video floor for view-based deals. USUALLY absent — the
+    // creator publishes as many posts as needed to hit the guaranteed view
+    // total, with no minimum count — so this defaults to null and the contract
+    // renders NO minimum-videos row. It's populated only when the negotiation
+    // set a minimum, extracted from the thread (see CONTRACT_SYSTEM). Never set
+    // on a video-based deal, which already names an exact count.
+    minVideos: isViewBased ? minVideos : null,
     includeDmAutomation: true,
 
     // Revisions.
@@ -362,6 +384,7 @@ Return ONLY a JSON object — no prose, no markdown fences — with EXACTLY thes
   "numberOfDeliverables": number|null,
   "numberOfVideos": number|null,
   "minTotalViews": number|null,
+  "minVideos": number|null,
   "includeDmAutomation": boolean|null,
   "revisionRounds": number|null,
 
@@ -400,6 +423,7 @@ Rules:
 - "platforms" are the platforms the CREATOR agreed to post the content on. REPLY 1 proposes all three — Instagram, TikTok and YouTube Shorts — but the creator decides: return only the platforms the creator actually agreed to. DEFAULT to all three ["Instagram","TikTok","YouTube Shorts"] whenever the creator never restricted them in the thread; return a subset ONLY when the creator explicitly chose or limited which platforms they'll post on. Note: a view-based deal counts guaranteed views "on Instagram" for PRICING only — that view-counting reference does NOT limit the posting platforms, so never narrow to Instagram-only because of it.
 - "deliverables": when KNOWN VALUES.acceptedOffer.offer_type is "view_based", the deal is priced by TOTAL guaranteed views reached across as many posts as the creator needs — describe the content WITHOUT any video count (e.g. "Short-form video content") and set numberOfDeliverables and numberOfVideos to null. Never write "1 video" / "1 Reel" for a view-based deal. For flat (video-based) deals, state the agreed number of videos.
 - "deliverables" describes WHAT the creator produces — never the posting rhythm. Do NOT tack a cadence, posting rhythm, or per-week/day/month frequency onto this field (no "posted at a cadence of 1-2 videos per week", no "1 per week", no "posted weekly"). Cadence lives in the "timeline" field only. Keep "deliverables" as a bare content description like "3 short-form videos" or "Short-form video content".
+- "minVideos" applies ONLY to view-based deals (KNOWN VALUES.acceptedOffer.offer_type is "view_based"). A view-based deal is priced by the TOTAL guaranteed views and normally has NO minimum number of videos — the creator posts as many as needed to reach the view total — so "minVideos" is null in the overwhelming majority of cases. Set it to a number ONLY when the thread explicitly states a MINIMUM count of videos/posts the creator must publish (e.g. "at least 3 videos", "a minimum of 2 posts", "you'll need to post at least 4 times"). Do NOT infer a minimum from the guaranteed-view number, from a single-post assumption, or from anything short of an explicit minimum-count statement. Always null for video-based or bonus deals — they already name an exact video count.
 - "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
 - "currency" is a 3-letter ISO code (default "USD").
 - "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
@@ -494,6 +518,14 @@ async function extractContractData(creator, opts = {}) {
   if (base.offerType === 'video_based') {
     merged.minTotalViews = null;
     merged.guaranteedViews = null;
+  }
+  // The optional minimum-video floor is a view-based-only term (the fee buys a
+  // guaranteed view total across as many posts as needed, with an optional
+  // minimum count on top). Any other deal shape — video-based or bonus — already
+  // names an exact video count, so a "minimum" is meaningless there. Never let
+  // the extraction stamp one onto a non-view-based deal.
+  if (base.offerType !== 'view_based') {
+    merged.minVideos = null;
   }
   // Cadence never applies to a single-video (or view-based) deal, no matter
   // what Claude extracted from the thread — keep it out of the stored contract.
@@ -870,6 +902,7 @@ const EDITABLE_CONTRACT_FIELDS = [
   'offerType',
   'numberOfVideos',
   'minTotalViews',
+  'minVideos',
   'platforms',
   'postingDeadline',
   'paidAdsIncluded',
@@ -922,6 +955,10 @@ function coerceContractPatch(patch) {
       // promises. An explicit same-patch minTotalViews (below) still wins.
       out.minTotalViews = null;
       out.guaranteedViews = null;
+      // The optional minimum-video floor is a view-based-only term; a
+      // video-based deal already names an exact count, so clear any leftover
+      // minimum carried over from a prior view-based classification.
+      out.minVideos = null;
     }
   }
   if (has('numberOfVideos')) {
@@ -943,6 +980,16 @@ function coerceContractPatch(patch) {
     const n = raw == null || raw === '' ? null : Math.round(Number(raw));
     out.minTotalViews = Number.isFinite(n) && n >= 0 ? n : null;
     out.guaranteedViews = out.minTotalViews;
+  }
+  if (has('minVideos')) {
+    // Optional minimum-video floor on a view-based deal. Blank / zero clears it
+    // back to "no minimum" (the usual case, no row on the contract); a positive
+    // integer sets the floor. Only ever meaningful on a view-based deal — the
+    // Deals column exposes it there only, and a flip to video-based (above)
+    // clears it.
+    const raw = patch.minVideos;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    out.minVideos = Number.isFinite(n) && n > 0 ? n : null;
   }
   if (has('platforms')) {
     const arr = Array.isArray(patch.platforms)
@@ -1198,6 +1245,7 @@ module.exports = {
   agreedFeeFor,
   mergeContractData,
   usageRightsFor,
+  minVideosOf,
   paymentTermsFor,
   paymentScheduleFor,
   negotiatedSeparateUsageRightsPayment,
