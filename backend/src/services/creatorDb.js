@@ -24,7 +24,7 @@ function isConfigured() {
   return !!process.env.CREATOR_DB_URL;
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, opts = {}) {
   const key = process.env.CREATOR_DB_API_KEY || '';
   let lastErr;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -47,6 +47,9 @@ async function request(method, path, body) {
         const text = await res.text().catch(() => '');
         throw new Error(`CreatorDB ${method} ${path} → ${res.status}: ${text}`);
       }
+      // The document endpoint returns HTML, not JSON — callers opt in via
+      // { parse: 'text' } so we hand back the raw body untouched.
+      if (opts.parse === 'text') return res.text();
       return res.json().catch(() => ({}));
     } catch (err) {
       lastErr = err;
@@ -176,6 +179,47 @@ async function syncSignedCreator(contract, creator) {
   return request('POST', '/contracts', buildPayload(contract, creator));
 }
 
+// Fetch the compliant legal contract document (the "Creator Services
+// Agreement") for a signed creator straight from the Creator Database — the
+// same document its dashboard renders and downloads — so Deal Studio's
+// "Contract" download yields that legal PDF (drawn signature included) rather
+// than the outreach signing page.
+//
+// Resolution mirrors how the two systems already talk: categorize the creator
+// (by email OR IG handle) to get the Creator-DB creator id, then pick the
+// contract whose `contractRef` equals the outreach signing token (that mapping
+// is set in buildPayload above), falling back to the most recent contract.
+// Returns { html, creatorId, contractId } or null when Creator-DB isn't
+// configured or nothing matches, so the caller can surface a clean
+// "not available" instead of failing.
+async function fetchContractDocumentHtml({ email, instagramUsername, contractRef } = {}, opts = {}) {
+  if (!isConfigured()) return null;
+
+  const results = await categorizeCreators([
+    { email: email || null, instagramUsername: instagramUsername || null },
+  ]);
+  const hit = Array.isArray(results) && results[0];
+  const creatorId = hit && hit.creator && hit.creator.id;
+  if (!creatorId) return null;
+
+  const list = await request('GET', `/roster/${encodeURIComponent(creatorId)}/contracts`);
+  const rows = (list && list.contracts) || [];
+  if (!rows.length) return null;
+  const ref = contractRef ? String(contractRef) : '';
+  const match =
+    (ref && rows.find((c) => c.contractRef && String(c.contractRef) === ref)) || rows[0];
+  if (!match || !match.id) return null;
+
+  const qs = opts.print ? '?print=1' : '';
+  const html = await request(
+    'GET',
+    `/roster/${encodeURIComponent(creatorId)}/contracts/${encodeURIComponent(match.id)}/document${qs}`,
+    null,
+    { parse: 'text' },
+  );
+  return { html, creatorId, contractId: match.id };
+}
+
 // New-vs-old segmentation lookup. Batch-asks the Creator Database which of the
 // given Instagram handles have already participated in a campaign OTHER than
 // `excludeCampaign` (the current campaign's name). Returns { results: [...] }
@@ -271,6 +315,7 @@ async function searchCreators({ q = '', category = 'any', limit = 20 } = {}) {
 
 module.exports = {
   syncSignedCreator,
+  fetchContractDocumentHtml,
   buildPayload,
   isConfigured,
   lookupParticipation,

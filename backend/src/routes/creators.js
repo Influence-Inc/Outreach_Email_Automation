@@ -9,6 +9,7 @@ const contracts = require('../services/contracts');
 const offerPortal = require('../services/offers');
 const segmentation = require('../services/segmentation');
 const creatorDb = require('../services/creatorDb');
+const { resolveHandle } = require('../services/creatorIdentity');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
@@ -724,6 +725,74 @@ router.get('/:id', async (req, res, next) => {
     );
     res.json({ ...row, events });
   } catch (err) { next(err); }
+});
+
+// GET /api/creators/:id/contract-document — the compliant legal contract
+// document (the "Creator Services Agreement") for a signed creator, proxied
+// from the Creator Database so Deal Studio's "Contract" download yields the
+// SAME legal document the Creator-DB dashboard produces (drawn signature
+// included), not the outreach signing page. `?print=1` returns the print-ready
+// page that auto-opens the browser's Print → Save as PDF dialog. Auth to the
+// Creator-DB is the server-side x-api-key, so no second login is needed here.
+router.get('/:id/contract-document', async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [id]);
+    if (!creator) return res.status(404).type('text/plain').send('Creator not found.');
+
+    // The creator's contract token maps to the Creator-DB contract's
+    // `contractRef`. Prefer a signed/completed contract, newest first.
+    const rows = await db.many(
+      `SELECT token, status, data FROM contracts
+       WHERE creator_id = $1
+       ORDER BY (status IN ('signed', 'completed')) DESC, created_at DESC
+       LIMIT 1`,
+      [id],
+    );
+    const contract = rows[0];
+    if (!contract) {
+      return res.status(404).type('text/plain').send('No contract on file for this creator.');
+    }
+
+    const d = contract.data || {};
+    const email = d.email || creator.email || undefined;
+    const handle = resolveHandle(d, creator);
+    const wantsPrint =
+      req.query.print !== undefined && req.query.print !== '0' && req.query.print !== 'false';
+
+    if (!creatorDb.isConfigured()) {
+      return res
+        .status(503)
+        .type('text/plain')
+        .send('The Creator Database is not configured, so the legal contract is unavailable here.');
+    }
+
+    let doc;
+    try {
+      doc = await creatorDb.fetchContractDocumentHtml(
+        { email, instagramUsername: handle, contractRef: contract.token },
+        { print: wantsPrint },
+      );
+    } catch (err) {
+      console.error(`[creators] contract-document fetch failed for creator ${id}:`, err.message);
+      return res
+        .status(502)
+        .type('text/plain')
+        .send('Could not load the legal contract from the Creator Database. Please try again.');
+    }
+
+    if (!doc || !doc.html) {
+      return res
+        .status(404)
+        .type('text/plain')
+        .send('The legal contract document is not available yet for this creator.');
+    }
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(doc.html);
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.patch('/:id', async (req, res, next) => {

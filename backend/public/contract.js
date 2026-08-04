@@ -11,10 +11,6 @@
   // (/contracts/{token}) so links already emailed out keep working.
   var token = (location.pathname.match(/\/contracts?\/([^/?#]+)/) || [])[1] || '';
 
-  // Deal Studio's "Contract" download opens this page with ?print=1 so the
-  // executed agreement auto-invokes the browser's Print → Save as PDF dialog.
-  var wantsPrint = /[?&]print=1(&|$)/.test(location.search);
-
   // ── Country list (ISO 3166-1 + common territories) ──────────────────────
   var COUNTRIES = [
     'Aland Islands','Albania','Algeria','Afghanistan','American Samoa','Andorra','Angola','Anguilla',
@@ -485,15 +481,6 @@
     if (details) details.hidden = true;
     if (sign) sign.hidden = true;
     page1.hidden = false;
-
-    // When opened for download (print mode), auto-invoke the browser's
-    // Print → Save as PDF dialog now that the executed contract is on screen,
-    // then close the tab afterward — mirrors the dashboard download flow.
-    if (wantsPrint) {
-      window.focus();
-      window.addEventListener('afterprint', function () { window.close(); });
-      setTimeout(function () { window.print(); }, 250);
-    }
   }
 
   // ── Load contract ──────────────────────────────────────────────────────
