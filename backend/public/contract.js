@@ -233,6 +233,12 @@
     var viewDays = d.viewCountingDays != null
       ? Number(d.viewCountingDays)
       : (d.bonusWindowDays != null ? Number(d.bonusWindowDays) : 30);
+    // Always spell the window out as PER-POST — the count runs from the date
+    // each piece of content is posted, not a single shared window from one
+    // posting date — so a multi-post deal can't be misread (e.g. "in 14 days"
+    // sounds like 14 days total across all posts).
+    var countingWindowText =
+      'counted over ' + viewDays + ' days from the date each piece of content is posted';
     html += section('Campaign & Deliverables', rowsWrap(
       row('Campaign', d.campaignName) +
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
@@ -267,10 +273,10 @@
       // live. A bonus deal shows the same window inline in its Performance bonus
       // row below, so it isn't repeated here.
       (isViewBased && minViews
-        ? row('View counting window', 'Views are counted for ' + viewDays + ' days from each post’s publish date')
+        ? row('View counting window', 'Views are ' + countingWindowText)
         : '') +
       (d.bonusAmount && d.bonusThresholdViews
-        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + viewDays + ' days')
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ', ' + countingWindowText)
         : '')
     ));
 
@@ -306,7 +312,7 @@
     html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(baseComp, d.currency), { big: true }) +
       (hasBonus
-        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ' in ' + viewDays + ' days')
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if views cross ' + fmtNum(d.bonusThresholdViews) + ', ' + countingWindowText)
         : '') +
       (hasBonus
         ? row('Total (incl. bonus)', fmtMoney(compensation, d.currency))
