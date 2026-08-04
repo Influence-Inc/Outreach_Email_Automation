@@ -499,6 +499,13 @@ ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS ig_dm_body TEXT;
 -- instead (the brief still always sends — this only customises its content).
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS messaging_brief TEXT;
 
+-- Per-campaign structured content brief — the master brief an admin fills once
+-- (layer 2 of the creator-briefing feature). JSONB so the many fields (brand
+-- blurb, website, demo link, expected-views default, caption specifics,
+-- hashtags, DM keyword, etc.) live in one column that survives the read-only
+-- upstream campaign sync (like templates / messaging_brief). NULL = not set yet.
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS content_brief JSONB;
+
 -- IG DM send tracking on creators. Distinct from the email fields so the
 -- outreach lifecycle stays uncontaminated — a creator can have BOTH an email
 -- outreach and an IG DM sent (rare, but possible if we later discover an email).
@@ -511,6 +518,26 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_sent_at   TIMESTAMPTZ;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_body      TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_dm_error     TEXT;
 CREATE INDEX IF NOT EXISTS idx_creators_ig_dm_sent_at ON creators(ig_dm_sent_at);
+
+-- Per-creator content brief + its delegate flag (creator-briefing feature).
+--   brief_pending           — mirrors the needs_human delegate pattern above:
+--                             set when a creator signs (either contract path),
+--                             cleared on publish or dismiss. Drives the
+--                             "Brief hand-off" item in the Needs-you list.
+--   brief_content_direction — admin-typed creative angle (curated per creator)
+--   brief_video_links       — admin-typed example videos: [{label,url},...]
+--   brief_token             — public handle for the shareable /brief/:token page
+--   brief_published_at      — when the brief was published (flag cleared)
+--   brief_data              — snapshot of the assembled brief at publish time,
+--                             so later campaign-brief edits never rewrite a
+--                             brief already sent (the page reads the snapshot).
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS brief_pending           BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS brief_content_direction TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS brief_video_links       JSONB;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS brief_token             TEXT UNIQUE;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS brief_published_at      TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS brief_data              JSONB;
+CREATE INDEX IF NOT EXISTS idx_creators_brief_pending ON creators(brief_pending) WHERE brief_pending;
 
 -- Backfill for rows that landed in a `status='email_found'` state without an
 -- actual email (rejected addresses cleared on the dashboard before the PATCH

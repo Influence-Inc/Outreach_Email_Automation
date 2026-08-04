@@ -1668,6 +1668,15 @@ async function signMiniContract({ token, signature, signerName, ip }) {
   } catch (err) {
     console.error('[offers] mini-contract sign logging failed', err.message);
   }
+
+  // Returning creators sign here (not the main contract), so flag their brief
+  // from this path too — best-effort, never blocks the signature.
+  try {
+    await require('./briefs').flagBriefPending(offer.creator_id);
+  } catch (err) {
+    console.error('[offers] flagBriefPending failed', err.message);
+  }
+
   return { ok: true, signerName: name, signedAtFormatted: formatDate(new Date()) };
 }
 

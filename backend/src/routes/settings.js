@@ -8,6 +8,8 @@ const {
   setReplyPromptNotes,
   getReplyPromptOverrides,
   setReplyPromptOverrides,
+  getBriefBoilerplate,
+  setBriefBoilerplate,
   GUIDELINES_KEY,
   REPLY_NOTE_TYPES,
   REPLY_NOTE_KEYS,
@@ -27,6 +29,7 @@ router.get('/', async (_req, res, next) => {
     const snapshots = getReplyPromptSnapshots();
     res.json({
       guidelines: await getGuidelines(),
+      brief_boilerplate: await getBriefBoilerplate(),
       ai_replies_enabled: await getAiRepliesEnabled(),
       reply_prompt_notes: await getReplyPromptNotes(),
       reply_prompt_overrides: await getReplyPromptOverrides(),
@@ -48,6 +51,20 @@ router.put('/guidelines', async (req, res, next) => {
     }
     await setSetting(GUIDELINES_KEY, raw == null ? '' : raw);
     res.json({ guidelines: await getGuidelines() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Save the universal content-brief boilerplate (layer 1 of the creator brief).
+router.put('/brief-boilerplate', async (req, res, next) => {
+  try {
+    const raw = (req.body || {}).brief_boilerplate;
+    if (raw != null && typeof raw !== 'string') {
+      return res.status(400).json({ error: 'brief_boilerplate must be a string' });
+    }
+    await setBriefBoilerplate(raw == null ? '' : raw);
+    res.json({ brief_boilerplate: await getBriefBoilerplate() });
   } catch (err) {
     next(err);
   }

@@ -1094,3 +1094,40 @@ button:disabled { opacity: 0.5; cursor: default; }
 .review-item-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .review-status { flex: 1; min-width: 0; }
 .btn-primary.small { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 7px; }
+
+/* ── Content brief: per-campaign master-brief card ───────────────────────── */
+.brief-fields { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.brief-fields > .field-label { margin-top: 10px; }
+.brief-fields input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+  padding: 8px 10px; border: 1px solid var(--line-2); border-radius: var(--radius-xs);
+  background: var(--surface-2); color: var(--ink);
+}
+.brief-fields input:focus { outline: none; box-shadow: var(--ring); border-color: var(--faint); background: var(--surface); }
+.brief-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 4px 0 2px; }
+.brief-grid .field-label { margin-bottom: 5px; font-size: 12px; }
+@media (max-width: 640px) { .brief-grid { grid-template-columns: 1fr; } }
+
+/* ── Content brief: hand-off block in the intervention pop-up ────────────── */
+.delegate-brief-block { margin-top: 4px; }
+.delegate-brief-block .brief-label { display: block; margin-top: 14px; font-size: 12px; color: var(--muted); }
+.delegate-brief-block textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 13px;
+  margin-top: 6px; padding: 9px 11px; border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs); background: var(--surface); color: var(--ink);
+}
+.delegate-brief-block textarea:focus { outline: none; box-shadow: var(--ring); border-color: var(--faint); }
+.brief-preview {
+  margin-top: 10px; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface-2); max-height: 190px; overflow: auto;
+}
+.brief-preview-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 12.5px; }
+.brief-preview-grid .bp-k { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.brief-preview-grid .bp-v { color: var(--ink-2); }
+.brief-link-out { margin-top: 12px; }
+.brief-link-row { display: flex; gap: 8px; align-items: center; }
+.brief-link-input {
+  flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 7px 10px;
+  border: 1px solid var(--line-2); border-radius: var(--radius-xs);
+  background: var(--surface-3); color: var(--ink);
+}
