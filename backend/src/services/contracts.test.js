@@ -240,6 +240,53 @@ test('agreedFeeFor: without an accepted-creator-rate event, the last offer we se
   }
 });
 
+test('agreedFeeFor: an admin fee override after the deal was struck wins', async () => {
+  // Scenario the dashboard bug report describes: the deal was accepted at $800,
+  // then the creator confirmed a higher number and the admin typed $1,600 in the
+  // Deals column ("Rate updated $800 → $1,600" — a rate_quoted by admin, logged
+  // AFTER the acceptance). The contract must bill the corrected fee.
+  const db = require('../db');
+  const origOne = db.one;
+  db.one = async (sql) => {
+    if (/type = 'rate_quoted'/i.test(sql)) {
+      return { detail: { from: 800, to: 1600, by: 'admin' }, created_at: '2026-01-02T00:00:00Z' };
+    }
+    if (/type IN \('rate_accepted', 'rate_offer_sent'\)/i.test(sql)) return { created_at: '2026-01-01T00:00:00Z' };
+    if (/type = 'rate_accepted'/i.test(sql)) return { detail: { fee: 800, source: 'creator_rate' } };
+    if (/type = 'rate_offer_sent'/i.test(sql)) return { detail: { fee: 800 } };
+    return null;
+  };
+  try {
+    const fee = await contracts.agreedFeeFor({ id: 7, quoted_rate: 1600 });
+    assert.strictEqual(fee, 1600, 'the admin override is the latest word on the fee');
+  } finally {
+    db.one = origOne;
+  }
+});
+
+test('agreedFeeFor: a pre-acceptance admin quote does NOT override a later counter', async () => {
+  // Guard the timestamp rule: the admin quoted the creator's $1,000 ask early,
+  // then we countered lower and that counter is what got agreed. The override is
+  // OLDER than the last offer, so it must not resurrect the $1,000 quote.
+  const db = require('../db');
+  const origOne = db.one;
+  db.one = async (sql) => {
+    if (/type = 'rate_quoted'/i.test(sql)) {
+      return { detail: { to: 1000, by: 'admin' }, created_at: '2026-01-01T00:00:00Z' };
+    }
+    if (/type IN \('rate_accepted', 'rate_offer_sent'\)/i.test(sql)) return { created_at: '2026-01-02T00:00:00Z' };
+    if (/type = 'rate_accepted'/i.test(sql)) return null;
+    if (/type = 'rate_offer_sent'/i.test(sql)) return { detail: { fee: 800, cpm: 6 } };
+    return null;
+  };
+  try {
+    const fee = await contracts.agreedFeeFor({ id: 7, quoted_rate: 1000 });
+    assert.strictEqual(fee, 800, 'the later counter we sent wins over the earlier admin quote');
+  } finally {
+    db.one = origOne;
+  }
+});
+
 // ── resolveOffer: honouring an existing contract's committed offer type ─────
 // On a re-extraction we pass the offer type already committed on the contract
 // so a legacy deal (no pinned custom_offer / selected_offer_id) can't fall
@@ -626,6 +673,27 @@ test('coerceContractPatch: min views mirrors into guaranteedViews', () => {
   const out = contracts.coerceContractPatch({ minTotalViews: 100000 });
   assert.strictEqual(out.minTotalViews, 100000);
   assert.strictEqual(out.guaranteedViews, 100000);
+});
+
+test('coerceContractPatch: agreedFee writes both compensation and totalPayment', () => {
+  // The Deals-column fee edit — a price correction after the contract was drawn
+  // up. Both fee fields the contract page reads move together, and a decimal
+  // rounds to a whole dollar.
+  const out = contracts.coerceContractPatch({ agreedFee: '1600' });
+  assert.strictEqual(out.compensation, 1600);
+  assert.strictEqual(out.totalPayment, 1600);
+  assert.strictEqual(contracts.coerceContractPatch({ agreedFee: 1599.6 }).compensation, 1600);
+});
+
+test('coerceContractPatch: a blank or invalid agreedFee is ignored (never wipes the fee)', () => {
+  // makeEditable cancels a blank edit, but guard anyway: an empty / non-numeric
+  // fee must not write a null over the contract's compensation.
+  for (const v of ['', null, 'abc', -5]) {
+    assert.ok(
+      !('compensation' in contracts.coerceContractPatch({ agreedFee: v })),
+      `agreedFee ${JSON.stringify(v)} leaves compensation untouched`,
+    );
+  }
 });
 
 test('coerceContractPatch: minVideos sets a positive floor and clears on blank/zero', () => {

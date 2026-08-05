@@ -526,6 +526,10 @@ async function attachRateLog(rows) {
     const d = e.detail || {};
     if (d.fee != null) entry.amount = Number(d.fee);
     else if (d.to != null) entry.amount = Number(d.to);
+    // Who set the number, when the event carries it. Lets the client tell an
+    // admin "Rate updated" override (which supersedes the accepted fee) apart
+    // from a creator's own re-quote (a negotiation move, not an agreement).
+    if (d.by != null) entry.by = d.by;
     if (!byCreator.has(e.creator_id)) byCreator.set(e.creator_id, []);
     byCreator.get(e.creator_id).push(entry);
   }

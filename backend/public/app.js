@@ -697,18 +697,31 @@ function renderReachCell(r, cell) {
   });
 }
 
-// The rate the creator currently wants: once they've ACCEPTED, that's the offer
-// they accepted (the latest priced offer we sent), not their earlier quote. For
-// older accepted rows whose quoted_rate wasn't updated, we recover the amount
-// from the rate timeline. Otherwise it's their quoted_rate.
+// The deal's agreed fee. Once a contract exists, ITS compensation is the single
+// source of truth — the number the contract page, the Creator-DB sync and this
+// Deals column all read — so an edit to the fee lands on the contract and shows
+// here on the next load (rather than on a quoted_rate override that nothing
+// downstream reads, which is why fee edits used to "revert"). Before a contract
+// exists: once ACCEPTED the fee is the offer they accepted (the latest priced
+// offer we sent), unless an admin has since typed a new number ("Rate updated
+// $X → $Y" on the timeline), which supersedes it. A creator's own re-quote is a
+// negotiation move, not an agreement, so it never moves the number. Otherwise
+// it's their quoted_rate.
 function effectiveRate(r) {
+  const cd = r.contract && r.contract.data;
+  if (cd) {
+    const fee = cd.compensation != null ? Number(cd.compensation)
+      : cd.totalPayment != null ? Number(cd.totalPayment) : null;
+    if (fee != null && Number.isFinite(fee)) return fee;
+  }
   if (r.negotiation_status === 'ACCEPTED') {
     const log = Array.isArray(r.rate_log) ? r.rate_log : [];
     for (let i = log.length - 1; i >= 0; i--) {
       const e = log[i];
-      if (e && (e.type === 'rate_accepted' || e.type === 'rate_offer_sent') && e.amount != null) {
-        return Number(e.amount);
-      }
+      if (!e || e.amount == null) continue;
+      if (e.type === 'rate_accepted' || e.type === 'rate_offer_sent') return Number(e.amount);
+      // A later admin "Rate updated" override outranks the accepted offer.
+      if (e.type === 'rate_quoted' && e.by === 'admin') return Number(e.amount);
     }
   }
   return r.quoted_rate != null ? Number(r.quoted_rate) : null;
@@ -1063,11 +1076,20 @@ function renderRateCell(r, cell) {
   makeEditable(valueDiv, {
     value: rate != null ? String(rate) : '',
     placeholder: 'rate $',
-    onSave: (v) =>
-      api(`/api/creators/${r.id}/quoted-rate`, {
+    onSave: (v) => {
+      const amount = Number(String(v).replace(/[^0-9.]/g, ''));
+      // Once a contract exists the fee lives ON it — edit it there so the Deals
+      // column, the contract page and the Creator-DB sync stay in lockstep. The
+      // old quoted_rate-only path never reached the contract, so the displayed
+      // fee reverted to the contract's number on the next load.
+      if (r.contract && r.contract.data) {
+        return saveContractField(r, { agreedFee: amount });
+      }
+      return api(`/api/creators/${r.id}/quoted-rate`, {
         method: 'POST',
-        body: JSON.stringify({ quoted_rate: Number(String(v).replace(/[^0-9.]/g, '')) }),
-      }),
+        body: JSON.stringify({ quoted_rate: amount }),
+      });
+    },
   });
 
   if (r.negotiation_status === 'ACCEPTED' && r.contract && r.contract.data) {
