@@ -246,12 +246,41 @@ function rateLogEntry(type, detail, msg, summary) {
       return { text: 'Asked creator for their counter rate', tone: 'active' };
     case 'rate_accepted': {
       const fee = d.fee != null ? fmtMoney(d.fee) : null;
+      // Same offer-math suffix as rate_offer_sent — surfaces HOW the accepted
+      // number was reached ("1 video x 8.1M views x $37 CPM" for video-based,
+      // "8.1M views x $37 CPM" for view-based, "CPM $C" when we only have CPM).
+      // Only rendered when the accepted event carried the pricing breakdown
+      // (portal accepts do; older admin accepts may not).
+      let cpm = '';
+      if (d.cpm != null) {
+        const totalViews = d.views != null
+          ? Number(d.views)
+          : (d.fee != null ? (Number(d.fee) * 1000) / Number(d.cpm) : null);
+        const videos = d.videos != null ? Number(d.videos) : null;
+        const validViews = totalViews != null && Number.isFinite(totalViews) && totalViews > 0;
+        if (validViews && videos && Number.isFinite(videos) && videos > 0) {
+          const perVideoViews = totalViews / videos;
+          const noun = videos === 1 ? 'video' : 'videos';
+          cpm = ` · ${videos} ${noun} x ${fmtViews(perVideoViews)} views x $${d.cpm} CPM`;
+        } else if (validViews) {
+          cpm = ` · ${fmtViews(totalViews)} views x $${d.cpm} CPM`;
+        } else {
+          cpm = ` · CPM $${d.cpm}`;
+        }
+      }
+      let bonus = '';
+      if (d.bonus_amount != null) {
+        bonus = ` · +${fmtMoney(d.bonus_amount)} bonus`;
+        if (d.bonus_threshold_views != null) {
+          bonus += ` at ${fmtViews(d.bonus_threshold_views)} views`;
+        }
+      }
       // by:'admin' means WE accepted the creator's own quoted rate (via the
       // "Accept creator's rate" button), not the creator accepting our offer.
       if (d.by === 'admin') {
-        return { text: fee ? `Accepted creator's rate ✓ — ${fee}` : "Accepted creator's rate ✓", tone: 'success' };
+        return { text: fee ? `Accepted creator's rate ✓ — ${fee}${cpm}${bonus}` : "Accepted creator's rate ✓", tone: 'success' };
       }
-      return { text: fee ? `Creator accepted ✓ — ${fee}` : 'Creator accepted ✓', tone: 'success' };
+      return { text: fee ? `Creator accepted ✓ — ${fee}${cpm}${bonus}` : 'Creator accepted ✓', tone: 'success' };
     }
     case 'rate_declined':
       return { text: 'Creator declined', tone: 'muted' };
