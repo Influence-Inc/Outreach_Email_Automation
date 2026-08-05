@@ -1562,8 +1562,31 @@ async function sendRescheduledOffer({ creatorId, startDate }) {
 // standard terms (these creators are Instagram-first; the deliverables are
 // Reels). `offer` must carry brand_name, deliverables, campaign_name,
 // first_name/full_name.
+// Instagram Reels drive every offer-portal deal, so Instagram is always in the
+// contract; TikTok and YouTube Shorts are opt-in and picked by the creator in
+// the interstitial step between accept and sign. INSTAGRAM must stay the first
+// element — the contract snapshot and the outbound sync both rely on that order.
 const CONTRACT_PLATFORMS_DEFAULT = ['Instagram'];
+const CONTRACT_PLATFORM_OPTIONAL = ['TikTok', 'YouTube Shorts'];
+const CONTRACT_PLATFORMS_ALL = ['Instagram', ...CONTRACT_PLATFORM_OPTIONAL];
 const CONTRACT_TIMELINE_DEFAULT = 'Content to be posted within 3 weeks of signing.';
+
+// Normalise a user-supplied platforms array to the canonical token order and
+// deduplicate. Instagram is always included. Unknown tokens are dropped
+// (defense-in-depth against a hand-crafted POST). Case-insensitive, so 'tiktok'
+// / 'youtube shorts' from anywhere in the flow still lands on the right token.
+function normalizeContractPlatforms(raw) {
+  const wanted = new Set(['Instagram']);
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const lower = String(item || '').trim().toLowerCase();
+      for (const canon of CONTRACT_PLATFORMS_ALL) {
+        if (canon.toLowerCase() === lower) wanted.add(canon);
+      }
+    }
+  }
+  return CONTRACT_PLATFORMS_ALL.filter((p) => wanted.has(p));
+}
 
 function creatorFullName(creator) {
   return (
@@ -1577,12 +1600,17 @@ function miniContractTerms(offer) {
   // A schedule-negotiated offer (requested_start_date set) carries the agreed
   // start date into the contract timeline instead of the standard boilerplate.
   const startDate = offer.requested_start_date ? formatDate(offer.requested_start_date) : null;
+  // Platforms come from the creator's post-accept picker when they've completed
+  // it; before that (or for legacy offers) the sensible Instagram-only default
+  // stands in so the contract preview never renders empty.
+  const picked = Array.isArray(offer.contract_platforms) ? offer.contract_platforms : null;
+  const platforms = picked && picked.length ? normalizeContractPlatforms(picked) : CONTRACT_PLATFORMS_DEFAULT.slice();
   return {
     creatorName: creatorFullName(offer),
     brandName: offer.brand_name,
     campaignName: (offer.campaign_name && String(offer.campaign_name).trim()) || null,
     deliverables: Array.isArray(offer.deliverables) ? offer.deliverables : [],
-    platforms: CONTRACT_PLATFORMS_DEFAULT.slice(),
+    platforms,
     timeline: startDate ? `Content to be posted around ${startDate}.` : CONTRACT_TIMELINE_DEFAULT,
   };
 }
@@ -1608,13 +1636,19 @@ async function getOfferForPage(token) {
   const expired = offer.status === 'pending' && new Date(offer.expires_at).getTime() < Date.now();
   const onHold = offer.status === 'pending' && offer.schedule_hold;
   const signed = !!offer.contract_signed_at;
-  // After acceptance the creator reviews + signs the mini contract; only once
-  // signed is the deal fully confirmed on the page.
+  // A used creator picks their posting platforms (Instagram required, TikTok +
+  // YouTube Shorts optional) right after acceptance, before the mini contract
+  // renders. `platforms` fires only for accepted-but-unsigned offers with no
+  // saved picker choice — a reload lands them back on the picker until they
+  // continue through to the contract.
+  const platformsChosen = Array.isArray(offer.contract_platforms) && offer.contract_platforms.length > 0;
   const initialState =
     offer.status === 'accepted'
       ? signed
         ? 'signed'
-        : 'contract'
+        : platformsChosen
+          ? 'contract'
+          : 'platforms'
       : offer.status === 'declined'
         ? 'declined'
         : onHold
@@ -1648,7 +1682,47 @@ async function getOfferForPage(token) {
     contractSigned: signed,
     signerName: offer.contract_signer_name || null,
     signedAtFormatted: offer.contract_signed_at ? formatDate(offer.contract_signed_at) : null,
+    // Post-accept platform picker: the required + optional tokens the page
+    // renders as checkboxes, and any already-picked selection so a reload
+    // pre-checks their previous choice.
+    platformOptions: {
+      required: CONTRACT_PLATFORMS_DEFAULT.slice(),
+      optional: CONTRACT_PLATFORM_OPTIONAL.slice(),
+    },
+    selectedPlatforms: platformsChosen ? offer.contract_platforms.slice() : null,
   };
+}
+
+// Save the platforms the creator picked in the interstitial step between accept
+// and sign. Guarded so it only applies to an accepted-but-unsigned offer;
+// re-callable up until the moment they sign (so the "back" affordance can move
+// the picker forward again). Best-effort event log.
+async function selectContractPlatforms({ token, platforms }) {
+  const offer = await db.one(
+    `SELECT id, status, contract_signed_at, creator_id FROM offers WHERE token = $1`,
+    [token],
+  );
+  if (!offer) return { ok: false, reason: 'not_found' };
+  if (offer.status !== 'accepted') return { ok: false, reason: 'not_accepted' };
+  if (offer.contract_signed_at) return { ok: false, reason: 'already_signed' };
+
+  const normalized = normalizeContractPlatforms(platforms);
+  const upd = await db.query(
+    `UPDATE offers SET contract_platforms = $2::jsonb
+      WHERE id = $1 AND status = 'accepted' AND contract_signed_at IS NULL`,
+    [offer.id, JSON.stringify(normalized)],
+  );
+  if (upd.rowCount === 0) return { ok: false, reason: 'already_signed' };
+
+  try {
+    await db.query(
+      `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'platforms_selected', 'web')`,
+      [offer.id],
+    );
+  } catch (err) {
+    console.error('[offers] platforms_selected event log failed', err.message);
+  }
+  return { ok: true, platforms: normalized };
 }
 
 // Record the creator's signature on the mini contract. Guarded: the offer must
@@ -1674,6 +1748,12 @@ async function signMiniContract({ token, signature, signerName, ip }) {
   if (!offer) return { ok: false, reason: 'not_found' };
   if (offer.status !== 'accepted') return { ok: false, reason: 'not_accepted' };
   if (offer.contract_signed_at) return { ok: false, reason: 'already_signed' };
+  // The picker must be completed before signing — the UI walks the creator
+  // through it, but a direct POST that skips it is refused here as well so the
+  // snapshot never captures an implicit "Instagram only" the creator never saw.
+  if (!Array.isArray(offer.contract_platforms) || offer.contract_platforms.length === 0) {
+    return { ok: false, reason: 'platforms_required' };
+  }
 
   // Signer name for the record: an explicitly provided name wins, else the known
   // creator name (returning creators are already identified) — no typing needed.
@@ -1992,6 +2072,8 @@ module.exports = {
   getOfferForPage,
   miniContractTerms,
   signMiniContract,
+  selectContractPlatforms,
+  normalizeContractPlatforms,
   sendPortalOffer,
   offerTermsFromApproved,
   attachOffers,

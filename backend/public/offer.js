@@ -11,7 +11,12 @@
   var DECLINE_REASONS = ['Budget', 'Timing', 'Not a fit'];
 
   var offer = null; // { token, firstName, brandName, deliverables, rate, currency, rateFormatted, expiresFormatted }
-  var view = 'loading'; // loading | active | options | accepted | declined | expired | too_high | on_hold | notfound
+  var view = 'loading'; // loading | active | options | platforms | contract | signed | declined | expired | too_high | on_hold | notfound
+  // Platform picker state — the required + optional tokens the server hands us,
+  // and the creator's tick-marks. Instagram is always locked on (Reels drive
+  // the deal); tapping Continue POSTs the selection then reveals the contract.
+  var platformOptions = { required: ['Instagram'], optional: ['TikTok', 'YouTube Shorts'] };
+  var selectedPlatforms = {}; // { Instagram: true, TikTok: false, ... }
   var mode = 'cta'; // cta | reasons | budget | schedule
   var countered = false;
   var options = null; // the two typed counter deals (view-based + video-based) to choose between
@@ -173,6 +178,8 @@
       root = renderTooHigh();
     } else if (view === 'on_hold') {
       root = renderOnHold();
+    } else if (view === 'platforms') {
+      root = renderPlatforms();
     } else if (view === 'contract') {
       root = renderContract();
     } else if (view === 'signed') {
@@ -360,6 +367,85 @@
       errNode());
   }
 
+  // --- Platform picker (shown after acceptance, before the contract) --------
+  // Instagram is required (the deal is Reels-first); TikTok + YouTube Shorts
+  // are opt-in cross-posts. The picker is a checkbox row: Instagram is checked
+  // and disabled, the optional ones toggle. Continue → POST /platforms →
+  // view = 'contract'.
+  function platformRow(name, opts) {
+    opts = opts || {};
+    var box = h('input', {
+      type: 'checkbox',
+      id: 'plat-' + name.toLowerCase().replace(/\s+/g, '-'),
+      onchange: function (e) {
+        if (opts.locked) { e.target.checked = true; return; }
+        selectedPlatforms[name] = e.target.checked;
+      },
+    });
+    if (selectedPlatforms[name] || opts.locked) box.checked = true;
+    if (opts.locked) box.disabled = true;
+    var label = h('label', { class: 'plat-row' + (opts.locked ? ' plat-locked' : ''), for: box.id },
+      box,
+      h('span', { class: 'plat-name' }, name),
+      opts.locked ? h('span', { class: 'plat-tag' }, 'Required') : null);
+    return label;
+  }
+
+  function renderPlatforms() {
+    var wrap = h('div', { class: 'fade' });
+    wrap.appendChild(h('div', { class: 'eyebrow' }, h('span', { class: 'dot' }), 'One quick step'));
+    wrap.appendChild(h('h1', { class: 'brand' }, 'Where will you post?'));
+    wrap.appendChild(h('p', { class: 'lede' },
+      'Thanks, ' + offer.firstName + '. Pick the platforms you\'ll post this on. ' +
+      'Instagram is included by default — TikTok and YouTube Shorts are optional cross-posts.'));
+
+    var list = h('div', { class: 'plat-list' });
+    (platformOptions.required || []).forEach(function (name) { list.appendChild(platformRow(name, { locked: true })); });
+    (platformOptions.optional || []).forEach(function (name) { list.appendChild(platformRow(name)); });
+    wrap.appendChild(list);
+
+    wrap.appendChild(h('div', { class: 'btns' },
+      btn(submitting ? '…' : 'Continue', { onClick: savePlatforms })));
+
+    var e = errNode();
+    if (e) wrap.appendChild(e);
+    return wrap;
+  }
+
+  async function savePlatforms() {
+    var chosen = (platformOptions.required || []).slice();
+    (platformOptions.optional || []).forEach(function (name) {
+      if (selectedPlatforms[name]) chosen.push(name);
+    });
+    setSubmitting(true);
+    error = null;
+    try {
+      var res = await fetch('/api/offers/' + encodeURIComponent(offer.token) + '/platforms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platforms: chosen }),
+      });
+      var data = await res.json();
+      if (data.ok) {
+        // The contract on the loaded `offer` was assembled with the OLD (or
+        // default) platforms; refresh it so the terms match what they picked
+        // before they see the mini-contract preview.
+        try {
+          var refreshed = await fetch('/api/offers/' + encodeURIComponent(offer.token)).then(function (r) { return r.json(); });
+          if (refreshed && refreshed.contract) offer.contract = refreshed.contract;
+        } catch (_) { /* keep going — the snapshot on sign uses the server-side value regardless */ }
+        view = 'contract';
+      } else if (data.reason === 'already_signed') { return location.reload(); }
+      else if (data.reason === 'not_accepted') { error = 'Please accept the offer first.'; }
+      else { error = 'Something went wrong. Please try again.'; }
+    } catch (e) {
+      error = 'Network error. Please try again.';
+    } finally {
+      submitting = false;
+      render();
+    }
+  }
+
   // --- Mini contract (shown after acceptance) --------------------------------
   function contractRow(label, value) {
     return h('div', { class: 'crow' },
@@ -477,7 +563,8 @@
         body: JSON.stringify({ response: response, reason: reason }),
       });
       var data = await res.json();
-      // Accepting doesn't finish the flow — it opens the mini contract to sign.
+      // Accepting doesn't finish the flow — it opens the platform picker, then
+      // the mini contract to sign.
       if (data.ok) {
         if (data.status === 'accepted') {
           // A client-swapped offer (after a counter / reschedule) has no contract
@@ -485,7 +572,7 @@
           // token — navigate to the accepted offer's own page so it loads fresh
           // with its contract. A freshly-loaded offer already has its contract.
           if (!offer.contract) { location.href = '/o/' + encodeURIComponent(offer.token); return; }
-          view = 'contract';
+          view = 'platforms';
         } else {
           view = data.status;
         }
@@ -607,7 +694,18 @@
       signatureDataUrl = null;
       // A schedule-held offer reopens on the "we'll be in touch" view.
       if (data.initialState === 'on_hold') holdDateFormatted = data.startDateFormatted || null;
-      view = data.initialState; // active | contract | signed | declined | expired | on_hold
+      // Platform picker: seed the required + optional tokens from the server,
+      // and pre-check any prior selection so a reload doesn't lose their picks.
+      if (data.platformOptions) {
+        platformOptions = {
+          required: (data.platformOptions.required || []).slice(),
+          optional: (data.platformOptions.optional || []).slice(),
+        };
+      }
+      selectedPlatforms = {};
+      platformOptions.required.forEach(function (n) { selectedPlatforms[n] = true; });
+      (data.selectedPlatforms || []).forEach(function (n) { selectedPlatforms[n] = true; });
+      view = data.initialState; // active | platforms | contract | signed | declined | expired | on_hold
       render();
     } catch (e) {
       view = 'notfound';

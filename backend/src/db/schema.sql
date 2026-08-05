@@ -387,6 +387,12 @@ ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signer_name TEXT;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signer_ip   TEXT;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_terms       JSONB;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_signature   TEXT;
+-- The platforms the creator picked in the interstitial step between accepting
+-- the offer and signing the mini contract. Instagram is required (Reels drive
+-- the deal); TikTok / YouTube Shorts are opt-in. Stored as a JSONB array of
+-- verbatim tokens ('Instagram' | 'TikTok' | 'YouTube Shorts'). NULL until the
+-- picker is completed — the sign endpoint refuses to sign without it.
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_platforms   JSONB;
 -- Schedule negotiation (a "Timing" decline). requested_start_date is the date
 -- the creator says they're free to start; when it's within the accommodation
 -- window (SCHEDULE_THRESHOLD_DAYS) we re-offer the same terms carrying that date

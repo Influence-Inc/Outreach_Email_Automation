@@ -136,3 +136,42 @@ test('miniContractTerms falls back to first name then "Creator", and null campai
   assert.strictEqual(offers.miniContractTerms({ brand_name: 'Acme' }).creatorName, 'Creator');
   assert.strictEqual(offers.miniContractTerms({ brand_name: 'Acme' }).campaignName, null);
 });
+
+test('miniContractTerms carries the creator-picked platforms when set', () => {
+  const terms = offers.miniContractTerms({
+    full_name: 'Sam',
+    brand_name: 'Acme',
+    contract_platforms: ['Instagram', 'TikTok'],
+  });
+  assert.deepStrictEqual(terms.platforms, ['Instagram', 'TikTok']);
+});
+
+// --- normalizeContractPlatforms (post-accept picker input hygiene) ----------
+
+test('normalizeContractPlatforms always includes Instagram, in canonical order', () => {
+  assert.deepStrictEqual(offers.normalizeContractPlatforms([]), ['Instagram']);
+  assert.deepStrictEqual(offers.normalizeContractPlatforms(null), ['Instagram']);
+  // Order is canonical regardless of what came in.
+  assert.deepStrictEqual(
+    offers.normalizeContractPlatforms(['YouTube Shorts', 'TikTok']),
+    ['Instagram', 'TikTok', 'YouTube Shorts'],
+  );
+});
+
+test('normalizeContractPlatforms accepts case-insensitive tokens and drops unknowns', () => {
+  assert.deepStrictEqual(
+    offers.normalizeContractPlatforms(['tiktok', 'YOUTUBE SHORTS']),
+    ['Instagram', 'TikTok', 'YouTube Shorts'],
+  );
+  assert.deepStrictEqual(
+    offers.normalizeContractPlatforms(['tiktok', 'Twitter', 'Facebook']),
+    ['Instagram', 'TikTok'],
+  );
+});
+
+test('normalizeContractPlatforms deduplicates repeated tokens', () => {
+  assert.deepStrictEqual(
+    offers.normalizeContractPlatforms(['TikTok', 'TikTok', 'tiktok']),
+    ['Instagram', 'TikTok'],
+  );
+});
