@@ -421,6 +421,20 @@ test('contractEmail carries the signing link and the expected copy', () => {
   assert.match(body, /Jennifer/);
 });
 
+// briefEmail follows up on the "I'll share a quick content brief" line
+// contractEmail ends on — see negotiation.sendBriefEmail.
+test('briefEmail carries the brief link and the expected copy', () => {
+  const { body } = templates.briefEmail({
+    firstName: 'Alex',
+    url: 'https://x.test/brief/tok123',
+    managerName: 'Jennifer',
+  });
+  assert.match(body, /Hi Alex,/);
+  assert.match(body, /content brief/i);
+  assert.match(body, /https:\/\/x\.test\/brief\/tok123/);
+  assert.match(body, /Jennifer/);
+});
+
 // ── Usage rights policy (campaigns.usage_rights_policy) ─────────────────────
 
 test('usageRightsFor: no_rights (default) excludes paid ad rights', () => {

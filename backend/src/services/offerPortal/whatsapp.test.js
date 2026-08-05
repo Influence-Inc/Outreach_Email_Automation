@@ -191,3 +191,14 @@ test('renderOfferOutreachBody names creator + brand and includes the link + expi
   assert.match(body, /https:\/\/x\.test\/o\/tok/);
   assert.match(body, /Aug 1/);
 });
+
+test('renderContentBriefReadyBody names creator + brand and includes the brief link', () => {
+  const body = whatsapp.renderContentBriefReadyBody({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    briefUrl: 'https://x.test/brief/tok',
+  });
+  assert.match(body, /Sam/);
+  assert.match(body, /Acme/);
+  assert.match(body, /https:\/\/x\.test\/brief\/tok/);
+});

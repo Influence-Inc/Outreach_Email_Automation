@@ -92,6 +92,13 @@ async function sendOfferOutreachIMessage(params) {
   return sendIMessageText({ to: params.to, body: renderOfferOutreachBody(params) });
 }
 
+// Sent once an admin publishes the creator's personalised content brief (see
+// offers.deliverBriefToCreator) — same copy as the WhatsApp version so the
+// creator gets a consistent message whichever channel reaches them.
+function renderContentBriefReadyBody({ firstName, brandName, briefUrl }) {
+  return `Hi ${firstName}, this is INFLUENCE — your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
+}
+
 // Our own iMessage sender number, shown in the invite email so a creator knows
 // what to text. Same value the send path uses as the Linq `from` field.
 const businessNumber = fromNumber;
@@ -146,5 +153,6 @@ module.exports = {
   sendIMessageText,
   sendOfferOutreachIMessage,
   renderOfferOutreachBody,
+  renderContentBriefReadyBody,
   renderRedirectPage,
 };

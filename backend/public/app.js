@@ -4372,8 +4372,9 @@ function buildBriefBlock(r) {
         body: JSON.stringify({ contentDirection, videoLinks }),
       });
       const url = res && res.brief_result && res.brief_result.url;
+      const delivery = res && res.brief_result && res.brief_result.delivery;
       statusEl.textContent = 'Published ✓';
-      if (url) showBriefLink(linkOut, url);
+      if (url) showBriefLink(linkOut, url, delivery);
       // Refresh the table/counts in the background but keep the pop-up open so
       // the admin can copy the link before closing.
       await refreshCreators();
@@ -4400,11 +4401,24 @@ function buildBriefBlock(r) {
   return block;
 }
 
+// One-line summary of whether/how the brief was auto-delivered, shown under
+// the copy-link row so the admin knows if they still need to share it by hand
+// — see offers.deliverBriefToCreator for the channel/reason vocabulary.
+function describeBriefDelivery(delivery) {
+  if (!delivery) return null;
+  const CHANNEL_LABEL = { whatsapp: 'WhatsApp', imessage: 'iMessage', email_thread: 'email', email: 'email' };
+  if (delivery.sent) return `Sent to the creator via ${CHANNEL_LABEL[delivery.channel] || delivery.channel}.`;
+  if (delivery.reason === 'no_contact') return "Couldn't auto-send — no contact info on file. Share the link manually.";
+  return "Couldn't auto-send — share the link manually.";
+}
+
 // Show the published brief's shareable link with a copy button.
-function showBriefLink(container, url) {
+function showBriefLink(container, url, delivery) {
   container.hidden = false;
+  const deliveryNote = describeBriefDelivery(delivery);
   container.innerHTML =
     '<div class="brief-link-row"><input class="brief-link-input" type="text" readonly></div>' +
+    (deliveryNote ? `<div class="hint">${escapeHtml(deliveryNote)}</div>` : '') +
     '<div class="hint">Send this link to the creator. Re-open anytime to edit and re-publish.</div>';
   container.querySelector('.brief-link-input').value = url;
   const btn = document.createElement('button');

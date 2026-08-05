@@ -185,6 +185,19 @@ test('renderOfferEmail is warm, names the creator + brand, and keeps the offer l
   assert.doesNotMatch(r.text, /Please accept or decline/);
 });
 
+test('renderBriefReadyEmail is warm, names the creator + brand, and keeps the brief link', () => {
+  const r = email.renderBriefReadyEmail({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    briefUrl: 'https://portal.example/brief/tok123',
+  });
+  assert.match(r.subject, /Acme/);
+  assert.match(r.text, /^Hi Sam,/);
+  assert.match(r.text, /Acme/);
+  assert.match(r.text, /https:\/\/portal\.example\/brief\/tok123/);
+  assert.match(r.html, /\/brief\/tok123/);
+});
+
 test('renderPortalInviteEmail body never names a specific channel not offered (WhatsApp-only stays silent on iMessage)', () => {
   const r = renderPortalInviteEmail({
     firstName: 'Sam',

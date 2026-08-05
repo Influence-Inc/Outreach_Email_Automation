@@ -389,6 +389,18 @@ router.post('/:id/brief/publish', async (req, res, next) => {
   try {
     const { contentDirection, videoLinks } = req.body || {};
     const result = await briefs.publishBrief(req.params.id, { contentDirection, videoLinks });
+    // Deliver the "your brief is ready" notification on the FIRST publish only
+    // — a re-publish (e.g. the admin tweaks the content direction and hits
+    // Publish again) must not re-notify a creator who already has the link.
+    // Best-effort: a delivery failure is logged but never fails the publish
+    // itself — the admin still gets the link back to share by hand.
+    if (!result.alreadyPublished) {
+      try {
+        result.delivery = await offers.deliverBriefToCreator(req.params.id, result.url);
+      } catch (err) {
+        console.error(`[brief] delivery failed for creator ${req.params.id}:`, err.message);
+      }
+    }
     const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
     res.json({ ...fresh, brief_result: result });
   } catch (err) {

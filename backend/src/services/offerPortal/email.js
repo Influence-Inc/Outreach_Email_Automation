@@ -359,6 +359,37 @@ async function sendGraduationEmail({ to, firstName, brandName, congratsLine, wha
 // personalised brief link) happens right on the portal, so an extra inbox
 // email would set the wrong expectation.
 
+// Content-brief-ready email — the direct-email fallback in
+// offers.deliverBriefToCreator, used when the creator has neither an
+// established WhatsApp/iMessage conversation nor a live cold-outreach thread,
+// but we do have an address on file. Short and link-first, same voice as
+// renderOfferEmail.
+function renderBriefReadyEmail({ firstName, brandName, briefUrl }) {
+  const subject = `Your ${brandName} content brief is ready`;
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `Your personalised content brief for ${brandName} is ready — it has everything you need to get started.`,
+    ``,
+    `Take a look here: ${briefUrl}`,
+    ``,
+    `Excited to see what you create,`,
+    `Team INFLUENCE`,
+  ].join('\n');
+
+  const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
+    <p>Your personalised content brief for <strong>${escapeHtml(brandName)}</strong> is ready &mdash; it has everything you need to get started.</p>
+    <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(briefUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">View your brief</a></p>
+    <p style="margin-top:24px;">Excited to see what you create,<br/>Team INFLUENCE</p>`);
+
+  return { subject, text, html };
+}
+
+async function sendBriefReadyEmail({ to, firstName, brandName, briefUrl }) {
+  const { subject, text, html } = renderBriefReadyEmail({ firstName, brandName, briefUrl });
+  return deliver({ to, subject, text, html });
+}
+
 module.exports = {
   renderOfferEmail,
   sendOfferEmail,
@@ -370,4 +401,6 @@ module.exports = {
   sendNewCampaignOfferEmail,
   renderGraduationEmail,
   sendGraduationEmail,
+  renderBriefReadyEmail,
+  sendBriefReadyEmail,
 };

@@ -370,6 +370,10 @@ async function publishBrief(creatorId, { contentDirection, videoLinks } = {}) {
     err.status = 404;
     throw err;
   }
+  // Captured BEFORE the update below — tells the caller whether this is the
+  // creator's first publish (deliver the "your brief is ready" notification)
+  // or a re-publish after an edit (stay silent; they already have the link).
+  const alreadyPublished = !!ctx.creator.brief_published_at;
   const cleanDir = typeof contentDirection === 'string' ? contentDirection.trim() : '';
   const cleanLinks = normalizeVideoLinks(videoLinks);
   const { trackedUrl, reviewUrl, postShareUrl } = await mintDashboardLinks(ctx);
@@ -398,7 +402,7 @@ async function publishBrief(creatorId, { contentDirection, videoLinks } = {}) {
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'brief_published', $2)`,
     [creatorId, { token, trackedUrl: trackedUrl || null }],
   );
-  return { url: briefUrl(token), token, brief };
+  return { url: briefUrl(token), token, brief, alreadyPublished };
 }
 
 // Dismiss a pending brief without publishing (clears the flag). Mirrors

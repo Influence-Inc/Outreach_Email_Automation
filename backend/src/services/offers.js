@@ -335,6 +335,86 @@ async function deliverOfferOverChannel(offerId, channel) {
   return result;
 }
 
+// Deliver a just-published content brief to the creator over whichever
+// channel reaches them fastest — called once by the /brief/publish route,
+// right after briefs.publishBrief, and only on a creator's FIRST publish (a
+// re-publish after editing content direction / video links must not re-notify
+// them). Priority mirrors sendOfferOutreach:
+//   1. An already-established WhatsApp/iMessage conversation — a short
+//      free-form text with the link. Most used/returning creators land here:
+//      they signed their mini-contract in a chat-adjacent flow already.
+//   2. A live cold-outreach negotiation thread (instantly_reply_uuid) — a
+//      threaded reply in the SAME Gmail thread as their contract email,
+//      fulfilling the "I'll share a quick content brief" line that email ends
+//      on. Delegates to negotiation.sendBriefEmail (lazy-required: negotiation.js
+//      already requires offers.js at load time, so the reverse edge has to
+//      stay lazy or the two modules would deadlock loading each other).
+//   3. A plain email address with neither of the above — a direct
+//      transactional email over the same Resend channel as the rest of the
+//      portal.
+// Best-effort throughout — every branch returns a result object, and a
+// failure in step 2 falls back to step 3 rather than giving up; nothing here
+// ever throws, so a delivery failure can never undo the publish that
+// triggered it.
+async function deliverBriefToCreator(creatorId, briefUrl) {
+  const c = await db.one(
+    `SELECT c.id, c.first_name, c.full_name, c.email, c.whatsapp, c.imessage,
+            c.established_channel, c.messaging_opted_out, c.instantly_reply_uuid,
+            ca.brand_name
+       FROM creators c LEFT JOIN campaigns ca ON ca.id = c.campaign_id
+      WHERE c.id = $1`,
+    [creatorId],
+  );
+  if (!c) return { sent: false, reason: 'not_found' };
+  const firstName = firstNameOf(c);
+  const brandName = c.brand_name || 'the brand';
+
+  const logDelivered = (channel) =>
+    db.query(`INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'brief_delivered', $2)`, [
+      c.id,
+      { channel, briefUrl },
+    ]);
+
+  const channel = c.messaging_opted_out ? null : c.established_channel;
+  const to = channel === 'imessage' ? c.imessage : channel === 'whatsapp' ? c.whatsapp : null;
+  if (channel && to) {
+    const mod = channel === 'imessage' ? imessage : whatsapp;
+    const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
+    const body = mod.renderContentBriefReadyBody({ firstName, brandName, briefUrl });
+    const result = await send({ to, body });
+    if (result.sent) {
+      await db.query(
+        `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
+         VALUES ($1, 'outbound', $2, $3, $4)`,
+        [c.id, channel, body, result.id || null],
+      );
+      await logDelivered(channel);
+    }
+    return { ...result, channel };
+  }
+
+  if (c.instantly_reply_uuid) {
+    try {
+      const result = await require('./negotiation').sendBriefEmail(c.id, briefUrl);
+      if (result.sent) {
+        await logDelivered('email_thread');
+        return { ...result, channel: 'email_thread' };
+      }
+    } catch (err) {
+      console.error('[offers] threaded brief email failed, falling back to direct email:', err.message);
+    }
+    // Falls through to the direct-email branch below on any miss/failure.
+  }
+
+  if (c.email) {
+    const result = await email.sendBriefReadyEmail({ to: c.email, firstName, brandName, briefUrl });
+    if (result.sent) await logDelivered('email');
+    return { ...result, channel: 'email' };
+  }
+
+  return { sent: false, reason: 'no_contact' };
+}
+
 // Top-level dispatcher for a NEW offer. Three outcomes:
 //   established_channel set → the creator already messaged us on this channel
 //     (subscribed), so deliver the DEAL directly there (deliverOfferOverChannel)
@@ -2057,6 +2137,7 @@ module.exports = {
   sendUsedCreatorBrief,
   sendOfferBriefing,
   deliverOfferOverChannel,
+  deliverBriefToCreator,
   createOffer,
   respondToOffer,
   listNeedsReview,
