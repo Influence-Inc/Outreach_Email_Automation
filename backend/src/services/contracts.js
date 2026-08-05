@@ -89,6 +89,29 @@ function resolveOffer(creator, opts = {}) {
 // agreed to. Failing that, prefer the most recent priced offer we sent, then
 // the creator's stored quoted_rate, then the resolved offer's flat_fee.
 async function agreedFeeFor(creator) {
+  // A deliberate admin fee override made AFTER the deal was struck ("Rate
+  // updated $X → $Y" on the timeline) is the latest word on the fee and wins
+  // over the accepted offer and any earlier counter. Only an admin rate_quoted
+  // counts — a creator's later re-quote is a negotiation move, not the agreed
+  // number — and only when it lands at or after the most recent acceptance /
+  // offer, so a pre-acceptance admin quote can never override a later counter.
+  const override = await db.one(
+    `SELECT detail, created_at FROM email_events
+     WHERE creator_id = $1 AND type = 'rate_quoted' AND detail->>'by' = 'admin'
+     ORDER BY created_at DESC LIMIT 1`,
+    [creator.id],
+  );
+  if (override && override.detail && override.detail.to != null && Number.isFinite(Number(override.detail.to))) {
+    const lastAgree = await db.one(
+      `SELECT created_at FROM email_events
+       WHERE creator_id = $1 AND type IN ('rate_accepted', 'rate_offer_sent')
+       ORDER BY created_at DESC LIMIT 1`,
+      [creator.id],
+    );
+    if (!lastAgree || new Date(override.created_at) >= new Date(lastAgree.created_at)) {
+      return Math.round(Number(override.detail.to));
+    }
+  }
   const accepted = await db.one(
     `SELECT detail FROM email_events
      WHERE creator_id = $1 AND type = 'rate_accepted' AND detail->>'source' = 'creator_rate'
@@ -951,6 +974,7 @@ async function syncPaymentScheduleForContract(token) {
 // the existing flows. Coerce each field to its stored shape and keep the
 // paired fields consistent (paid ads ↔ usage-rights wording, deadline aliases).
 const EDITABLE_CONTRACT_FIELDS = [
+  'agreedFee',
   'offerType',
   'numberOfVideos',
   'minTotalViews',
@@ -982,6 +1006,22 @@ function coerceContractPatch(patch, existing = {}) {
   const out = {};
   const has = (k) => Object.prototype.hasOwnProperty.call(patch, k);
   const existingData = existing && typeof existing === 'object' ? existing : {};
+  // The agreed fee — corrected from the Deals column when the deal's price
+  // changed after the contract was drawn up (e.g. the creator confirmed a
+  // higher number). Writes both fee fields the contract page reads. The upfront
+  // split is stored as PERCENTAGES (not dollar amounts), so it re-scales against
+  // the new total automatically — nothing else to touch. Keyed off `agreedFee`
+  // (the Deals-column field name) only: the contract's own `compensation` key is
+  // deliberately NOT settable directly, so a stray extraction field can't slip
+  // a fee change through this whitelist.
+  if (has('agreedFee')) {
+    const raw = patch.agreedFee;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    if (Number.isFinite(n) && n >= 0) {
+      out.compensation = n;
+      out.totalPayment = n;
+    }
+  }
   // Offer type is a manual repair for a contract the extraction misclassified
   // — the reported case: admin accepted the creator's per-video rate, but the
   // pre-fix pipeline stamped the contract as "View-based deal" with no video
@@ -1136,6 +1176,23 @@ async function updateContractFields(creatorId, patch, { force = false } = {}) {
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_edited', $2)`,
     [creatorId, { token: existing.token, fields: Object.keys(changes) }],
   );
+  // A fee correction is also a rate change: log it as a 'rate_quoted' admin
+  // override so the timeline shows "Rate updated $X → $Y", and keep the
+  // creator's quoted_rate column in lockstep so every fee reader (offer math,
+  // agreedFeeFor's fallback) agrees with the contract.
+  const feeBefore =
+    existing.data && existing.data.compensation != null ? Number(existing.data.compensation) : null;
+  const feeAfter = changes.compensation != null ? Number(changes.compensation) : feeBefore;
+  if (feeAfter != null && Number.isFinite(feeAfter) && feeAfter !== feeBefore) {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_quoted', $2)`,
+      [creatorId, { from: feeBefore, to: feeAfter, by: 'admin' }],
+    );
+    await db.query(`UPDATE creators SET quoted_rate = $2, updated_at = NOW() WHERE id = $1`, [
+      creatorId,
+      feeAfter,
+    ]);
+  }
   return { updated: true, row };
 }
 
