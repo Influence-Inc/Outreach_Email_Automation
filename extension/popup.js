@@ -32,22 +32,7 @@ document.getElementById('save-url').addEventListener('click', () => {
   });
 });
 
-// Dashboard API token — the backend's DASHBOARD_API_TOKEN. The dashboard
-// authenticates humans with a same-origin Slack session cookie, which
-// extension-origin requests can't use, so the offer panel and the scrape/DM
-// queues send this machine token as an `x-site-password` header instead (the
-// backend also accepts `x-api-token`). Blank means the backend has no gate.
-const pwInput = document.getElementById('site-password');
-const pwSaved = document.getElementById('password-saved');
-
-chrome.storage.local.get(['infSitePassword'], (v) => {
-  if (v && v.infSitePassword) pwInput.value = v.infSitePassword;
-});
-
-document.getElementById('save-password').addEventListener('click', () => {
-  const val = pwInput.value.trim();
-  chrome.storage.local.set({ infSitePassword: val }, () => {
-    pwSaved.textContent = val ? 'Saved ✓' : 'Cleared.';
-    setTimeout(() => { pwSaved.textContent = ''; }, 1600);
-  });
-});
+// One-time cleanup: older builds stored a shared dashboard token here. Auth now
+// reuses the team member's Slack session (see panel.js / background.js
+// authHeaders), so drop any leftover value.
+chrome.storage.local.remove('infSitePassword');

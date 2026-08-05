@@ -79,15 +79,7 @@
     <p class="hint">Used by the Instagram offer panel to reach your Deal Studio. Auto-filled when you open the dashboard; set it here to open the panel directly on a profile.</p>
   </div>
 
-  <div class="field">
-    <label for="site-password">Dashboard API token</label>
-    <div class="row">
-      <input id="site-password" type="password" placeholder="Deal Studio API token" />
-      <button id="save-password" type="button">Save</button>
-    </div>
-    <div class="saved" id="password-saved"></div>
-    <p class="hint">The backend&rsquo;s <code>DASHBOARD_API_TOKEN</code>. The dashboard signs humans in with Slack, but extension calls can&rsquo;t use that session cookie, so they send this machine token instead. Stored locally. Leave blank if your backend has no gate set.</p>
-  </div>
+  <p class="hint">Sign-in is automatic: the extension uses your existing Deal Studio session, so just stay signed in to the dashboard (Sign in with Slack). Nothing to configure here.</p>
 
   <script src="popup.js"></script>
 </body>

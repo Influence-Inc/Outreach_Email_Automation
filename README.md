@@ -85,10 +85,16 @@ Set-up in the Slack app config (https://api.slack.com/apps):
 2. Enable **Sign in with Slack** (the `openid`, `email`, `profile` scopes).
 3. Copy the **Client ID + Client Secret** into the env vars above.
 
-Non-browser clients (the Chrome extension, curl, cron scripts) can't ride the
-session cookie, so they authenticate with a machine token instead: set
-`DASHBOARD_API_TOKEN` and send it as `x-api-token: <token>` (the legacy
-`x-site-password` header and HTTP Basic auth also work).
+The **Chrome extension needs no setup** — it reuses the signed-in team member's
+dashboard session: it reads the `io_session` cookie via the browser's cookies
+API and forwards the same signed token as an `x-io-session` header, so as long as
+the user is signed in to the dashboard the extension just works (no shared secret
+ships inside it).
+
+Truly headless clients (curl, cron scripts) have no Slack session, so they
+authenticate with a machine token instead: set `DASHBOARD_API_TOKEN` and send it
+as `x-api-token: <token>` (the legacy `x-site-password` header and HTTP Basic
+auth also work).
 
 Creator-facing and machine surfaces stay public — they're resolved by unguessable
 token or carry their own secret: `/contract/:token`, `/o/:token`, `/go/imessage`,
