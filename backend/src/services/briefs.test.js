@@ -16,16 +16,18 @@ test('roundClean tidies numbers by magnitude and rejects non-positive', () => {
 });
 
 // ── computeExpectedViews ─────────────────────────────────────────────────────
-test('view-based deal shows the contract guarantee as a combined total', () => {
+test('view-based deal shows a "minimum views target" and drops "No pressure"', () => {
   const creator = { custom_offer: { offer_type: 'view_based', view_guarantee: 300000 } };
   const ev = computeExpectedViews(creator, null, {});
   assert.strictEqual(ev.value, 300000);
   assert.strictEqual(ev.per, 'total');
   assert.strictEqual(ev.basis, 'contract');
-  assert.match(ev.display, /300,000 total views/);
+  assert.strictEqual(ev.label, 'Minimum views target');
+  assert.strictEqual(ev.noPressure, false);
+  assert.match(ev.display, /300,000 views/);
 });
 
-test('video-based deal uses p25 + ~15% per video, rounded clean', () => {
+test('video-based deal uses p25 + ~15% per video, rounded clean, keeps "No pressure"', () => {
   const creator = {
     custom_offer: { offer_type: 'video_based', num_videos: 2 },
     ig_scraped_data: { p25: 40000, p50: 90000, min_views: 20000 },
@@ -35,6 +37,8 @@ test('video-based deal uses p25 + ~15% per video, rounded clean', () => {
   assert.strictEqual(ev.value, 45000);
   assert.strictEqual(ev.per, 'video');
   assert.strictEqual(ev.basis, 'scraped');
+  assert.strictEqual(ev.label, 'Expected views');
+  assert.strictEqual(ev.noPressure, true);
   assert.match(ev.display, /~45,000 per video/);
 });
 
@@ -146,4 +150,34 @@ test('buildBrief carries the curated fields, boilerplate and creator identity', 
   assert.strictEqual(brief.expectedViews.per, 'video'); // video-based deal
   assert.strictEqual(brief.campaignNarrative, 'AI image tool');
   assert.deepStrictEqual(brief.brand.demoLinks, ['https://drive.google.com/file/d/ABC/view']);
+});
+
+test('buildBrief no longer emits the dropped why-viral / target-audience fields', () => {
+  const brief = buildBrief(ctxFixture({ contentBrief: { why_viral: 'x', target_audience: 'y' } }), {});
+  assert.ok(!('whyViral' in brief));
+  assert.ok(!('targetAudience' in brief));
+});
+
+test('buildBrief takes top videos from the campaign example_videos (common), then appends per-creator', () => {
+  const ctx = ctxFixture({
+    contentBrief: { example_videos: ['https://common/1', 'Labelled | https://common/2'] },
+  });
+  const brief = buildBrief(ctx, { videoLinks: ['https://common/1', 'https://creator/3'] });
+  // Common first, per-creator after, de-duped on URL.
+  assert.deepStrictEqual(brief.topVideos, [
+    { label: '', url: 'https://common/1' },
+    { label: 'Labelled', url: 'https://common/2' },
+    { label: '', url: 'https://creator/3' },
+  ]);
+});
+
+test('buildBrief threads the per-creator review + post links and the bio link', () => {
+  const brief = buildBrief(ctxFixture(), {
+    trackedUrl: 'https://track.example/abc',
+    reviewUrl: 'https://campaigns.influence.technology/reve/submit-for-review?username=tharun.fyi',
+    postShareUrl: 'https://campaigns.influence.technology/reve/submit-links?username=tharun.fyi',
+  });
+  assert.match(brief.reviewUrl, /submit-for-review/);
+  assert.match(brief.postShareUrl, /submit-links/);
+  assert.strictEqual(brief.posting.linkInBio, 'https://track.example/abc');
 });

@@ -55,6 +55,16 @@
   }
   function section(title, inner) { return '<section class="blk"><h2>' + esc(title) + '</h2>' + inner + '</section>'; }
   function prose(text) { return '<p class="prose">' + esc(text) + '</p>'; }
+  // One <li> per non-empty line — lets a multi-line field (e.g. "What to avoid")
+  // render as a proper bullet list rather than a single run-on item.
+  function bullets(text) {
+    var items = String(text == null ? '' : text)
+      .split('\n')
+      .map(function (s) { return s.replace(/^[\s•\-*]+/, '').trim(); })
+      .filter(Boolean);
+    if (!items.length) return '';
+    return '<ul class="bullets">' + items.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join('') + '</ul>';
+  }
 
   function render(d) {
     if (!d) { showState('notfound'); return; }
@@ -85,27 +95,34 @@
     }
 
     // ── Expected views ──────────────────────────────────────────────────────
-    if (d.expectedViews && has(d.expectedViews.display)) {
-      html += '<div class="callout"><div class="c-title">Expected views</div>' +
-        '<div class="views"><span class="big num">' + esc(d.expectedViews.display) + '</span>' +
-        '<span class="sub">No pressure :)</span></div></div>';
+    // Video-based deals show a friendly per-video estimate ("No pressure :)").
+    // View-based deals show a committed "Minimum views target" and drop the
+    // reassurance — the number is a target, not a guess.
+    var ev = d.expectedViews;
+    if (ev && has(ev.display)) {
+      html += '<div class="callout"><div class="c-title">' + esc(ev.label || 'Expected views') + '</div>' +
+        '<div class="views"><span class="big num">' + esc(ev.display) + '</span>' +
+        (ev.noPressure ? '<span class="sub">No pressure :)</span>' : '') + '</div></div>';
     }
 
     // ── 1. Before you film ──────────────────────────────────────────────────
     var pre = '';
     if (has(d.contentDirection)) pre += section('Content direction', prose(d.contentDirection));
     if (has(d.screenFlowInstructions)) pre += section('Features to use', prose(d.screenFlowInstructions));
-    if (has(d.whyViral)) pre += section('Why it works', prose(d.whyViral));
     if (Array.isArray(brand.demoLinks) && brand.demoLinks.length) {
       pre += section('Demos', mediaList(brand.demoLinks.map(function (u) { return { url: u, label: '' }; })));
     }
     if (Array.isArray(d.topVideos) && d.topVideos.length) {
       pre += section('Top performing videos', '<p class="lead-in">References that show the direction we love:</p>' + mediaList(d.topVideos));
     }
-    if (has(d.restrictions)) pre += section('Restrictions', '<ul class="bullets"><li>' + esc(d.restrictions) + '</li></ul>');
-    if (has(d.targetAudience)) pre += section('Target audience', prose(d.targetAudience));
+    if (has(d.restrictions)) pre += section('What to avoid', bullets(d.restrictions));
     if (has(d.rules)) pre += section('Guidelines', '<div class="rules">' + esc(d.rules) + '</div>');
     if (has(d.usageRights)) pre += section('Usage rights', '<div class="usage">' + esc(d.usageRights) + '</div>');
+    if (has(d.reviewUrl)) {
+      pre += section('Upload for review',
+        '<p class="prose">After making the video, upload it here for a quick review from the brand (24-hour turnaround):</p>' +
+        '<div class="media-link">' + link(d.reviewUrl, 'Upload for review') + '</div>');
+    }
     if (pre) html += '<h3 class="phase-h">1 · Before you film</h3>' + pre;
 
     // ── 2. After you post ───────────────────────────────────────────────────
@@ -122,6 +139,12 @@
         : 'DM viewers ';
       dmb += 'your unique link' + (has(dm.link) ? ': ' + link(dm.link) : '.');
       items.push({ t: 'DM automation', b: dmb });
+    }
+    if (has(post.linkInBio)) {
+      items.push({ t: 'Link in bio', b: 'Add your unique link to your bio for this campaign: ' + link(post.linkInBio) });
+    }
+    if (has(d.postShareUrl)) {
+      items.push({ t: 'Share your post', b: 'After posting, share your live post link(s) here: ' + link(d.postShareUrl) });
     }
     if (items.length) {
       html += '<h3 class="phase-h">2 · After you post</h3>' +
