@@ -59,8 +59,8 @@ async function api(path, options = {}) {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
-  // Session expired (or the site password was rotated) — bounce to the login
-  // page and come back to whatever the user was looking at. See
+  // Session expired (or the signing secret was rotated) — bounce to the Slack
+  // sign-in page and come back to whatever the user was looking at. See
   // services/siteAuth.js.
   if (res.status === 401) {
     window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
@@ -4582,7 +4582,26 @@ if (el('review-inbox-btn')) {
   el('review-backdrop').addEventListener('click', closeReviewInbox);
 }
 
+// Show who's signed in (via Slack) in the topbar. Best-effort: if the gate is
+// off, /api/me returns nulls and we simply leave the chip hidden.
+async function loadSignedInUser() {
+  const chip = el('signed-in-as');
+  if (!chip) return;
+  try {
+    const me = await api('/api/me');
+    const label = me && (me.name || me.email);
+    if (label) {
+      chip.textContent = `Signed in as ${label}`;
+      chip.title = me.email || '';
+      chip.hidden = false;
+    }
+  } catch {
+    // 401 already bounces to /login via api(); anything else is non-fatal.
+  }
+}
+
 (async () => {
+  loadSignedInUser();
   await refreshCampaigns();
   // Restore the view encoded in the URL so a refresh keeps the current
   // campaign instead of dropping back to the empty picker.

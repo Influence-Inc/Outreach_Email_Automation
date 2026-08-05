@@ -32,10 +32,11 @@ document.getElementById('save-url').addEventListener('click', () => {
   });
 });
 
-// Site password — the backend's SITE_PASSWORD. The dashboard authenticates with
-// a same-origin session cookie, which extension-origin requests can't use, so
-// the offer panel and the scrape/DM queues send this as an `x-site-password`
-// header instead. Blank means the backend has no password gate.
+// Dashboard API token — the backend's DASHBOARD_API_TOKEN. The dashboard
+// authenticates humans with a same-origin Slack session cookie, which
+// extension-origin requests can't use, so the offer panel and the scrape/DM
+// queues send this machine token as an `x-site-password` header instead (the
+// backend also accepts `x-api-token`). Blank means the backend has no gate.
 const pwInput = document.getElementById('site-password');
 const pwSaved = document.getElementById('password-saved');
 
