@@ -363,21 +363,21 @@ function syncContentBriefUI(c) {
   const cb = c && c.content_brief && typeof c.content_brief === 'object' ? c.content_brief : {};
   const cap = cb.caption && typeof cb.caption === 'object' ? cb.caption : {};
   const set = (id, v) => { const e = el(id); if (e) e.value = v == null ? '' : v; };
-  set('cb-what-is-it', cb.what_is_it);
-  set('cb-pronunciation', cb.pronunciation);
+  set('cb-narrative', cb.campaign_narrative);
+  set('cb-why-viral', cb.why_viral);
+  set('cb-screen-flow', cb.screen_flow_instructions);
+  set('cb-restrictions', cb.restrictions);
+  set('cb-audience', cb.target_audience);
   set('cb-website', cb.website);
-  set('cb-demo-link', cb.demo_link);
   set('cb-free-account-link', cb.free_account_link);
-  set('cb-expected-views', cb.expected_views_default);
   set('cb-dm-keyword', cb.dm_keyword);
+  set('cb-demo-links', Array.isArray(cb.demo_links) ? cb.demo_links.join('\n') : (cb.demo_links || ''));
   set('cb-cap-mention', cap.mention_handle);
   set('cb-cap-comment', cap.comment_word);
   set('cb-cap-via', cap.via_tag);
   set('cb-cap-hashtags', cap.hashtags);
-  set('cb-review-link', cb.review_upload_link);
-  set('cb-submit-links', cb.submit_links_url);
   el('content-brief-status').textContent = '';
-  el('content-brief-hint').textContent = Object.keys(cb).length ? 'configured' : 'not set';
+  el('content-brief-hint').textContent = (cb.campaign_narrative || cb.website) ? 'configured' : 'not set';
   card.open = false;
 }
 
@@ -3315,23 +3315,23 @@ el('save-content-brief-btn').addEventListener('click', async () => {
   const btn = el('save-content-brief-btn');
   const status = el('content-brief-status');
   const val = (id) => { const e = el(id); return e ? e.value.trim() : ''; };
-  const numVal = (id) => { const v = val(id); const n = Number(v); return v && Number.isFinite(n) ? n : null; };
+  const lines = (id) => val(id).split('\n').map((s) => s.trim()).filter(Boolean);
   const content_brief = {
-    what_is_it: val('cb-what-is-it'),
-    pronunciation: val('cb-pronunciation'),
+    campaign_narrative: val('cb-narrative'),
+    why_viral: val('cb-why-viral'),
+    screen_flow_instructions: val('cb-screen-flow'),
+    restrictions: val('cb-restrictions'),
+    target_audience: val('cb-audience'),
     website: val('cb-website'),
-    demo_link: val('cb-demo-link'),
     free_account_link: val('cb-free-account-link'),
-    expected_views_default: numVal('cb-expected-views'),
     dm_keyword: val('cb-dm-keyword'),
+    demo_links: lines('cb-demo-links'),
     caption: {
       mention_handle: val('cb-cap-mention'),
       comment_word: val('cb-cap-comment'),
       via_tag: val('cb-cap-via'),
       hashtags: val('cb-cap-hashtags'),
     },
-    review_upload_link: val('cb-review-link'),
-    submit_links_url: val('cb-submit-links'),
   };
   btn.disabled = true;
   status.textContent = 'Saving…';
