@@ -72,6 +72,20 @@ api.post('/:token/schedule', async (req, res, next) => {
   }
 });
 
+// POST /api/offers/:token/platforms — the creator's post-accept platform picker.
+// Persists the tokens they chose (Instagram is always locked in; TikTok /
+// YouTube Shorts are optional) so the mini contract renders — and the snapshot
+// captures — exactly what they picked.
+api.post('/:token/platforms', async (req, res, next) => {
+  try {
+    const platforms = Array.isArray((req.body || {}).platforms) ? req.body.platforms : [];
+    const result = await offers.selectContractPlatforms({ token: req.params.token, platforms });
+    return res.status(result.ok ? 200 : 409).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/offers/:token/sign-contract — the creator signs the mini contract
 // with a drawn on-screen signature after accepting. Returns { ok } or a reason.
 api.post('/:token/sign-contract', async (req, res, next) => {

@@ -111,6 +111,20 @@
 
     .err { color: var(--danger); font-size: 13px; margin-top: 12px; min-height: 16px; }
 
+    /* Post-accept platform picker: a stack of tap-target rows, Instagram is
+       locked on (checked + disabled + faded), TikTok / YouTube Shorts toggle. */
+    .plat-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 16px; }
+    .plat-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+      background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+      cursor: pointer; user-select: none; transition: border-color .12s, background .12s; }
+    .plat-row:hover { border-color: var(--faint); }
+    .plat-row input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; flex: none; }
+    .plat-name { flex: 1; font-size: 14.5px; font-weight: 600; color: var(--ink); }
+    .plat-tag { font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase;
+      color: var(--muted); font-weight: 700; }
+    .plat-locked { cursor: default; opacity: .78; }
+    .plat-locked input[type=checkbox] { cursor: default; }
+
     /* Mini contract rows */
     .crow { display: flex; justify-content: space-between; gap: 14px; padding: 9px 0;
       border-bottom: 1px solid var(--line-3); }
