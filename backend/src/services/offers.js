@@ -28,6 +28,7 @@ const imessage = require('./offerPortal/imessage');
 const { offerPortalConfig } = require('./offerPortal/config');
 const { thankYouMessage, politeCloseMessage, notAFitCloseMessage, renderMessagingBrief } = require('./offerPortal/replies');
 const creatorDb = require('./creatorDb');
+const campaignDashboard = require('./campaignDashboard');
 
 const DEFAULT_EXPIRY_DAYS = Number(process.env.OFFER_EXPIRY_DAYS || 7);
 
@@ -1879,6 +1880,32 @@ async function signMiniContract({ token, signature, signerName, ip }) {
   } catch (err) {
     console.error('[offers] auto-approve on portal sign failed', err.message);
   }
+
+  // Push the signed creator into the CURRENT campaign's dashboard row, same as
+  // routes/contracts.js does for new/unused creators on the full contract flow.
+  // The comment above is about Creator-DB (cross-campaign identity, already
+  // known for a returning creator) — the campaign dashboard row is per-campaign,
+  // so a used creator still needs one created here, or they never show up on
+  // the campaign page. Best-effort — the signature is already saved; failures
+  // here never block it.
+  if (campaignDashboard.isConfigured()) {
+    try {
+      const creator = await db.one(`SELECT * FROM creators WHERE id = $1`, [offer.creator_id]);
+      await campaignDashboard.syncSignedCreator(
+        { token: offer.token, data: { platforms: terms.platforms } },
+        creator,
+      );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_dashboard_synced', $2)`,
+        [offer.creator_id, { offerToken: offer.token, ok: true }],
+      );
+    } catch (err) {
+      console.error('[offers] campaign-dashboard sync failed', err.message);
+    }
+  } else {
+    console.warn('[offers] CAMPAIGN_DASHBOARD_URL not set — skipping dashboard sync');
+  }
+
   try {
     await require('./briefs').flagBriefPending(offer.creator_id);
   } catch (err) {
