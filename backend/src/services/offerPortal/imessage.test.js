@@ -55,6 +55,17 @@ test('businessNumber reflects IMESSAGE_FROM_NUMBER (empty when unset)', () => {
   }
 });
 
+test('renderContentBriefReadyBody includes name, brand, and the brief link', () => {
+  const body = imessage.renderContentBriefReadyBody({
+    firstName: 'Sam',
+    brandName: 'Acme',
+    briefUrl: 'https://x.test/brief/tok',
+  });
+  assert.match(body, /Sam/);
+  assert.match(body, /Acme/);
+  assert.match(body, /https:\/\/x\.test\/brief\/tok/);
+});
+
 test('renderOfferOutreachBody includes name, brand, link, and expiry', () => {
   const body = imessage.renderOfferOutreachBody({
     firstName: 'Sam',

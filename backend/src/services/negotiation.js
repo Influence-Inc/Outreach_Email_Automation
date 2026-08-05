@@ -1638,6 +1638,32 @@ async function ensureContractSent(creatorId) {
   return { ok: true };
 }
 
+// Email the creator's published content brief as a threaded reply in the
+// negotiation conversation — fulfills the "I'll share a quick content brief"
+// line contractEmail ends on. Only usable when the creator has a live thread
+// (instantly_reply_uuid); the caller (offers.deliverBriefToCreator) tries an
+// established WhatsApp/iMessage channel first and falls back to a direct
+// email when there's no thread either. Best-effort — returns a result object,
+// never throws (mirrors sendContractOnAcceptance's failure handling).
+async function sendBriefEmail(creatorId, briefUrl) {
+  const creator = await loadCreator(creatorId);
+  if (!creator) return { sent: false, reason: 'not_found' };
+  if (!creator.instantly_reply_uuid) return { sent: false, reason: 'no_thread' };
+  try {
+    const v = templateVars(ctxFor(creator));
+    const email = templates.briefEmail({ ...v, url: briefUrl });
+    await sendNegotiationEmail(creator, email, 'brief');
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'brief_emailed', $2)`,
+      [creator.id, { url: briefUrl }],
+    );
+    return { sent: true };
+  } catch (err) {
+    console.error(`[negotiation] failed to send brief email for creator ${creatorId}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
 // The brand-POC go-ahead on an accepted deal. The team must get a "go" from
 // the brand's point of contact before finalizing a creator, so acceptance
 // parks the deal in the Delegate window instead of firing the contract; this
@@ -2515,6 +2541,7 @@ module.exports = {
   startOfferForCreator,
   sendDelegateReply,
   ensureContractSent,
+  sendBriefEmail,
   approveContract,
   acceptQuotedRate,
   handleAcceptedReply,

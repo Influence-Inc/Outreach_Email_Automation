@@ -204,6 +204,13 @@ function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate })
   return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
 }
 
+// Sent once an admin publishes the creator's personalised content brief (see
+// offers.deliverBriefToCreator) — a free-form session reply on an already-
+// established channel, same style as renderOfferOutreachBody.
+function renderContentBriefReadyBody({ firstName, brandName, briefUrl }) {
+  return `Hi ${firstName}, this is INFLUENCE — your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
+}
+
 module.exports = {
   whatsappProvider,
   normalizePhone,
@@ -211,6 +218,7 @@ module.exports = {
   businessNumber,
   sendWhatsAppText,
   renderOfferOutreachBody,
+  renderContentBriefReadyBody,
   // Exposed for tests.
   buildTwilioForm,
   basicAuthHeader,

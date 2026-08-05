@@ -457,6 +457,26 @@ So excited to be working together :)
   };
 }
 
+// Sent once an admin publishes the creator's personalised content brief —
+// fulfills the "I'll share a quick content brief" line contractEmail ends on.
+// Threaded reply in the same conversation, same as contractEmail. Carries the
+// brief link ({url}).
+function briefEmail(vars) {
+  const v = withDefaults(vars);
+  return {
+    subject: fill(REPLY1_SUBJECT, v),
+    body: `Hi ${v.salutation},
+
+Here's your personalised content brief — it has everything you need to get started:
+
+${v.url}
+
+Take a look whenever you're ready. Excited to see what you create :)
+
+- ${v.managerName}`,
+  };
+}
+
 module.exports = {
   defaults,
   fill,
@@ -475,6 +495,7 @@ module.exports = {
   followup2,
   acceptance,
   contractEmail,
+  briefEmail,
   declineDelay,
   stripReferences,
   stripUsageRights,
