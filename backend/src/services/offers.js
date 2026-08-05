@@ -834,9 +834,48 @@ async function onOfferResponded(offerId, response) {
           [offer.creator_id, Number(offer.rate)],
         );
         if (claimed) {
+          // Attach the offer's pricing breakdown to the rate_accepted event so
+          // the timeline can show HOW the accepted number was reached (same
+          // format as rate_offer_sent — "N videos x V per-video views x $C CPM"
+          // for video-based, "V views x $C CPM" for view-based). Fields come
+          // from the creator's approved offer (custom_offer wins over the
+          // selected suggested offer). If unavailable, we still log a plain
+          // fee-only event — the admin just sees the total.
+          const cr = await db.one(
+            `SELECT custom_offer, selected_offer_id, suggested_offers FROM creators WHERE id = $1`,
+            [offer.creator_id],
+          );
+          const acc =
+            (cr && cr.custom_offer) ||
+            (cr && cr.selected_offer_id && Array.isArray(cr.suggested_offers)
+              ? cr.suggested_offers.find((o) => o && o.offer_id === cr.selected_offer_id)
+              : null) ||
+            (cr && Array.isArray(cr.suggested_offers) ? cr.suggested_offers[0] : null) ||
+            null;
+          const detail = { fee: Number(offer.rate), by: 'creator', source: 'offer_portal' };
+          if (acc) {
+            if (acc.offer_type) detail.offer_type = acc.offer_type;
+            if (acc.cpm_applied != null) detail.cpm = Number(acc.cpm_applied);
+            if (acc.view_guarantee != null) detail.views = Number(acc.view_guarantee);
+            // Only video-shaped deals name a video count — leaving `videos`
+            // out of a view-based detail lets the timeline render its total
+            // views line instead of the per-video split.
+            if ((acc.offer_type === 'video_based' || acc.offer_type === 'video_bonus') && acc.num_videos != null) {
+              detail.videos = Number(acc.num_videos);
+            }
+            if (acc.bonus_amount != null) detail.bonus_amount = Number(acc.bonus_amount);
+            if (acc.bonus_threshold_views != null) detail.bonus_threshold_views = Number(acc.bonus_threshold_views);
+          }
+          // Fallback: derive CPM from the offer row's rate + expected views
+          // when the approved offer wasn't reachable (older rows / mid-flight
+          // sync). Same math the rate_offer_sent renderer already does.
+          if (detail.cpm == null && offer.expected_impressions && Number(offer.expected_impressions) > 0) {
+            detail.views = detail.views != null ? detail.views : Number(offer.expected_impressions);
+            detail.cpm = Number(((Number(offer.rate) * 1000) / Number(offer.expected_impressions)).toFixed(2));
+          }
           await db.query(
             `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
-            [offer.creator_id, { fee: Number(offer.rate), by: 'creator', source: 'offer_portal' }],
+            [offer.creator_id, detail],
           );
           await db.query(
             `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_approval_requested', $2)`,

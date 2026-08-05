@@ -1352,11 +1352,21 @@ function renderPortalOfferBlock(r) {
   if (chan.email) addChip('Email', chan.email.sent, false);
   if (chan.whatsapp) addChip('WhatsApp', chan.whatsapp.sent, chan.whatsapp.replied, chan.whatsapp.delivery);
   if (chan.imessage) addChip('iMessage', chan.imessage.sent, chan.imessage.replied, chan.imessage.delivery);
-  const viewed = document.createElement('span');
-  viewed.className = 'po-chip' + (p.viewed ? ' on' : ' off');
-  viewed.textContent = 'Portal' + (p.viewed ? ' viewed' : ' —');
-  viewed.title = p.viewed ? 'Creator opened the offer page' : 'Offer page not opened yet';
-  chips.appendChild(viewed);
+  // Portal chip: reflect the CREATOR's decision on the portal, not just page
+  // views. Signed (mini-contract) is the strongest state, then accepted, then
+  // declined; viewed / not-viewed only when no decision has been made yet.
+  const portal = document.createElement('span');
+  let pMark = ' —';
+  let pTitle = 'Offer page not opened yet';
+  let pTone = 'off';
+  if (p.signed) { pMark = ' ✓ signed'; pTitle = 'Creator signed the mini-contract on the portal'; pTone = 'on replied'; }
+  else if (p.status === 'accepted') { pMark = ' ✓ accepted'; pTitle = 'Creator accepted the offer on the portal'; pTone = 'on replied'; }
+  else if (p.status === 'declined') { pMark = ' ✗ declined'; pTitle = 'Creator declined the offer on the portal'; pTone = 'on failed'; }
+  else if (p.viewed) { pMark = ' viewed'; pTitle = 'Creator opened the offer page'; pTone = 'on'; }
+  portal.className = 'po-chip ' + pTone;
+  portal.textContent = 'Portal' + pMark;
+  portal.title = pTitle;
+  chips.appendChild(portal);
   box.appendChild(chips);
 
   if (p.needsReview) {
