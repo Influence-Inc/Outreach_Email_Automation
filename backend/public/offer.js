@@ -427,7 +427,7 @@
       h('div', { class: 'ic ok' }, '✓'),
       h('h1', {}, 'Agreement signed'),
       h('p', {}, 'Thanks, ' + (offer.serverSignerName || offer.firstName) +
-        '. Your agreement is confirmed — our team will be in touch with next steps.')));
+        ". Your agreement is confirmed — you'll get your personalised content brief link from us shortly.")));
     var box = contractTermsBlock(c);
     box.appendChild(contractRow('Signed by', offer.serverSignerName || offer.firstName));
     if (offer.signedAtFormatted) box.appendChild(contractRow('Signed on', offer.signedAtFormatted));

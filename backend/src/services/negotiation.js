@@ -1579,6 +1579,28 @@ async function requestContractApproval(creator, fee) {
 // the approval is already recorded, and the scheduler's contract backfill
 // (pollNegotiations) retries any approved ACCEPTED creator with no contract.
 async function sendContractOnAcceptance(creator, ctx, result) {
+  // Used creators sign the offer-portal mini-contract for confirmation, so we
+  // already hold their signed agreement — don't generate + email a separate
+  // contract. Approving their deal instead starts the personalised brief right
+  // away. Gated here (not just in approveContract) so every path that would send
+  // a contract — approval, the scheduler backfill, the manual /contract route —
+  // honours it. On any error we fall through to the normal contract flow.
+  try {
+    const portalSigned = await db.one(
+      `SELECT 1 FROM offers WHERE creator_id = $1 AND contract_signed_at IS NOT NULL LIMIT 1`,
+      [creator.id],
+    );
+    if (portalSigned) {
+      await require('./briefs').flagBriefPending(creator.id);
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_skipped_portal_signed', $2)`,
+        [creator.id, {}],
+      );
+      return;
+    }
+  } catch (err) {
+    console.error(`[contracts] portal-signed check failed for creator ${creator.id}:`, err.message);
+  }
   try {
     const { url } = await contracts.createContractForCreator(creator.id);
     const v = templateVars(ctx);

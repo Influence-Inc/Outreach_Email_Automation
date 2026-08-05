@@ -773,19 +773,11 @@ async function onOfferResponded(offerId, response) {
         [offer.creator_id, offer.id, channel, body, providerMessageId],
       );
 
-    // Email confirmation (accept only — no email on decline).
-    if (response === 'accepted' && offer.creator_email) {
-      try {
-        const res = await email.sendOfferConfirmationEmail({
-          to: offer.creator_email,
-          firstName,
-          brandName: offer.brand_name,
-        });
-        if (res.sent) await logSend('email', `Confirmation email — "Offer confirmed — ${offer.brand_name}"`);
-      } catch (err) {
-        console.error('[offers] confirmation email failed', err.message);
-      }
-    }
+    // Note: we deliberately DON'T send an acceptance-confirmation email here.
+    // The old "our team will follow up in 1–2 business days" copy is obsolete
+    // now that a used creator's next step (sign the mini-contract, then get
+    // their personalised brief link) starts immediately on the same portal
+    // page — an extra inbox email would set the wrong expectation.
 
     // WhatsApp / iMessage thank-you / polite-close (both accept and decline) —
     // only over an ALREADY-established channel. A web response with no prior
@@ -1669,8 +1661,25 @@ async function signMiniContract({ token, signature, signerName, ip }) {
     console.error('[offers] mini-contract sign logging failed', err.message);
   }
 
-  // Returning creators sign here (not the main contract), so flag their brief
-  // from this path too — best-effort, never blocks the signature.
+  // A used creator's portal signature IS their contract — Deal Studio already
+  // holds their prior-campaign details and the offer portal covers acceptance
+  // + a drawn signature, so there's no separate contract to email and nothing
+  // for admin to approve. Auto-set contract_approved so the row skips the
+  // "Approve deal" delegate, and start the personalised brief immediately.
+  // Best-effort — the signature is already saved; failures here never block it.
+  try {
+    await db.query(
+      `UPDATE creators SET contract_approved = TRUE, updated_at = NOW()
+        WHERE id = $1 AND contract_approved = FALSE`,
+      [offer.creator_id],
+    );
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_auto_approved_portal_signed', $2)`,
+      [offer.creator_id, { offerToken: token }],
+    );
+  } catch (err) {
+    console.error('[offers] auto-approve on portal sign failed', err.message);
+  }
   try {
     await require('./briefs').flagBriefPending(offer.creator_id);
   } catch (err) {
@@ -1833,6 +1842,10 @@ async function attachOffers(rows) {
         ? String(o.requested_start_date instanceof Date ? o.requested_start_date.toISOString() : o.requested_start_date).slice(0, 10)
         : null,
       expiresAt: o.expires_at,
+      // Whether they've signed the portal mini-contract — the dashboard's
+      // "Approve deal" pop-up uses this to show that approving starts the brief
+      // (no separate contract is sent) rather than emailing a contract.
+      signed: !!o.contract_signed_at,
       isCounter: o.parent_offer_id != null,
       viewed,
       events: evs.map((e) => ({ event: e.event, channel: e.channel, at: e.occurred_at })),
