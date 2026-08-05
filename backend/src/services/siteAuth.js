@@ -21,11 +21,17 @@
 //   /health                               Railway health check
 //   /login, /logout, /auth/slack*         the sign-in flow itself
 //
-// Non-browser clients (the Chrome extension, curl, cron scripts) can't ride the
-// session cookie, so they authenticate with a shared machine token instead —
-// DASHBOARD_API_TOKEN, sent as `x-api-token` (or the legacy `x-site-password`
-// header, or HTTP Basic). This is a service credential, distinct from the human
-// Slack sign-in.
+// The Chrome extension can't ride the HttpOnly session cookie on its
+// extension-origin fetches, so it reuses the team member's existing dashboard
+// sign-in: it reads the `io_session` cookie via the browser's cookies API and
+// forwards the same signed token in the `x-io-session` header. No per-user
+// setup, and extension access is automatically tied to being signed in to the
+// dashboard.
+//
+// Truly headless clients (curl, cron scripts) have no Slack session at all, so
+// they authenticate with a shared machine token instead — DASHBOARD_API_TOKEN,
+// sent as `x-api-token` (or the legacy `x-site-password` header, or HTTP Basic).
+// This is a service credential, distinct from the human Slack sign-in.
 //
 // If SLACK_CLIENT_ID / SLACK_CLIENT_SECRET are unset the gate is OFF (with a
 // loud boot warning) so a fresh clone / local `npm start` still works and so
@@ -34,6 +40,9 @@
 const crypto = require('crypto');
 
 const COOKIE_NAME = 'io_session';
+// Header the Chrome extension uses to forward the session token it read from the
+// dashboard's cookie (extension-origin fetches can't send the cookie itself).
+const SESSION_HEADER = 'x-io-session';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const STATE_TTL_MS = 15 * 60 * 1000; // OAuth round-trip window
 const SESSION_VERSION = 'v2';
@@ -368,9 +377,19 @@ function tokenFromHeaders(req) {
   return null;
 }
 
+// Resolve the signed-in user from the session token. Browsers carry it in the
+// HttpOnly `io_session` cookie; the Chrome extension can't send that cookie on
+// its extension-origin fetches, so it reads the cookie via the browser's cookies
+// API and forwards the same token in the `x-io-session` header instead. Both are
+// the identical signed token — a custom header is not auto-attached by the
+// browser, so accepting it here adds no CSRF exposure the cookie didn't have.
 function sessionUser(req) {
   const cookie = parseCookies(req.headers.cookie)[COOKIE_NAME];
-  return readSession(cookie);
+  const fromCookie = readSession(cookie);
+  if (fromCookie) return fromCookie;
+  const header = req.headers[SESSION_HEADER];
+  if (typeof header === 'string' && header) return readSession(header);
+  return null;
 }
 
 function isAuthed(req) {
@@ -617,6 +636,7 @@ function logSiteAuthConfig() {
 
 module.exports = {
   COOKIE_NAME,
+  SESSION_HEADER,
   SESSION_TTL_MS,
   gate,
   showLogin,

@@ -192,6 +192,23 @@ test('a valid session cookie passes the gate and carries identity', () => {
   });
 });
 
+test('the extension can forward the session token via the x-io-session header', () => {
+  withEnv({}, () => {
+    const token = auth.createSession(USER);
+    // No cookie — just the header the extension sends after reading io_session.
+    const headers = { [auth.SESSION_HEADER]: token };
+    let called = false;
+    auth.gate(req({ path: '/api/campaigns', headers }), res(), () => { called = true; });
+    assert.strictEqual(called, true);
+
+    const user = auth.sessionUser(req({ headers }));
+    assert.strictEqual(user.email, USER.email);
+
+    // A forged header token is rejected.
+    assert.strictEqual(auth.sessionUser(req({ headers: { [auth.SESSION_HEADER]: `${token}x` } })), null);
+  });
+});
+
 test('sessions expire and tampered signatures are rejected', () => {
   withEnv({}, () => {
     const now = Date.now();

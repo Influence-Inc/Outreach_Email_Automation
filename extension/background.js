@@ -143,20 +143,29 @@ async function emitProgress(senderTabId, payload) {
 }
 
 // The dashboard's admin API sits behind Sign in with Slack (see backend
-// services/siteAuth.js). Its session cookie is same-origin only, so extension
-// requests authenticate with the machine token header instead — the backend's
-// DASHBOARD_API_TOKEN, saved in the popup under "Dashboard API token". Returns
-// {} when unset (backend with the gate off).
-async function authHeaders() {
-  const { infSitePassword } = await chrome.storage.local.get(['infSitePassword']);
-  return infSitePassword ? { 'x-site-password': infSitePassword } : {};
+// services/siteAuth.js). Its `io_session` cookie is same-origin only, so an
+// extension-origin fetch can't send it. Instead we reuse the team member's
+// existing dashboard sign-in: read that cookie via the browser's cookies API
+// and forward the same signed token in the `x-io-session` header. No per-user
+// setup — as long as they're signed in to the dashboard, the extension works.
+// Returns {} when there's no session (not signed in, or backend gate off).
+async function authHeaders(apiBase) {
+  try {
+    if (apiBase && chrome.cookies) {
+      const cookie = await chrome.cookies.get({ url: apiBase, name: 'io_session' });
+      if (cookie && cookie.value) return { 'x-io-session': cookie.value };
+    }
+  } catch (e) {
+    /* cookies unavailable — fall through to no auth header */
+  }
+  return {};
 }
 
 async function patchCreator(apiBase, id, body) {
   const url = `${apiBase}/api/creators/${id}`;
   const resp = await fetch(url, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders(apiBase)) },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -355,7 +364,7 @@ async function postIgDmResult(apiBase, creatorId, { ok, error }) {
   const url = `${apiBase}/api/creators/${creatorId}/ig-dm-result`;
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders(apiBase)) },
     body: JSON.stringify(ok ? { ok: true } : { ok: false, error: error || 'unknown' }),
   });
   if (!resp.ok) {

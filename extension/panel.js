@@ -67,29 +67,36 @@
 
   // ---- API ----------------------------------------------------------------
   // The dashboard's admin API sits behind Sign in with Slack (see backend
-  // services/siteAuth.js). Its session cookie is same-origin to the dashboard,
-  // so this panel — served from the extension origin — sends the machine token
-  // header (DASHBOARD_API_TOKEN) instead. It's read from extension storage (set
-  // in the popup) rather than passed through the iframe URL, so it never lands
-  // in the DOM of the Instagram page hosting us.
-  let sitePassword = null;
-  const sitePasswordReady = chrome.storage.local
-    .get(['infSitePassword'])
-    .then((v) => { sitePassword = (v && v.infSitePassword) || null; })
-    .catch(() => {});
+  // services/siteAuth.js). Its `io_session` cookie is same-origin to the
+  // dashboard, so this panel — served from the extension origin — can't send it.
+  // Instead we reuse the team member's existing dashboard sign-in: read that
+  // cookie via the browser's cookies API and forward the same signed token in
+  // the `x-io-session` header. Nothing to configure; it just needs the user to
+  // be signed in to the Deal Studio dashboard. The token never lands in the DOM
+  // of the Instagram page hosting us.
+  async function authHeaders() {
+    try {
+      if (apiBase && chrome.cookies) {
+        const cookie = await chrome.cookies.get({ url: apiBase, name: 'io_session' });
+        if (cookie && cookie.value) return { 'x-io-session': cookie.value };
+      }
+    } catch (e) {
+      /* cookies unavailable — fall through to no auth header */
+    }
+    return {};
+  }
 
   async function api(path, options = {}) {
     if (!apiBase) throw new Error('Dashboard URL not set. Open the extension popup to set it.');
-    await sitePasswordReady;
     const res = await fetch(apiBase + path, {
       headers: {
         'Content-Type': 'application/json',
-        ...(sitePassword ? { 'x-site-password': sitePassword } : {}),
+        ...(await authHeaders()),
       },
       ...options,
     });
     if (res.status === 401) {
-      throw new Error('Dashboard token required. Open the extension popup and set the Dashboard API token.');
+      throw new Error('Not signed in. Open the Deal Studio dashboard and sign in with Slack, then retry.');
     }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

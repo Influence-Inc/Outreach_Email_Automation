@@ -30,18 +30,24 @@ You can also open the panel manually on any creator's profile via the slim **"De
 | `panel.html` / `panel.css` / `panel.js` | The panel itself: rate timeline, safe floor, and the offer configurator (ported from the dashboard). Fetches + posts to the dashboard API. |
 | `background.js` | `openDecideOffer`: stores the one-shot target (creator id + dashboard URL) and opens the profile tab. |
 | `dashboard-bridge.js` | Forwards the dashboard's `OEA_OPEN_DECIDE_OFFER` message and remembers the dashboard URL. |
-| `popup.html` / `popup.js` | Lets you set the Dashboard URL used by the panel when opened standalone, and the dashboard API token below. |
+| `popup.html` / `popup.js` | Lets you set the Dashboard URL used by the panel when opened standalone. No auth setup — see below. |
 
-### Dashboard API token
+### Authentication (zero setup)
 
-The dashboard signs humans in with Slack, but its admin API also accepts a
-machine token (`DASHBOARD_API_TOKEN`) for clients that can't ride the Slack
-session cookie. Extension-origin requests are exactly that case — so open the
-extension popup and save the backend's `DASHBOARD_API_TOKEN` under **Dashboard
-API token**. It's kept in `chrome.storage.local` and sent as an `x-site-password`
-header (the backend also accepts `x-api-token`) on every API call the panel, the
-scrape queue and the DM queue make. Without it those calls fail with "Dashboard
-token required". Leave it blank for a backend that has no gate set.
+Install the extension and use it — there's no token or password to configure.
+The dashboard signs people in with Slack and drops an HttpOnly `io_session`
+cookie on its own origin. An extension-origin `fetch` can't send that cookie, so
+instead the extension **reuses your existing dashboard sign-in**: it reads the
+`io_session` cookie via the browser's `cookies` API (the `cookies` permission in
+`manifest.json`) and forwards the same signed token in an `x-io-session` header
+on every API call the panel, the scrape queue and the DM queue make. The backend
+accepts that header exactly like the cookie (see `services/siteAuth.js`).
+
+So the only requirement is that you're **signed in to the Deal Studio dashboard
+in the same browser** — which you are day to day. If you're not, calls fail with
+"Not signed in. Open the Deal Studio dashboard and sign in with Slack, then
+retry." No shared secret is ever shipped inside the extension, and the token
+read is origin-scoped, so nothing is exposed to a look-alike page.
 
 The panel is an **extension-origin** iframe (listed in `web_accessible_resources`) rather than a dashboard-origin frame: extension frames are CSS-isolated from Instagram and aren't blocked by Instagram's page CSP. It reaches the API using the dashboard URL captured when you open the dashboard (or set in the popup); no offers are ever sent by the extension itself — it calls the same server endpoints the dashboard does, which remain the single source of truth for pricing and sending.
 
