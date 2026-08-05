@@ -353,38 +353,15 @@ async function sendGraduationEmail({ to, firstName, brandName, congratsLine, wha
   return deliver({ to, subject, text, html });
 }
 
-// Thank-you confirmation email on acceptance.
-function renderOfferConfirmationEmail({ firstName, brandName }) {
-  const subject = `You're all set, ${firstName}! 🎉`;
-  const text = [
-    `Hi ${firstName},`,
-    ``,
-    `Thank you for accepting the ${brandName} collaboration — we're genuinely excited to have you on board!`,
-    ``,
-    `Our team will follow up within 1–2 business days with the next steps to get everything moving.`,
-    ``,
-    `Excited to create something great together,`,
-    `Team INFLUENCE`,
-  ].join('\n');
-
-  const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
-    <p>Thank you for accepting the <strong>${escapeHtml(brandName)}</strong> collaboration &mdash; we're genuinely excited to have you on board!</p>
-    <p>Our team will follow up within 1&ndash;2 business days with the next steps to get everything moving.</p>
-    <p style="margin-top:24px;">Excited to create something great together,<br/>Team INFLUENCE</p>`);
-
-  return { subject, text, html };
-}
-
-async function sendOfferConfirmationEmail({ to, firstName, brandName }) {
-  const { subject, text, html } = renderOfferConfirmationEmail({ firstName, brandName });
-  return deliver({ to, subject, text, html });
-}
+// (Removed: renderOfferConfirmationEmail / sendOfferConfirmationEmail.)
+// The old "we'll follow up in 1–2 business days" confirmation email is gone —
+// the creator's next step (sign the mini-contract, then receive their
+// personalised brief link) happens right on the portal, so an extra inbox
+// email would set the wrong expectation.
 
 module.exports = {
   renderOfferEmail,
   sendOfferEmail,
-  renderOfferConfirmationEmail,
-  sendOfferConfirmationEmail,
   renderPortalInviteEmail,
   sendPortalInviteEmail,
   renderOfferWithContactEmail,

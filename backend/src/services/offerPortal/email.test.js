@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const email = require('./email');
-const { renderOfferEmail, renderOfferConfirmationEmail, renderPortalInviteEmail } = email;
+const { renderOfferEmail, renderPortalInviteEmail } = email;
 
 // Set PUBLIC_BASE_URL for the block so the iMessage button resolves to the https
 // redirect page (the production path), and restore it after.
@@ -183,14 +183,6 @@ test('renderOfferEmail is warm, names the creator + brand, and keeps the offer l
   // Warmer than the old transactional "Please accept or decline through the
   // above link." closer.
   assert.doesNotMatch(r.text, /Please accept or decline/);
-});
-
-test('renderOfferConfirmationEmail is celebratory and mentions the follow-up window', () => {
-  const r = renderOfferConfirmationEmail({ firstName: 'Sam', brandName: 'Acme' });
-  assert.match(r.subject, /Sam/);
-  assert.match(r.text, /Acme/);
-  assert.match(r.text, /1–2 business days/);
-  assert.match(r.html, /Acme/);
 });
 
 test('renderPortalInviteEmail body never names a specific channel not offered (WhatsApp-only stays silent on iMessage)', () => {
