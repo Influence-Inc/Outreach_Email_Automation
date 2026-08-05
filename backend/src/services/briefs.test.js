@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const briefs = require('./briefs');
-const { computeExpectedViews, buildBrief, normalizeVideoLinks, roundClean } = briefs;
+const { computeExpectedViews, buildBrief, normalizeVideoLinks, roundClean, attachBriefs } = briefs;
 
 // ── roundClean ───────────────────────────────────────────────────────────────
 test('roundClean tidies numbers by magnitude and rejects non-positive', () => {
@@ -180,4 +180,24 @@ test('buildBrief threads the per-creator review + post links and the bio link', 
   assert.match(brief.reviewUrl, /submit-for-review/);
   assert.match(brief.postShareUrl, /submit-links/);
   assert.strictEqual(brief.posting.linkInBio, 'https://track.example/abc');
+});
+
+// ── attachBriefs ──────────────────────────────────────────────────────────────
+test('attachBriefs sets { token, url, publishedAt } only for published briefs', async () => {
+  const rows = [
+    { id: 1, brief_token: 'tok-a', brief_published_at: '2026-01-01T00:00:00.000Z' },
+    { id: 2, brief_token: 'tok-b', brief_published_at: null }, // never published
+    { id: 3, brief_token: null, brief_published_at: null }, // no brief at all
+  ];
+  await attachBriefs(rows);
+  assert.strictEqual(rows[0].brief.token, 'tok-a');
+  assert.match(rows[0].brief.url, /\/brief\/tok-a$/);
+  assert.strictEqual(rows[0].brief.publishedAt, '2026-01-01T00:00:00.000Z');
+  assert.strictEqual(rows[1].brief, null);
+  assert.strictEqual(rows[2].brief, null);
+});
+
+test('attachBriefs tolerates an empty/missing rows array', async () => {
+  await assert.doesNotReject(attachBriefs([]));
+  await assert.doesNotReject(attachBriefs(undefined));
 });

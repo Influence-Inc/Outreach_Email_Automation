@@ -1480,6 +1480,24 @@ function renderStatusCell(r, cell) {
     }
   }
 
+  // Brief action — once a creator's personalised content brief has been
+  // published (see buildBriefBlock's "Publish & get link"), a "View brief"
+  // link sits next to Contract so admins can find it again later without
+  // re-opening the hand-off — the pending hand-off itself only shows up
+  // while unpublished (isBriefActionable), so this is the only place a
+  // published brief stays reachable from the table.
+  if (r.brief && r.brief.url) {
+    const viewBrief = document.createElement('button');
+    viewBrief.type = 'button';
+    viewBrief.className = 'ghost small cr-view-brief';
+    viewBrief.textContent = 'View brief';
+    viewBrief.title = r.brief.url;
+    viewBrief.onclick = () => {
+      window.open(r.brief.url, '_blank', 'noopener');
+    };
+    left.appendChild(viewBrief);
+  }
+
   top.appendChild(left);
 
   // Stop outreach — a square icon button beside delete, available on every
