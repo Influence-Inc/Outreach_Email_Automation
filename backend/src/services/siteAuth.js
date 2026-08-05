@@ -446,56 +446,104 @@ function loginPage({ next = '/', error = '' } = {}) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
+  <meta name="color-scheme" content="light dark" />
   <title>Influence — Deal Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
   <style>
     :root {
-      --bg: #f5f4f0; --surface: #fff; --surface-2: #faf9f6;
-      --ink: #191817; --ink-2: #4d4b46; --muted: #8a8880;
-      --line: #e6e4de; --line-2: #dcdad3; --danger: #FF3140;
+      --bg-1: #f7f6f2; --bg-2: #eeece6; --glow: rgba(255, 255, 255, 0.7);
+      --surface: #fffefb; --ink: #191817; --ink-2: #4d4b46; --muted: #8a8880;
+      --line: #e6e4de; --line-2: #dcdad3;
+      --btn-bg: #191817; --btn-bg-hover: #000; --btn-ink: #fff;
+      --ring: rgba(25, 24, 23, 0.16);
+      --danger: #c22736; --danger-bg: rgba(255, 49, 64, 0.07); --danger-line: rgba(255, 49, 64, 0.22);
+      --card-shadow: 0 1px 1px rgba(20, 18, 15, 0.04), 0 10px 30px -12px rgba(20, 18, 15, 0.18);
       --font: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-1: #171614; --bg-2: #0e0d0c; --glow: rgba(120, 116, 108, 0.12);
+        --surface: #1d1b19; --ink: #f4f2ec; --ink-2: #b6b2a9; --muted: #8b877f;
+        --line: #2c2925; --line-2: #38342f;
+        --btn-bg: #f4f2ec; --btn-bg-hover: #fff; --btn-ink: #191817;
+        --ring: rgba(244, 242, 236, 0.22);
+        --danger: #ff7a84; --danger-bg: rgba(255, 90, 100, 0.10); --danger-line: rgba(255, 90, 100, 0.26);
+        --card-shadow: 0 1px 1px rgba(0, 0, 0, 0.3), 0 18px 44px -16px rgba(0, 0, 0, 0.6);
+      }
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
     body {
-      font-family: var(--font); color: var(--ink); background: var(--bg);
-      -webkit-font-smoothing: antialiased; min-height: 100vh;
+      font-family: var(--font); color: var(--ink);
+      background: var(--bg-2);
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+      min-height: 100vh; min-height: 100dvh;
       display: flex; align-items: center; justify-content: center; padding: 24px;
     }
-    .card {
-      width: 100%; max-width: 380px; background: var(--surface);
-      border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px;
-      box-shadow: 0 1px 2px rgba(20, 18, 15, 0.03); text-align: center;
+    /* Warm gradient wash + a soft light bloom above the card. */
+    body::before {
+      content: ""; position: fixed; inset: 0; z-index: -1;
+      background:
+        radial-gradient(120% 80% at 50% -10%, var(--glow), transparent 60%),
+        linear-gradient(180deg, var(--bg-1), var(--bg-2));
     }
-    .logo { width: 132px; height: auto; display: block; margin: 0 auto; fill: var(--ink); }
-    h1 { font-size: 15px; font-weight: 600; margin: 18px 0 4px; letter-spacing: -0.01em; }
-    p.sub { font-size: 13px; color: var(--muted); margin: 0 0 22px; }
+    .card {
+      position: relative; width: 100%; max-width: 396px; background: var(--surface);
+      border: 1px solid var(--line); border-radius: 20px; padding: 40px 36px 30px;
+      box-shadow: var(--card-shadow); text-align: center;
+    }
+    .brand {
+      display: block; width: 108px; height: auto; margin: 0 auto 26px;
+      fill: var(--ink-2); opacity: 0.85;
+    }
+    h1 {
+      font-size: 23px; font-weight: 600; line-height: 1.15;
+      letter-spacing: -0.02em; margin: 0 0 8px;
+    }
+    p.sub {
+      font-size: 13.5px; line-height: 1.5; color: var(--muted);
+      margin: 0 auto 26px; max-width: 34ch; text-wrap: balance;
+    }
+    .error {
+      display: flex; align-items: flex-start; gap: 8px; text-align: left;
+      font-size: 13px; line-height: 1.45; color: var(--danger);
+      background: var(--danger-bg); border: 1px solid var(--danger-line);
+      border-radius: 12px; padding: 10px 12px; margin: 0 0 18px;
+    }
+    .error svg { width: 15px; height: 15px; flex: none; margin-top: 1px; }
     .slack-btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-      width: 100%; font: inherit; font-size: 14px; font-weight: 600;
-      color: var(--ink); background: var(--surface);
-      border: 1px solid var(--line-2); border-radius: 10px;
-      padding: 12px; cursor: pointer; text-decoration: none;
+      width: 100%; font: inherit; font-size: 14.5px; font-weight: 600;
+      color: var(--btn-ink); background: var(--btn-bg);
+      border: 0; border-radius: 12px; padding: 13px 16px;
+      cursor: pointer; text-decoration: none;
+      transition: transform .12s ease, box-shadow .12s ease, background-color .12s ease;
     }
-    .slack-btn:hover { border-color: var(--ink); background: var(--surface-2); }
-    .slack-btn svg { width: 20px; height: 20px; flex: none; }
-    .error {
-      font-size: 13px; color: var(--danger); background: rgba(255, 49, 64, 0.06);
-      border: 1px solid rgba(255, 49, 64, 0.18); border-radius: 10px;
-      padding: 9px 11px; margin: 0 0 16px; text-align: left;
+    .slack-btn:hover { background: var(--btn-bg-hover); transform: translateY(-1px); box-shadow: 0 8px 20px -10px rgba(20, 18, 15, 0.5); }
+    .slack-btn:active { transform: translateY(0); box-shadow: none; }
+    .slack-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+    .slack-btn svg { width: 19px; height: 19px; flex: none; }
+    .foot {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin: 22px 0 0; font-size: 11.5px; color: var(--muted);
+    }
+    .foot svg { width: 12px; height: 12px; flex: none; opacity: 0.8; }
+    @media (prefers-reduced-motion: no-preference) {
+      .card { animation: rise .5s cubic-bezier(.2, .7, .2, 1) both; }
+      @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.99); } to { opacity: 1; transform: none; } }
     }
   </style>
 </head>
 <body>
   <main class="card">
-    <svg class="logo" viewBox="0 0 793 70" role="img" aria-label="Influence">
+    <svg class="brand" viewBox="0 0 793 70" role="img" aria-label="Influence">
       <path d="M20.01 68.6729H1.35348e-05V1.03334H20.01V68.6729ZM126.221 69.8941L55.1993 29.4044V68.6729H42.5169V-4.03086e-05L113.538 40.3018V1.03334H126.221V69.8941ZM209.764 44.2475H168.992V68.6729H148.794V1.03334H219.816V11.9308H169.086V33.35H209.764V44.2475ZM306.528 68.6729H236.54V1.03334H256.738V57.7754H306.528V68.6729ZM389.07 34.6652V1.03334H401.847V34.6652C401.847 40.8029 400.813 46.1577 398.747 50.7296C396.742 55.3015 393.861 58.934 390.104 61.6271C386.409 64.3201 382.15 66.3243 377.327 67.6395C372.505 68.9547 367.119 69.6123 361.169 69.6123C348.706 69.6123 338.81 66.7627 331.483 61.0634C324.218 55.3642 320.585 46.6274 320.585 34.8531V1.03334H341.065V34.6652C341.065 38.8614 341.754 42.4939 343.132 45.5627C344.51 48.6315 346.357 51.0114 348.675 52.7024C351.054 54.3934 353.591 55.646 356.284 56.4602C359.04 57.2117 361.983 57.5875 365.115 57.5875C368.246 57.5875 371.158 57.2117 373.851 56.4602C376.607 55.646 379.144 54.3934 381.461 52.7024C383.841 51.0114 385.688 48.6315 387.004 45.5627C388.381 42.4939 389.07 38.8614 389.07 34.6652ZM494.814 68.6729H423.041V1.03334H494.814V11.9308H443.238V28.7468H484.386V39.6442H443.238V57.7754H494.814V68.6729ZM596.325 69.8941L525.303 29.4044V68.6729H512.621V-4.03086e-05L583.643 40.3018V1.03334H596.325V69.8941ZM702.321 52.6085V63.7878C692.989 67.796 681.778 69.8002 668.689 69.8002C657.917 69.8002 648.428 68.4536 640.224 65.7606C632.082 63.0049 625.694 58.9653 621.059 53.6418C616.425 48.3184 614.108 42.0555 614.108 34.8531C614.108 24.0809 619.087 15.6259 629.045 9.48828C639.003 3.28799 652.217 0.187845 668.689 0.187845C681.966 0.187845 693.177 2.19198 702.321 6.20025V18.5069C693.302 13.4965 682.78 10.9914 670.756 10.9914C659.545 10.9914 650.84 13.246 644.639 17.7553C638.439 22.202 635.339 27.9013 635.339 34.8531C635.339 41.8676 638.439 47.6294 644.639 52.1387C650.902 56.648 659.796 58.9027 671.319 58.9027C682.029 58.9027 692.363 56.8046 702.321 52.6085ZM792.821 68.6729H721.048V1.03334H792.821V11.9308H741.246V28.7468H782.393V39.6442H741.246V57.7754H792.821V68.6729Z" />
     </svg>
-    <h1>Deal Studio</h1>
-    <p class="sub">This dashboard is private. Sign in with your team Slack account to continue.</p>
-    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+    <h1>Welcome to Deal Studio</h1>
+    <p class="sub">This dashboard is private. Sign in with your Influence Slack account.</p>
+    ${error ? `<p class="error"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 1.5 1 18h18L10 1.5Zm0 5.25c.48 0 .85.41.8.89l-.35 4.02a.45.45 0 0 1-.9 0L9.2 7.64a.8.8 0 0 1 .8-.89ZM10 14a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z" clip-rule="evenodd"/></svg><span>${escapeHtml(error)}</span></p>` : ''}
     <a class="slack-btn" href="${escapeHtml(authHref)}">
       <svg viewBox="0 0 122.8 122.8" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A"/>
@@ -505,6 +553,10 @@ function loginPage({ next = '/', error = '' } = {}) {
       </svg>
       Sign in with Slack
     </a>
+    <p class="foot">
+      <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6 8V6a4 4 0 0 1 8 0v2h.5A1.5 1.5 0 0 1 16 9.5v6A1.5 1.5 0 0 1 14.5 17h-9A1.5 1.5 0 0 1 4 15.5v-6A1.5 1.5 0 0 1 5.5 8H6Zm2 0h4V6a2 2 0 1 0-4 0v2Z"/></svg>
+      Access is limited to the Influence team
+    </p>
   </main>
 </body>
 </html>`;
