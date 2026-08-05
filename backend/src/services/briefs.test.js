@@ -71,11 +71,13 @@ test('normalizeVideoLinks accepts strings and {label,url}, drops empties', () =>
     '',
     { url: '' },
     'https://c',
+    'Labelled | https://d',
   ]);
   assert.deepStrictEqual(out, [
     { label: '', url: 'https://a' },
     { label: 'Hook', url: 'https://b' },
     { label: '', url: 'https://c' },
+    { label: 'Labelled', url: 'https://d' },
   ]);
 });
 
@@ -93,8 +95,9 @@ function ctxFixture(overrides = {}) {
     },
     contentBrief: {
       website: 'reve.com',
-      what_is_it: 'AI image tool',
+      campaign_narrative: 'AI image tool',
       dm_keyword: 'Reve',
+      demo_links: ['https://drive.google.com/file/d/ABC/view'],
       caption: { mention_handle: '@reve_image', hashtags: '#reveimage' },
       ...(overrides.contentBrief || {}),
     },
@@ -141,4 +144,6 @@ test('buildBrief carries the curated fields, boilerplate and creator identity', 
   assert.strictEqual(brief.creator.firstName, 'Tharun');
   assert.strictEqual(brief.creator.handle, '@tharun.fyi');
   assert.strictEqual(brief.expectedViews.per, 'video'); // video-based deal
+  assert.strictEqual(brief.campaignNarrative, 'AI image tool');
+  assert.deepStrictEqual(brief.brand.demoLinks, ['https://drive.google.com/file/d/ABC/view']);
 });

@@ -30,6 +30,32 @@
     .then(function (payload) { render(payload && payload.data); })
     .catch(function () { showState('notfound'); });
 
+  // Return an embeddable iframe src for known providers (Google Drive files,
+  // YouTube), else null so the link renders as a plain link instead.
+  function embedSrc(url) {
+    if (!url) return null;
+    var m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
+    if (m) return 'https://drive.google.com/file/d/' + m[1] + '/preview';
+    m = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{6,})/);
+    if (m) return 'https://www.youtube.com/embed/' + m[1];
+    return null;
+  }
+  // A single media reference — embedded when we recognise it, else a link.
+  function media(url, label) {
+    var src = embedSrc(url);
+    if (src) {
+      return '<figure class="embed"><iframe src="' + esc(src) +
+        '" loading="lazy" allow="autoplay; encrypted-media; fullscreen" allowfullscreen referrerpolicy="no-referrer"></iframe>' +
+        (has(label) ? '<figcaption>' + esc(label) + '</figcaption>' : '') + '</figure>';
+    }
+    return '<div class="media-link">' + link(url, has(label) ? label : url) + '</div>';
+  }
+  function mediaList(items) {
+    return '<div class="media-list">' + items.map(function (it) { return media(it.url, it.label); }).join('') + '</div>';
+  }
+  function section(title, inner) { return '<section class="blk"><h2>' + esc(title) + '</h2>' + inner + '</section>'; }
+  function prose(text) { return '<p class="prose">' + esc(text) + '</p>'; }
+
   function render(d) {
     if (!d) { showState('notfound'); return; }
     var brand = d.brand || {};
@@ -49,21 +75,13 @@
 
     // ── Quick info ──────────────────────────────────────────────────────────
     var q = [];
-    if (has(brand.name)) {
-      var brandLine = '<b>Brand:</b> ' + esc(brand.name);
-      if (has(brand.pronunciation)) brandLine += ' (pronounced “' + esc(brand.pronunciation) + '”)';
-      q.push(brandLine);
-    }
-    if (has(brand.whatIsIt)) q.push('<b>What is it:</b> ' + esc(brand.whatIsIt));
-    if (has(brand.websiteUrl) || has(brand.website)) {
-      q.push('<b>Website:</b> ' + link(brand.websiteUrl, brand.website || brand.websiteUrl));
-    }
-    if (has(brand.demoLink)) q.push('<b>Quick demo:</b> ' + link(brand.demoLink));
+    if (has(brand.name)) q.push('<b>Brand:</b> ' + esc(brand.name));
+    if (has(d.campaignNarrative)) q.push('<b>What is it:</b> ' + esc(d.campaignNarrative));
+    if (has(brand.websiteUrl) || has(brand.website)) q.push('<b>Website:</b> ' + link(brand.websiteUrl, brand.website || brand.websiteUrl));
     if (has(brand.freeAccountLink)) q.push('<b>Free account:</b> ' + link(brand.freeAccountLink));
     if (q.length) {
-      html += '<div class="callout star"><div class="c-title">★ Quick info</div><ul class="kv">';
-      q.forEach(function (item) { html += '<li>' + item + '</li>'; });
-      html += '</ul></div>';
+      html += '<div class="callout star"><div class="c-title">★ Quick info</div><ul class="kv">' +
+        q.map(function (i) { return '<li>' + i + '</li>'; }).join('') + '</ul></div>';
     }
 
     // ── Expected views ──────────────────────────────────────────────────────
@@ -73,34 +91,24 @@
         '<span class="sub">No pressure :)</span></div></div>';
     }
 
-    // ── Content direction (per creator) ─────────────────────────────────────
-    if (has(d.contentDirection)) {
-      html += '<section class="blk"><h2>Content direction</h2>' +
-        '<p class="prose">' + esc(d.contentDirection) + '</p></section>';
+    // ── 1. Before you film ──────────────────────────────────────────────────
+    var pre = '';
+    if (has(d.contentDirection)) pre += section('Content direction', prose(d.contentDirection));
+    if (has(d.screenFlowInstructions)) pre += section('Features to use', prose(d.screenFlowInstructions));
+    if (has(d.whyViral)) pre += section('Why it works', prose(d.whyViral));
+    if (Array.isArray(brand.demoLinks) && brand.demoLinks.length) {
+      pre += section('Demos', mediaList(brand.demoLinks.map(function (u) { return { url: u, label: '' }; })));
     }
-
-    // ── Top performing videos (per creator) ─────────────────────────────────
     if (Array.isArray(d.topVideos) && d.topVideos.length) {
-      html += '<section class="blk"><h2>Top performing videos</h2>' +
-        '<p class="lead-in">A few references to show the direction we love:</p><ul class="vids">';
-      d.topVideos.forEach(function (v, i) {
-        var label = has(v.label) ? v.label : 'Example ' + (i + 1);
-        html += '<li>' + link(v.url, label) + '</li>';
-      });
-      html += '</ul></section>';
+      pre += section('Top performing videos', '<p class="lead-in">References that show the direction we love:</p>' + mediaList(d.topVideos));
     }
+    if (has(d.restrictions)) pre += section('Restrictions', '<ul class="bullets"><li>' + esc(d.restrictions) + '</li></ul>');
+    if (has(d.targetAudience)) pre += section('Target audience', prose(d.targetAudience));
+    if (has(d.rules)) pre += section('Guidelines', '<div class="rules">' + esc(d.rules) + '</div>');
+    if (has(d.usageRights)) pre += section('Usage rights', '<div class="usage">' + esc(d.usageRights) + '</div>');
+    if (pre) html += '<h3 class="phase-h">1 · Before you film</h3>' + pre;
 
-    // ── Filming & posting rules (universal boilerplate) ─────────────────────
-    if (has(d.rules)) {
-      html += '<section class="blk"><h2>Guidelines</h2><div class="rules">' + esc(d.rules) + '</div></section>';
-    }
-
-    // ── Usage rights ────────────────────────────────────────────────────────
-    if (has(d.usageRights)) {
-      html += '<section class="blk"><h2>Usage rights</h2><div class="usage">' + esc(d.usageRights) + '</div></section>';
-    }
-
-    // ── Posting checklist (campaign specifics) ──────────────────────────────
+    // ── 2. After you post ───────────────────────────────────────────────────
     var items = [];
     var capBits = [];
     if (has(cap.mentionHandle)) capBits.push('Mention ' + esc(cap.mentionHandle));
@@ -108,26 +116,19 @@
     if (has(cap.viaTag)) capBits.push('include ' + esc(cap.viaTag));
     if (has(cap.hashtags)) capBits.push('add ' + esc(cap.hashtags));
     if (capBits.length) items.push({ t: 'Caption', b: capBits.join('; ') + '.' });
-
     if (has(dm.keyword) || has(dm.link)) {
-      var dmb = '';
-      if (has(dm.keyword)) dmb += 'Set viewers to comment <span class="chip">' + esc(dm.keyword) + '</span> and auto-DM them ';
-      else dmb += 'DM viewers ';
-      dmb += 'your unique link' + (has(dm.link) ? ': ' + link(dm.link) : '.') ;
+      var dmb = has(dm.keyword)
+        ? 'Set viewers to comment <span class="chip">' + esc(dm.keyword) + '</span> and auto-DM them '
+        : 'DM viewers ';
+      dmb += 'your unique link' + (has(dm.link) ? ': ' + link(dm.link) : '.');
       items.push({ t: 'DM automation', b: dmb });
     }
-    if (has(post.reviewUploadLink)) {
-      items.push({ t: 'Upload for review', b: 'Before posting, upload your video for a quick brand review: ' + link(post.reviewUploadLink) + ' (24-hour turnaround).' });
-    }
-    if (has(post.submitLinksUrl)) {
-      items.push({ t: 'Share your posted links', b: 'After posting, share your link(s) here: ' + link(post.submitLinksUrl) + '.' });
-    }
     if (items.length) {
-      html += '<section class="blk"><h2>After you post</h2><ul class="checklist">';
-      items.forEach(function (it) {
-        html += '<li><span class="box"></span><span class="ci"><b>' + esc(it.t) + '</b>' + it.b + '</span></li>';
-      });
-      html += '</ul></section>';
+      html += '<h3 class="phase-h">2 · After you post</h3>' +
+        '<section class="blk"><ul class="checklist">' +
+        items.map(function (it) {
+          return '<li><span class="box"></span><span class="ci"><b>' + esc(it.t) + '</b>' + it.b + '</span></li>';
+        }).join('') + '</ul></section>';
     }
 
     // ── Footer ──────────────────────────────────────────────────────────────

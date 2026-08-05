@@ -1103,12 +1103,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* ── Content brief: per-campaign master-brief card ───────────────────────── */
 .brief-fields { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .brief-fields > .field-label { margin-top: 10px; }
-.brief-fields input {
+.brief-fields input, .brief-fields textarea {
   width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
   padding: 8px 10px; border: 1px solid var(--line-2); border-radius: var(--radius-xs);
   background: var(--surface-2); color: var(--ink);
 }
-.brief-fields input:focus { outline: none; box-shadow: var(--ring); border-color: var(--faint); background: var(--surface); }
+.brief-fields textarea { resize: vertical; }
+.brief-fields input:focus, .brief-fields textarea:focus { outline: none; box-shadow: var(--ring); border-color: var(--faint); background: var(--surface); }
 .brief-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 4px 0 2px; }
 .brief-grid .field-label { margin-bottom: 5px; font-size: 12px; }
 @media (max-width: 640px) { .brief-grid { grid-template-columns: 1fr; } }

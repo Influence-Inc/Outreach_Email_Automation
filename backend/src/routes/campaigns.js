@@ -14,7 +14,7 @@ router.get('/', async (_req, res, next) => {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
-              c.ig_dm_body, c.messaging_brief,
+              c.ig_dm_body, c.messaging_brief, c.content_brief,
               COUNT(cr.id)::int AS creator_count,
               -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
               -- creators without an email who haven't been DM'd yet AND whose

@@ -73,8 +73,16 @@ function normalizeVideoLinks(v) {
   return v
     .map((item) => {
       if (typeof item === 'string') {
-        const url = item.trim();
-        return url ? { label: '', url } : null;
+        const s = item.trim();
+        if (!s) return null;
+        // Accept "Label | https://…" as well as a bare URL (mirrors the
+        // dashboard's parseVideoLines, so raw lines survive either path).
+        const i = s.indexOf('|');
+        if (i > -1) {
+          const u = s.slice(i + 1).trim();
+          return u ? { label: s.slice(0, i).trim(), url: u } : null;
+        }
+        return { label: '', url: s };
       }
       if (item && typeof item === 'object') {
         const url = String(item.url || '').trim();
@@ -189,20 +197,28 @@ function buildBrief(ctx, { contentDirection = '', videoLinks = [], trackedUrl = 
   // else the raw brand website (so an un-minted brief still shows a link).
   const link = trackedUrl || ensureUrl(websiteRaw);
   const caption = cb.caption && typeof cb.caption === 'object' ? cb.caption : {};
+  // Multiple demo / screen-flow links (Drive, YouTube, …) — the page embeds the
+  // ones it recognises. Accepts an array or a single string for older data.
+  const demoLinks = (Array.isArray(cb.demo_links) ? cb.demo_links : cb.demo_links ? [cb.demo_links] : [])
+    .map((u) => ensureUrl(strOrNull(u)))
+    .filter(Boolean);
 
   return {
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     creator: { firstName, handle, fullName: creator.full_name || null },
     brand: {
       name: creator.brand_name || 'the brand',
-      pronunciation: strOrNull(cb.pronunciation),
-      whatIsIt: strOrNull(cb.what_is_it),
       website: websiteRaw,
       websiteUrl: link,
-      demoLink: strOrNull(cb.demo_link),
       freeAccountLink: strOrNull(cb.free_account_link),
+      demoLinks,
     },
+    campaignNarrative: strOrNull(cb.campaign_narrative),
+    whyViral: strOrNull(cb.why_viral),
+    screenFlowInstructions: strOrNull(cb.screen_flow_instructions),
+    restrictions: strOrNull(cb.restrictions),
+    targetAudience: strOrNull(cb.target_audience),
     expectedViews: computeExpectedViews(creator, contractData, cb),
     contentDirection: String(contentDirection || '').trim(),
     topVideos: normalizeVideoLinks(videoLinks),
@@ -217,8 +233,6 @@ function buildBrief(ctx, { contentDirection = '', videoLinks = [], trackedUrl = 
         link,
       },
       dmAutomation: { keyword: strOrNull(cb.dm_keyword || caption.comment_word), link },
-      reviewUploadLink: strOrNull(cb.review_upload_link),
-      submitLinksUrl: strOrNull(cb.submit_links_url),
     },
     trackedUrl: link,
   };
