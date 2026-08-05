@@ -165,25 +165,26 @@
             <p class="hint subhead">
               The master brief for this campaign — the parts that are the same for
               every creator. After a creator signs, this merges with their name,
-              usage rights and a tracked link into a ready-to-send brief; the team
-              only adds the content direction &amp; example videos in the hand-off.
+              usage rights, expected views and the per-creator tracked, review and
+              post links into a ready-to-send brief; the hand-off only adds an
+              optional creator-specific creative angle.
             </p>
             <div class="brief-fields">
               <label class="field-label">Campaign narrative <span class="hint">— what the product is, in a sentence or two</span></label>
               <textarea id="cb-narrative" class="io-scroll" rows="2" placeholder="Reve is a powerful graphic design / creative tool with annotations, text, graphics, reframe, templates, and image generation all in one place."></textarea>
-              <label class="field-label">Why it will go viral</label>
-              <textarea id="cb-why-viral" class="io-scroll" rows="2" placeholder="The “wow” factor, or a relatable problem it solves…"></textarea>
-              <label class="field-label">Screen / flow instructions <span class="hint">— the features to use &amp; how</span></label>
+              <label class="field-label">Features to use <span class="hint">— the content direction: which features to show &amp; how</span></label>
               <textarea id="cb-screen-flow" class="io-scroll" rows="4" placeholder="Annotations: add instructions right on your image to make detailed changes.&#10;Layers: add text and graphics to any image with new, adjustable layers.&#10;Reframe: zoom out or into your image, and adjust your aspect ratio.&#10;Templates: create dynamic graphics with templates."></textarea>
+              <label class="field-label">What to avoid <span class="hint">— one per line</span></label>
+              <textarea id="cb-restrictions" class="io-scroll" rows="3" placeholder="No IP content — no famous brands, people or characters.&#10;No commercial images — use Reve-generated or license-free images.&#10;No copyrighted songs — use license-free music."></textarea>
               <div class="brief-grid">
-                <div><label class="field-label">Restrictions</label><input id="cb-restrictions" type="text" placeholder="No IP content" /></div>
-                <div><label class="field-label">Target audience</label><input id="cb-audience" type="text" placeholder="Same as before" /></div>
                 <div><label class="field-label">Website <span class="hint">(tracked-link destination)</span></label><input id="cb-website" type="text" placeholder="reve.com" /></div>
                 <div><label class="field-label">Free-account / coupon link</label><input id="cb-free-account-link" type="text" placeholder="https://…" /></div>
                 <div><label class="field-label">DM automation keyword</label><input id="cb-dm-keyword" type="text" placeholder="Reve" /></div>
               </div>
-              <label class="field-label">Demo / screen-flow links <span class="hint">— one per line; Google Drive &amp; YouTube links embed on the brief</span></label>
+              <label class="field-label">Demo / quick-demo links <span class="hint">— one per line; Google Drive &amp; YouTube links embed on the brief</span></label>
               <textarea id="cb-demo-links" class="io-scroll" rows="2" placeholder="https://drive.google.com/file/d/…/view&#10;https://drive.google.com/drive/folders/…"></textarea>
+              <label class="field-label">Top-performing / example videos <span class="hint">— common to every creator; one per line, optional &ldquo;Label | https://…&rdquo;</span></label>
+              <textarea id="cb-example-videos" class="io-scroll" rows="3" placeholder="https://www.instagram.com/reel/…&#10;Great hook | https://…"></textarea>
               <label class="field-label">Caption</label>
               <div class="brief-grid">
                 <div><label class="field-label">Mention handle</label><input id="cb-cap-mention" type="text" placeholder="@reve_image" /></div>

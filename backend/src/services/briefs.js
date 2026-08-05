@@ -95,6 +95,23 @@ function normalizeVideoLinks(v) {
     .slice(0, 12);
 }
 
+// Merge already-normalised video-link lists, keeping order (common campaign
+// links first, per-creator links after), dropping duplicates by URL, capped at
+// 12 — the same ceiling normalizeVideoLinks enforces.
+function mergeVideoLinks(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const item of list) {
+      if (seen.has(item.url)) continue;
+      seen.add(item.url);
+      out.push(item);
+      if (out.length >= 12) return out;
+    }
+  }
+  return out;
+}
+
 // The offer the creator accepted (custom overrides suggested; selected id wins;
 // else the first suggested). Mirrors resolveOffer in contracts.js — kept local
 // so briefs never has to require the contracts engine (which requires nothing
@@ -127,10 +144,15 @@ function usageRightsText(contractData, policy) {
 }
 
 // "Expected views" line at the top of the brief, driven by the signed deal:
-//   • view-based  → the contract's guaranteed COMBINED total, shown as-is.
+//   • view-based  → the contract's guaranteed COMBINED total. This is a
+//                   commitment, so it reads "Minimum views target — N views"
+//                   with NO "No pressure :)" reassurance.
 //   • video-based → the creator's low-end average (p25) scraped reel views + 15%,
 //                   rounded, shown PER VIDEO. Falls back to min_views / p50, then
-//                   the campaign's admin default.
+//                   the campaign's admin default. This is only an estimate, so it
+//                   keeps the friendly "Expected views … No pressure :)" framing.
+// `label` names the line and `noPressure` tells the brief page whether to show
+// the "No pressure :)" sub-note (video-based only).
 function computeExpectedViews(creator, contractData, contentBrief) {
   const fallback = numOrNull(contentBrief && contentBrief.expected_views_default);
   const offer = resolveAcceptedOffer(creator);
@@ -147,7 +169,9 @@ function computeExpectedViews(creator, contractData, contentBrief) {
     return {
       value: guarantee,
       per: 'total',
-      display: `${fmt(guarantee)} total views across your video(s)`,
+      label: 'Minimum views target',
+      display: `${fmt(guarantee)} views`,
+      noPressure: false,
       basis: 'contract',
     };
   }
@@ -156,10 +180,10 @@ function computeExpectedViews(creator, contractData, contentBrief) {
   const base = numOrNull(stats.p25) || numOrNull(stats.min_views) || numOrNull(stats.p50);
   if (base) {
     const v = roundClean(base * 1.15);
-    return { value: v, per: 'video', display: `~${fmt(v)} per video`, basis: 'scraped' };
+    return { value: v, per: 'video', label: 'Expected views', display: `~${fmt(v)} per video`, noPressure: true, basis: 'scraped' };
   }
-  if (fallback) return { value: fallback, per: 'video', display: `~${fmt(fallback)} per video`, basis: 'default' };
-  return { value: null, per: null, display: null, basis: 'none' };
+  if (fallback) return { value: fallback, per: 'video', label: 'Expected views', display: `~${fmt(fallback)} per video`, noPressure: true, basis: 'default' };
+  return { value: null, per: null, label: null, display: null, noPressure: false, basis: 'none' };
 }
 
 // ── context load ────────────────────────────────────────────────────────────
@@ -188,7 +212,10 @@ async function loadBriefContext(creatorId) {
 
 // Assemble the full structured brief object rendered by BOTH the hand-off
 // preview and the public /brief/:token page.
-function buildBrief(ctx, { contentDirection = '', videoLinks = [], trackedUrl = null } = {}) {
+function buildBrief(
+  ctx,
+  { contentDirection = '', videoLinks = [], trackedUrl = null, reviewUrl = null, postShareUrl = null } = {},
+) {
   const { creator, contentBrief: cb, contractData, boilerplate } = ctx;
   const firstName = creator.first_name || String(creator.full_name || '').split(' ')[0] || 'there';
   const handle = creator.instagram_username ? `@${creator.instagram_username}` : null;
@@ -202,6 +229,13 @@ function buildBrief(ctx, { contentDirection = '', videoLinks = [], trackedUrl = 
   const demoLinks = (Array.isArray(cb.demo_links) ? cb.demo_links : cb.demo_links ? [cb.demo_links] : [])
     .map((u) => ensureUrl(strOrNull(u)))
     .filter(Boolean);
+  // Top-performing / example videos are common to the whole campaign
+  // (content_brief.example_videos). Any per-creator links passed in the hand-off
+  // are appended after them; duplicates by URL are dropped and the list capped.
+  const topVideos = mergeVideoLinks(
+    normalizeVideoLinks(cb.example_videos),
+    normalizeVideoLinks(videoLinks),
+  );
 
   return {
     version: 2,
@@ -215,15 +249,18 @@ function buildBrief(ctx, { contentDirection = '', videoLinks = [], trackedUrl = 
       demoLinks,
     },
     campaignNarrative: strOrNull(cb.campaign_narrative),
-    whyViral: strOrNull(cb.why_viral),
     screenFlowInstructions: strOrNull(cb.screen_flow_instructions),
     restrictions: strOrNull(cb.restrictions),
-    targetAudience: strOrNull(cb.target_audience),
     expectedViews: computeExpectedViews(creator, contractData, cb),
     contentDirection: String(contentDirection || '').trim(),
-    topVideos: normalizeVideoLinks(videoLinks),
+    topVideos,
     rules: boilerplate || '',
     usageRights: usageRightsText(contractData, creator.usage_rights_policy),
+    // Per-creator submission pages minted on the campaign dashboard
+    // (campaigns.influence.technology): upload the finished video for review,
+    // and share the live post link(s) after posting.
+    reviewUrl: strOrNull(reviewUrl),
+    postShareUrl: strOrNull(postShareUrl),
     posting: {
       caption: {
         mentionHandle: strOrNull(caption.mention_handle),
@@ -233,6 +270,8 @@ function buildBrief(ctx, { contentDirection = '', videoLinks = [], trackedUrl = 
         link,
       },
       dmAutomation: { keyword: strOrNull(cb.dm_keyword || caption.comment_word), link },
+      // The tracked link is what goes in the creator's bio for this campaign.
+      linkInBio: link,
     },
     trackedUrl: link,
   };
@@ -275,9 +314,13 @@ async function assembleBrief(creatorId, overrides = {}) {
     overrides.contentDirection != null ? overrides.contentDirection : ctx.creator.brief_content_direction || '';
   const videoLinks =
     overrides.videoLinks != null ? overrides.videoLinks : ctx.creator.brief_video_links || [];
-  const trackedUrl =
-    (ctx.creator.brief_data && ctx.creator.brief_data.trackedUrl) || overrides.trackedUrl || null;
-  const brief = buildBrief(ctx, { contentDirection, videoLinks, trackedUrl });
+  const prior = ctx.creator.brief_data && typeof ctx.creator.brief_data === 'object' ? ctx.creator.brief_data : {};
+  const trackedUrl = prior.trackedUrl || overrides.trackedUrl || null;
+  // Preview reuses the submission links from a prior publish; a first-time
+  // hand-off simply shows those sections empty until publish mints them.
+  const reviewUrl = prior.reviewUrl || overrides.reviewUrl || null;
+  const postShareUrl = prior.postShareUrl || overrides.postShareUrl || null;
+  const brief = buildBrief(ctx, { contentDirection, videoLinks, trackedUrl, reviewUrl, postShareUrl });
   return {
     ...brief,
     pending: !!ctx.creator.brief_pending,
@@ -287,25 +330,33 @@ async function assembleBrief(creatorId, overrides = {}) {
   };
 }
 
-// Mint the per-creator tracked website link on the influence-stats dashboard.
-// Best-effort — returns null (and the brief falls back to the raw brand link)
-// when the dashboard isn't configured, there's no website, or the call fails.
-async function mintTrackedLink(ctx) {
+// Mint the per-creator dashboard links on influence-stats: the tracked website
+// link plus the creator's unique review + post-share submission pages. Returns
+// { trackedUrl, reviewUrl, postShareUrl } — each null when unavailable, so the
+// brief falls back gracefully (the tracked link to the raw brand website; the
+// submission links simply omit their sections). Best-effort: any failure yields
+// all-null rather than blocking publish.
+async function mintDashboardLinks(ctx) {
+  const empty = { trackedUrl: null, reviewUrl: null, postShareUrl: null };
   try {
-    if (!campaignDashboard.isConfigured || !campaignDashboard.isConfigured()) return null;
+    if (!campaignDashboard.isConfigured || !campaignDashboard.isConfigured()) return empty;
     const website = ensureUrl(strOrNull(ctx.contentBrief.website));
-    if (!website) return null;
+    if (!website) return empty;
     const username = resolveHandle(ctx.contractData || {}, ctx.creator);
-    if (!username) return null;
+    if (!username) return empty;
     const res = await campaignDashboard.mintTrackedLink({
       campaignId: ctx.creator.campaign_id,
       username,
       destinationUrl: website,
     });
-    return (res && (res.trackedUrl || res.url)) || null;
+    return {
+      trackedUrl: (res && (res.trackedUrl || res.url)) || null,
+      reviewUrl: (res && res.submitForReviewUrl) || null,
+      postShareUrl: (res && res.submitPostsUrl) || null,
+    };
   } catch (err) {
-    console.error('[briefs] mintTrackedLink failed:', err.message);
-    return null;
+    console.error('[briefs] mintDashboardLinks failed:', err.message);
+    return empty;
   }
 }
 
@@ -321,9 +372,15 @@ async function publishBrief(creatorId, { contentDirection, videoLinks } = {}) {
   }
   const cleanDir = typeof contentDirection === 'string' ? contentDirection.trim() : '';
   const cleanLinks = normalizeVideoLinks(videoLinks);
-  const trackedUrl = await mintTrackedLink(ctx);
+  const { trackedUrl, reviewUrl, postShareUrl } = await mintDashboardLinks(ctx);
   const token = ctx.creator.brief_token || generateToken();
-  const brief = buildBrief(ctx, { contentDirection: cleanDir, videoLinks: cleanLinks, trackedUrl });
+  const brief = buildBrief(ctx, {
+    contentDirection: cleanDir,
+    videoLinks: cleanLinks,
+    trackedUrl,
+    reviewUrl,
+    postShareUrl,
+  });
 
   await db.query(
     `UPDATE creators

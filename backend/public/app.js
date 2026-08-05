@@ -374,14 +374,13 @@ function syncContentBriefUI(c) {
   const cap = cb.caption && typeof cb.caption === 'object' ? cb.caption : {};
   const set = (id, v) => { const e = el(id); if (e) e.value = v == null ? '' : v; };
   set('cb-narrative', cb.campaign_narrative);
-  set('cb-why-viral', cb.why_viral);
   set('cb-screen-flow', cb.screen_flow_instructions);
   set('cb-restrictions', cb.restrictions);
-  set('cb-audience', cb.target_audience);
   set('cb-website', cb.website);
   set('cb-free-account-link', cb.free_account_link);
   set('cb-dm-keyword', cb.dm_keyword);
   set('cb-demo-links', Array.isArray(cb.demo_links) ? cb.demo_links.join('\n') : (cb.demo_links || ''));
+  set('cb-example-videos', videoLinksToText(cb.example_videos));
   set('cb-cap-mention', cap.mention_handle);
   set('cb-cap-comment', cap.comment_word);
   set('cb-cap-via', cap.via_tag);
@@ -3349,14 +3348,13 @@ el('save-content-brief-btn').addEventListener('click', async () => {
   const lines = (id) => val(id).split('\n').map((s) => s.trim()).filter(Boolean);
   const content_brief = {
     campaign_narrative: val('cb-narrative'),
-    why_viral: val('cb-why-viral'),
     screen_flow_instructions: val('cb-screen-flow'),
     restrictions: val('cb-restrictions'),
-    target_audience: val('cb-audience'),
     website: val('cb-website'),
     free_account_link: val('cb-free-account-link'),
     dm_keyword: val('cb-dm-keyword'),
     demo_links: lines('cb-demo-links'),
+    example_videos: parseVideoLines(val('cb-example-videos')),
     caption: {
       mention_handle: val('cb-cap-mention'),
       comment_word: val('cb-cap-comment'),
