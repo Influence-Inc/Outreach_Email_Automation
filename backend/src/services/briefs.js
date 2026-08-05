@@ -420,6 +420,20 @@ async function dismissBrief(creatorId) {
   return { dismissed: true };
 }
 
+// Hang a { url, publishedAt } summary on each creator row once their brief is
+// published (mirrors attachContracts / attachOffers) so the admin dashboard can
+// show a "View brief" link. No query needed — brief_token / brief_published_at
+// are already on the row (SELECT *); unpublished/never-briefed rows get null.
+async function attachBriefs(rows) {
+  for (const r of rows || []) {
+    r.brief =
+      r.brief_token && r.brief_published_at
+        ? { token: r.brief_token, url: briefUrl(r.brief_token), publishedAt: r.brief_published_at }
+        : null;
+  }
+  return rows;
+}
+
 // The published brief snapshot for the public /brief/:token page.
 async function getByToken(token) {
   const row = await db.one(
@@ -436,6 +450,7 @@ module.exports = {
   publishBrief,
   dismissBrief,
   getByToken,
+  attachBriefs,
   briefUrl,
   // exported for tests
   computeExpectedViews,

@@ -7,6 +7,7 @@ const { enrichEmail } = require('../services/emailEnrich');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
 const contracts = require('../services/contracts');
 const offerPortal = require('../services/offers');
+const briefs = require('../services/briefs');
 const segmentation = require('../services/segmentation');
 const creatorDb = require('../services/creatorDb');
 const { resolveHandle } = require('../services/creatorIdentity');
@@ -607,6 +608,7 @@ router.get('/', async (req, res, next) => {
     await attachRateLog(rows);
     await contracts.attachContracts(rows);
     await offerPortal.attachOffers(rows);
+    await briefs.attachBriefs(rows);
     await attachSegment(rows);
     await attachCategories(rows);
     res.json(rows);

@@ -76,7 +76,8 @@
     var html = '';
 
     // ── Header ──────────────────────────────────────────────────────────────
-    html += '<div class="brandbar">INFLUENCE</div>';
+    // The INFLUENCE wordmark itself is static markup in brief.html (always
+    // visible, even while loading) — this only renders the per-creator title.
     html += '<h1>Content Brief &amp; Guidelines</h1>';
     html += '<p class="prepared">Prepared by INFLUENCE</p>';
     if (has(creator.handle) || has(creator.firstName)) {
@@ -90,7 +91,7 @@
     if (has(brand.websiteUrl) || has(brand.website)) q.push('<b>Website:</b> ' + link(brand.websiteUrl, brand.website || brand.websiteUrl));
     if (has(brand.freeAccountLink)) q.push('<b>Free account:</b> ' + link(brand.freeAccountLink));
     if (q.length) {
-      html += '<div class="callout star"><div class="c-title">★ Quick info</div><ul class="kv">' +
+      html += '<div class="callout"><div class="c-title">Quick info</div><ul class="kv">' +
         q.map(function (i) { return '<li>' + i + '</li>'; }).join('') + '</ul></div>';
     }
 
@@ -121,7 +122,7 @@
     if (has(d.reviewUrl)) {
       pre += section('Upload for review',
         '<p class="prose">After making the video, upload it here for a quick review from the brand (24-hour turnaround):</p>' +
-        '<div class="media-link">' + link(d.reviewUrl, 'Upload for review') + '</div>');
+        '<p><a class="link-btn" href="' + esc(d.reviewUrl) + '" target="_blank" rel="noopener nofollow">Upload for review</a></p>');
     }
     if (pre) html += '<h3 class="phase-h">1 · Before you film</h3>' + pre;
 

@@ -5,14 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
   <title>Content Brief &amp; Guidelines — INFLUENCE</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
   <style>
+    /* Same design tokens as contract.html / offer.html — the brief page is the
+       third leg of the creator-facing document set and should read as one
+       system, not a one-off. */
     :root {
-      --bg: #191919; --surface: #212121; --surface-2: #262626; --callout: #2b2a26;
-      --ink: #ededec; --ink-2: #c6c6c3; --muted: #9a9a96; --faint: #6f6f6b;
-      --line: #333331; --line-2: #3d3d3a;
-      --accent: #e8b84b; --accent-bg: #2c2717; --accent-line: #4a3f20;
-      --link: #86a9ff; --green: #6fce9a; --green-bg: #17281f;
-      --radius: 14px; --radius-sm: 10px;
+      --bg: #f5f4f0; --surface: #ffffff; --surface-2: #faf9f6; --surface-3: #f2f0eb;
+      --ink: #191817; --ink-2: #4d4b46; --muted: #8a8880; --faint: #a3a19b; --faint-2: #b4b2ac;
+      --line: #e6e4de; --line-2: #dcdad3; --line-3: #eeece6;
+      --accent: #191817; --accent-strong: #000000;
+      --link: #2451d6; --link-strong: #1638a3;
+      --green: #147a52; --green-bg: #e7f2ec; --green-line: #cfe6da;
+      --radius: 16px; --radius-sm: 10px; --radius-xs: 8px;
+      --shadow-card: 0 6px 24px rgba(20,18,15,.06);
       --font: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
@@ -24,23 +32,30 @@
       -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; line-height: 1.6;
     }
     a { color: var(--link); text-decoration: none; word-break: break-word; }
-    a:hover { text-decoration: underline; }
+    a:hover { color: var(--link-strong); text-decoration: underline; }
     .num { font-variant-numeric: tabular-nums; }
     .wrap { max-width: 720px; margin: 0 auto; padding: 44px 20px 90px; }
 
-    .brandbar { font-size: 13px; font-weight: 700; letter-spacing: .26em; color: var(--muted); margin-bottom: 26px; }
-    h1 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 8px; text-wrap: balance; }
+    /* Brand mark — the real INFLUENCE wordmark (same SVG as the contract page),
+       always visible above loading / not-found / the loaded brief alike. */
+    .brandbar { margin-bottom: 30px; }
+    .brandbar svg { height: 22px; width: auto; fill: var(--ink); display: block; }
+
+    .doc {
+      background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow-card); padding: 44px 46px 54px;
+    }
+    h1 { font-size: 29px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 8px; text-wrap: balance; }
     .prepared { color: var(--muted); font-size: 13.5px; margin: 0 0 4px; }
     .for { color: var(--ink-2); font-size: 14px; margin: 0; }
 
     .callout {
-      background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
       padding: 18px 20px; margin: 26px 0;
     }
-    .callout.star { background: var(--surface-2); }
     .callout .c-title {
-      display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;
-      letter-spacing: .04em; text-transform: uppercase; color: var(--accent); margin-bottom: 12px;
+      font-weight: 700; font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--faint); margin-bottom: 12px;
     }
     .kv { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
     .kv li { font-size: 14.5px; color: var(--ink-2); }
@@ -52,17 +67,13 @@
 
     section.blk { margin: 30px 0; }
     section.blk > h2 {
-      font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+      font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
       color: var(--faint); margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
     }
     .lead-in { font-size: 15px; color: var(--ink-2); margin: 0 0 10px; }
     .prose { font-size: 15px; color: var(--ink-2); white-space: pre-wrap; margin: 0; }
-    .rules { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    .rules { background: var(--surface-3); border: 1px solid var(--line); border-radius: var(--radius-sm);
       padding: 16px 18px; font-size: 14.5px; color: var(--ink-2); white-space: pre-wrap; }
-
-    .vids { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
-    .vids li { font-size: 14.5px; }
-    .vids .lbl { color: var(--muted); margin-right: 6px; }
 
     .checklist { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
     .checklist > li {
@@ -71,19 +82,33 @@
     }
     .checklist .box {
       width: 17px; height: 17px; border: 1.5px solid var(--line-2); border-radius: 5px; margin-top: 3px;
+      background: var(--surface);
     }
     .checklist .ci b { color: var(--ink); font-weight: 650; display: block; margin-bottom: 2px; }
     .chip {
-      font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); color: var(--ink);
+      font-family: var(--mono); font-size: 12.5px; background: var(--surface-3); color: var(--ink);
       border: 1px solid var(--line-2); border-radius: 6px; padding: 1px 6px;
     }
-    .usage { background: var(--green-bg); border: 1px solid #244233; border-radius: var(--radius-sm);
+    .usage { background: var(--green-bg); border: 1px solid var(--green-line); border-radius: var(--radius-sm);
       padding: 13px 16px; font-size: 14px; color: var(--green); }
+
+    /* Primary CTA — used for the one true "go do this" link (upload for
+       review); everything else stays an inline link inside its checklist row. */
+    .link-btn {
+      display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13.5px;
+      color: #fff; background: var(--accent); padding: 10px 16px; border-radius: var(--radius-xs);
+      text-decoration: none;
+    }
+    .link-btn:hover { background: var(--accent-strong); color: #fff; text-decoration: none; }
+    .link-btn:after { content: '→'; margin-left: 2px; }
 
     .foot { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
     .foot b { color: var(--ink-2); }
 
-    .phase-h { font-size: 15px; font-weight: 800; letter-spacing: -.01em; margin: 34px 0 4px; color: var(--ink); }
+    .phase-h {
+      font-size: 15px; font-weight: 800; letter-spacing: -.01em; color: var(--ink);
+      margin: 40px 0 4px; padding-top: 26px; border-top: 1px solid var(--line);
+    }
     .media-list { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
     .embed { margin: 0; }
     .embed iframe { width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #000; display: block; }
@@ -92,26 +117,37 @@
     .bullets { margin: 0; padding-left: 18px; color: var(--ink-2); font-size: 14.5px; }
     .bullets li { margin: 2px 0; }
 
-    .state { max-width: 460px; margin: 90px auto; text-align: center; color: var(--muted); }
+    .state { max-width: 460px; margin: 60px auto; text-align: center; color: var(--muted); }
     .state h2 { color: var(--ink); font-size: 20px; margin: 0 0 8px; }
     .spinner { width: 26px; height: 26px; border: 3px solid var(--line-2); border-top-color: var(--muted);
       border-radius: 50%; margin: 0 auto 16px; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
-    @media (max-width: 520px) { .wrap { padding: 30px 16px 70px; } h1 { font-size: 25px; } }
+    @media (max-width: 520px) {
+      .wrap { padding: 30px 14px 70px; }
+      .doc { padding: 30px 22px 40px; border-radius: var(--radius-sm); }
+      h1 { font-size: 24px; }
+    }
   </style>
 </head>
 <body>
-  <div id="loading" class="state">
-    <div class="spinner"></div>
-    <p>Loading your brief…</p>
+  <div class="wrap">
+    <div class="brandbar">
+      <svg viewBox="0 0 793 70" role="img" aria-label="Influence">
+        <path d="M20.01 68.6729H1.35348e-05V1.03334H20.01V68.6729ZM126.221 69.8941L55.1993 29.4044V68.6729H42.5169V-4.03086e-05L113.538 40.3018V1.03334H126.221V69.8941ZM209.764 44.2475H168.992V68.6729H148.794V1.03334H219.816V11.9308H169.086V33.35H209.764V44.2475ZM306.528 68.6729H236.54V1.03334H256.738V57.7754H306.528V68.6729ZM389.07 34.6652V1.03334H401.847V34.6652C401.847 40.8029 400.813 46.1577 398.747 50.7296C396.742 55.3015 393.861 58.934 390.104 61.6271C386.409 64.3201 382.15 66.3243 377.327 67.6395C372.505 68.9547 367.119 69.6123 361.169 69.6123C348.706 69.6123 338.81 66.7627 331.483 61.0634C324.218 55.3642 320.585 46.6274 320.585 34.8531V1.03334H341.065V34.6652C341.065 38.8614 341.754 42.4939 343.132 45.5627C344.51 48.6315 346.357 51.0114 348.675 52.7024C351.054 54.3934 353.591 55.646 356.284 56.4602C359.04 57.2117 361.983 57.5875 365.115 57.5875C368.246 57.5875 371.158 57.2117 373.851 56.4602C376.607 55.646 379.144 54.3934 381.461 52.7024C383.841 51.0114 385.688 48.6315 387.004 45.5627C388.381 42.4939 389.07 38.8614 389.07 34.6652ZM494.814 68.6729H423.041V1.03334H494.814V11.9308H443.238V28.7468H484.386V39.6442H443.238V57.7754H494.814V68.6729ZM596.325 69.8941L525.303 29.4044V68.6729H512.621V-4.03086e-05L583.643 40.3018V1.03334H596.325V69.8941ZM702.321 52.6085V63.7878C692.989 67.796 681.778 69.8002 668.689 69.8002C657.917 69.8002 648.428 68.4536 640.224 65.7606C632.082 63.0049 625.694 58.9653 621.059 53.6418C616.425 48.3184 614.108 42.0555 614.108 34.8531C614.108 24.0809 619.087 15.6259 629.045 9.48828C639.003 3.28799 652.217 0.187845 668.689 0.187845C681.966 0.187845 693.177 2.19198 702.321 6.20025V18.5069C693.302 13.4965 682.78 10.9914 670.756 10.9914C659.545 10.9914 650.84 13.246 644.639 17.7553C638.439 22.202 635.339 27.9013 635.339 34.8531C635.339 41.8676 638.439 47.6294 644.639 52.1387C650.902 56.648 659.796 58.9027 671.319 58.9027C682.029 58.9027 692.363 56.8046 702.321 52.6085ZM792.821 68.6729H721.048V1.03334H792.821V11.9308H741.246V28.7468H782.393V39.6442H741.246V57.7754H792.821V68.6729Z" />
+      </svg>
+    </div>
+    <div id="loading" class="state">
+      <div class="spinner"></div>
+      <p>Loading your brief…</p>
+    </div>
+    <div id="notfound" class="state" hidden>
+      <h2>Brief not found</h2>
+      <p>This link may be incorrect or the brief hasn't been published yet. Please check with your INFLUENCE contact.</p>
+    </div>
+    <div id="root" class="doc" hidden></div>
   </div>
-  <div id="notfound" class="state" hidden>
-    <h2>Brief not found</h2>
-    <p>This link may be incorrect or the brief hasn't been published yet. Please check with your INFLUENCE contact.</p>
-  </div>
-  <div id="root" class="wrap" hidden></div>
   <script src="/brief.js"></script>
 </body>
 </html>
