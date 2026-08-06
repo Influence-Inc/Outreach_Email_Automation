@@ -63,9 +63,9 @@ async function buildDriverAndReader(cfg) {
 }
 
 if (require.main === module) {
+  const { printDiagnostic } = require('./diagnose');
   main().catch((err) => {
-    // eslint-disable-next-line no-console
-    console.error('[runner] fatal:', err && err.stack || err.message || err);
+    printDiagnostic(err, console);
     process.exit(1);
   });
 }
