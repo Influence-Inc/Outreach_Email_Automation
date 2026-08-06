@@ -52,18 +52,58 @@ RUNNER_DRIVER=android RUNNER_BACKEND_URL=... RUNNER_HOST_TOKEN=... RUNNER_RUN_ID
    token into `RUNNER_HOST_TOKEN`. Start a run from the dashboard, grab its
    `runId` from the URL, and start the runner as above.
 
-## iOS setup (Phase 3)
+## iOS setup
 
-Same runner, different driver: `RUNNER_DRIVER=ios` on a Mac host running Appium +
-XCUITest driver + WebDriverAgent (requires an Apple developer account to sign the
-WDA app; the signature must be refreshed periodically). Full instructions land
-with the Phase 3 commit.
+Same runner, different driver. The host **must be a Mac** (Xcode is required to
+build and sign WebDriverAgent — Apple's sanctioned test agent), and the WDA
+signature must be refreshed periodically:
+
+- **≈7 days** on a free personal Apple ID.
+- **1 year** on a paid Apple Developer Program account (`$99/yr`, strongly
+  preferred for anything long-running).
+
+One-time setup on the Mac:
+
+1. Install **Xcode** + Xcode command-line tools.
+2. Pair the iPhone to the Mac (Finder → device → "Trust this computer").
+3. Install Appium 2 + the XCUITest driver:
+   ```bash
+   npm install -g appium
+   appium driver install xcuitest
+   appium --base-path /wd/hub
+   ```
+4. Build/sign WebDriverAgent against the phone (Xcode Signing tab → pick your
+   Team, then):
+   ```bash
+   xcodebuild \
+     -project /path/to/appium-webdriveragent/WebDriverAgent.xcodeproj \
+     -scheme WebDriverAgentRunner \
+     -destination 'id=<IPHONE_UDID>' \
+     test
+   ```
+   On the phone: **Settings → General → VPN & Device Management → trust the
+   developer certificate.**
+5. `cd runner && npm install webdriverio` (same client the Android driver uses).
+6. Set env and run:
+   ```bash
+   RUNNER_DRIVER=ios \
+   RUNNER_APPIUM_URL=http://127.0.0.1:4723 \
+   RUNNER_DEVICE_UDID=00008101-000A1B2C3D4E5F6 \
+   RUNNER_DEVICE_NAME='Scouting iPhone' \
+   RUNNER_XCODE_ORG_ID=ABCDE12345 \
+   RUNNER_BACKEND_URL=https://... RUNNER_HOST_TOKEN=... RUNNER_RUN_ID=42 \
+   npm start
+   ```
+
+When the WDA signature expires you'll see Appium fail to start a session — rerun
+step 4 to re-sign.
 
 ## Files
 
 - `src/driver/base.js` — the DeviceDriver contract.
 - `src/driver/mock.js` — fixture-replay driver used by tests.
 - `src/driver/android.js` — Appium UiAutomator2 driver (skeleton).
+- `src/driver/ios.js` — Appium XCUITest / WebDriverAgent driver.
 - `src/navigator/instagram.js` — the vision-driven scout flow.
 - `src/navigator/screenReader.js` — screenshot → structured data (mock in tests).
 - `src/backend.js` — thin Deal Studio HTTP client.

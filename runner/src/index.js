@@ -29,10 +29,17 @@ async function main() {
 async function buildDriver(cfg) {
   if (cfg.driver === 'android') {
     const { AndroidDriver } = require('./driver/android');
-    return new AndroidDriver({ appiumUrl: cfg.appiumUrl });
+    return new AndroidDriver({ appiumUrl: cfg.appiumUrl, udid: cfg.deviceUdid });
   }
   if (cfg.driver === 'ios') {
-    throw new Error('iOS driver ships in Phase 3');
+    const { IosDriver } = require('./driver/ios');
+    return new IosDriver({
+      appiumUrl: cfg.appiumUrl,
+      udid: cfg.deviceUdid,
+      deviceName: cfg.deviceName,
+      xcodeOrgId: cfg.xcodeOrgId,
+      xcodeSigningId: cfg.xcodeSigningId,
+    });
   }
   const { MockDriver } = require('./driver/mock');
   return new MockDriver({ screens: [] });
