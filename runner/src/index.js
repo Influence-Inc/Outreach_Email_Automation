@@ -4,11 +4,11 @@
 // Runner entry point. Reads config from env, picks a driver, and drives the
 // Instagram Navigator on a paired phone until the sourcing run completes.
 //
+// Android only — driven directly over adb, no Appium, no extra npm deps.
+//
 // Drivers:
 //   RUNNER_DRIVER=mock      in-process fixture (no phone, no extra tools)
-//   RUNNER_DRIVER=android   real Android via adb only (no Appium, no extra deps)
-//   RUNNER_DRIVER=ios       real iOS via Appium + WebDriverAgent (Apple requires
-//                           its own sanctioned test agent — no ADB-equivalent exists)
+//   RUNNER_DRIVER=android   real Android via adb only (default when unset)
 
 const { loadConfig, assertConfig } = require('./config');
 const { makeBackend } = require('./backend');
@@ -32,10 +32,10 @@ async function main() {
 }
 
 // The driver and the screen reader are a matched pair — the mock driver ships
-// with a canned fixture the mock reader knows how to decode. Real drivers pair
-// with the (deliberately not-yet-implemented) ScreenReader stub so a real run
-// fails loudly if the vision layer isn't wired up, instead of pretending to
-// scout with no signal.
+// with a canned fixture the mock reader knows how to decode. The real (Android)
+// driver pairs with the (deliberately not-yet-implemented) ScreenReader stub so
+// a real run fails loudly if the vision layer isn't wired up, instead of
+// pretending to scout with no signal.
 async function buildDriverAndReader(cfg) {
   if (cfg.driver === 'android') {
     const { AndroidDriver } = require('./driver/android');
@@ -45,22 +45,14 @@ async function buildDriverAndReader(cfg) {
       reader: new ScreenReader(),
     };
   }
-  if (cfg.driver === 'ios') {
-    const { IosDriver } = require('./driver/ios');
-    const { ScreenReader } = require('./navigator/screenReader');
-    return {
-      driver: new IosDriver({
-        appiumUrl: cfg.appiumUrl,
-        udid: cfg.deviceUdid,
-        deviceName: cfg.deviceName,
-        xcodeOrgId: cfg.xcodeOrgId,
-        xcodeSigningId: cfg.xcodeSigningId,
-      }),
-      reader: new ScreenReader(),
-    };
+  if (cfg.driver === 'mock') {
+    const { buildSmokeFixture } = require('./mockFixture');
+    return buildSmokeFixture();
   }
-  const { buildSmokeFixture } = require('./mockFixture');
-  return buildSmokeFixture();
+  throw new Error(
+    `Unsupported RUNNER_DRIVER '${cfg.driver}'. This runner is Android-only — use 'android' ` +
+      `(real phone via adb) or 'mock' (no hardware, for testing).`,
+  );
 }
 
 if (require.main === module) {

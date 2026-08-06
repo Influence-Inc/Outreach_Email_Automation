@@ -23,7 +23,7 @@ async function captureAndUpload({ driver, backend, hostId, log }) {
     const shot = await driver.screenshot();
     if (!shot || !shot.data || !shot.data.length) return;
     // width/height are optional — they let the dashboard normalize an admin
-    // click back to real device pixels. The Appium drivers expose them via
+    // click back to real device pixels. The Android driver exposes them via
     // getWindowSize (best-effort; if it fails we still upload the frame).
     let dims = { width: null, height: null };
     if (driver.getWindowSize) {

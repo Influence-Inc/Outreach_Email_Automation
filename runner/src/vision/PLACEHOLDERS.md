@@ -33,16 +33,16 @@ The **mock** driver ships with a `MockScreenReader` (in `../navigator/screenRead
 that pattern-matches on a canned `screenName` field. That is what the unit
 tests + `RUNNER_DRIVER=mock` use.
 
-The **real** Android / iOS drivers are wired to the abstract `ScreenReader`
-stub — `read()` throws `not implemented` — *by design*. Nothing about the
-real Instagram UI is guessed from a specification; we build the real reader
+The **real** Android driver is wired to the abstract `ScreenReader` stub —
+`read()` throws `not implemented` — *by design*. Nothing about the real
+Instagram UI is guessed from a specification; we build the real reader
 against actual screenshots. `runner/src/diagnose.js` catches this exact error
 and prints an actionable "capture screens and share them" hint.
 
 ## When Track D lands screenshots
 
-The plan for Track D step 8: capture three PNGs off the phone with
-`adb exec-out screencap -p > screen-N.png` and ship them:
+The plan for Track D step 6 (see `PHASE_D_CHECKLIST.md`): capture three PNGs
+off the phone with `adb exec-out screencap -p > screen-N.png` and ship them:
 
 - **screen-1-search-results.png** — after typing a keyword in Search; whatever
   the top ~5 accounts row looks like now.
@@ -65,7 +65,7 @@ With those three, the follow-up work is:
 2. **Implement `RealScreenReader`** in this directory (`vision/RealScreenReader.js`)
    with `read(shot)` → the shape above.
 3. **Wire it into `../index.js`** — replace the `ScreenReader` stub used for
-   `android` / `ios` drivers with `RealScreenReader`.
+   the `android` driver with `RealScreenReader`.
 4. **Add a fixture test** — decode each of the three real screenshots into
    the structured shape and assert the values; that's how we lock the reader
    against future IG UI drift.

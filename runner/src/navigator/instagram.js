@@ -11,13 +11,12 @@
 //      -> read the recent-N view overlays -> back to search
 //
 // Every screen decision goes through screenReader.read(); the navigator NEVER
-// hardcodes coordinates. That keeps the code driver-agnostic (mock/Android/iOS
-// all work) and lets the vision layer swap without touching the flow.
+// hardcodes coordinates. That keeps the code driver-agnostic (mock/real Android
+// both work) and lets the vision layer swap without touching the flow.
 //
 // Pacing: after every mutating action we sleep pacingMs so we look human.
 
 const IG_ANDROID_PACKAGE = 'com.instagram.android';
-const IG_IOS_BUNDLE = 'com.burbn.instagram';
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -27,10 +26,8 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 async function* scoutCandidates({ driver, reader, config, opts = {} }) {
   const pacingMs = config.pacingMs ?? 1500;
   const max = opts.max || Infinity;
-  const platform = (opts.platform || 'android').toLowerCase();
-  const appId = platform === 'ios' ? IG_IOS_BUNDLE : IG_ANDROID_PACKAGE;
 
-  await driver.openApp(appId);
+  await driver.openApp(IG_ANDROID_PACKAGE);
   await sleep(pacingMs);
 
   const terms = pickSearchTerms(opts);
@@ -129,10 +126,10 @@ async function goBack({ driver, reader, pacingMs }) {
   if (t) {
     await driver.tap(t.x, t.y);
   } else {
-    // fallback: swipe from the left edge (Android/iOS back gesture)
+    // fallback: swipe from the left edge (Android's system back gesture)
     await driver.swipe({ x1: 5, y1: 400, x2: 200, y2: 400, durationMs: 250 });
   }
   await sleep(pacingMs);
 }
 
-module.exports = { scoutCandidates, IG_ANDROID_PACKAGE, IG_IOS_BUNDLE };
+module.exports = { scoutCandidates, IG_ANDROID_PACKAGE };

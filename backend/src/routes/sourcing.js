@@ -38,18 +38,19 @@ function requireLiveMirror(_req, res, next) {
 // runner-facing routes further down use requireHostOrSlack, which accepts EITHER
 // a dashboard session or a valid per-host token (see services/hostTokens.js).
 
-// POST /api/sourcing/hosts { label, platforms:['android'|'ios',...] }
+// POST /api/sourcing/hosts { label, platforms:['android',...] }
 // Returns { id, label, platforms, status, token } — token is the PLAINTEXT and
 // is only shown here, once. Copy it into the runner's RUNNER_HOST_TOKEN env.
+// Android only — the runner has no iOS driver (see runner/README.md).
 router.post('/hosts', async (req, res, next) => {
   try {
     const body = req.body || {};
     const label = String(body.label || '').trim();
     const platforms = Array.isArray(body.platforms)
-      ? body.platforms.filter((p) => p === 'android' || p === 'ios')
+      ? body.platforms.filter((p) => p === 'android')
       : [];
     if (!label) return res.status(400).json({ error: 'label is required' });
-    if (!platforms.length) return res.status(400).json({ error: 'platforms must include android and/or ios' });
+    if (!platforms.length) return res.status(400).json({ error: 'platforms must include android' });
 
     const token = generateToken();
     const row = await db.one(
