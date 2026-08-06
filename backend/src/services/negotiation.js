@@ -26,6 +26,7 @@ const contracts = require('./contracts');
 const thread = require('./thread');
 const offers = require('./offers');
 const { formatFirstName } = require('./nameFormat');
+const { splitQuotedReply, stripQuotedReply } = require('./emailQuote');
 
 // ── Claude client (shared) ────────────────────────────────────────────────
 // The lazy Anthropic client + JSON helpers live in ./claudeClient so the
@@ -50,163 +51,70 @@ const isDryRun = () => /^(1|true|yes)$/i.test(String(process.env.DRY_RUN || ''))
 // ── Who is replying? ────────────────────────────────────────────────────────
 // A reply may come from someone acting on the creator's behalf — a manager,
 // agent, assistant, or agency rep. When it does, we greet THAT person by name
-// while still doing the deal with the creator. Detect the sender's first name
-// from an explicit self-introduction or a signature. Conservative by design:
-// returns null unless it finds a clear, plausible first name, so we never
-// invent or mis-address.
-const ROLE_WORD = 'manager|agent|assistant|team|talent|mgmt|management|rep|representative|partnerships?|agency|mcn';
-const NAME = "([A-Z][a-z]+(?:\\s[A-Z][a-z]+)?)"; // "Alex" or "Alex Chen"
+// while still doing the deal with the creator. Name resolution (and the
+// evidence test that decides whether to talk about the creator in the third
+// person) lives in ./salutation; the helpers below wire it to a creator row.
+const {
+  resolveSalutation,
+  salutationFor,
+  detectSenderName,
+  nameFromEmail,
+  isSamePerson,
+  sanitizeStored,
+} = require('./salutation');
 
-function firstToken(name) {
-  return String(name || '').trim().split(/\s+/)[0] || null;
+// Identities that are OURS on this creator's thread, so a greeting can never be
+// addressed to ourselves. Beyond the environment-wide manager/sender names, the
+// per-creator sending mailbox is only known from the row.
+function ourIdentityOpts(creator) {
+  return {
+    ourNames: [creator && creator.brand_name].filter(Boolean),
+    ourEmails: [creator && creator.instantly_email_account].filter(Boolean),
+  };
 }
 
-// A real name, case-sensitively: each token starts with a capital. This is the
-// guard against the case-insensitive trigger match capturing a common word
-// (the `i` flag lets "thanks, sounds good" match "Thanks, <Name>", but the
-// captured "sounds" keeps its lowercase and is rejected here).
-function looksLikeName(s) {
-  return /^[A-Z][a-z]+(?:\s[A-Z][a-z]+)?$/.test(String(s || '').trim());
-}
-// Return the captured name's first token only if it's genuinely capitalized.
-function nameOf(m) {
-  return m && looksLikeName(m[1]) ? firstToken(m[1]) : null;
-}
-
-function detectSenderName(text) {
-  if (!text) return null;
-  const s = String(text).replace(/\r\n/g, '\n');
-
-  // 1. Signature block at the tail of the message. Scan the last few non-empty
-  //    lines and try each shape people actually use:
-  //   • "- Alex" / "– Alex Chen" / "- Alex, Manager"
-  //   • "Best, Alex" / "Thanks, Alex" — signoff + name on the SAME line
-  //   • "Best,\nTang" — signoff on its own line, name on the FOLLOWING line
-  //     (a two-line block is one of the most common sign-off shapes in the
-  //     wild; missing it here defaults the greeting to the creator's name and
-  //     produces "Hi Linn," on a reply from a manager named Tang).
-  const SIGNOFFS = 'best|thanks|thank you|regards|cheers|warmly|sincerely';
-  const signoffAloneRe = new RegExp(`^(?:${SIGNOFFS})[,!.]?$`, 'i');
-  const dashNameRe = new RegExp(`^[-–—]\\s*${NAME}(?:\\s*,\\s*(?:the\\s+)?(?:${ROLE_WORD})\\b)?`, 'i');
-  const signoffAndNameRe = new RegExp(`^(?:${SIGNOFFS})[,!]?\\s+${NAME}$`, 'i');
-  const lines = s.split('\n').map((l) => l.trim()).filter(Boolean);
-  const tail = lines.slice(-6);
-  for (let i = 0; i < tail.length; i++) {
-    const line = tail[i];
-    let m = line.match(dashNameRe);
-    if (nameOf(m)) return nameOf(m);
-    m = line.match(signoffAndNameRe);
-    if (nameOf(m)) return nameOf(m);
-    // Two-line signature: this line is a bare "Best," / "Thanks," / "Regards"
-    // etc., and the next non-empty line is JUST a name ("Tang", "Alex Chen").
-    // Require the following line to match looksLikeName exactly so we can't
-    // pick up a body sentence, and skip stacked signoff words so
-    // "Best,\nRegards\nAlex" still lands on "Alex".
-    if (signoffAloneRe.test(line)) {
-      for (let j = i + 1; j < tail.length; j++) {
-        const nxt = tail[j];
-        if (signoffAloneRe.test(nxt)) continue;
-        if (looksLikeName(nxt)) return firstToken(nxt);
-        break;
-      }
-    }
-  }
-
-  // 2. Self-introduction: "this is Alex", "I'm Alex", "I am Alex",
-  //    "Alex here", "Alex from XYZ", "on behalf of ... , Alex".
-  let m = s.match(new RegExp(`\\b(?:this is|i['’]?m|i am|it['’]?s)\\s+${NAME}`, 'i'));
-  if (nameOf(m)) return nameOf(m);
-  m = s.match(new RegExp(`\\b${NAME}\\s+here\\b`, 'i'));
-  if (nameOf(m)) return nameOf(m);
-  m = s.match(new RegExp(`\\b${NAME}[,]?\\s+(?:the\\s+)?(?:${ROLE_WORD})\\b`, 'i'));
-  if (nameOf(m)) return nameOf(m);
-
-  return null;
+// Resolve `{ name, isDelegate }` for a creator row + the inbound text that
+// prompted the reply. Every send path goes through this so the greeting rules
+// are identical whether the email is auto-sent, drafted in the extension, or
+// sent later from an admin approval.
+function resolveSalutationFor(creator, inboundText) {
+  return resolveSalutation(creator.first_name, inboundText, {
+    senderEmail: creator.latest_inbound_from_email,
+    creatorEmail: creator.email,
+    ...ourIdentityOpts(creator),
+  });
 }
 
-// Common role-mailbox local parts that read as an inbox, not a person
-// ("info@…", "team@…", "partnerships@…"). If the sender is one of these we do
-// NOT invent a name from it — we fall through to the creator's stored first
-// name instead, since "Hi Info," is worse than mis-greeting by the creator.
-const ROLE_MAILBOX_LOCALS = new Set([
-  'info', 'hello', 'hi', 'team', 'support', 'contact', 'admin', 'sales',
-  'billing', 'noreply', 'no-reply', 'notifications', 'help', 'office',
-  'inquiries', 'inquiry', 'partnerships', 'partnership', 'management',
-  'mgmt', 'talent', 'agency', 'brand', 'brands', 'collabs', 'collab',
-  'press', 'pr', 'marketing', 'business', 'biz', 'hi5', 'me',
-]);
-
-// Turn an email address into a plausible first name derived from its local
-// part. "claudia@x", "claudia.villondo@x", "claudia+work@x" → "Claudia".
-// Strips digits and separators, formats through formatFirstName (which folds
-// stylized fonts / decoration and title-cases), and returns only the first
-// token so a first-last local part yields just the first name. Returns null
-// when the local part is missing, is a role mailbox, or leaves nothing
-// name-like behind.
-function nameFromEmail(email) {
-  if (!email) return null;
-  const raw = String(email).trim();
-  const at = raw.indexOf('@');
-  if (at <= 0) return null;
-  let local = raw.slice(0, at);
-  // "+tag" suffixes (Gmail plus-addressing) never carry the name.
-  local = local.split('+')[0];
-  if (ROLE_MAILBOX_LOCALS.has(local.toLowerCase())) return null;
-  // Turn separators / digits into spaces so formatFirstName can split on them.
-  local = local.replace(/[._\-]+/g, ' ').replace(/\d+/g, ' ').trim();
-  if (!local) return null;
-  const formatted = formatFirstName(local);
-  const first = firstToken(formatted);
-  if (!first) return null;
-  if (ROLE_MAILBOX_LOCALS.has(first.toLowerCase())) return null;
-  return first;
-}
-
-// The greeting name for our reply.
-// 1. A clear signature or self-introduction in the inbound text wins ("Best,
-//    Sarah" → "Sarah"), and if it matches the creator's own first token we
-//    greet by the FULL stored name so a multi-word first_name like "Anvith K"
-//    still reads correctly when the creator signs just "- Anvith".
-// 2. Otherwise, if the reply came from an address that is NOT the creator's
-//    own (a manager/agent using their own inbox), derive the greeting from the
-//    sender's email local part — "claudia@…" becomes "Claudia" — so a
-//    signature-less reply from a third party isn't misgreeted by the creator's
-//    stored first name. Only kicks in when we know both the sender's address
-//    and the creator's; role mailboxes ("info@…") are skipped.
-// 3. Fall back to the creator's own first name (formatFirstName normalizes
-//    decorative casing / stylized fonts, while keeping internal spaces like
-//    "Anvith K"), and to "there" only when neither is known.
+// The greeting cached on the creator row, when it is still trustworthy. A
+// cached name that is our own (or a placeholder) is dropped so the caller
+// re-resolves — one bad detection must not keep addressing every future email
+// to the wrong person. Returns `{ name, isDelegate }` or null.
 //
-// `firstToken()` is used ONLY to compare the detected sender against the
-// creator's own name — the returned greeting name for the creator branch is
-// always the full, normalized first_name.
-const NOT_A_PERSON = new Set([
-  'the', 'team', 'hi', 'hello', 'hey', 'manager', 'agent', 'influence', 'thanks',
-]);
-function salutationFor(creatorFirstName, inboundText, opts = {}) {
-  const fullCreatorName = formatFirstName(creatorFirstName) || null;
-  const creatorToken = firstToken(fullCreatorName);
-  const sender = detectSenderName(inboundText);
-  const { senderEmail = null, creatorEmail = null } = opts;
+// `reply_is_delegate` is stored alongside the name and carries the evidence
+// that was available when the reply came in; older rows predate the column, so
+// a null falls back to comparing the cached name against the creator's.
+function storedSalutationFor(creator) {
+  const name = sanitizeStored(creator.reply_salutation, creator.first_name, ourIdentityOpts(creator));
+  if (!name) return null;
+  const isDelegate =
+    creator.reply_is_delegate == null
+      ? !isSamePerson(name, creator.first_name)
+      : !!creator.reply_is_delegate;
+  return { name, isDelegate };
+}
 
-  if (sender && !NOT_A_PERSON.has(sender.toLowerCase())) {
-    if (creatorToken && sender.toLowerCase() === creatorToken.toLowerCase()) return fullCreatorName;
-    return sender; // someone else is writing on the creator's behalf
-  }
+// The greeting for an email we're about to send: the vetted cached value when
+// there is one (the inbound that produced it is often already consumed), else a
+// fresh resolution from whatever inbound text we still have.
+function greetingFor(creator, inboundText) {
+  return storedSalutationFor(creator) || resolveSalutationFor(creator, inboundText);
+}
 
-  // No usable signature name. If the reply came from a different address than
-  // the creator's own — a manager/agent inbox — greet by that inbox's owner
-  // rather than the creator. Same-address (or unknown-address) replies keep
-  // the pre-existing creator-name fallback so a creator writing without a
-  // signature still gets their stored first_name.
-  const senderNorm = senderEmail ? String(senderEmail).trim().toLowerCase() : '';
-  const creatorNorm = creatorEmail ? String(creatorEmail).trim().toLowerCase() : '';
-  if (senderNorm && senderNorm !== creatorNorm) {
-    const emailName = nameFromEmail(senderEmail);
-    if (emailName) return emailName;
-  }
-
-  return fullCreatorName || 'there';
+// The same thing shaped as ctxFor() fields, for the call sites that spread it
+// straight into a context object.
+function greetingCtx(creator, inboundText) {
+  const { name, isDelegate } = resolveSalutationFor(creator, inboundText);
+  return { salutation: name, isDelegate };
 }
 
 // Did the sender explicitly ask to see references / a portfolio / other
@@ -258,8 +166,15 @@ async function loadCreator(creatorId) {
 }
 
 function ctxFor(creator, extra = {}) {
+  // Callers that resolved a greeting from a specific inbound pass it in.
+  // Everyone else — the contract email, the brief email, the follow-ups — gets
+  // the vetted cached one, so a thread a manager has been handling keeps
+  // greeting the manager instead of silently reverting to the creator's name
+  // on the templated sends.
+  const stored = extra.salutation == null ? storedSalutationFor(creator) : null;
+  const firstName = formatFirstName(creator.first_name) || 'there';
   return {
-    firstName: formatFirstName(creator.first_name) || 'there',
+    firstName,
     brandName: creator.brand_name || process.env.BRAND_NAME || 'the brand',
     campaignName: creator.campaign_name || null,
     cadence: process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week',
@@ -272,6 +187,13 @@ function ctxFor(creator, extra = {}) {
     guidelines: extra.guidelines || '',
     replyNotes: extra.replyNotes || null,
     replyOverrides: extra.replyOverrides || null,
+    salutation: stored ? stored.name : firstName,
+    // True only when we have positive evidence that someone OTHER than the
+    // creator is corresponding (see salutation.resolveSalutation). It is the
+    // ONLY thing that licenses third-person phrasing about the creator, so it
+    // defaults to false: writing about the person who is reading the email as
+    // if they were absent is far worse than the reverse.
+    isDelegate: extra.isDelegate === true || (!!stored && stored.isDelegate),
     // Governs the Usage Rights section in Reply 1 (see negotiationTemplates.js
     // reply1()) and paid-ad-rights inclusion in the generated contract (see
     // contracts.js). Defaults to 'no_rights' — the pre-existing behavior.
@@ -362,16 +284,44 @@ function actionReplyOverridesBlock(ctx) {
 }
 
 function templateVars(ctx) {
+  const salutationName = ctx.salutation || ctx.firstName;
   return {
     firstName: ctx.firstName,
     // The greeting name — the sender when someone replied on the creator's
     // behalf, else the creator. Defaults to firstName when not resolved.
-    salutation: ctx.salutation || ctx.firstName,
+    salutation: salutationName,
+    // Third-person phrasing about the creator is allowed ONLY when the greeting
+    // goes to a different person AND we had evidence of that (ctx.isDelegate).
+    // A differing name alone is not enough — people sign with short forms.
+    isDelegate: ctx.isDelegate === true && !isSamePerson(salutationName, ctx.firstName),
     brandName: ctx.brandName,
     cadence: ctx.cadence,
     refs: ctx.refs,
     managerName: ctx.managerName,
   };
+}
+
+// The greeting instruction shared by every Claude email-writing prompt, so the
+// reply, the offer, and the delegate draft can never disagree about who they
+// are addressing. Two hard rules are stated every time because both have been
+// violated in production: the model must not re-derive the name (it used to
+// pick our own sign-off out of the quoted thread at the bottom of the reply),
+// and it must not narrate about its own reader in the third person.
+function greetingRule(v) {
+  const lines = [
+    `Open with EXACTLY "Hi ${v.salutation}," — this name is already resolved for you. Do NOT derive a name from the message yourself, and do NOT use any other name.`,
+    `The message you are replying to may include the QUOTED EARLIER THREAD beneath it. Every signature in that quoted part is OUR OWN previous email — "${v.managerName}" is you, the writer. Never greet or address anyone by your own name (${v.managerName}) or by the brand name.`,
+  ];
+  if (v.isDelegate) {
+    lines.push(
+      `${v.salutation} is writing on the creator ${v.firstName}'s behalf (a manager/agent/assistant), so address ${v.salutation} as "you" and refer to the creator as ${v.firstName} when you talk about the collaboration.`,
+    );
+  } else {
+    lines.push(
+      `You are writing to the creator themselves. Address them directly in the second person ("you", "your content") throughout. Do NOT refer to the creator in the third person and do NOT mention "${v.firstName}" as if they were someone else in the conversation — "${v.salutation}" IS the creator, possibly signing with a short form of their name.`,
+    );
+  }
+  return lines.join('\n');
 }
 
 function todayStr() {
@@ -399,6 +349,30 @@ function describeStage(stage) {
   }
 }
 
+// Present an inbound reply to Claude with the new message and the quoted
+// earlier thread told apart. The quoted part is kept (it carries the terms
+// already discussed, which the classifier needs) but explicitly labelled as OUR
+// side of the conversation — unlabelled, the model reads our own "- Jennifer"
+// sign-off at the bottom as the sender's signature and writes back to us.
+// Messages with no quoted history are passed through untouched, so the common
+// case looks exactly like the few-shot examples.
+function framedInbound(replyText) {
+  const raw = String(replyText || '');
+  const { latest, quoted } = splitQuotedReply(raw);
+  if (!latest || !quoted) return raw;
+  return [
+    'THE NEW MESSAGE THEY JUST SENT (this is what you are replying to):',
+    '"""',
+    latest,
+    '"""',
+    '',
+    'QUOTED EARLIER THREAD, included by their mail client — context only. These are messages ALREADY SENT, mostly OURS; the sign-off at the bottom is our own. Do not treat anything in here as newly said, and never take the greeting name from it:',
+    '"""',
+    quoted,
+    '"""',
+  ].join('\n');
+}
+
 // ── (a) Understand a reply — ONE Claude call, strict JSON ─────────────────
 async function handleCreatorReply(creator, replyText, ctx) {
   const v = templateVars(ctx);
@@ -410,9 +384,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
       ctx.campaignName ? ` (campaign: ${ctx.campaignName})` : ''
     }.`,
     `Today's date is ${todayStr()}. The desired posting cadence is "${v.cadence}". When you mention timelines, compute an APPROXIMATE "all videos posted by" calendar date from today's date, the cadence, and the number of videos in the deal — do NOT print the cadence text where a date belongs.`,
-    v.salutation && v.salutation !== v.firstName
-      ? `This reply appears to be from ${v.salutation}, writing on ${v.firstName}'s behalf (a manager/agent/assistant). Greet ${v.salutation} by name ("Hi ${v.salutation},") while still referring to the creator as ${v.firstName} when you talk about the collaboration.`
-      : `Greet the creator by their first name ("Hi ${v.firstName},").`,
+    greetingRule(v),
     ctx.includeRefs
       ? 'The sender asked to see examples of past work, so you MAY include the reference accounts.'
       : 'The sender did NOT ask for references — do NOT include the reference accounts or a "Past content references" section in this reply.',
@@ -455,16 +427,28 @@ async function handleCreatorReply(creator, replyText, ctx) {
     `- ACKNOWLEDGE the creator's actual message. Whenever you write an email (asking_details, answer_question, request_counter_rate, declined, accepted), OPEN by briefly and specifically reacting to what THIS reply said — a compliment they paid, a preference or constraint they mentioned (a timeline, a platform, a video count, their availability), a piece of context they shared, or the question they asked — in one warm, natural sentence before you move into the template content. Never send the canonical template as a generic form letter that ignores what they wrote. Do NOT invent facts or answer things outside your source material just to seem responsive: if they raised something you cannot address from the templates / campaign context / past examples / approved offer, acknowledge it warmly and handle it per the action rules above (fold it in where you can, otherwise "escalate").`,
     '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
     '- Some (user → assistant) turn pairs may precede the real message below: those are REAL exchanges from our past negotiations, showing the correct output for a similar inbound. Treat the facts, decisions, and phrasing in their replies as team-approved knowledge. When the new message closely matches an example where our team answered directly, answer the same way instead of escalating — but never copy a dollar amount from an example, and never reuse another creator\'s name or deal specifics.',
-    `- Salutation name — the reply may not be from the creator themselves. It may be from a manager, agent, assistant, MCN, agency, or brand-partnerships rep writing on the creator's behalf. Detect the sender's first name from the reply's opening ("Hi, this is Alex, ${v.firstName}'s manager"), signature block ("- Alex", "Best, Alex Chen"), or self-introduction ("I'm Alex from XYZ Talent"). If the sender's name is clearly different from "${v.firstName}", address that person by THEIR first name in the salutation ("Hi Alex,"). Still refer to the creator as "${v.firstName}" when discussing the collaboration itself — the deal is with the creator, not the sender. If the sender's identity is ambiguous, address "${v.firstName}" or fall back to "Hi there,"; never guess a name.`,
+    `- Salutation name — HARD RULE, no exceptions. The greeting has already been resolved for you from the sender's address and signature: it is "${v.salutation}". Every email you write opens "Hi ${v.salutation},". Do NOT scan the message for a name of your own choosing — the reply below usually carries the QUOTED EARLIER THREAD under it, and the signature down there is OUR OWN previous email, not the sender's. Never address anyone as "${v.managerName}" (that is you) or by the brand name.`,
     `- Reference accounts (${v.refs}) are a portfolio credential — DO NOT include them proactively. Only include them when the sender explicitly asked to see examples of past work, other creators we've worked with, our portfolio, or references. When adapting REPLY 1 without such an ask, drop the "Past content references" section from your email entirely.`,
     `- ${FORMATTING_RULE}`,
-    `- The creator's first name is "${v.firstName}" (used when talking about the creator; may be overridden by the sender's actual first name for the salutation, per the rule above).`,
+    v.isDelegate
+      ? `- The creator's first name is "${v.firstName}". You are writing to ${v.salutation}, who represents them, so talk about ${v.firstName} in the third person and address ${v.salutation} as "you".`
+      : `- "${v.salutation}" is the creator you are writing to — address them as "you" throughout, never in the third person.`,
   ].join('\n');
+
+  // Everything DETERMINISTIC about the reply reads the new message only. The
+  // quoted thread below it is our own previous email, and every dollar figure
+  // in it is an offer WE made — running the rate extractor over the raw body
+  // would book our own number as the creator's. (Claude still receives the
+  // quoted history, labelled, because the terms already discussed are real
+  // context for classification.)
+  const newMessage = stripQuotedReply(replyText);
 
   // Few-shot examples picked from past labeled threads (seed bank + harvested
   // mailbox if available). Empty array when nothing matches — call still works,
-  // just zero-shot like before. Capped at 4 to keep the prompt compact.
-  const shots = replyExamples.pickExamplesFor(replyText, { k: 4, stage: ctx.stage });
+  // just zero-shot like before. Capped at 4 to keep the prompt compact. Matched
+  // against the new message because the stored examples are themselves stored
+  // de-quoted (see replyLearning.normalizeInstantlyEmail).
+  const shots = replyExamples.pickExamplesFor(newMessage, { k: 4, stage: ctx.stage });
   const shotMessages = replyExamples.examplesAsMessages(shots);
   if (shots.length) {
     console.log(
@@ -474,7 +458,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     );
   }
 
-  const messages = [...shotMessages, { role: 'user', content: replyText }];
+  const messages = [...shotMessages, { role: 'user', content: framedInbound(replyText) }];
   const out = parseJsonLoose(await callClaudeMessages(system, messages, 1200));
   if (out && out.action) {
     const email =
@@ -483,7 +467,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
         : null;
     // Normalise quoted_rate_options: keep only well-formed entries; if empty
     // after filtering, fall back to running the deterministic extractor over
-    // the raw reply so an older Claude JSON without the new field still
+    // the new message so an older Claude JSON without the new field still
     // captures multi-rate structure.
     let options = Array.isArray(out.quoted_rate_options)
       ? out.quoted_rate_options
@@ -494,7 +478,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
           .filter((o) => o.amount != null && o.label)
       : [];
     if (!options.length && (out.action === 'shared_rate' || out.action === 'counter')) {
-      const extracted = parseRateOptionsFromText(replyText);
+      const extracted = parseRateOptionsFromText(newMessage);
       if (extracted.length > 1) options = extracted;
     }
     return {
@@ -506,7 +490,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
       send_now: out.send_now !== false,
     };
   }
-  return heuristicReply(replyText, ctx);
+  return heuristicReply(newMessage, ctx);
 }
 
 function parseRateFromText(text) {
@@ -745,6 +729,9 @@ async function draftAcknowledgmentLine(creator, ctx, { situation }) {
   const system = [
     `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE, corresponding with the creator ${v.firstName} for "${v.brandName}".`,
     situation,
+    v.isDelegate
+      ? `This line is going to ${v.salutation}, who writes on ${v.firstName}'s behalf — address ${v.salutation} as "you" and refer to the creator as ${v.firstName}.`
+      : 'This line is going to the creator themselves — address them as "you" and never in the third person; do not name them at all.',
     'Write ONE short, warm, specific sentence (max ~30 words) that acknowledges what the creator said in the message below — react to their enthusiasm, thank them for confirming, or note a preference/constraint/question they raised. Do NOT answer any question, quote or imply any price/number, promise anything, or introduce new terms. Plain text only: no greeting, no sign-off, no markdown, no quotes. If there is nothing meaningful to acknowledge, reply with an empty string.',
   ]
     .filter(Boolean)
@@ -790,9 +777,8 @@ async function draftOfferEmail(
     : `A flat package: ${offer.num_videos} video(s) for $${offer.flat_fee} total (full creative freedom; no exclusivity).`;
 
   const system = [
-    `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE writing about a collaboration for "${v.brandName}". Greet ${v.salutation} by name ("Hi ${v.salutation},")${
-      v.salutation !== v.firstName ? ` — they are writing on ${v.firstName}'s behalf, so refer to the creator as ${v.firstName} when discussing the deal` : ''
-    }.`,
+    `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE writing about a collaboration for "${v.brandName}".`,
+    greetingRule(v),
     'An admin has APPROVED exactly one offer. Use its numbers EXACTLY — do not invent or change amounts, and present only this one offer.',
     `Approved offer JSON: ${JSON.stringify(offer)}`,
     `In plain words: ${offerDesc}`,
@@ -903,13 +889,15 @@ async function buildOfferDraft(creatorId, { offer: rawOffer, instructions = '' }
     getReplyPromptNotes(),
     getReplyPromptOverrides(),
   ]);
-  const salutation =
-    creator.reply_salutation ||
-    salutationFor(creator.first_name, creator.latest_inbound_text, {
-      senderEmail: creator.latest_inbound_from_email,
-      creatorEmail: creator.email,
-    });
-  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, replyNotes, replyOverrides, salutation });
+  const greeting = greetingFor(creator, creator.latest_inbound_text);
+  const ctx = ctxFor(creator, {
+    approvedOffer: offer,
+    guidelines,
+    replyNotes,
+    replyOverrides,
+    salutation: greeting.name,
+    isDelegate: greeting.isDelegate,
+  });
   const combine = (await countSentNegotiation(creatorId)) === 0;
   const revised = (await countOffersSent(creatorId)) > 0;
   const email = await draftOfferEmail(creator, offer, ctx, {
@@ -942,9 +930,7 @@ async function draftReplyEmail(creator, ctx, { instructions = '' } = {}) {
     `You're corresponding with the creator ${v.firstName} for the brand "${v.brandName}"${
       ctx.campaignName ? ` (campaign: ${ctx.campaignName})` : ''
     }.`,
-    v.salutation && v.salutation !== v.firstName
-      ? `This reply is going to ${v.salutation}, who is writing on ${v.firstName}'s behalf — greet ${v.salutation} by name ("Hi ${v.salutation},"), but refer to the creator as ${v.firstName} when discussing the collaboration.`
-      : `Greet the creator by their first name ("Hi ${v.firstName},").`,
+    greetingRule(v),
     `Today's date is ${todayStr()}. The desired posting cadence is "${v.cadence}".`,
     '',
     'A human account manager is writing this reply and has told you, in their own words, what to say. Your job is to turn their intent into a warm, professional, well-formatted email in their voice — not to decide the content yourself.',
@@ -1006,13 +992,17 @@ async function buildReplyDraft(creatorId, { instructions = '' } = {}) {
     getReplyPromptNotes(),
     getReplyPromptOverrides(),
   ]);
-  const salutation =
-    creator.reply_salutation ||
-    salutationFor(creator.first_name, creator.delegate_question || creator.latest_inbound_text, {
-      senderEmail: creator.latest_inbound_from_email,
-      creatorEmail: creator.email,
-    });
-  const ctx = ctxFor(creator, { guidelines, replyNotes, replyOverrides, salutation });
+  const greeting = greetingFor(
+    creator,
+    creator.delegate_question || creator.latest_inbound_text,
+  );
+  const ctx = ctxFor(creator, {
+    guidelines,
+    replyNotes,
+    replyOverrides,
+    salutation: greeting.name,
+    isDelegate: greeting.isDelegate,
+  });
   const email = await draftReplyEmail(creator, ctx, { instructions });
   return { subject: email.subject, body: email.body };
 }
@@ -1291,10 +1281,11 @@ async function processReply(creatorId) {
   // creator's behalf) and whether they asked to see references. Computed up
   // front so we can persist the salutation — a later offer email (sent at admin
   // approval, after the inbound text has been consumed) reads it back.
-  const salutation = salutationFor(creator.first_name, inbound.text, {
-    senderEmail: creator.latest_inbound_from_email,
-    creatorEmail: creator.email,
-  });
+  const greeting = resolveSalutationFor(creator, inbound.text);
+  console.log(
+    `[negotiation] creator ${creator.id}: greeting "${greeting.name}" ` +
+      `(source=${greeting.source}, delegate=${greeting.isDelegate})`,
+  );
   const includeRefs = askedForReferences(inbound.text);
 
   // Dedup by consuming the text: clear latest_inbound_text once handled so a
@@ -1302,14 +1293,17 @@ async function processReply(creatorId) {
   // it's a thread handle, stable across replies, so a uuid match would wrongly
   // skip every follow-up reply (counter-offers, acceptances) in the same thread.
   // Persist the detected salutation on the same write so offer emails can greet
-  // the right person even after the inbound text is gone.
+  // the right person even after the inbound text is gone. The delegate flag
+  // rides along: without it a later send can only compare the cached name to
+  // the creator's, which re-derives "someone else is writing" from a name that
+  // may simply be a short form.
   const markHandled = () =>
     db.query(
       `UPDATE creators
        SET latest_inbound_text = NULL, last_negotiation_msg_id = $2,
-           reply_salutation = $4, updated_at = NOW()
+           reply_salutation = $4, reply_is_delegate = $5, updated_at = NOW()
        WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $3`,
-      [creator.id, inbound.messageId || null, inbound.text, salutation],
+      [creator.id, inbound.messageId || null, inbound.text, greeting.name, greeting.isDelegate],
     );
 
   // AI off for this template -> always hand the reply to a human.
@@ -1327,7 +1321,14 @@ async function processReply(creatorId) {
     getReplyPromptNotes(),
     getReplyPromptOverrides(),
   ]);
-  const ctx = ctxFor(creator, { guidelines, replyNotes, replyOverrides, salutation, includeRefs });
+  const ctx = ctxFor(creator, {
+    guidelines,
+    replyNotes,
+    replyOverrides,
+    salutation: greeting.name,
+    isDelegate: greeting.isDelegate,
+    includeRefs,
+  });
   const result = await handleCreatorReply(creator, inbound.text, ctx);
   // Visibility: surface Claude's classification + a snippet of its understanding
   // so it's obvious from Railway logs whether the model is doing the work.
@@ -1892,10 +1893,7 @@ async function handleAcceptedReply(creatorId) {
     guidelines,
     replyNotes,
     replyOverrides,
-    salutation: salutationFor(creator.first_name, inbound, {
-      senderEmail: creator.latest_inbound_from_email,
-      creatorEmail: creator.email,
-    }),
+    ...greetingCtx(creator, inbound),
     includeRefs: askedForReferences(inbound),
   });
   const result = await handleCreatorReply(creator, inbound, ctx);
@@ -2379,13 +2377,15 @@ async function sendApprovedOffer(
   // Greet whoever's been corresponding (a manager may have shared the rate on
   // the creator's behalf). The reply salutation was persisted when the rate
   // came in; fall back to re-parsing any still-present inbound, then the name.
-  const salutation =
-    creator.reply_salutation ||
-    salutationFor(creator.first_name, creator.latest_inbound_text, {
-      senderEmail: creator.latest_inbound_from_email,
-      creatorEmail: creator.email,
-    });
-  const ctx = ctxFor(creator, { approvedOffer: offer, guidelines, replyNotes, replyOverrides, salutation });
+  const greeting = greetingFor(creator, creator.latest_inbound_text);
+  const ctx = ctxFor(creator, {
+    approvedOffer: offer,
+    guidelines,
+    replyNotes,
+    replyOverrides,
+    salutation: greeting.name,
+    isDelegate: greeting.isDelegate,
+  });
 
   // A reviewed/edited draft (from the "Draft with AI" review-before-send flow)
   // is sent verbatim — we do NOT re-draft over wording the admin already
@@ -2553,6 +2553,8 @@ module.exports = {
   aiRepliesEnabledForCreator,
   loadCreator,
   ctxFor,
+  greetingCtx,
+  resolveSalutationFor,
   salutationFor,
   detectSenderName,
   nameFromEmail,

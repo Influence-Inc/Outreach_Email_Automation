@@ -32,6 +32,33 @@ model, instead of escalating again.
 The example pick is capped at 2 per action label so the model sees a diverse
 set instead of 4 copies of the same label biasing it.
 
+## Quoted history: the new message vs. the thread under it
+
+Every real reply arrives with the mail client's copy of our previous email
+pasted below it. `backend/src/services/emailQuote.js` (`splitQuotedReply`)
+finds that boundary — Gmail's `On … wrote:` line including its wrapped form,
+Outlook's `-----Original Message-----` / underscore-and-headers divider,
+forwarded-message markers, `>` quoting, `<blockquote>` / `div.gmail_quote` in
+HTML bodies, and mobile-client footers — and everything that reasons about
+"what the creator said" reads the new half only:
+
+- **who to greet** — `services/salutation.js`. Reading the tail of the raw body
+  meant reading OUR sign-off, which is how a reply from the creator went out
+  addressed "Hi Jennifer," and referred to the creator in the third person.
+  The resolved name is passed to Claude as a hard rule; the prompt no longer
+  asks the model to find a name for itself.
+- **example matching + the deterministic fallbacks** — harvested examples are
+  stored de-quoted, so matching a raw body against them compares different
+  things, and the rate/intent heuristics would otherwise mine our own quoted
+  offer for the creator's numbers.
+- **learned examples and timeline gists** — `replyLearning.stripQuotedHistory`
+  is a thin wrapper over the same splitter, so the live path and the learning
+  path can't drift apart.
+
+Claude still *sees* the quoted thread on the classify call — the terms already
+discussed are real context — but it arrives under an explicit label saying the
+messages are already-sent, mostly ours.
+
 ## Feed 1 — Delegate replies (live, per-reply)
 
 When Claude escalates a reply it can't handle, the creator lands in the

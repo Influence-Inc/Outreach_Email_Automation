@@ -32,6 +32,7 @@ const db = require('../db');
 const instantly = require('./instantly');
 const replyExamples = require('./replyExamples');
 const { getSetting, setSetting } = require('./settings');
+const { splitQuotedReply } = require('./emailQuote');
 
 const HARVEST_LAST_RUN_KEY = 'learn_last_harvest_at';
 const SLEEP_MS_BETWEEN_LABELS = 250;
@@ -224,34 +225,17 @@ async function learnFromHumanReply({ creator, inbound, outbound, stage = null })
 
 // ── Feed 2: harvest the mailbox via the Instantly API ───────────────────────
 
-function htmlToText(html) {
-  return String(html)
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'");
-}
-
+// Just the new message, with the quoted thread AND the sender's own signature
+// block dropped — a learned example should show what the creator said, not the
+// email they were replying to and not their mail footer. Boundary detection
+// (which quote shapes count, in which clients) lives in ./emailQuote so the
+// live reply path and the learning path can never drift apart.
+//
+// Returns '' when the message is nothing but quoted history; every caller here
+// falls back to the raw text in that case.
 function stripQuotedHistory(text) {
-  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
-  const out = [];
-  for (const line of lines) {
-    if (/^\s*On .+ wrote:\s*$/.test(line)) break;
-    if (/^\s*-{2,}\s*Original Message\s*-{2,}/i.test(line)) break;
-    if (/^\s*From:\s.+/i.test(line) && out.length) break;
-    if (/^\s*>/.test(line)) continue;
-    out.push(line);
-  }
-  let result = out.join('\n').trim();
-  result = result.replace(/\n-- \n[\s\S]*$/, '').trim();
-  return result;
+  const { latest } = splitQuotedReply(text);
+  return latest.replace(/\n-- \n[\s\S]*$/, '').trim();
 }
 
 const EMAIL_RE = /[\w.+-]+@[\w.-]+\.\w+/;
@@ -264,10 +248,11 @@ function bareAddress(v) {
 // defensively from the known aliases (same philosophy as the reply webhook).
 function normalizeInstantlyEmail(raw) {
   const body = raw.body || {};
+  // An HTML body is handed over as HTML, not pre-flattened: stripQuotedHistory
+  // finds the quote container (<blockquote>, div.gmail_quote) in the markup,
+  // and flattening first would throw that boundary away.
   const rawText =
-    typeof body === 'string'
-      ? body
-      : body.text || (body.html ? htmlToText(body.html) : '') || raw.content_preview || '';
+    typeof body === 'string' ? body : body.text || body.html || raw.content_preview || '';
   return {
     id: raw.id || raw.message_id || raw.uuid || null,
     threadId: raw.thread_id || raw.threadId || raw.id || null,
