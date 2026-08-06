@@ -121,6 +121,23 @@
       </table>
     </div>
 
+    <div class="card" id="watch-card" hidden style="margin-top:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <h2 style="margin:0;font-size:16px">Watch phone <span id="watch-host-label" class="scout-hint"></span></h2>
+        <div class="scout-row" style="margin:0">
+          <select id="watch-host" class="scout-select" style="width:auto;min-width:220px"></select>
+          <button id="watch-toggle" class="ghost small">Start watching</button>
+          <button id="watch-pause" class="ghost small" disabled>Pause phone</button>
+        </div>
+      </div>
+      <p class="scout-hint">Click on the phone image below to tap that spot on the real phone. Requires <code>SOURCING_LIVE_MIRROR=on</code> on the backend and the runner started with <code>RUNNER_LIVE_MIRROR=on</code> + a paired <code>RUNNER_HOST_ID</code>.</p>
+      <div id="watch-shell" style="position:relative;max-width:420px;margin-top:8px;border:1px solid #d9dbe0;border-radius:14px;overflow:hidden;background:#0b0e14;min-height:120px;display:flex;align-items:center;justify-content:center">
+        <img id="watch-frame" alt="phone screen (live)" style="display:block;max-width:100%;height:auto;cursor:crosshair" />
+        <span id="watch-empty" style="color:#93a1b1;font-size:12px;padding:24px">No frames yet — start the runner with live mirror.</span>
+      </div>
+      <div id="watch-status" class="scout-status"></div>
+    </div>
+
     <div class="card" id="run-card" hidden style="margin-top:18px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <h2 style="margin:0;font-size:16px">Run <span id="run-id"></span></h2>

@@ -217,9 +217,13 @@ function stopPolling() {
 
 // --- Paired hosts ---------------------------------------------------------
 
+let latestHosts = [];
+
 async function loadHosts() {
   try {
     const rows = await api('/api/sourcing/hosts');
+    latestHosts = rows;
+    populateWatchHosts(rows);
     const tb = el('hosts-rows');
     tb.innerHTML = '';
     for (const h of rows) {
@@ -272,6 +276,119 @@ async function mintHost() {
   }
 }
 
+// --- Watch phone (live mirror + take-over) --------------------------------
+
+let watchTimer = null;
+let watchHostId = null;
+let watchDims = { width: 0, height: 0 };
+
+function setWatchStatus(msg, kind) {
+  const s = el('watch-status');
+  if (s) { s.textContent = msg || ''; s.className = 'scout-status' + (kind ? ' ' + kind : ''); }
+}
+
+function populateWatchHosts(rows) {
+  const sel = el('watch-host');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const opt0 = document.createElement('option');
+  opt0.value = ''; opt0.textContent = '— pick a host —';
+  sel.appendChild(opt0);
+  for (const h of rows.filter((r) => r.status === 'active')) {
+    const o = document.createElement('option');
+    o.value = String(h.id); o.textContent = `#${h.id} ${h.label}`;
+    sel.appendChild(o);
+  }
+  if (prev) sel.value = prev;
+  el('watch-card').hidden = rows.length === 0;
+}
+
+async function fetchFrame() {
+  if (!watchHostId) return;
+  try {
+    const resp = await fetch(`/api/sourcing/hosts/${watchHostId}/frame`, {
+      headers: { Accept: 'image/*' },
+    });
+    if (resp.status === 204) {
+      el('watch-frame').removeAttribute('src');
+      el('watch-empty').style.display = '';
+      setWatchStatus('Waiting for the runner to publish a frame…');
+      return;
+    }
+    if (resp.status === 404) {
+      setWatchStatus('Live mirror is disabled on the backend (SOURCING_LIVE_MIRROR=on).', 'err');
+      stopWatching();
+      return;
+    }
+    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+    watchDims = {
+      width: Number(resp.headers.get('X-Screen-Width') || 0),
+      height: Number(resp.headers.get('X-Screen-Height') || 0),
+    };
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const img = el('watch-frame');
+    const prev = img.src;
+    img.onload = () => { if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev); };
+    img.src = url;
+    el('watch-empty').style.display = 'none';
+    setWatchStatus('');
+  } catch (err) {
+    setWatchStatus(err.message, 'err');
+  }
+}
+
+function startWatching() {
+  const sel = el('watch-host');
+  const id = Number(sel.value);
+  if (!id) { setWatchStatus('Pick a host first.', 'err'); return; }
+  watchHostId = id;
+  el('watch-host-label').textContent = sel.options[sel.selectedIndex].textContent;
+  el('watch-toggle').textContent = 'Stop watching';
+  el('watch-pause').disabled = false;
+  fetchFrame();
+  watchTimer = setInterval(fetchFrame, 2000);
+}
+
+function stopWatching() {
+  if (watchTimer) clearInterval(watchTimer); watchTimer = null;
+  watchHostId = null;
+  el('watch-toggle').textContent = 'Start watching';
+  el('watch-pause').disabled = true;
+  el('watch-frame').removeAttribute('src');
+  el('watch-empty').style.display = '';
+  setWatchStatus('');
+}
+
+async function postControl(op) {
+  if (!watchHostId) return;
+  try {
+    const res = await fetch(`/api/sourcing/hosts/${watchHostId}/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(op),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  } catch (err) {
+    setWatchStatus(err.message, 'err');
+  }
+}
+
+function onFrameClick(ev) {
+  if (!watchHostId) return;
+  const img = ev.currentTarget;
+  const rect = img.getBoundingClientRect();
+  const localX = ev.clientX - rect.left;
+  const localY = ev.clientY - rect.top;
+  if (!watchDims.width || !watchDims.height || !rect.width || !rect.height) return;
+  // Normalize dashboard-pixel click to real device pixels.
+  const x = Math.round((localX / rect.width) * watchDims.width);
+  const y = Math.round((localY / rect.height) * watchDims.height);
+  setWatchStatus(`Sent tap (${x}, ${y})`, 'ok');
+  postControl({ op: 'tap', x, y });
+}
+
 function wire() {
   el('campaign').addEventListener('change', () => { currentRun = null; el('run-card').hidden = true; stopPolling(); loadConfig(); });
   el('save-btn').addEventListener('click', saveDefaults);
@@ -279,6 +396,9 @@ function wire() {
   el('stop-btn').addEventListener('click', stopRun);
   el('feed-mock-btn').addEventListener('click', feedMock);
   el('mint-host-btn').addEventListener('click', mintHost);
+  el('watch-toggle').addEventListener('click', () => (watchTimer ? stopWatching() : startWatching()));
+  el('watch-pause').addEventListener('click', () => postControl({ op: 'pause' }));
+  el('watch-frame').addEventListener('click', onFrameClick);
 }
 
 wire();

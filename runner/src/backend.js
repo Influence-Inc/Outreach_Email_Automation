@@ -35,6 +35,11 @@ function makeBackend({ backendUrl, hostToken, fetchImpl = globalThis.fetch }) {
     postCandidates: (id, candidates) =>
       req('POST', `/api/sourcing/runs/${id}/candidates`, { candidates }),
     stopRun: (id) => req('POST', `/api/sourcing/runs/${id}/stop`),
+    // Live mirror surface (only meaningful when SOURCING_LIVE_MIRROR=on on the
+    // backend; each 404s otherwise, which the caller treats as "off").
+    publishFrame: (hostId, payload) =>
+      req('POST', `/api/sourcing/hosts/${hostId}/frame`, payload),
+    pullControls: (hostId) => req('GET', `/api/sourcing/hosts/${hostId}/control`),
   };
 }
 

@@ -15,6 +15,13 @@
 //   RUNNER_BATCH_SIZE      candidates per ingest batch (default 5)
 //   RUNNER_PACING_MS       min ms between IG actions (default 1800)
 //   RUNNER_DAILY_CAP       hard stop after N captures/day (default 200)
+//   RUNNER_HOST_ID         paired-host id (integer). Required when
+//                          RUNNER_LIVE_MIRROR=on so frame uploads + control drains
+//                          address the right host on the backend.
+//   RUNNER_LIVE_MIRROR     'on' to start the live-mirror + take-over side loops
+//                          alongside scouting (default off)
+//   RUNNER_FRAME_MS        live-mirror frame upload interval, ms (default 3000)
+//   RUNNER_CONTROL_MS      live-mirror control drain interval, ms (default 1500)
 
 function loadConfig(env = process.env) {
   const backend = (env.RUNNER_BACKEND_URL || '').replace(/\/$/, '');
@@ -31,6 +38,10 @@ function loadConfig(env = process.env) {
     batchSize: Number(env.RUNNER_BATCH_SIZE || 5),
     pacingMs: Number(env.RUNNER_PACING_MS || 1800),
     dailyCap: Number(env.RUNNER_DAILY_CAP || 200),
+    hostId: env.RUNNER_HOST_ID ? Number(env.RUNNER_HOST_ID) : null,
+    liveMirror: String(env.RUNNER_LIVE_MIRROR || '').toLowerCase() === 'on',
+    frameMs: Number(env.RUNNER_FRAME_MS || 3000),
+    controlMs: Number(env.RUNNER_CONTROL_MS || 1500),
   };
   return cfg;
 }

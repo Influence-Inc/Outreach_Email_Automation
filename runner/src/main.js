@@ -10,6 +10,7 @@
 // screen reader, and a stubbed backend (see main.test.js).
 
 const { scoutCandidates } = require('./navigator/instagram');
+const { startLiveMirror } = require('./liveMirror');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -32,6 +33,19 @@ async function runOnce({ driver, reader, backend, config, runOverride }) {
     batch = [];
   };
 
+  // Optional live mirror: starts a pair of side loops that upload the phone
+  // screen and drain admin control ops. Only enabled when both RUNNER_LIVE_MIRROR
+  // and RUNNER_HOST_ID are set — otherwise a scouting run stays "headless".
+  let mirror = null;
+  if (config.liveMirror && config.hostId) {
+    mirror = startLiveMirror({
+      driver, backend, hostId: config.hostId,
+      frameIntervalMs: config.frameMs,
+      controlIntervalMs: config.controlMs,
+      getShouldStop: shouldStop,
+    });
+  }
+
   try {
     for await (const cand of scoutCandidates({
       driver,
@@ -51,6 +65,7 @@ async function runOnce({ driver, reader, backend, config, runOverride }) {
     }
   } finally {
     await flush().catch(() => {});
+    if (mirror) await mirror.stop().catch(() => {});
     if (driver.close) await driver.close().catch(() => {});
   }
   return { run: latest, capturedToday };

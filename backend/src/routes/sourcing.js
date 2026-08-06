@@ -20,8 +20,17 @@ const store = require('../services/sourcingStore');
 const { processCandidate } = require('../services/sourcingOrchestrator');
 const { buildConfig } = require('../services/sourcingConfig');
 const { generateToken, hashToken, requireHostOrSlack } = require('../services/hostTokens');
+const hostChannel = require('../services/hostChannel');
 
 const router = express.Router();
+
+// Feature gate: everything under Live Mirror only exists when SOURCING_LIVE_MIRROR=on.
+// Kept as its own middleware so removing the env var flips the whole surface off
+// (frame upload, latest-frame read, control push, control drain) with no code change.
+function requireLiveMirror(_req, res, next) {
+  if (!hostChannel.enabled()) return res.status(404).json({ error: 'live mirror disabled' });
+  next();
+}
 
 // --- Paired hosts (per-runner token pairing) -------------------------------
 // Mint/list/revoke are admin-only — they sit behind the top-level siteAuth gate
@@ -199,6 +208,60 @@ router.post('/runs/:id/candidates', requireHostOrSlack, async (req, res, next) =
       ...(done ? { status: 'done' } : {}),
     });
     res.json({ run: updated, results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Live screen mirror + human take-over ---------------------------------
+// Runner uploads the latest phone frame every N seconds; dashboards render it.
+// Admins post control instructions (tap/swipe/type/home/pause/resume) which the
+// runner drains on its next poll. All in-memory (see services/hostChannel.js).
+
+// Runner → backend: publish the latest phone frame.
+router.post('/hosts/:id/frame', requireLiveMirror, requireHostOrSlack, async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const result = hostChannel.publishFrame(Number(req.params.id), body);
+    res.json({ ok: true, bytes: result.bytes });
+  } catch (err) {
+    // publishFrame throws on validation issues; surface them as 400s.
+    if (/empty frame|too large/.test(err.message)) return res.status(400).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Dashboard → backend: read the latest phone frame as an image (or 204 if stale).
+router.get('/hosts/:id/frame', requireLiveMirror, async (req, res, next) => {
+  try {
+    const f = hostChannel.latestFrame(Number(req.params.id));
+    if (!f) return res.status(204).end();
+    res.set('Content-Type', f.mediaType);
+    res.set('Cache-Control', 'no-store');
+    if (f.width) res.set('X-Screen-Width', String(f.width));
+    if (f.height) res.set('X-Screen-Height', String(f.height));
+    res.set('X-Frame-At', String(f.at));
+    res.send(f.data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Dashboard → backend: push a control instruction.
+router.post('/hosts/:id/control', requireLiveMirror, async (req, res, next) => {
+  try {
+    const entry = hostChannel.pushControl(Number(req.params.id), req.body || {});
+    res.status(202).json({ ok: true, id: entry.id });
+  } catch (err) {
+    if (/unknown op|op is required/.test(err.message)) return res.status(400).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Runner → backend: drain queued control instructions.
+router.get('/hosts/:id/control', requireLiveMirror, requireHostOrSlack, async (req, res, next) => {
+  try {
+    res.json({ ops: hostChannel.drainControls(Number(req.params.id)) });
   } catch (err) {
     next(err);
   }

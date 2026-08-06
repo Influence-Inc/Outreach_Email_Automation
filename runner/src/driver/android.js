@@ -109,6 +109,14 @@ class AndroidDriver extends DeviceDriver {
       this.session = null;
     }
   }
+
+  // Real device pixel size, used by the live mirror to normalize an admin click
+  // in the dashboard's phone image back to device coordinates.
+  async getWindowSize() {
+    const s = await this._ensureSession();
+    const r = await s.getWindowSize();
+    return { width: r && r.width, height: r && r.height };
+  }
 }
 
 module.exports = { AndroidDriver };

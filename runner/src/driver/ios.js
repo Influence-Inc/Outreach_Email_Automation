@@ -136,6 +136,14 @@ class IosDriver extends DeviceDriver {
       this.session = null;
     }
   }
+
+  // Device pixel size for the live mirror's click normalization (see the
+  // AndroidDriver counterpart for context).
+  async getWindowSize() {
+    const s = await this._ensureSession();
+    const r = await s.getWindowSize();
+    return { width: r && r.width, height: r && r.height };
+  }
 }
 
 module.exports = { IosDriver };
