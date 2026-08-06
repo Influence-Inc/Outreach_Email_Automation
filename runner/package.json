@@ -1,0 +1,17 @@
+{
+  "name": "influence-sourcing-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Paired-host runner that drives the Instagram app on a real phone to scout creators for a Deal Studio campaign, over the {screenshot, tap, swipe} contract.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js",
+    "start:mock": "RUNNER_DRIVER=mock node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {},
+  "optionalDependencies": {
+    "webdriverio": "^8.39.0"
+  }
+}
