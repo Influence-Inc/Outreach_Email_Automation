@@ -66,7 +66,7 @@
     var html = '';
 
     // ── Header ──────────────────────────────────────────────────────────────
-    html += '<div class="brandbar">INFLUENCE</div>';
+    // (The INFLUENCE logo lives in the page masthead — see brief.html.)
     html += '<h1>Content Brief &amp; Guidelines</h1>';
     html += '<p class="prepared">Prepared by INFLUENCE</p>';
     if (has(creator.handle) || has(creator.firstName)) {
