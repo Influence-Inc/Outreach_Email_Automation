@@ -15,6 +15,7 @@ const { api: briefsApi, page: briefPage } = require('./routes/briefs');
 const offerReview = require('./routes/offerReview');
 const bot = require('./routes/bot');
 const creatorDbRoutes = require('./routes/creatorDb');
+const sourcing = require('./routes/sourcing');
 const scheduler = require('./services/scheduler');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
@@ -100,6 +101,8 @@ app.use('/api/creators', negotiation);
 // Creator-Database bridge: /search (Used/Unused/New lookup) + /import (create
 // a creators row from a picked Creator-DB record). See routes/creatorDb.js.
 app.use('/api/creator-db', creatorDbRoutes);
+// Automated Instagram creator sourcing (scout config, runs, host candidate ingest).
+app.use('/api/sourcing', sourcing);
 app.use('/api/settings', settings);
 app.use('/webhook', webhook);
 // Inbound WhatsApp + iMessage for the offer portal (old-creator negotiation).

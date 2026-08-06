@@ -14,7 +14,7 @@ router.get('/', async (_req, res, next) => {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
-              c.ig_dm_body, c.messaging_brief, c.content_brief,
+              c.ig_dm_body, c.messaging_brief, c.content_brief, c.sourcing_defaults,
               COUNT(cr.id)::int AS creator_count,
               -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
               -- creators without an email who haven't been DM'd yet AND whose
@@ -130,13 +130,14 @@ router.patch('/:id', async (req, res, next) => {
     const hasIgDm = Object.prototype.hasOwnProperty.call(body, 'ig_dm_body');
     const hasMessagingBrief = Object.prototype.hasOwnProperty.call(body, 'messaging_brief');
     const hasContentBrief = Object.prototype.hasOwnProperty.call(body, 'content_brief');
+    const hasSourcingDefaults = Object.prototype.hasOwnProperty.call(body, 'sourcing_defaults');
     if (
       !hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm &&
-      !hasMessagingBrief && !hasContentBrief
+      !hasMessagingBrief && !hasContentBrief && !hasSourcingDefaults
     ) {
       return res.status(400).json({
         error:
-          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body, messaging_brief or content_brief is required',
+          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body, messaging_brief, content_brief or sourcing_defaults is required',
       });
     }
 
@@ -211,6 +212,15 @@ router.patch('/:id', async (req, res, next) => {
       }
       params.push(raw == null ? null : JSON.stringify(raw));
       sets.push(`content_brief = $${params.length}::jsonb`);
+    }
+
+    if (hasSourcingDefaults) {
+      const raw = body.sourcing_defaults;
+      if (raw != null && (typeof raw !== 'object' || Array.isArray(raw))) {
+        return res.status(400).json({ error: 'sourcing_defaults must be an object or null' });
+      }
+      params.push(raw == null ? null : JSON.stringify(raw));
+      sets.push(`sourcing_defaults = $${params.length}::jsonb`);
     }
 
     const row = await db.one(

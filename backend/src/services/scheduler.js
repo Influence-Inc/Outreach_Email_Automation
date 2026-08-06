@@ -5,6 +5,8 @@ const graduation = require('./graduation');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const segmentation = require('./segmentation');
+const sourcingSweepMod = require('./sourcingSweep');
+const { buildConfig: buildSourcingConfig } = require('./sourcingConfig');
 
 const intervalMs = () =>
   Number(process.env.SCHEDULER_INTERVAL_MINUTES || 5) * 60 * 1000;
@@ -18,11 +20,16 @@ const segmentSweepMs = () => Number(process.env.SEGMENT_SWEEP_MINUTES || 60) * 6
 // their deliverables to send the one-time graduation email (TTL-gated, default
 // hourly; 0 disables).
 const graduationSweepMs = () => Number(process.env.GRADUATION_SWEEP_MINUTES || 60) * 60 * 1000;
+// How often the creator-sourcing housekeeping sweep runs — reap crashed runs,
+// mark stale hosts, auto-enqueue runs for enabled campaigns (TTL-gated, default
+// 10 min; 0 disables the sweep entirely).
+const sourcingSweepMs = () => Number(process.env.SOURCING_SWEEP_MINUTES || 10) * 60 * 1000;
 
 let timer = null;
 let negRunning = false;
 let lastSegmentSweep = 0;
 let lastGraduationSweep = 0;
+let lastSourcingSweep = 0;
 
 // Outreach and follow-up sending is now handled by Instantly.ai.
 // Reply detection arrives via the /webhook/instantly endpoint (reply_received event).
@@ -264,12 +271,31 @@ async function sendUsedInviteFollowups() {
   }
 }
 
+// Periodic housekeeping for creator sourcing: reap runs whose runner crashed,
+// mark hosts stale after 24h of silence, and enqueue new runs for campaigns
+// whose sourcing_defaults.enabled = true. TTL-gated (SOURCING_SWEEP_MINUTES);
+// runSweep is safe to call as often as we want but the TTL keeps DB pressure
+// bounded and lines this up with the other sweeps above.
+async function maybeSourcingSweep() {
+  const everyMs = sourcingSweepMs();
+  if (!(everyMs > 0)) return; // 0 / blank disables
+  if (Date.now() - lastSourcingSweep < everyMs) return;
+  lastSourcingSweep = Date.now();
+  const r = await sourcingSweepMod.runSweep({ db, buildConfig: buildSourcingConfig });
+  if (r && (r.reapedRuns || r.reapedHosts || r.enqueued)) {
+    console.log(
+      `[sourcing] scheduled sweep: reapedRuns=${r.reapedRuns} reapedHosts=${r.reapedHosts} enqueued=${r.enqueued}`,
+    );
+  }
+}
+
 async function tick() {
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
   await sendUsedInviteFollowups().catch((err) => console.error('used-invite follow-up tick failed:', err));
   await maybeGraduate().catch((err) => console.error('graduation tick failed:', err));
   await refreshLearning().catch((err) => console.error('learning tick failed:', err));
   await maybeSegment().catch((err) => console.error('segmentation tick failed:', err));
+  await maybeSourcingSweep().catch((err) => console.error('sourcing sweep tick failed:', err));
 }
 
 function start() {

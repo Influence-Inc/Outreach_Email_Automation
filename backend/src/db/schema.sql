@@ -563,3 +563,82 @@ UPDATE creators
 -- or fail independently, and neither affects the contract's own
 -- pending/signed/completed status (that stays tied to Creator-DB sync only).
 ALTER TABLE contracts ADD COLUMN IF NOT EXISTS synced_to_dashboard BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ---------------------------------------------------------------------------
+-- Creator Sourcing (automated Instagram scouting)
+-- ---------------------------------------------------------------------------
+-- A paired "host" runner drives the Instagram app on a real phone (screenshot +
+-- tap + swipe, no IG API), captures candidate creators, and the backend filters
+-- them by the admin's scouting rules (niche match, min-view floor on recent
+-- reels, risk profile, stable growth) before adding the passing ones into a
+-- campaign's creators list. All additive + idempotent so this stays "safe to run
+-- on every boot".
+
+-- Remembered per-campaign scouting defaults (niche, keywords, view floor/ceiling,
+-- risk, target count, reels window). Added on campaigns like content_brief so the
+-- read-only upstream campaign sync upsert never clobbers it. NULL = never set.
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS sourcing_defaults JSONB;
+
+-- Paired host runners (the computer next to the phone). A runner authenticates
+-- outbound with a per-host token (only its SHA-256 hash is stored) and drives one
+-- or more phones. status: 'active' | 'disabled'.
+CREATE TABLE IF NOT EXISTS sourcing_hosts (
+  id           SERIAL PRIMARY KEY,
+  label        TEXT NOT NULL,
+  platforms    JSONB NOT NULL DEFAULT '[]'::jsonb,   -- ['android','ios']
+  token_hash   TEXT NOT NULL UNIQUE,
+  status       TEXT NOT NULL DEFAULT 'active',
+  last_seen_at TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One scouting run for a campaign. `config` is a frozen snapshot of the admin's
+-- inputs at start time, so later edits to the campaign defaults never change an
+-- in-flight run. status: queued | running | paused | done | stopped | error
+CREATE TABLE IF NOT EXISTS sourcing_runs (
+  id            SERIAL PRIMARY KEY,
+  campaign_id   TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  host_id       INTEGER REFERENCES sourcing_hosts(id) ON DELETE SET NULL,
+  config        JSONB NOT NULL,   -- {niche,keywords[],floor,ceiling,risk,targetCount,reelsWindow}
+  status        TEXT NOT NULL DEFAULT 'queued',
+  target_count  INTEGER NOT NULL DEFAULT 0,
+  found_count   INTEGER NOT NULL DEFAULT 0,
+  stats         JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {scanned,rejected,byReason:{...}}
+  error         TEXT,
+  created_by    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sourcing_runs_campaign ON sourcing_runs(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_sourcing_runs_status ON sourcing_runs(status);
+
+-- Every candidate the host captured for a run, with the scouting-rule verdict.
+--   decision: pending | passed | rejected | added   (added = promoted to creators)
+-- `reels` holds the recent window as [{views,likes?,comments?,posted_at?,caption?}].
+-- The expression UNIQUE index keeps the same handle from being scouted twice for
+-- one campaign (Instagram handles are case-insensitive).
+CREATE TABLE IF NOT EXISTS sourced_candidates (
+  id              SERIAL PRIMARY KEY,
+  run_id          INTEGER NOT NULL REFERENCES sourcing_runs(id) ON DELETE CASCADE,
+  campaign_id     TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  username        TEXT NOT NULL,
+  full_name       TEXT,
+  followers       INTEGER,
+  bio             TEXT,
+  reels           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  niche_score     NUMERIC(4,3),
+  niche_reason    TEXT,
+  view_floor_pass BOOLEAN,
+  risk_profile    TEXT,            -- computed low | medium | high
+  stability_score NUMERIC(4,3),
+  growth_trend    TEXT,            -- up | flat | down
+  decision        TEXT NOT NULL DEFAULT 'pending',
+  reject_reason   TEXT,
+  creator_id      INTEGER REFERENCES creators(id) ON DELETE SET NULL,
+  evidence        JSONB,           -- screenshot refs / raw captured text
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sourced_candidates_run ON sourced_candidates(run_id);
+CREATE INDEX IF NOT EXISTS idx_sourced_candidates_decision ON sourced_candidates(decision);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sourced_candidates_campaign_username
+  ON sourced_candidates(campaign_id, LOWER(username));
