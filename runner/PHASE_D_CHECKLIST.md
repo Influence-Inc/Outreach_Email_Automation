@@ -1,15 +1,17 @@
 # Phase D — Android live E2E checklist
 
 The runner package already ships the Android driver (`src/driver/android.js`)
-and the vision-driven Instagram Navigator. What's left is one-time host setup:
-Appium 2 + UiAutomator2, ADB against the phone, and a paired Deal Studio host
-token. This checklist is a linear script — do each step, verify the "expected
-output" matches, then move on.
+and the vision-driven Instagram Navigator. Android needs **no Appium and no
+extra software** — the driver talks to the phone directly through `adb`
+(Google's own Android SDK tool, the same one you use for `adb devices`). What's
+left is one-time host setup: install `adb`, connect the phone, and pair a Deal
+Studio host token. This checklist is a linear script — do each step, verify the
+"expected output" matches, then move on.
 
 The tests from Phase 2 already prove the runner talks to the backend correctly
 (commit `db3dbfa` on PR #305 verified this against a real Postgres). Anything
-that goes wrong from here on is an **Appium/phone-side setup issue**, not the
-runner code — the `preflight.js` script in step 4 pinpoints where in the stack
+that goes wrong from here on is a **phone/adb-side setup issue**, not the
+runner code — the `preflight.js` script in step 2 pinpoints where in the stack
 the failure actually is.
 
 ---
@@ -20,6 +22,10 @@ the failure actually is.
       strongly preferred so an IG account lock doesn't hit a team member)
 - [ ] USB cable (or a Wi-Fi ADB pairing, but USB is more reliable for the first run)
 - [ ] Host computer with Node 20+ and `npm` (already required for the runner)
+- [ ] `adb` installed on the host — macOS: `brew install android-platform-tools`;
+      Ubuntu: `sudo apt install android-tools-adb`; Windows: install the
+      Android SDK Platform Tools. **That's the only extra software needed —
+      no Appium, no separate server to run.**
 - [ ] A **dedicated Instagram account** signed into the IG app on the phone
       — never the team's real one; IG will action it if it gets flagged
 - [ ] Backend URL you can reach (production Railway, staging, or local)
@@ -41,46 +47,23 @@ adb devices
 # 12345ABCDE     device
 ```
 
-## Step 2 — install Appium 2 + the UiAutomator2 driver
-
-```bash
-npm install -g appium
-appium driver install uiautomator2
-appium driver list --installed
-```
-
-**Expected:** `uiautomator2@x.y.z (installed)` in the output.
-
-## Step 3 — start Appium
-
-In a spare terminal (keep it running for the whole session):
-
-```bash
-appium --base-path /wd/hub
-```
-
-**Expected:** logs `[Appium] Welcome to Appium vX.Y.Z` and
-`[Appium] You can provide the following URLS in your client code to connect to
-this server: http://127.0.0.1:4723/wd/hub`
-
-## Step 4 — install runner deps + run preflight
+## Step 2 — install runner deps + run preflight
 
 ```bash
 cd runner
-npm install                 # installs the base runner package
-npm install webdriverio     # optional dep needed only for real drivers
+npm install                 # installs the base runner package (no Appium needed for Android)
 node scripts/preflight.js
 ```
 
 **Expected — every check green:**
 
 ```
-[preflight] Appium /status: 200 OK — v2.x.y
+Runner preflight (Android via adb — no Appium)
 [preflight] ADB found: /usr/bin/adb
 [preflight] ADB devices:
              12345ABCDE   device
 [preflight] Instagram installed on device: yes (versionName=326.0.0.42.108)
-[preflight] Attempting Appium UiAutomator2 session against Instagram… OK
+[preflight] Opening the phone with AndroidDriver (adb only, no Appium)…
 [preflight] Screen size reported: 1080 x 2400
 [preflight] Screenshot bytes: 348271
 [preflight] ✅ all checks passed — the runner is ready to scout
@@ -90,7 +73,7 @@ If **any** check fails, `preflight.js` prints an actionable next-step. Fix and
 re-run; do not proceed past this step with a red preflight — you'll just burn
 IG rate limit against a broken setup.
 
-## Step 5 — mint a per-host token
+## Step 3 — mint a per-host token
 
 Two ways, pick either:
 
@@ -111,7 +94,7 @@ curl -X POST <backend-url>/api/sourcing/hosts \
 # → returns { id, label, platforms, status, token: "sk_..." }
 ```
 
-## Step 6 — start a small scouting run
+## Step 4 — start a small scouting run
 
 From the Scout Creators page (or via curl), start a run on a real campaign with:
 
@@ -123,18 +106,21 @@ From the Scout Creators page (or via curl), start a run on a real campaign with:
 
 Note the returned `run.id`.
 
-## Step 7 — run the runner
+## Step 5 — run the runner
 
 ```bash
 cd runner
 RUNNER_DRIVER=android \
-RUNNER_APPIUM_URL=http://127.0.0.1:4723 \
 RUNNER_BACKEND_URL=<backend-url> \
-RUNNER_HOST_TOKEN=sk_...            # from step 5
-RUNNER_RUN_ID=<from step 6> \
+RUNNER_HOST_TOKEN=sk_...            # from step 3
+RUNNER_RUN_ID=<from step 4> \
 RUNNER_PACING_MS=2500 \
 npm start
 ```
+
+No `RUNNER_APPIUM_URL` needed — the Android driver talks to the phone directly.
+If you have more than one phone attached, add `RUNNER_DEVICE_UDID=<serial>`
+(from `adb devices`).
 
 **Expected — on the phone:**
 
@@ -158,13 +144,17 @@ the pass/reject log, and the campaign's creators table has a new row with
 | Symptom | Meaning | Fix |
 |---|---|---|
 | `adb devices` shows `unauthorized` | You haven't tapped Allow on the phone | Unplug, replug, tap Allow |
-| Appium session error `Original error: Could not find a driver for automationName 'UiAutomator2'` | Driver not installed | `appium driver install uiautomator2` |
-| `Cannot find module 'webdriverio'` from the runner | Optional dep not installed | `cd runner && npm install webdriverio` |
-| Session opens but IG never opens | IG not installed on the phone | Install IG from Play Store; sign in; retry |
-| `takeScreenshot` returns empty / black | Screen is locked | Wake the phone; disable auto-lock during the run |
-| Runner exits with `not implemented` from `ScreenReader.read` | Expected on the first live run | Send screenshots per step 8 below |
+| `spawn adb ENOENT` | `adb` isn't installed / not on PATH | Install Android platform-tools (see Prerequisites) |
+| `adb: more than one device/emulator` | Two+ phones attached | Set `RUNNER_DEVICE_UDID=<serial>` |
+| `openApp` runs but IG never opens | IG not installed on the phone | Install IG from Play Store; sign in; retry |
+| Screenshot comes back empty | Screen is locked | Wake the phone; disable auto-lock during the run |
+| Runner exits with `not implemented` from `ScreenReader.read` | Expected on the first live run | Send screenshots per step 6 below |
 
-## Step 8 — first-live-run iteration loop
+Every failure above also gets an actionable "cause + fix" line automatically —
+the runner's `src/diagnose.js` recognizes these patterns and prints the fix,
+not just a raw stack trace.
+
+## Step 6 — first-live-run iteration loop
 
 On the very first Track D run, the vision reader (`src/navigator/screenReader.js`)
 is intentionally the `not implemented` stub for real drivers — we build it
@@ -180,7 +170,7 @@ adb exec-out screencap -p > screen-3-reels-tab.png
 
 Ship these three PNGs back — with those in hand I'll ship the first real
 `ScreenReader` implementation as a follow-up commit on PR #305 and you re-run
-step 7 with the vision layer live.
+step 5 with the vision layer live.
 
 ---
 

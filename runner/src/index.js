@@ -5,9 +5,10 @@
 // Instagram Navigator on a paired phone until the sourcing run completes.
 //
 // Drivers:
-//   RUNNER_DRIVER=mock   in-process fixture (no phone, no Appium)
-//   RUNNER_DRIVER=android    real Android via Appium UiAutomator2
-//   RUNNER_DRIVER=ios    (Phase 3) real iOS via Appium + WebDriverAgent
+//   RUNNER_DRIVER=mock      in-process fixture (no phone, no extra tools)
+//   RUNNER_DRIVER=android   real Android via adb only (no Appium, no extra deps)
+//   RUNNER_DRIVER=ios       real iOS via Appium + WebDriverAgent (Apple requires
+//                           its own sanctioned test agent — no ADB-equivalent exists)
 
 const { loadConfig, assertConfig } = require('./config');
 const { makeBackend } = require('./backend');
@@ -40,7 +41,7 @@ async function buildDriverAndReader(cfg) {
     const { AndroidDriver } = require('./driver/android');
     const { ScreenReader } = require('./navigator/screenReader');
     return {
-      driver: new AndroidDriver({ appiumUrl: cfg.appiumUrl, udid: cfg.deviceUdid }),
+      driver: new AndroidDriver({ serial: cfg.deviceUdid }),
       reader: new ScreenReader(),
     };
   }

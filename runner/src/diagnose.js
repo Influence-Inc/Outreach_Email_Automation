@@ -8,41 +8,59 @@
 // message so we never SWALLOW an unexpected error.
 
 // Ordered patterns — the first match wins, so put more specific ones first.
+//
+// Android is driven directly over adb (no Appium) — its failure modes are all
+// adb-shaped: the binary missing, no device, wrong device picked, or the
+// screen being locked. iOS still goes through Appium + WebDriverAgent (there
+// is no Apple-provided ADB-equivalent), so its Appium-shaped failures remain.
 const PATTERNS = [
   {
-    match: /Cannot find module 'webdriverio'/i,
-    reason: "The 'webdriverio' optional dependency is not installed.",
-    fix: "cd runner && npm install webdriverio",
+    match: /spawn adb ENOENT|'adb' not in PATH/i,
+    reason: "The 'adb' command was not found on this host.",
+    fix:
+      "install Android platform tools (macOS: 'brew install android-platform-tools', " +
+      "Ubuntu: 'sudo apt install android-tools-adb', Windows: install Android SDK Platform Tools) " +
+      'and make sure it is on PATH.',
   },
   {
-    match: /Could not find a driver for automationName 'UiAutomator2'/i,
-    reason: 'Appium is running but the UiAutomator2 driver is missing.',
-    fix: 'appium driver install uiautomator2',
+    match: /no devices\/emulators found|error: no devices\/?/i,
+    reason: 'adb sees no phone attached.',
+    fix: 'plug the phone in via USB and enable Developer options → USB debugging',
+  },
+  {
+    match: /more than one device\/emulator/i,
+    reason: 'adb sees more than one phone/emulator and does not know which to use.',
+    fix: "run 'adb devices' to list them, then set RUNNER_DEVICE_UDID=<serial>",
+  },
+  {
+    match: /device\s+offline/i,
+    reason: 'adb sees the phone but it is in the "offline" state.',
+    fix: 'unplug and replug the USB cable, or reboot the phone',
+  },
+  {
+    match: /Cannot find module 'webdriverio'/i,
+    reason: "The 'webdriverio' optional dependency is not installed (only needed for the iOS driver).",
+    fix: 'cd runner && npm install webdriverio',
   },
   {
     match: /Could not find a driver for automationName 'XCUITest'/i,
-    reason: 'Appium is running but the XCUITest driver is missing.',
+    reason: 'Appium is running but the XCUITest driver (iOS) is missing.',
     fix: 'appium driver install xcuitest',
   },
   {
     match: /(ECONNREFUSED|fetch failed).*(4723|127\.0\.0\.1)/i,
-    reason: 'Appium server is not running on the configured URL.',
-    fix: "start Appium in another terminal: 'appium --base-path /wd/hub'",
+    reason: 'The iOS Appium server is not running on the configured URL.',
+    fix: "start Appium in another terminal: 'appium --base-path /wd/hub'  (Android does not need this)",
   },
   {
     match: /connect ECONNREFUSED/i,
     reason: 'A network connection was refused.',
-    fix: 'check the backend URL (RUNNER_BACKEND_URL) or the Appium URL (RUNNER_APPIUM_URL)',
+    fix: 'check the backend URL (RUNNER_BACKEND_URL), or — iOS only — the Appium URL (RUNNER_APPIUM_URL)',
   },
   {
-    match: /screen is locked/i,
-    reason: 'The phone screen is locked; Appium cannot take a screenshot.',
+    match: /screen.{0,20}locked/i,
+    reason: 'The phone screen is locked, so a screenshot/tap could not go through.',
     fix: 'unlock the phone and disable auto-lock during the run',
-  },
-  {
-    match: /Instrumentation process.*(is not running|failed to start)/i,
-    reason: "Appium's UiAutomator2 helper on the phone is stuck.",
-    fix: 'adb uninstall io.appium.uiautomator2.server && retry (the driver will reinstall it)',
   },
   {
     match: /(WebDriverAgent.*not.*installed|WebDriverAgentRunner.*failed|xcodebuild)/i,

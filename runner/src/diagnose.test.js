@@ -1,21 +1,28 @@
 'use strict';
 
-// Locks the diagnose() pattern → { reason, fix } mapping so a raw Appium /
-// webdriverio / backend error surfaces as a compact, actionable line instead
-// of a stack trace. Add a fixture per new failure mode we hit for real.
+// Locks the diagnose() pattern → { reason, fix } mapping so a raw adb / Appium
+// (iOS only) / webdriverio / backend error surfaces as a compact, actionable
+// line instead of a stack trace. Add a fixture per new failure mode we hit for
+// real. Android is adb-only (no Appium) — its cases are the adb-shaped ones;
+// the Appium/WebDriverAgent cases only apply to the iOS driver.
 
 const test = require('node:test');
 const assert = require('node:assert');
 const { diagnose, printDiagnostic } = require('./diagnose');
 
 const cases = [
+  // Android (adb-only)
+  { in: new Error('spawn adb ENOENT'), reason: /adb.*not found/i },
+  { in: new Error('adb: error: no devices/emulators found'), reason: /sees no phone/i },
+  { in: new Error('adb: more than one device/emulator'), reason: /more than one/i },
+  { in: new Error('error: device offline'), reason: /offline/i },
+  { in: new Error('adb screencap returned no data — is the screen locked?'), reason: /screen is locked/i },
+  { in: new Error('adb device shows unauthorized state'), reason: /unauthorized/i },
+  // iOS (Appium + WebDriverAgent)
   { in: new Error("Cannot find module 'webdriverio'"), reason: /optional dependency/ },
-  { in: new Error("Could not find a driver for automationName 'UiAutomator2'"), reason: /UiAutomator2/ },
   { in: new Error("Could not find a driver for automationName 'XCUITest'"), reason: /XCUITest/ },
   { in: new Error('fetch failed on http://127.0.0.1:4723'), reason: /Appium server is not running/ },
-  { in: new Error('screen is locked'), reason: /screen is locked/i },
-  { in: new Error('Instrumentation process failed to start'), reason: /Appium.*UiAutomator2 helper/ },
-  { in: new Error('adb device shows unauthorized state'), reason: /unauthorized/i },
+  // Shared
   { in: new Error('POST /api/sourcing/runs/1/candidates -> HTTP 401 Unauthorized'), reason: /Backend rejected/ },
   { in: new Error('not implemented'), reason: /vision reader is not implemented/ },
 ];

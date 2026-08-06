@@ -4,20 +4,21 @@
 // runner/scripts/preflight.js
 //
 // Verify the whole live-scouting stack is talking BEFORE we start burning IG's
-// rate limit against a broken setup. Runs top-down: Appium server → ADB → IG
-// installed → open an Appium session → screenshot the phone. Each check prints
-// exactly which layer is at fault so the fix is one-line.
+// rate limit against a broken setup. Runs top-down: ADB found → phone attached
+// & authorized → IG installed → the REAL AndroidDriver can screenshot the
+// phone. Each check prints exactly which layer is at fault so the fix is
+// one-line. No Appium involved — Android is driven directly over adb.
 //
 // Usage:
-//   RUNNER_APPIUM_URL=http://127.0.0.1:4723 node scripts/preflight.js
+//   node scripts/preflight.js
+//   RUNNER_DEVICE_UDID=<serial> node scripts/preflight.js   # when >1 device attached
 //
 // The script is stand-alone — no runner state — so it's safe to run repeatedly
 // while diagnosing setup issues on the host.
 
 const { spawnSync } = require('child_process');
+const { AndroidDriver } = require('../src/driver/android');
 
-const APPIUM_URL = process.env.RUNNER_APPIUM_URL || 'http://127.0.0.1:4723';
-const APPIUM_BASE_PATH = process.env.RUNNER_APPIUM_BASE_PATH || '/wd/hub';
 const IG_PACKAGE = 'com.instagram.android';
 const DEVICE_UDID = process.env.RUNNER_DEVICE_UDID || null;
 
@@ -38,29 +39,6 @@ function fail(msg, fix) {
 }
 
 // --- checks ---------------------------------------------------------------
-
-async function checkAppiumStatus() {
-  try {
-    const resp = await fetch(`${APPIUM_URL}${APPIUM_BASE_PATH}/status`);
-    if (!resp.ok) {
-      fail(
-        `Appium /status returned ${resp.status} ${resp.statusText}`,
-        `check that 'appium --base-path ${APPIUM_BASE_PATH}' is running on ${APPIUM_URL}`,
-      );
-      return null;
-    }
-    const body = await resp.json().catch(() => ({}));
-    const build = body.value && body.value.build && body.value.build.version;
-    log(c.ok('Appium /status: 200 OK') + ' — ' + (build ? `v${build}` : 'version unknown'));
-    return body;
-  } catch (err) {
-    fail(
-      `Cannot reach Appium at ${APPIUM_URL}${APPIUM_BASE_PATH}: ${err.message}`,
-      `start it in another terminal: 'appium --base-path ${APPIUM_BASE_PATH}'`,
-    );
-    return null;
-  }
-}
 
 function which(cmd) {
   const r = spawnSync('which', [cmd], { encoding: 'utf8' });
@@ -109,6 +87,13 @@ function checkAdbDevices() {
     );
     return null;
   }
+  if (devices.length > 1 && !DEVICE_UDID) {
+    fail(
+      `${devices.length} devices attached and RUNNER_DEVICE_UDID is not set`,
+      'set RUNNER_DEVICE_UDID=<serial> to pick which one (see the list above)',
+    );
+    return null;
+  }
   const online = devices.find((d) => d.state === 'device');
   if (!online) {
     fail(`no device in the 'device' state`, 'unplug + replug the phone');
@@ -137,80 +122,35 @@ function checkInstagramInstalled(serial) {
   return version;
 }
 
-async function checkOpenSession(serial) {
-  log(c.dim('Attempting Appium UiAutomator2 session against Instagram…'));
-  const capsForBody = {
-    capabilities: {
-      alwaysMatch: {
-        platformName: 'Android',
-        'appium:automationName': 'UiAutomator2',
-        'appium:appPackage': IG_PACKAGE,
-        'appium:appActivity': 'com.instagram.mainactivity.MainActivity',
-        'appium:noReset': true,
-        'appium:udid': serial,
-        'appium:newCommandTimeout': 60,
-      },
-      firstMatch: [{}],
-    },
-  };
-  let sessionId = null;
+// Exercises the REAL AndroidDriver — the exact code the runner uses — so a
+// green preflight is a genuine guarantee, not a separate reimplementation that
+// could drift from the real driver.
+async function checkDriverRoundTrip(serial) {
+  log(c.dim('Opening the phone with AndroidDriver (adb only, no Appium)…'));
+  const driver = new AndroidDriver({ serial });
   try {
-    const resp = await fetch(`${APPIUM_URL}${APPIUM_BASE_PATH}/session`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(capsForBody),
-    });
-    const body = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      const detail = (body.value && (body.value.message || body.value.error)) || `${resp.status}`;
-      let hint = 'see runner/README.md for the Android setup section';
-      if (/Could not find a driver for automationName/i.test(detail))
-        hint = 'install the driver: appium driver install uiautomator2';
-      if (/screen is locked/i.test(detail)) hint = 'unlock the phone and disable auto-lock during the run';
-      if (/Original error: Instrumentation process/i.test(detail))
-        hint = 'try: adb -s ' + serial + ' uninstall io.appium.uiautomator2.server';
-      fail(`Could not open Appium session: ${detail}`, hint);
-      return null;
-    }
-    sessionId = (body.value && body.value.sessionId) || body.sessionId;
-    log(c.ok('Attempting Appium UiAutomator2 session against Instagram… OK'));
-    // Once open, ask for screen size + take a screenshot to prove screen access.
-    const sizeResp = await fetch(`${APPIUM_URL}${APPIUM_BASE_PATH}/session/${sessionId}/window/rect`);
-    const sizeBody = await sizeResp.json().catch(() => ({}));
-    const size = (sizeBody.value && { w: sizeBody.value.width, h: sizeBody.value.height }) || null;
-    if (size) log(c.ok(`Screen size reported: ${size.w} x ${size.h}`));
-    const shotResp = await fetch(`${APPIUM_URL}${APPIUM_BASE_PATH}/session/${sessionId}/screenshot`);
-    const shotBody = await shotResp.json().catch(() => ({}));
-    const b64 = shotBody.value;
-    if (typeof b64 === 'string' && b64.length > 100) {
-      const bytes = Buffer.from(b64, 'base64').length;
-      log(c.ok(`Screenshot bytes: ${bytes}`));
+    const size = await driver.getWindowSize();
+    if (size && size.width) {
+      log(c.ok(`Screen size reported: ${size.width} x ${size.height}`));
     } else {
-      fail('Screenshot came back empty');
+      fail("'adb shell wm size' returned nothing parseable");
     }
-    return sessionId;
+    const shot = await driver.screenshot();
+    log(c.ok(`Screenshot bytes: ${shot.data.length}`));
   } catch (err) {
-    fail(`Session open threw: ${err.message}`);
-    return null;
-  } finally {
-    if (sessionId) {
-      try {
-        await fetch(`${APPIUM_URL}${APPIUM_BASE_PATH}/session/${sessionId}`, { method: 'DELETE' });
-      } catch (_) { /* best-effort cleanup */ }
-    }
+    fail(`AndroidDriver round-trip failed: ${err.message}`);
   }
 }
 
 // --- main -----------------------------------------------------------------
 
 (async () => {
-  console.log(c.b('Runner preflight'), c.dim(`(appium=${APPIUM_URL}${APPIUM_BASE_PATH})`));
-  await checkAppiumStatus();
+  console.log(c.b('Runner preflight'), c.dim('(Android via adb — no Appium)'));
   const adb = checkAdbAvailable();
   const device = adb ? checkAdbDevices() : null;
   const serial = DEVICE_UDID || (device && device.serial) || null;
   const igVersion = serial ? checkInstagramInstalled(serial) : null;
-  if (serial && igVersion) await checkOpenSession(serial);
+  if (serial && igVersion) await checkDriverRoundTrip(serial);
 
   console.log('');
   if (failed) {

@@ -7,8 +7,12 @@
 //   RUNNER_HOST_TOKEN      per-host machine token minted by the dashboard
 //   RUNNER_RUN_ID          the sourcing_runs id to drive (else long-polls for one)
 //   RUNNER_DRIVER          'mock' | 'android' | 'ios'   (default 'mock')
-//   RUNNER_APPIUM_URL      e.g. http://127.0.0.1:4723  (android/ios)
-//   RUNNER_DEVICE_UDID     ios only (also used by android when several are paired)
+//   RUNNER_APPIUM_URL      e.g. http://127.0.0.1:4723  (ios only — Android drives
+//                          the phone directly via adb, no Appium involved)
+//   RUNNER_DEVICE_UDID     the adb serial (Android) or the device UDID (iOS).
+//                          Only required when more than one phone is attached
+//                          to the same host; adb/Appium auto-pick the lone
+//                          device otherwise.
 //   RUNNER_DEVICE_NAME     ios only ('iPhone' or the name shown in Xcode)
 //   RUNNER_XCODE_ORG_ID    ios only (Apple developer team id used to sign WDA)
 //   RUNNER_XCODE_SIGNING_ID ios only (default 'iPhone Developer')
