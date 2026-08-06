@@ -99,6 +99,28 @@
       <div id="status" class="scout-status"></div>
     </div>
 
+    <div class="card" id="hosts-card" style="margin-top:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <h2 style="margin:0;font-size:16px">Paired phone-hosts</h2>
+        <span class="scout-hint">The computer next to a phone that runs the sourcing app.</span>
+      </div>
+      <p class="scout-hint" style="margin:4px 0 8px">
+        Mint a token per host and paste it into the runner's <code>RUNNER_HOST_TOKEN</code>.
+        The plaintext is shown only once — copy it now.
+      </p>
+      <div class="scout-row" style="margin-top:6px">
+        <input id="new-host-label" type="text" placeholder="Label (e.g. 'Sourcing Mac + Pixel 7')" style="flex:1;min-width:220px;padding:8px 10px;border:1px solid #d9dbe0;border-radius:8px" />
+        <label style="font-size:12px"><input type="checkbox" id="new-host-android" checked /> Android</label>
+        <label style="font-size:12px"><input type="checkbox" id="new-host-ios" /> iOS</label>
+        <button id="mint-host-btn" class="btn-primary small">Mint token</button>
+      </div>
+      <div id="new-host-token" class="scout-status" style="font-family:ui-monospace,monospace;word-break:break-all"></div>
+      <table class="scout-table" id="hosts-table">
+        <thead><tr><th>Label</th><th>Platforms</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+        <tbody id="hosts-rows"></tbody>
+      </table>
+    </div>
+
     <div class="card" id="run-card" hidden style="margin-top:18px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <h2 style="margin:0;font-size:16px">Run <span id="run-id"></span></h2>

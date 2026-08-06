@@ -215,13 +215,72 @@ function stopPolling() {
   pollTimer = null;
 }
 
+// --- Paired hosts ---------------------------------------------------------
+
+async function loadHosts() {
+  try {
+    const rows = await api('/api/sourcing/hosts');
+    const tb = el('hosts-rows');
+    tb.innerHTML = '';
+    for (const h of rows) {
+      const tr = document.createElement('tr');
+      const seen = h.last_seen_at ? new Date(h.last_seen_at).toLocaleString() : '—';
+      const plats = Array.isArray(h.platforms) ? h.platforms.join(', ') : '';
+      tr.innerHTML = `
+        <td>${h.label}</td>
+        <td>${plats}</td>
+        <td><span class="pill ${h.status === 'active' ? 'added' : 'rejected'}">${h.status}</span></td>
+        <td>${seen}</td>
+        <td>${h.status === 'active' ? `<button data-host="${h.id}" class="ghost small revoke-host">Revoke</button>` : ''}</td>`;
+      tb.appendChild(tr);
+    }
+    tb.querySelectorAll('.revoke-host').forEach((b) => {
+      b.addEventListener('click', async () => {
+        if (!confirm('Revoke this host token? The runner using it will stop being able to authenticate.')) return;
+        try {
+          await api(`/api/sourcing/hosts/${b.dataset.host}`, { method: 'DELETE' });
+          await loadHosts();
+        } catch (err) {
+          setStatus(err.message, 'err');
+        }
+      });
+    });
+  } catch (err) {
+    setStatus(err.message, 'err');
+  }
+}
+
+async function mintHost() {
+  const label = el('new-host-label').value.trim();
+  const platforms = [];
+  if (el('new-host-android').checked) platforms.push('android');
+  if (el('new-host-ios').checked) platforms.push('ios');
+  if (!label) { setStatus('Host label is required.', 'err'); return; }
+  if (!platforms.length) { setStatus('Pick at least one platform.', 'err'); return; }
+  try {
+    const created = await api('/api/sourcing/hosts', {
+      method: 'POST',
+      body: JSON.stringify({ label, platforms }),
+    });
+    el('new-host-token').textContent =
+      `Copy this token into the runner's RUNNER_HOST_TOKEN env — it won't be shown again:\n${created.token}`;
+    el('new-host-token').className = 'scout-status ok';
+    el('new-host-label').value = '';
+    await loadHosts();
+  } catch (err) {
+    setStatus(err.message, 'err');
+  }
+}
+
 function wire() {
   el('campaign').addEventListener('change', () => { currentRun = null; el('run-card').hidden = true; stopPolling(); loadConfig(); });
   el('save-btn').addEventListener('click', saveDefaults);
   el('start-btn').addEventListener('click', startRun);
   el('stop-btn').addEventListener('click', stopRun);
   el('feed-mock-btn').addEventListener('click', feedMock);
+  el('mint-host-btn').addEventListener('click', mintHost);
 }
 
 wire();
 loadCampaigns().catch((err) => setStatus(err.message, 'err'));
+loadHosts().catch(() => { /* non-fatal if the hosts card fails */ });

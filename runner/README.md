@@ -17,7 +17,7 @@ Set these environment variables on the host:
 | Env | Description |
 | --- | --- |
 | `RUNNER_BACKEND_URL`   | Deal Studio backend origin (no trailing slash). |
-| `RUNNER_HOST_TOKEN`    | Machine token the backend accepts as `x-api-token`. In Phase 2 this is the existing `DASHBOARD_API_TOKEN` env value on the backend — reuse it. Phase 3 will replace it with per-host tokens minted by a dashboard *Pair a host* flow (stored as SHA-256 in `sourcing_hosts`). |
+| `RUNNER_HOST_TOKEN`    | Token the backend accepts as `x-api-token` on `/api/sourcing/*`. Preferred: a **per-host token** minted from the dashboard's "Paired phone-hosts" panel — stored as SHA-256 in `sourcing_hosts`, revocable individually, shown only once at mint time. The legacy global `DASHBOARD_API_TOKEN` still works (siteAuth continues to accept it), but per-host tokens are auditable per phone and can be revoked without rotating the shared credential. |
 | `RUNNER_RUN_ID`        | The `sourcing_runs.id` this process will drive. |
 | `RUNNER_DRIVER`        | `mock` (default), `android`, or `ios` (Phase 3). |
 | `RUNNER_APPIUM_URL`    | Appium server URL for `android`/`ios` (default `http://127.0.0.1:4723`). |

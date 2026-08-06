@@ -19,8 +19,68 @@ const db = require('../db');
 const store = require('../services/sourcingStore');
 const { processCandidate } = require('../services/sourcingOrchestrator');
 const { buildConfig } = require('../services/sourcingConfig');
+const { generateToken, hashToken, requireHostOrSlack } = require('../services/hostTokens');
 
 const router = express.Router();
+
+// --- Paired hosts (per-runner token pairing) -------------------------------
+// Mint/list/revoke are admin-only — they sit behind the top-level siteAuth gate
+// mounted in server.js, so only a signed-in dashboard user reaches them. The
+// runner-facing routes further down use requireHostOrSlack, which accepts EITHER
+// a dashboard session or a valid per-host token (see services/hostTokens.js).
+
+// POST /api/sourcing/hosts { label, platforms:['android'|'ios',...] }
+// Returns { id, label, platforms, status, token } — token is the PLAINTEXT and
+// is only shown here, once. Copy it into the runner's RUNNER_HOST_TOKEN env.
+router.post('/hosts', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const label = String(body.label || '').trim();
+    const platforms = Array.isArray(body.platforms)
+      ? body.platforms.filter((p) => p === 'android' || p === 'ios')
+      : [];
+    if (!label) return res.status(400).json({ error: 'label is required' });
+    if (!platforms.length) return res.status(400).json({ error: 'platforms must include android and/or ios' });
+
+    const token = generateToken();
+    const row = await db.one(
+      `INSERT INTO sourcing_hosts (label, platforms, token_hash, status)
+       VALUES ($1, $2::jsonb, $3, 'active')
+       RETURNING id, label, platforms, status, last_seen_at, created_at`,
+      [label, JSON.stringify(platforms), hashToken(token)],
+    );
+    res.status(201).json({ ...row, token });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/hosts', async (_req, res, next) => {
+  try {
+    const rows = await db.many(
+      `SELECT id, label, platforms, status, last_seen_at, created_at
+       FROM sourcing_hosts ORDER BY created_at DESC`,
+    );
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Revoke: flip status to 'revoked' rather than deleting so any historical
+// run.host_id references (once wired) still resolve to a labelled row.
+router.delete('/hosts/:id', async (req, res, next) => {
+  try {
+    const row = await db.one(
+      `UPDATE sourcing_hosts SET status = 'revoked' WHERE id = $1 RETURNING id, status`,
+      [Number(req.params.id)],
+    );
+    if (!row) return res.status(404).json({ error: 'not found' });
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/config/:campaignId', async (req, res, next) => {
   try {
@@ -84,7 +144,10 @@ router.post('/runs', async (req, res, next) => {
   }
 });
 
-router.get('/runs/:id', async (req, res, next) => {
+// The runner and the dashboard both need to read run state, so this route
+// accepts either a signed-in Slack session (dashboard) or a valid per-host
+// token (runner). Same widening applies to /runs/:id/candidates below.
+router.get('/runs/:id', requireHostOrSlack, async (req, res, next) => {
   try {
     const run = await store.getRun(Number(req.params.id));
     if (!run) return res.status(404).json({ error: 'not found' });
@@ -108,7 +171,7 @@ router.post('/runs/:id/stop', async (req, res, next) => {
 // Ingest a batch of captured candidates. The paired host posts here as it scouts;
 // each candidate is scored against the run's frozen rules, deduped, and — if it
 // passes — added to the campaign. Idempotent per handle (unique index).
-router.post('/runs/:id/candidates', async (req, res, next) => {
+router.post('/runs/:id/candidates', requireHostOrSlack, async (req, res, next) => {
   try {
     const run = await store.getRun(Number(req.params.id));
     if (!run) return res.status(404).json({ error: 'run not found' });
