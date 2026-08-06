@@ -32,6 +32,20 @@ function makeBackend({ backendUrl, hostToken, fetchImpl = globalThis.fetch }) {
 
   return {
     getRun: (id) => req('GET', `/api/sourcing/runs/${id}`),
+    // Auto mode: poll for the next queued run. Returns { run } or null when the
+    // backend responded 204 ("nothing queued right now").
+    getNextRun: async () => {
+      const res = await fetchImpl(base + '/api/sourcing/runs/next', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'x-api-token': hostToken },
+      });
+      if (res.status === 204) return null;
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) { /* non-json */ }
+      if (!res.ok) throw new Error(`GET /api/sourcing/runs/next -> ${res.status} ${(json && json.error) || text}`);
+      return json;
+    },
     postCandidates: (id, candidates) =>
       req('POST', `/api/sourcing/runs/${id}/candidates`, { candidates }),
     stopRun: (id) => req('POST', `/api/sourcing/runs/${id}/stop`),

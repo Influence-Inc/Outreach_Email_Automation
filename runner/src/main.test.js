@@ -84,6 +84,33 @@ test('runOnce captures via navigator, batches, and posts to backend', async () =
   assert.strictEqual(backend.posted[1][0].username, 'coach.b');
 });
 
+test('runOnce in auto mode pulls the next queued run', async () => {
+  const { screens, readings } = twoProfileFixture();
+  const driver = new MockDriver({ screens });
+  const reader = new MockScreenReader(readings);
+  const backend = stubBackend({ initial: { id: 77, status: 'running', target_count: 1, found_count: 0, config: { keywords: ['gym'] } } });
+  // In auto mode the runner never calls getRun by id — it asks for the next
+  // queued run instead.
+  backend.getRun = async () => { throw new Error('should not be called in auto mode'); };
+  backend.getNextRun = async () => ({ run: { id: 77, status: 'running', target_count: 1, found_count: 0, config: { keywords: ['gym'] } } });
+  const { capturedToday, run } = await runOnce({
+    driver, reader, backend,
+    config: { runMode: 'auto', batchSize: 1, pacingMs: 0, dailyCap: 100 },
+  });
+  assert.strictEqual(run.id, 77);
+  assert.ok(capturedToday >= 1);
+});
+
+test('runOnce in auto mode idles when nothing is queued', async () => {
+  const backend = { getNextRun: async () => null };
+  const out = await runOnce({
+    driver: {}, reader: {}, backend,
+    config: { runMode: 'auto', batchSize: 1, pacingMs: 0, dailyCap: 100 },
+  });
+  assert.strictEqual(out.idle, true);
+  assert.strictEqual(out.run, null);
+});
+
 test('runOnce stops early when backend flips run to done', async () => {
   const { screens, readings } = twoProfileFixture();
   const driver = new MockDriver({ screens });

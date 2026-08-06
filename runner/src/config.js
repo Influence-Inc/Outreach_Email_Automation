@@ -25,10 +25,12 @@
 
 function loadConfig(env = process.env) {
   const backend = (env.RUNNER_BACKEND_URL || '').replace(/\/$/, '');
+  const rawRunId = env.RUNNER_RUN_ID || '';
   const cfg = {
     backendUrl: backend,
     hostToken: env.RUNNER_HOST_TOKEN || '',
-    runId: env.RUNNER_RUN_ID ? Number(env.RUNNER_RUN_ID) : null,
+    runId: rawRunId && rawRunId !== 'auto' ? Number(rawRunId) : null,
+    runMode: rawRunId === 'auto' ? 'auto' : 'fixed',
     driver: env.RUNNER_DRIVER || 'mock',
     appiumUrl: env.RUNNER_APPIUM_URL || 'http://127.0.0.1:4723',
     deviceUdid: env.RUNNER_DEVICE_UDID || null,
@@ -50,7 +52,10 @@ function assertConfig(cfg) {
   const missing = [];
   if (!cfg.backendUrl) missing.push('RUNNER_BACKEND_URL');
   if (!cfg.hostToken) missing.push('RUNNER_HOST_TOKEN');
-  if (!cfg.runId) missing.push('RUNNER_RUN_ID');
+  // RUNNER_RUN_ID may be a number (drive a specific run) OR the literal string
+  // 'auto' (poll for the newest queued run for any campaign — populated by the
+  // sourcing sweep for campaigns with sourcing_defaults.enabled=true).
+  if (!cfg.runId && cfg.runMode !== 'auto') missing.push('RUNNER_RUN_ID');
   if (missing.length) {
     throw new Error(`Runner missing required env: ${missing.join(', ')}`);
   }

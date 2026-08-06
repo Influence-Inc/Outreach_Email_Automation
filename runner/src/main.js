@@ -14,8 +14,20 @@ const { startLiveMirror } = require('./liveMirror');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+async function resolveRun({ backend, config, runOverride }) {
+  if (runOverride) return runOverride;
+  if (config.runMode === 'auto') {
+    const next = await backend.getNextRun();
+    if (!next) return null; // nothing queued right now
+    return next.run;
+  }
+  const { run } = await backend.getRun(config.runId);
+  return run;
+}
+
 async function runOnce({ driver, reader, backend, config, runOverride }) {
-  const run = runOverride || (await backend.getRun(config.runId)).run;
+  const run = await resolveRun({ backend, config, runOverride });
+  if (!run) return { run: null, capturedToday: 0, idle: true };
   const runId = run.id;
   const cfg = run.config || {};
   const batchSize = Math.max(1, Number(config.batchSize || 5));

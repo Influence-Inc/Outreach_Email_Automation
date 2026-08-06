@@ -34,3 +34,14 @@ test('assertConfig accepts a full config', () => {
   });
   assert.doesNotThrow(() => assertConfig(cfg));
 });
+
+test('assertConfig accepts RUNNER_RUN_ID=auto (poll queued runs)', () => {
+  const cfg = loadConfig({
+    RUNNER_BACKEND_URL: 'https://x.example',
+    RUNNER_HOST_TOKEN: 't',
+    RUNNER_RUN_ID: 'auto',
+  });
+  assert.strictEqual(cfg.runId, null);
+  assert.strictEqual(cfg.runMode, 'auto');
+  assert.doesNotThrow(() => assertConfig(cfg));
+});

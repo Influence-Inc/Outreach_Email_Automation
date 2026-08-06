@@ -153,6 +153,38 @@ router.post('/runs', async (req, res, next) => {
   }
 });
 
+// Runner in RUNNER_RUN_ID=auto mode polls this endpoint for the newest queued
+// run and takes ownership by flipping status to 'running'. Registered BEFORE
+// /runs/:id so the literal segment isn't parsed as an id.
+router.get('/runs/next', requireHostOrSlack, async (_req, res, next) => {
+  try {
+    // FOR UPDATE SKIP LOCKED so two runners polling at the same time each claim
+    // a distinct run instead of racing.
+    const run = await db.withTransaction(async (client) => {
+      const picked = await client.query(
+        `SELECT id FROM sourcing_runs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
+      );
+      if (!picked.rows.length) return null;
+      const r = await client.query(
+        `UPDATE sourcing_runs
+            SET status = 'running', updated_at = NOW()
+          WHERE id = $1
+          RETURNING *`,
+        [picked.rows[0].id],
+      );
+      return r.rows[0];
+    });
+    if (!run) return res.status(204).end();
+    res.json({ run });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // The runner and the dashboard both need to read run state, so this route
 // accepts either a signed-in Slack session (dashboard) or a valid per-host
 // token (runner). Same widening applies to /runs/:id/candidates below.
