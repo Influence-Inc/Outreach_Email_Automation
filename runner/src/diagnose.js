@@ -1,18 +1,17 @@
 'use strict';
 
 // Turn a raw runner exception into a compact, actionable diagnostic. Called
-// from the top-level catch in src/index.js — instead of dumping a webdriverio
-// stack trace we tell the operator exactly what to do next.
+// from the top-level catch in src/index.js — instead of dumping a raw stack
+// trace we tell the operator exactly what to do next.
 //
 // New failure modes get added as we hit them for real; the fallback is a plain
 // message so we never SWALLOW an unexpected error.
 
 // Ordered patterns — the first match wins, so put more specific ones first.
 //
-// Android is driven directly over adb (no Appium) — its failure modes are all
-// adb-shaped: the binary missing, no device, wrong device picked, or the
-// screen being locked. iOS still goes through Appium + WebDriverAgent (there
-// is no Apple-provided ADB-equivalent), so its Appium-shaped failures remain.
+// Android-only, driven directly over adb — every failure mode here is
+// adb-shaped: the binary missing, no device, wrong device picked, the screen
+// being locked, etc. There is no Appium/WebDriverAgent layer to diagnose.
 const PATTERNS = [
   {
     match: /spawn adb ENOENT|'adb' not in PATH/i,
@@ -38,36 +37,14 @@ const PATTERNS = [
     fix: 'unplug and replug the USB cable, or reboot the phone',
   },
   {
-    match: /Cannot find module 'webdriverio'/i,
-    reason: "The 'webdriverio' optional dependency is not installed (only needed for the iOS driver).",
-    fix: 'cd runner && npm install webdriverio',
-  },
-  {
-    match: /Could not find a driver for automationName 'XCUITest'/i,
-    reason: 'Appium is running but the XCUITest driver (iOS) is missing.',
-    fix: 'appium driver install xcuitest',
-  },
-  {
-    match: /(ECONNREFUSED|fetch failed).*(4723|127\.0\.0\.1)/i,
-    reason: 'The iOS Appium server is not running on the configured URL.',
-    fix: "start Appium in another terminal: 'appium --base-path /wd/hub'  (Android does not need this)",
-  },
-  {
     match: /connect ECONNREFUSED/i,
     reason: 'A network connection was refused.',
-    fix: 'check the backend URL (RUNNER_BACKEND_URL), or — iOS only — the Appium URL (RUNNER_APPIUM_URL)',
+    fix: 'check the backend URL (RUNNER_BACKEND_URL) is correct and reachable',
   },
   {
     match: /screen.{0,20}locked/i,
     reason: 'The phone screen is locked, so a screenshot/tap could not go through.',
     fix: 'unlock the phone and disable auto-lock during the run',
-  },
-  {
-    match: /(WebDriverAgent.*not.*installed|WebDriverAgentRunner.*failed|xcodebuild)/i,
-    reason: 'iOS WebDriverAgent is missing or has an expired signing certificate.',
-    fix:
-      'rebuild + resign WDA against your phone (see runner/README.md iOS section); ' +
-      'signing must be refreshed ~weekly on a free Apple ID',
   },
   {
     match: /\b(?:adb|device)\b.{0,80}\bunauthorized\b|\bunauthorized\b.{0,80}\b(?:adb|device)\b/i,
@@ -89,7 +66,7 @@ const PATTERNS = [
     fix:
       'capture one screenshot per navigator screen (search results, profile, reels tab) with ' +
       "'adb exec-out screencap -p > screen-N.png' and share them; see runner/PHASE_D_CHECKLIST.md " +
-      'step 8.',
+      'step 6.',
   },
 ];
 

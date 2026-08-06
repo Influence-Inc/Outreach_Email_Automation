@@ -1,21 +1,16 @@
 'use strict';
 
 // Runner config, loaded from env at boot. Kept in one place so main + tests
-// share the same source of truth.
+// share the source of truth. Android-only — driven directly over adb, no
+// Appium, no extra npm dependency.
 //
 //   RUNNER_BACKEND_URL     e.g. https://outreach.your.app  (no trailing slash)
 //   RUNNER_HOST_TOKEN      per-host machine token minted by the dashboard
 //   RUNNER_RUN_ID          the sourcing_runs id to drive (else long-polls for one)
-//   RUNNER_DRIVER          'mock' | 'android' | 'ios'   (default 'mock')
-//   RUNNER_APPIUM_URL      e.g. http://127.0.0.1:4723  (ios only — Android drives
-//                          the phone directly via adb, no Appium involved)
-//   RUNNER_DEVICE_UDID     the adb serial (Android) or the device UDID (iOS).
-//                          Only required when more than one phone is attached
-//                          to the same host; adb/Appium auto-pick the lone
-//                          device otherwise.
-//   RUNNER_DEVICE_NAME     ios only ('iPhone' or the name shown in Xcode)
-//   RUNNER_XCODE_ORG_ID    ios only (Apple developer team id used to sign WDA)
-//   RUNNER_XCODE_SIGNING_ID ios only (default 'iPhone Developer')
+//   RUNNER_DRIVER          'mock' | 'android'   (default 'mock')
+//   RUNNER_DEVICE_UDID     the adb serial to target. Only required when more
+//                          than one phone is attached to the host; adb
+//                          auto-picks the lone device otherwise.
 //   RUNNER_BATCH_SIZE      candidates per ingest batch (default 5)
 //   RUNNER_PACING_MS       min ms between IG actions (default 1800)
 //   RUNNER_DAILY_CAP       hard stop after N captures/day (default 200)
@@ -36,11 +31,7 @@ function loadConfig(env = process.env) {
     runId: rawRunId && rawRunId !== 'auto' ? Number(rawRunId) : null,
     runMode: rawRunId === 'auto' ? 'auto' : 'fixed',
     driver: env.RUNNER_DRIVER || 'mock',
-    appiumUrl: env.RUNNER_APPIUM_URL || 'http://127.0.0.1:4723',
     deviceUdid: env.RUNNER_DEVICE_UDID || null,
-    deviceName: env.RUNNER_DEVICE_NAME || null,
-    xcodeOrgId: env.RUNNER_XCODE_ORG_ID || null,
-    xcodeSigningId: env.RUNNER_XCODE_SIGNING_ID || 'iPhone Developer',
     batchSize: Number(env.RUNNER_BATCH_SIZE || 5),
     pacingMs: Number(env.RUNNER_PACING_MS || 1800),
     dailyCap: Number(env.RUNNER_DAILY_CAP || 200),

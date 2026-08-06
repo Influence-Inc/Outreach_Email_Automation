@@ -1,8 +1,9 @@
 'use strict';
 
 // DeviceDriver contract: the minimal shared surface every phone driver exposes.
-// Deliberately tiny so the SAME navigator code runs against a mock, an Android
-// (Appium UiAutomator2 / ADB) driver, or an iOS (Appium + WebDriverAgent) driver.
+// Deliberately tiny so the SAME navigator code runs against a mock or the real
+// Android driver (adb only — see driver/android.js). Android-only by design;
+// see runner/README.md for why iOS isn't supported here.
 //
 // A driver must implement:
 //   screenshot() -> { data: Buffer, mediaType: 'image/png' }

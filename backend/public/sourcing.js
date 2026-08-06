@@ -256,11 +256,8 @@ async function loadHosts() {
 
 async function mintHost() {
   const label = el('new-host-label').value.trim();
-  const platforms = [];
-  if (el('new-host-android').checked) platforms.push('android');
-  if (el('new-host-ios').checked) platforms.push('ios');
+  const platforms = ['android']; // the runner is Android-only — no iOS driver
   if (!label) { setStatus('Host label is required.', 'err'); return; }
-  if (!platforms.length) { setStatus('Pick at least one platform.', 'err'); return; }
   try {
     const created = await api('/api/sourcing/hosts', {
       method: 'POST',

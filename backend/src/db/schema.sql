@@ -585,7 +585,7 @@ ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS sourcing_defaults JSONB;
 CREATE TABLE IF NOT EXISTS sourcing_hosts (
   id           SERIAL PRIMARY KEY,
   label        TEXT NOT NULL,
-  platforms    JSONB NOT NULL DEFAULT '[]'::jsonb,   -- ['android','ios']
+  platforms    JSONB NOT NULL DEFAULT '[]'::jsonb,   -- ['android'] — Android only, no iOS driver
   token_hash   TEXT NOT NULL UNIQUE,
   status       TEXT NOT NULL DEFAULT 'active',
   last_seen_at TIMESTAMPTZ,

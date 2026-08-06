@@ -63,10 +63,7 @@ async function runOnce({ driver, reader, backend, config, runOverride }) {
       driver,
       reader,
       config: { pacingMs: config.pacingMs },
-      opts: {
-        keywords: cfg.keywords || [],
-        platform: /iphone|ios/i.test(config.driver || '') ? 'ios' : 'android',
-      },
+      opts: { keywords: cfg.keywords || [] },
     })) {
       capturedToday += 1;
       batch.push(cand);

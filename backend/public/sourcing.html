@@ -106,12 +106,11 @@
       </div>
       <p class="scout-hint" style="margin:4px 0 8px">
         Mint a token per host and paste it into the runner's <code>RUNNER_HOST_TOKEN</code>.
-        The plaintext is shown only once — copy it now.
+        The plaintext is shown only once — copy it now. Android phones only — the
+        runner drives Instagram over adb, no iOS support.
       </p>
       <div class="scout-row" style="margin-top:6px">
-        <input id="new-host-label" type="text" placeholder="Label (e.g. 'Sourcing Mac + Pixel 7')" style="flex:1;min-width:220px;padding:8px 10px;border:1px solid #d9dbe0;border-radius:8px" />
-        <label style="font-size:12px"><input type="checkbox" id="new-host-android" checked /> Android</label>
-        <label style="font-size:12px"><input type="checkbox" id="new-host-ios" /> iOS</label>
+        <input id="new-host-label" type="text" placeholder="Label (e.g. 'Sourcing laptop + Pixel 7')" style="flex:1;min-width:220px;padding:8px 10px;border:1px solid #d9dbe0;border-radius:8px" />
         <button id="mint-host-btn" class="btn-primary small">Mint token</button>
       </div>
       <div id="new-host-token" class="scout-status" style="font-family:ui-monospace,monospace;word-break:break-all"></div>
