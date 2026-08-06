@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Influence — Scout Creators</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .scout-wrap { max-width: 1040px; margin: 0 auto; padding: 24px 20px 64px; }
+    .scout-grid { display: grid; grid-template-columns: 140px 1fr; gap: 12px 16px; align-items: center; }
+    .scout-grid label { font-weight: 600; font-size: 13px; }
+    .scout-grid input, .scout-grid select, .scout-select {
+      width: 100%; padding: 8px 10px; border: 1px solid var(--border, #d9dbe0);
+      border-radius: 8px; font: inherit; background: var(--card-bg, #fff); color: inherit;
+    }
+    .scout-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+    .scout-hint { color: #6b7280; font-size: 12px; margin: 4px 0 0; }
+    .scout-status { margin: 12px 0; font-size: 13px; min-height: 18px; }
+    .scout-status.err { color: #b42318; }
+    .scout-status.ok { color: #067647; }
+    table.scout-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+    table.scout-table th, table.scout-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #eee; }
+    table.scout-table th { color: #6b7280; font-weight: 600; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .pill.added { background: #e7f6ee; color: #067647; }
+    .pill.rejected { background: #fdecea; color: #b42318; }
+    .pill.pending { background: #eef1f6; color: #4b5563; }
+    .pill.low { background: #e7f6ee; color: #067647; }
+    .pill.medium { background: #fff4e5; color: #b25e09; }
+    .pill.high { background: #fdecea; color: #b42318; }
+    .runmeta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; margin: 8px 0; }
+    .runmeta b { font-size: 18px; display: block; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+    @media (max-width: 640px) { .two-col { grid-template-columns: 1fr; } .scout-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="topbar-title">Deal Studio</span>
+      <span class="topbar-divider"></span>
+      <span class="topbar-title">Scout Creators</span>
+    </div>
+    <div class="auth">
+      <a class="logout-link" href="/">&larr; Back to dashboard</a>
+    </div>
+  </header>
+
+  <main class="scout-wrap">
+    <h1 style="margin:0 0 4px">Scout Instagram creators</h1>
+    <p class="scout-hint">
+      Automatically discover creators from the Instagram app (via a paired phone) that match a
+      campaign&rsquo;s niche and view/quality rules, and add the ones that pass into that campaign.
+    </p>
+
+    <div class="card" style="margin-top:18px">
+      <label for="campaign" style="font-weight:600;font-size:13px">Campaign</label>
+      <select id="campaign" class="scout-select" style="margin-top:6px"></select>
+
+      <h2 style="margin:20px 0 10px;font-size:16px">Scouting rules</h2>
+      <div class="scout-grid">
+        <label for="niche">Niche / genre</label>
+        <input id="niche" type="text" placeholder="e.g. home fitness, skincare, budget travel" />
+
+        <label for="keywords">Caption keywords</label>
+        <input id="keywords" type="text" placeholder="comma-separated, e.g. gym, workout, homegym" />
+
+        <label for="floor">Min views (floor)</label>
+        <input id="floor" type="number" min="0" step="1000" placeholder="15000" />
+
+        <label for="ceiling">Max of range (ceiling)</label>
+        <input id="ceiling" type="number" min="0" step="1000" placeholder="500000" />
+
+        <label for="risk">Risk level</label>
+        <select id="risk">
+          <option value="low">Low — steady, stable views</option>
+          <option value="medium" selected>Medium — some ups and downs</option>
+          <option value="high">High — a couple can go viral, rest at the floor</option>
+        </select>
+
+        <label for="targetCount">Creators to source</label>
+        <input id="targetCount" type="number" min="1" step="1" placeholder="20" />
+
+        <label for="reelsWindow">Recent reels to check</label>
+        <input id="reelsWindow" type="number" min="3" max="24" step="1" value="12" />
+      </div>
+      <p class="scout-hint">
+        The floor is a hard gate: every one of the recent reels must clear it. The risk level
+        decides the acceptable shape of the view distribution across those reels.
+      </p>
+
+      <div class="scout-row">
+        <button id="save-btn" class="ghost">Save as campaign defaults</button>
+        <button id="start-btn" class="btn-primary">Start scouting run</button>
+      </div>
+      <div id="status" class="scout-status"></div>
+    </div>
+
+    <div class="card" id="run-card" hidden style="margin-top:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <h2 style="margin:0;font-size:16px">Run <span id="run-id"></span></h2>
+        <div class="scout-row" style="margin:0">
+          <button id="feed-mock-btn" class="ghost small" title="Phase 1: exercise the full pipeline without a phone">Feed sample captures (test)</button>
+          <button id="stop-btn" class="ghost small">Stop run</button>
+        </div>
+      </div>
+      <div class="runmeta">
+        <div>Status<b id="run-status">—</b></div>
+        <div>Added<b id="run-found">0</b></div>
+        <div>Target<b id="run-target">0</b></div>
+        <div>Scanned<b id="run-scanned">0</b></div>
+      </div>
+      <table class="scout-table">
+        <thead>
+          <tr><th>Handle</th><th>Followers</th><th>Views (min–max)</th><th>Niche</th><th>Risk</th><th>Decision</th><th>Reason</th></tr>
+        </thead>
+        <tbody id="cand-rows"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="/sourcing.js"></script>
+</body>
+</html>
