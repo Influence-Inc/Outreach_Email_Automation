@@ -395,6 +395,10 @@ function sessionUser(req) {
 function isAuthed(req) {
   if (!enabled()) return true; // gate disabled
   if (sessionUser(req)) return true;
+  // Per-host sourcing token, verified by an earlier async pre-middleware that
+  // stamps the request when the token hashes to an active row in
+  // sourcing_hosts (see services/hostTokens.js:preGateHostToken).
+  if (req.__sourcingHostAuthed) return true;
   const token = machineToken();
   if (token) {
     const supplied = tokenFromHeaders(req);

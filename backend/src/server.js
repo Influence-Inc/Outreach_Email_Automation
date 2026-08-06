@@ -27,6 +27,7 @@ const {
 } = require('./services/offerPortal/config');
 const offerImessage = require('./services/offerPortal/imessage');
 const siteAuth = require('./services/siteAuth');
+const { preGateHostToken } = require('./services/hostTokens');
 
 const app = express();
 // Railway terminates TLS in front of us, so req.secure / req.ip are only
@@ -65,6 +66,11 @@ app.get('/auth/slack', siteAuth.beginSlackLogin);
 app.get('/auth/slack/callback', siteAuth.handleSlackCallback);
 app.get('/logout', siteAuth.handleLogout);
 app.post('/logout', siteAuth.handleLogout);
+// /api/sourcing/* accepts a per-host sourcing token from a paired runner in
+// addition to the normal Slack session / DASHBOARD_API_TOKEN. This pre-gate
+// middleware validates the per-host token asynchronously and marks the request;
+// the sync gate below then honors that marker.
+app.use('/api/sourcing', preGateHostToken);
 app.use(siteAuth.gate);
 
 // Who's signed in (drives the "signed in as …" chip in the topbar). Behind the

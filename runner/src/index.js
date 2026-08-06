@@ -17,42 +17,49 @@ async function main() {
   const cfg = loadConfig();
   assertConfig(cfg);
 
-  const driver = await buildDriver(cfg);
-  const reader = await buildReader(cfg);
+  const { driver, reader } = await buildDriverAndReader(cfg);
   const backend = makeBackend({ backendUrl: cfg.backendUrl, hostToken: cfg.hostToken });
 
-  const { run, capturedToday } = await runOnce({ driver, reader, backend, config: cfg });
+  const { run, capturedToday, idle } = await runOnce({ driver, reader, backend, config: cfg });
+  if (idle) {
+    // eslint-disable-next-line no-console
+    console.log('[runner] finished: idle (no queued runs)');
+    return;
+  }
   // eslint-disable-next-line no-console
   console.log(`[runner] finished run #${run.id} status=${run.status} captured=${capturedToday}`);
 }
 
-async function buildDriver(cfg) {
+// The driver and the screen reader are a matched pair — the mock driver ships
+// with a canned fixture the mock reader knows how to decode. Real drivers pair
+// with the (deliberately not-yet-implemented) ScreenReader stub so a real run
+// fails loudly if the vision layer isn't wired up, instead of pretending to
+// scout with no signal.
+async function buildDriverAndReader(cfg) {
   if (cfg.driver === 'android') {
     const { AndroidDriver } = require('./driver/android');
-    return new AndroidDriver({ appiumUrl: cfg.appiumUrl, udid: cfg.deviceUdid });
+    const { ScreenReader } = require('./navigator/screenReader');
+    return {
+      driver: new AndroidDriver({ appiumUrl: cfg.appiumUrl, udid: cfg.deviceUdid }),
+      reader: new ScreenReader(),
+    };
   }
   if (cfg.driver === 'ios') {
     const { IosDriver } = require('./driver/ios');
-    return new IosDriver({
-      appiumUrl: cfg.appiumUrl,
-      udid: cfg.deviceUdid,
-      deviceName: cfg.deviceName,
-      xcodeOrgId: cfg.xcodeOrgId,
-      xcodeSigningId: cfg.xcodeSigningId,
-    });
+    const { ScreenReader } = require('./navigator/screenReader');
+    return {
+      driver: new IosDriver({
+        appiumUrl: cfg.appiumUrl,
+        udid: cfg.deviceUdid,
+        deviceName: cfg.deviceName,
+        xcodeOrgId: cfg.xcodeOrgId,
+        xcodeSigningId: cfg.xcodeSigningId,
+      }),
+      reader: new ScreenReader(),
+    };
   }
-  const { MockDriver } = require('./driver/mock');
-  return new MockDriver({ screens: [] });
-}
-
-async function buildReader(_cfg) {
-  // Vision layer: production would post screenshots to the backend's Claude
-  // helper (services/claudeClient.callClaudeMessages) or a local model. The
-  // mock driver ships with MockScreenReader used by tests; for real drivers the
-  // reader is intentionally left as an implementation-in-progress so a botched
-  // vision call surfaces loudly instead of pretending to read the screen.
-  const { ScreenReader } = require('./navigator/screenReader');
-  return new ScreenReader();
+  const { buildSmokeFixture } = require('./mockFixture');
+  return buildSmokeFixture();
 }
 
 if (require.main === module) {
