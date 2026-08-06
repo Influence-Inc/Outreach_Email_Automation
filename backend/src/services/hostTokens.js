@@ -69,9 +69,36 @@ function makeMiddleware({ db: dbi = db, isAuthed = siteAuth.isAuthed } = {}) {
   };
 }
 
+// Pre-gate middleware for /api/sourcing/*: validate the per-host token
+// (async DB lookup) BEFORE siteAuth.gate runs. If valid, mark the request
+// so siteAuth.isAuthed lets it through. If absent/invalid, pass through
+// silently so the normal gate can still authorize a signed-in dashboard
+// session on the same path — never REJECTS here, that stays the gate's job.
+function makePreGate({ db: dbi = db } = {}) {
+  return async function preGateHostToken(req, _res, next) {
+    const token = readToken(req);
+    if (!token) return next();
+    try {
+      const row = await dbi.one(
+        `SELECT id FROM sourcing_hosts WHERE token_hash = $1 AND status = 'active'`,
+        [hashToken(token)],
+      );
+      if (row) {
+        req.sourcingHostId = row.id;
+        req.__sourcingHostAuthed = true;
+        dbi.query(`UPDATE sourcing_hosts SET last_seen_at = NOW() WHERE id = $1`, [row.id])
+          .catch(() => {});
+      }
+    } catch (_) { /* swallow — the main gate still gets to decide */ }
+    return next();
+  };
+}
+
 module.exports = {
   generateToken,
   hashToken,
   requireHostOrSlack: makeMiddleware(),
+  preGateHostToken: makePreGate(),
   makeMiddleware, // exposed for tests
+  makePreGate,    // exposed for tests
 };

@@ -8,7 +8,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { generateToken, hashToken, makeMiddleware } = require('./hostTokens');
+const { generateToken, hashToken, makeMiddleware, makePreGate } = require('./hostTokens');
 
 function fakeReq(headers = {}) { return { headers, sourcingHostId: undefined }; }
 function fakeRes() {
@@ -97,4 +97,49 @@ test('a revoked host (WHERE status = active filters it out) → 401', async () =
   const mw = makeMiddleware({ db: dbi, isAuthed: () => false });
   const { res } = await runMw(mw, fakeReq({ 'x-api-token': generateToken() }));
   assert.strictEqual(res.state.status, 401);
+});
+
+// --- pre-gate middleware -------------------------------------------------
+// Guards against the exact bug caught during Track C: siteAuth.gate runs
+// synchronously and would 401 a runner request BEFORE the sync-only isAuthed
+// could consult sourcing_hosts. preGateHostToken runs first, does the async
+// lookup, and stamps req.__sourcingHostAuthed so isAuthed lets it through.
+
+test('preGate stamps a valid token and lets the request continue', async () => {
+  const token = generateToken();
+  const dbi = {
+    async one() { return { id: 5 }; },
+    async query() {},
+  };
+  const mw = makePreGate({ db: dbi });
+  const req = fakeReq({ 'x-api-token': token });
+  const { nextCalled, nextErr } = await runMw(mw, req);
+  assert.strictEqual(nextCalled, true);
+  assert.strictEqual(nextErr, undefined);
+  assert.strictEqual(req.__sourcingHostAuthed, true);
+  assert.strictEqual(req.sourcingHostId, 5);
+});
+
+test('preGate never rejects — no token or unknown token just passes through', async () => {
+  const dbi = { one: async () => null, query: async () => {} };
+  const mw = makePreGate({ db: dbi });
+  // No token
+  const req1 = fakeReq({});
+  const { nextCalled: n1, res: r1 } = await runMw(mw, req1);
+  assert.strictEqual(n1, true);
+  assert.strictEqual(r1.state.status, 200); // untouched
+  assert.strictEqual(req1.__sourcingHostAuthed, undefined);
+  // Unknown token — still passes so the main gate can decide (e.g. Slack session)
+  const req2 = fakeReq({ 'x-api-token': 'sk_bogus' });
+  const { nextCalled: n2 } = await runMw(mw, req2);
+  assert.strictEqual(n2, true);
+  assert.strictEqual(req2.__sourcingHostAuthed, undefined);
+});
+
+test('preGate swallows DB failures so a transient DB blip does not block Slack users', async () => {
+  const dbi = { one: async () => { throw new Error('DB down'); }, query: async () => {} };
+  const mw = makePreGate({ db: dbi });
+  const { nextCalled, res } = await runMw(mw, fakeReq({ 'x-api-token': generateToken() }));
+  assert.strictEqual(nextCalled, true);
+  assert.strictEqual(res.state.status, 200);
 });
