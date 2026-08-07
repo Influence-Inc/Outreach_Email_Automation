@@ -37,6 +37,26 @@ async function main() {
     if (driver.wake) await driver.wake().catch(() => {});
   }
 
+  // Agent mode (inverted control plane): the BACKEND navigator drives the phone;
+  // this host is a thin command executor. It claims runs by host, so it needs no
+  // RUNNER_RUN_ID. One-time setup — start once, Ctrl+C to stop.
+  if (cfg.mode === 'agent') {
+    const { runAgent } = require('./agent');
+    let stopping = false;
+    const stop = (signal) => {
+      if (stopping) return;
+      stopping = true;
+      // eslint-disable-next-line no-console
+      console.log(`\n[runner] ${signal} received — stopping after the current step...`);
+    };
+    process.once('SIGINT', () => stop('SIGINT'));
+    process.once('SIGTERM', () => stop('SIGTERM'));
+    // eslint-disable-next-line no-console
+    console.log('[runner] agent mode: the backend drives the phone. Press Ctrl+C to stop.');
+    await runAgent({ driver, backend, config: cfg, shouldStop: () => stopping });
+    return;
+  }
+
   if (cfg.runMode === 'auto') {
     let stopping = false;
     const stop = (signal) => {

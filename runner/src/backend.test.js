@@ -58,3 +58,27 @@ test('readScreen POSTs the element tree + device size to the vision endpoint', a
   assert.deepStrictEqual(body.elements, [{ rid: 'a' }]);
   assert.strictEqual(r.screen, 'profile');
 });
+
+test('claimSession returns { active:false } on a 204 (nothing queued)', async () => {
+  const fetchImpl = fakeFetch({ status: 204 });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  assert.deepStrictEqual(await b.claimSession(3), { active: false });
+  assert.strictEqual(fetchImpl.calls[0].url, 'https://x/api/sourcing/hosts/3/session/claim');
+  assert.strictEqual(fetchImpl.calls[0].opts.method, 'POST');
+});
+
+test('claimSession returns the run info on 201', async () => {
+  const fetchImpl = fakeFetch({ status: 201, body: { active: true, runId: 42 } });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  assert.deepStrictEqual(await b.claimSession(3), { active: true, runId: 42 });
+});
+
+test('pullCommands + postCommandResult hit the agent endpoints', async () => {
+  const fetchImpl = fakeFetch({ body: { commands: [], done: false } });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  await b.pullCommands(5);
+  await b.postCommandResult(5, { id: 1, ok: true, result: null });
+  assert.strictEqual(fetchImpl.calls[0].url, 'https://x/api/sourcing/hosts/5/commands');
+  assert.strictEqual(fetchImpl.calls[1].url, 'https://x/api/sourcing/hosts/5/commands/result');
+  assert.strictEqual(fetchImpl.calls[1].opts.method, 'POST');
+});

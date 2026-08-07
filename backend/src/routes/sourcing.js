@@ -21,6 +21,8 @@ const { processCandidate } = require('../services/sourcingOrchestrator');
 const { buildConfig } = require('../services/sourcingConfig');
 const { generateToken, hashToken, requireHostOrSlack } = require('../services/hostTokens');
 const hostChannel = require('../services/hostChannel');
+const hostCommands = require('../services/hostCommands');
+const sourcingSession = require('../services/sourcingSession');
 const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
@@ -284,6 +286,76 @@ router.post('/vision/read', requireHostOrSlack, async (req, res, next) => {
       height: Number(body.height) || null,
     });
     res.json(reading);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Remote control: backend-driven scouting (agent mode) ------------------
+// The inverted control plane. A host running in RUNNER_MODE=agent claims a run,
+// then the BACKEND navigator (services/sourcingNavigator.js) drives the phone by
+// enqueuing device commands the agent pulls + executes, posting results back.
+// Whole surface is opt-in via SOURCING_REMOTE_CONTROL=on (404s otherwise).
+function requireRemoteControl(_req, res, next) {
+  if (!hostCommands.enabled()) return res.status(404).json({ error: 'remote control disabled' });
+  next();
+}
+
+// Agent -> backend: claim the newest queued run for this host and start a
+// backend-driven session. Idempotent while a session is live for the host.
+router.post('/hosts/:id/session/claim', requireRemoteControl, requireHostOrSlack, async (req, res, next) => {
+  try {
+    const hostId = Number(req.params.id);
+    if (sourcingSession.isActive(hostId)) {
+      return res.json({ active: true, runId: sourcingSession.activeRunId(hostId) });
+    }
+    // Claim like GET /runs/next (FOR UPDATE SKIP LOCKED), also binding host_id.
+    const run = await db.withTransaction(async (client) => {
+      const picked = await client.query(
+        `SELECT id FROM sourcing_runs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
+      );
+      if (!picked.rows.length) return null;
+      const r = await client.query(
+        `UPDATE sourcing_runs
+            SET status = 'running', host_id = $2, updated_at = NOW()
+          WHERE id = $1
+          RETURNING *`,
+        [picked.rows[0].id, hostId],
+      );
+      return r.rows[0];
+    });
+    if (!run) return res.status(204).end();
+    sourcingSession.start({ hostId, run });
+    res.status(201).json({ active: true, runId: run.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Agent -> backend: drain the queued device commands to execute. `done:true`
+// tells the agent the backend finished this run's session.
+router.get('/hosts/:id/commands', requireRemoteControl, requireHostOrSlack, (req, res, next) => {
+  try {
+    res.json(hostCommands.pull(Number(req.params.id)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Agent -> backend: post a command's result, settling the navigator's await.
+router.post('/hosts/:id/commands/result', requireRemoteControl, requireHostOrSlack, (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const settled = hostCommands.resolve(Number(req.params.id), body.id, {
+      ok: body.ok !== false,
+      result: body.result,
+      error: body.error,
+    });
+    res.json({ ok: settled });
   } catch (err) {
     next(err);
   }

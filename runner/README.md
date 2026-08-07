@@ -30,6 +30,9 @@ Set these environment variables on the host:
 | `RUNNER_ADB_RECONNECT_RETRIES` | How many times to re-establish the adb link + retry after a transient drop (default 3). |
 | `RUNNER_ADB_RECONNECT_BACKOFF_MS` | Base backoff between reconnect attempts, multiplied by attempt number (default 1000). |
 | `RUNNER_KEEP_AWAKE`    | `on` (default) keeps the screen awake for the whole run so a lock never breaks capture; `off` to disable. |
+| `RUNNER_MODE`          | `scout` (default) runs the Instagram navigator on THIS host. `agent` makes the host a thin relay while the **backend** navigator drives the phone (inverted control plane — see below). |
+| `RUNNER_HOST_ID`       | The paired-host id (integer). **Required in `agent` mode** (and for the live mirror) so commands/frames address the right phone. |
+| `RUNNER_AGENT_POLL_MS` | Agent mode: poll interval for pending backend commands (default 400). |
 | `RUNNER_BATCH_SIZE`    | Candidates per POST (default 5). |
 | `RUNNER_PACING_MS`     | Min ms between IG actions (default 1800 — human-like pacing). |
 | `RUNNER_DAILY_CAP`     | Hard stop after N captures/day (default 200). |
@@ -68,6 +71,34 @@ To drive one specific run and exit (e.g. for a controlled test), set
 ```bash
 RUNNER_DRIVER=android RUNNER_BACKEND_URL=... RUNNER_HOST_TOKEN=... RUNNER_RUN_ID=42 npm start
 ```
+
+## Agent mode (backend-driven — the inverted control plane)
+
+The default `scout` mode runs the Instagram navigator on this host. **Agent mode
+moves the brain to the backend**: the Deal Studio backend runs the navigator and
+the vision reader, and drives the phone by sending device commands this host just
+executes (`{screenshot, tap, swipe, type, dumpUi, …}`). The host is then a thin,
+near-zero-maintenance relay — every scouting-logic change ships by deploying the
+backend, nothing to update here.
+
+Turn it on with `SOURCING_REMOTE_CONTROL=on` on the **backend** and
+`RUNNER_MODE=agent` + `RUNNER_HOST_ID=<paired host id>` here. Agent mode claims
+runs by host, so it needs **no `RUNNER_RUN_ID`**:
+
+```bash
+cd runner
+RUNNER_DRIVER=android \
+RUNNER_MODE=agent \
+RUNNER_BACKEND_URL=https://deals.influence.technology \
+RUNNER_HOST_TOKEN=<paste your per-host token> \
+RUNNER_HOST_ID=<paired host id from the dashboard> \
+npm start
+```
+
+The loop: claim a queued run → pull the backend's device commands → run each on
+the phone → post the result → repeat until the run's done, then claim the next.
+Start it once and leave it running (Ctrl+C to stop). USB or Wi-Fi, same as scout
+mode; the auto-reconnect + keep-awake reliability applies here too.
 
 ## Android setup
 
@@ -110,7 +141,10 @@ revisited, add a new driver implementing the same `DeviceDriver` contract in
 - `src/driver/mock.js` — fixture-replay driver used by tests.
 - `src/driver/android.js` — direct-`adb` driver (no Appium, no extra deps): adds
   `dumpUi` (UI tree), `keepAwake`/`wake`, and transparent auto-reconnect.
-- `src/navigator/instagram.js` — the vision-driven scout flow.
+- `src/navigator/instagram.js` — the on-host scout flow (scout mode).
+- `src/agent.js` — agent-mode loop: claim → pull backend commands → execute →
+  post result. The backend navigator (`backend/src/services/sourcingNavigator.js`)
+  is the brain in this mode.
 - `src/navigator/screenReader.js` — the reader contract + `MockScreenReader`.
 - `src/vision/RealScreenReader.js` — production reader: captures the UI tree and
   asks the backend to interpret it (all interpretation is **server-side**, see

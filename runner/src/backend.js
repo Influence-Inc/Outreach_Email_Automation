@@ -57,6 +57,24 @@ function makeBackend({ backendUrl, hostToken, fetchImpl = globalThis.fetch }) {
     publishFrame: (hostId, payload) =>
       req('POST', `/api/sourcing/hosts/${hostId}/frame`, payload),
     pullControls: (hostId) => req('GET', `/api/sourcing/hosts/${hostId}/control`),
+
+    // Agent-mode surface (backend-driven scouting; SOURCING_REMOTE_CONTROL=on).
+    // claimSession returns { active, runId? } — 204 means nothing is queued.
+    claimSession: async (hostId) => {
+      const res = await fetchImpl(base + `/api/sourcing/hosts/${hostId}/session/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-token': hostToken },
+      });
+      if (res.status === 204) return { active: false };
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) { /* non-json */ }
+      if (!res.ok) throw new Error(`POST /session/claim -> ${res.status} ${(json && json.error) || text}`);
+      return json || { active: false };
+    },
+    pullCommands: (hostId) => req('GET', `/api/sourcing/hosts/${hostId}/commands`),
+    postCommandResult: (hostId, payload) =>
+      req('POST', `/api/sourcing/hosts/${hostId}/commands/result`, payload),
   };
 }
 

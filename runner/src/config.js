@@ -33,6 +33,11 @@
 //   RUNNER_ADB_RECONNECT_BACKOFF_MS  base backoff between reconnect attempts (default 1000)
 //   RUNNER_KEEP_AWAKE      'on' (default) keeps the screen on for the run so a
 //                          locked screen never breaks capture; 'off' to disable.
+//   RUNNER_MODE            'scout' (default) runs the navigator on THIS host;
+//                          'agent' makes the host a thin relay while the BACKEND
+//                          navigator drives the phone (inverted control plane —
+//                          needs SOURCING_REMOTE_CONTROL=on + RUNNER_HOST_ID).
+//   RUNNER_AGENT_POLL_MS   agent mode: poll interval for pending commands (default 400)
 
 function loadConfig(env = process.env) {
   const backend = (env.RUNNER_BACKEND_URL || '').replace(/\/$/, '');
@@ -40,6 +45,8 @@ function loadConfig(env = process.env) {
   const cfg = {
     backendUrl: backend,
     hostToken: env.RUNNER_HOST_TOKEN || '',
+    mode: (env.RUNNER_MODE || 'scout').toLowerCase() === 'agent' ? 'agent' : 'scout',
+    agentPollMs: Number(env.RUNNER_AGENT_POLL_MS || 400),
     runId: rawRunId && rawRunId !== 'auto' ? Number(rawRunId) : null,
     runMode: rawRunId === 'auto' ? 'auto' : 'fixed',
     driver: env.RUNNER_DRIVER || 'mock',
@@ -64,10 +71,16 @@ function assertConfig(cfg) {
   const missing = [];
   if (!cfg.backendUrl) missing.push('RUNNER_BACKEND_URL');
   if (!cfg.hostToken) missing.push('RUNNER_HOST_TOKEN');
-  // RUNNER_RUN_ID may be a number (drive a specific run) OR the literal string
-  // 'auto' (poll for the newest queued run for any campaign — populated by the
-  // sourcing sweep for campaigns with sourcing_defaults.enabled=true).
-  if (!cfg.runId && cfg.runMode !== 'auto') missing.push('RUNNER_RUN_ID');
+  if (cfg.mode === 'agent') {
+    // Agent mode claims runs by host — it never references a run id, but it must
+    // know which paired host it is so commands/results address the right phone.
+    if (!cfg.hostId) missing.push('RUNNER_HOST_ID');
+  } else if (!cfg.runId && cfg.runMode !== 'auto') {
+    // RUNNER_RUN_ID may be a number (drive a specific run) OR the literal string
+    // 'auto' (poll for the newest queued run for any campaign — populated by the
+    // sourcing sweep for campaigns with sourcing_defaults.enabled=true).
+    missing.push('RUNNER_RUN_ID');
+  }
   if (missing.length) {
     throw new Error(`Runner missing required env: ${missing.join(', ')}`);
   }

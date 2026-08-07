@@ -72,3 +72,27 @@ test('assertConfig accepts RUNNER_RUN_ID=auto (poll queued runs)', () => {
   assert.strictEqual(cfg.runMode, 'auto');
   assert.doesNotThrow(() => assertConfig(cfg));
 });
+
+test('scout mode is the default; agent mode reads RUNNER_MODE + poll interval', () => {
+  assert.strictEqual(loadConfig({}).mode, 'scout');
+  const cfg = loadConfig({ RUNNER_MODE: 'agent', RUNNER_AGENT_POLL_MS: '250' });
+  assert.strictEqual(cfg.mode, 'agent');
+  assert.strictEqual(cfg.agentPollMs, 250);
+});
+
+test('agent mode requires RUNNER_HOST_ID (not RUNNER_RUN_ID)', () => {
+  const missing = loadConfig({
+    RUNNER_BACKEND_URL: 'https://x.example',
+    RUNNER_HOST_TOKEN: 't',
+    RUNNER_MODE: 'agent',
+  });
+  assert.throws(() => assertConfig(missing), /RUNNER_HOST_ID/);
+
+  const ok = loadConfig({
+    RUNNER_BACKEND_URL: 'https://x.example',
+    RUNNER_HOST_TOKEN: 't',
+    RUNNER_MODE: 'agent',
+    RUNNER_HOST_ID: '4',
+  });
+  assert.doesNotThrow(() => assertConfig(ok));
+});
