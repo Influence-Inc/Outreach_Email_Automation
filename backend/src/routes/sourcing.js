@@ -21,6 +21,11 @@ const { processCandidate } = require('../services/sourcingOrchestrator');
 const { buildConfig } = require('../services/sourcingConfig');
 const { generateToken, hashToken, requireHostOrSlack } = require('../services/hostTokens');
 const hostChannel = require('../services/hostChannel');
+const hostCommands = require('../services/hostCommands');
+const sourcingSession = require('../services/sourcingSession');
+const clipStore = require('../services/clipStore');
+const humanize = require('../services/humanize');
+const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
 
@@ -79,13 +84,25 @@ router.post('/hosts', async (req, res, next) => {
   }
 });
 
+// Annotate host rows with live health the DB doesn't hold: whether the backend
+// is currently driving a session on this host (and which run). Pure + exported
+// so it's unit-testable. Last-seen freshness is derived client-side from
+// last_seen_at.
+function annotateHostHealth(rows, session = sourcingSession) {
+  return (rows || []).map((h) => ({
+    ...h,
+    sessionActive: session.isActive(h.id),
+    activeRunId: session.activeRunId(h.id),
+  }));
+}
+
 router.get('/hosts', async (_req, res, next) => {
   try {
     const rows = await db.many(
       `SELECT id, label, platforms, status, last_seen_at, created_at
        FROM sourcing_hosts ORDER BY created_at DESC`,
     );
-    res.json(rows);
+    res.json(annotateHostHealth(rows));
   } catch (err) {
     next(err);
   }
@@ -130,6 +147,41 @@ router.patch('/config/:campaignId', async (req, res, next) => {
     );
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(row.sourcing_defaults || {});
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Review queue (borderline matches) -------------------------------------
+// Admin-only (top-level siteAuth gate). Candidates whose niche score is just over
+// the threshold land here (when reviewBorderline is on) instead of auto-adding.
+
+router.get('/review', async (req, res, next) => {
+  try {
+    const campaignId = req.query.campaignId || req.query.campaign || null;
+    const rows = await store.listReview({ campaignId, limit: req.query.limit });
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/candidates/:id/approve', async (req, res, next) => {
+  try {
+    const row = await store.approveCandidate(Number(req.params.id));
+    if (!row) return res.status(404).json({ error: 'not found' });
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/candidates/:id/reject', async (req, res, next) => {
+  try {
+    const reason = (req.body && req.body.reason) || 'rejected in review';
+    const row = await store.rejectCandidate(Number(req.params.id), reason);
+    if (!row) return res.status(404).json({ error: 'not found' });
+    res.json(row);
   } catch (err) {
     next(err);
   }
@@ -260,6 +312,132 @@ router.post('/runs/:id/candidates', requireHostOrSlack, async (req, res, next) =
   }
 });
 
+// --- Server-side screen reader (vision) ------------------------------------
+// The thin runner captures a screenshot + the Android UI-element tree and POSTs
+// the parsed element array here; the backend interprets it into the navigator's
+// reading ({screen, targets, results, profile fields, reels}). Moving the
+// interpretation server-side means scouting logic ships by deploying Deal Studio
+// — the paired host never needs updating. Element trees are small, so the global
+// 1 MB json limit is plenty; the raw screenshot is intentionally NOT accepted
+// here (it stays bounded and cheap).
+router.post('/vision/read', requireHostOrSlack, async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    if (!Array.isArray(body.elements)) {
+      return res.status(400).json({ error: 'elements array is required' });
+    }
+    if (body.elements.length > 4000) {
+      return res.status(413).json({ error: 'too many elements (>4000)' });
+    }
+    const reading = readScreen({
+      elements: body.elements,
+      width: Number(body.width) || null,
+      height: Number(body.height) || null,
+    });
+    res.json(reading);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Remote control: backend-driven scouting (agent mode) ------------------
+// The inverted control plane. A host running in RUNNER_MODE=agent claims a run,
+// then the BACKEND navigator (services/sourcingNavigator.js) drives the phone by
+// enqueuing device commands the agent pulls + executes, posting results back.
+// Whole surface is opt-in via SOURCING_REMOTE_CONTROL=on (404s otherwise).
+function requireRemoteControl(_req, res, next) {
+  if (!hostCommands.enabled()) return res.status(404).json({ error: 'remote control disabled' });
+  next();
+}
+
+// Agent -> backend: claim the newest queued run for this host and start a
+// backend-driven session. Idempotent while a session is live for the host.
+router.post('/hosts/:id/session/claim', requireRemoteControl, requireHostOrSlack, async (req, res, next) => {
+  try {
+    const hostId = Number(req.params.id);
+    if (sourcingSession.isActive(hostId)) {
+      return res.json({ active: true, runId: sourcingSession.activeRunId(hostId) });
+    }
+    // Anti-flag: don't start scouting outside human-plausible hours. The agent
+    // just idle-polls until the window reopens.
+    if (!humanize.withinActiveHours(new Date(), process.env.SOURCING_ACTIVE_HOURS)) {
+      return res.status(204).end();
+    }
+    // Claim like GET /runs/next (FOR UPDATE SKIP LOCKED), also binding host_id.
+    const run = await db.withTransaction(async (client) => {
+      const picked = await client.query(
+        `SELECT id FROM sourcing_runs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
+      );
+      if (!picked.rows.length) return null;
+      const r = await client.query(
+        `UPDATE sourcing_runs
+            SET status = 'running', host_id = $2, updated_at = NOW()
+          WHERE id = $1
+          RETURNING *`,
+        [picked.rows[0].id, hostId],
+      );
+      return r.rows[0];
+    });
+    if (!run) return res.status(204).end();
+    sourcingSession.start({ hostId, run });
+    res.status(201).json({ active: true, runId: run.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Agent -> backend: drain the queued device commands to execute. `done:true`
+// tells the agent the backend finished this run's session.
+router.get('/hosts/:id/commands', requireRemoteControl, requireHostOrSlack, (req, res, next) => {
+  try {
+    res.json(hostCommands.pull(Number(req.params.id)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Agent -> backend: post a command's result, settling the navigator's await.
+router.post('/hosts/:id/commands/result', requireRemoteControl, requireHostOrSlack, (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const settled = hostCommands.resolve(Number(req.params.id), body.id, {
+      ok: body.ok !== false,
+      result: body.result,
+      error: body.error,
+    });
+    res.json({ ok: settled });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Agent -> backend: upload a recorded reel clip (raw mp4 bytes) and get a clipId.
+// Sent as application/octet-stream so the global 1 MB express.json parser skips
+// it (it only parses JSON), letting this route-level raw parser take the larger
+// body. The backend navigator hands the clip's bytes to the Gemini judge.
+router.post(
+  '/hosts/:id/clip',
+  requireRemoteControl,
+  requireHostOrSlack,
+  express.raw({ type: () => true, limit: '25mb' }),
+  (req, res, next) => {
+    try {
+      const buf = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!buf || !buf.length) return res.status(400).json({ error: 'empty clip body' });
+      const mediaType = req.get('content-type') || 'video/mp4';
+      const clipId = clipStore.put(Number(req.params.id), buf, mediaType);
+      res.status(201).json({ clipId });
+    } catch (err) {
+      if (/empty clip|too large/.test(err.message)) return res.status(413).json({ error: err.message });
+      next(err);
+    }
+  },
+);
+
 // --- Live screen mirror + human take-over ---------------------------------
 // Runner uploads the latest phone frame every N seconds; dashboards render it.
 // Admins post control instructions (tap/swipe/type/home/pause/resume) which the
@@ -314,8 +492,9 @@ router.get('/hosts/:id/control', requireLiveMirror, requireHostOrSlack, async (r
   }
 });
 
-// Attach the pure helper to the router (which is itself a function, so
-// `app.use('/api/sourcing', sourcing)` still works) so it can be unit-tested.
+// Attach the pure helpers to the router (which is itself a function, so
+// `app.use('/api/sourcing', sourcing)` still works) so they can be unit-tested.
 router.nextRunStatus = nextRunStatus;
+router.annotateHostHealth = annotateHostHealth;
 
 module.exports = router;

@@ -3,6 +3,9 @@ node_modules/
 *.log
 .DS_Store
 
+# Runner's persisted setup (holds a per-host token) — written by `npm run setup`.
+runner/.runnerrc.json
+
 # Reply-bank: harvested examples contain creator PII (real inbound text,
 # emails, thread ids). The seed file is committed; harvested output is not.
 backend/data/harvested_examples.json

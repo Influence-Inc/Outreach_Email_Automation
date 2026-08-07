@@ -34,6 +34,7 @@
     .pill.added { background: #e7f6ee; color: #067647; }
     .pill.rejected { background: #fdecea; color: #b42318; }
     .pill.pending { background: #eef1f6; color: #4b5563; }
+    .pill.review { background: #fff4e5; color: #b25e09; }
     .pill.low { background: #e7f6ee; color: #067647; }
     .pill.medium { background: #fff4e5; color: #b25e09; }
     .pill.high { background: #fdecea; color: #b42318; }
@@ -92,6 +93,24 @@
 
         <label for="reelsWindow">Recent reels to check</label>
         <input id="reelsWindow" type="number" min="3" max="24" step="1" value="12" />
+
+        <label for="targetAudience">Target audience</label>
+        <input id="targetAudience" type="text" placeholder="who the brand wants to reach, e.g. women 25–34 starting fitness" />
+
+        <label for="genres">Allowed genres</label>
+        <input id="genres" type="text" placeholder="comma-separated, optional" />
+
+        <label for="discovery">Discovery mode</label>
+        <select id="discovery">
+          <option value="">Profiles (search → profile)</option>
+          <option value="reels">Reels feed (explore + scroll, watch &amp; hear)</option>
+        </select>
+
+        <label for="reviewBorderline">Borderline → review</label>
+        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">
+          <input id="reviewBorderline" type="checkbox" style="width:auto" />
+          Hold near-threshold AI matches for approval instead of auto-adding
+        </label>
       </div>
       <p class="scout-hint">
         The floor is a hard gate: every one of the recent reels must clear it. The risk level
@@ -121,7 +140,7 @@
       </div>
       <div id="new-host-token" class="scout-status" style="font-family:ui-monospace,monospace;word-break:break-all"></div>
       <table class="scout-table" id="hosts-table">
-        <thead><tr><th>Label</th><th>Platforms</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+        <thead><tr><th>Label</th><th>Platforms</th><th>Status</th><th>Session</th><th>Last seen</th><th></th></tr></thead>
         <tbody id="hosts-rows"></tbody>
       </table>
     </div>
@@ -162,6 +181,20 @@
           <tr><th>Handle</th><th>Followers</th><th>Views (min–max)</th><th>Niche</th><th>Risk</th><th>Decision</th><th>Reason</th></tr>
         </thead>
         <tbody id="cand-rows"></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="review-card" style="margin-top:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <h2 style="margin:0;font-size:16px">Pending review</h2>
+        <button id="review-refresh" class="ghost small">Refresh</button>
+      </div>
+      <p class="scout-hint">Borderline AI matches for the selected campaign — approve to add to the campaign, or reject. Enable with &ldquo;Borderline → review&rdquo; above.</p>
+      <table class="scout-table">
+        <thead>
+          <tr><th>Handle</th><th>Followers</th><th>Niche</th><th>Genre / audience</th><th>Why</th><th></th></tr>
+        </thead>
+        <tbody id="review-rows"></tbody>
       </table>
     </div>
   </main>

@@ -26,12 +26,25 @@ function buildConfig(defaults = {}, override = {}) {
   return {
     niche: merged.niche ? String(merged.niche).trim() : '',
     keywords: toKeywordList(merged.keywords),
+    // Free-text description of who the brand wants to reach — fed to the Gemini
+    // reel judge so it scores audience fit, not just topic.
+    targetAudience: merged.targetAudience ? String(merged.targetAudience).trim() : '',
+    // Optional allow-list of genres the reel judge should treat as on-brand.
+    genres: toKeywordList(merged.genres),
     floor: num(merged.floor),
     ceiling: num(merged.ceiling),
     risk: RISKS.includes(merged.risk) ? merged.risk : 'medium',
     targetCount: num(merged.targetCount) || 0,
     reelsWindow: num(merged.reelsWindow) || 12,
     nicheThreshold: num(merged.nicheThreshold),
+    // Route borderline passers (niche score just over the threshold) to a human
+    // review queue instead of auto-adding. reviewBand = how far above threshold
+    // still counts as "borderline".
+    reviewBorderline: merged.reviewBorderline === true || merged.reviewBorderline === 'true',
+    reviewBand: num(merged.reviewBand),
+    // 'reels' = explore/scroll reel-feed flow (watch+hear); else search→profile.
+    discovery: merged.discovery === 'reels' ? 'reels' : '',
+    clipSeconds: num(merged.clipSeconds),
   };
 }
 

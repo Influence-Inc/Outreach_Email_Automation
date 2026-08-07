@@ -20,7 +20,9 @@ const cases = [
   // Shared
   { in: new Error('connect ECONNREFUSED 127.0.0.1:3000'), reason: /connection was refused/i },
   { in: new Error('POST /api/sourcing/runs/1/candidates -> HTTP 401 Unauthorized'), reason: /Backend rejected/ },
-  { in: new Error('not implemented'), reason: /vision reader is not implemented/ },
+  { in: new Error('failed to connect to 192.168.1.9:5555'), reason: /Wi-Fi/i },
+  { in: new Error('uiautomator: could not get idle state'), reason: /UI dump/i },
+  { in: new Error('not implemented'), reason: /RealScreenReader/ },
 ];
 
 for (const c of cases) {

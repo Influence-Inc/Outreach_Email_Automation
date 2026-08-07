@@ -13,6 +13,21 @@
 
 const { nicheMatch, decide } = require('./sourcingFilters');
 
+const REVIEW_BAND_DEFAULT = 0.15;
+
+// A passing candidate is either auto-added or held for human review. When the
+// admin turned on reviewBorderline, creators whose niche score is only just over
+// the threshold (within reviewBand) go to the review queue instead of straight
+// into the campaign — a trust dial for AI-sourced adds. Pure + exported for tests.
+function reviewDecision(verdict, config = {}) {
+  if (!config.reviewBorderline) return 'add';
+  const score = verdict && verdict.nicheScore;
+  if (typeof score !== 'number') return 'add'; // niche unassessed -> unchanged behavior
+  const threshold = config.nicheThreshold != null ? config.nicheThreshold : 0.5;
+  const band = config.reviewBand != null ? config.reviewBand : REVIEW_BAND_DEFAULT;
+  return score < threshold + band ? 'review' : 'add';
+}
+
 // Evaluate ONE captured candidate; if it clears the rules and isn't a duplicate,
 // add it to the campaign. Returns { decision, added, candidateId, creatorId?, rejectReason? }.
 async function processCandidate(run, config, candidate, deps) {
@@ -26,6 +41,11 @@ async function processCandidate(run, config, candidate, deps) {
   const niche = await nicheMatch(candidate, config, { classify: deps.nicheClassify });
   candidate.nicheScore = niche.nicheScore;
   candidate.nicheReason = niche.nicheReason;
+  // Preserve the multimodal verdict (genre / audience match / spoken topic) on the
+  // candidate's evidence so an admin can audit why it was matched.
+  if (niche.evidence) {
+    candidate.evidence = { ...(candidate.evidence || {}), niche: niche.evidence };
+  }
 
   // Rules 2/4/5 + niche threshold.
   const verdict = decide(candidate, config);
@@ -75,6 +95,12 @@ async function processCandidate(run, config, candidate, deps) {
     }
   }
 
+  // Trust dial: hold borderline passers for a human instead of auto-adding.
+  if (reviewDecision(verdict, config) === 'review') {
+    await deps.updateCandidate(row.id, { decision: 'review' });
+    return { decision: 'review', added: false, candidateId: row.id };
+  }
+
   const creator = await deps.insertCreator({
     campaignId,
     username,
@@ -90,7 +116,7 @@ async function processCandidate(run, config, candidate, deps) {
 // deps.shouldStop() returns true. Returns { status, stats }.
 async function runWithSource(run, config, source, deps) {
   const targetCount = Number(config.targetCount || run.target_count || 0);
-  const stats = { scanned: 0, added: 0, rejected: 0, skipped: 0, byReason: {} };
+  const stats = { scanned: 0, added: 0, rejected: 0, skipped: 0, review: 0, byReason: {} };
   let stopped = false;
 
   while (!targetCount || stats.added < targetCount) {
@@ -113,6 +139,8 @@ async function runWithSource(run, config, source, deps) {
       stats.added += 1;
     } else if (res.decision === 'skipped') {
       stats.skipped += 1;
+    } else if (res.decision === 'review') {
+      stats.review += 1;
     } else {
       stats.rejected += 1;
       const reason = res.rejectReason || 'unknown';
@@ -140,4 +168,4 @@ function arraySource(list) {
   };
 }
 
-module.exports = { processCandidate, runWithSource, arraySource };
+module.exports = { processCandidate, runWithSource, arraySource, reviewDecision };

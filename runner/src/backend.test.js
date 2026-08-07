@@ -45,3 +45,52 @@ test('non-2xx responses throw with the backend error message', async () => {
   const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
   await assert.rejects(() => b.getRun(1), /bad request/);
 });
+
+test('readScreen POSTs the element tree + device size to the vision endpoint', async () => {
+  const fetchImpl = fakeFetch({ body: { screen: 'profile', targets: {} } });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  const r = await b.readScreen({ elements: [{ rid: 'a' }], width: 1080, height: 2400 });
+  const call = fetchImpl.calls[0];
+  assert.strictEqual(call.url, 'https://x/api/sourcing/vision/read');
+  assert.strictEqual(call.opts.method, 'POST');
+  const body = JSON.parse(call.opts.body);
+  assert.strictEqual(body.width, 1080);
+  assert.deepStrictEqual(body.elements, [{ rid: 'a' }]);
+  assert.strictEqual(r.screen, 'profile');
+});
+
+test('claimSession returns { active:false } on a 204 (nothing queued)', async () => {
+  const fetchImpl = fakeFetch({ status: 204 });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  assert.deepStrictEqual(await b.claimSession(3), { active: false });
+  assert.strictEqual(fetchImpl.calls[0].url, 'https://x/api/sourcing/hosts/3/session/claim');
+  assert.strictEqual(fetchImpl.calls[0].opts.method, 'POST');
+});
+
+test('claimSession returns the run info on 201', async () => {
+  const fetchImpl = fakeFetch({ status: 201, body: { active: true, runId: 42 } });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  assert.deepStrictEqual(await b.claimSession(3), { active: true, runId: 42 });
+});
+
+test('pullCommands + postCommandResult hit the agent endpoints', async () => {
+  const fetchImpl = fakeFetch({ body: { commands: [], done: false } });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  await b.pullCommands(5);
+  await b.postCommandResult(5, { id: 1, ok: true, result: null });
+  assert.strictEqual(fetchImpl.calls[0].url, 'https://x/api/sourcing/hosts/5/commands');
+  assert.strictEqual(fetchImpl.calls[1].url, 'https://x/api/sourcing/hosts/5/commands/result');
+  assert.strictEqual(fetchImpl.calls[1].opts.method, 'POST');
+});
+
+test('uploadClip POSTs raw bytes as octet-stream and returns the clipId', async () => {
+  const fetchImpl = fakeFetch({ status: 201, body: { clipId: 'clip_3' } });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  const out = await b.uploadClip(7, Buffer.from('MP4'), 'video/mp4');
+  const call = fetchImpl.calls[0];
+  assert.strictEqual(call.url, 'https://x/api/sourcing/hosts/7/clip');
+  assert.strictEqual(call.opts.method, 'POST');
+  assert.strictEqual(call.opts.headers['Content-Type'], 'video/mp4');
+  assert.strictEqual(call.opts.headers['x-api-token'], 'tkn');
+  assert.deepStrictEqual(out, { clipId: 'clip_3' });
+});
