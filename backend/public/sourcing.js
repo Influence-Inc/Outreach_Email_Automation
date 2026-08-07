@@ -59,6 +59,10 @@ function readForm() {
     risk: el('risk').value,
     targetCount: numOrUndef('targetCount'),
     reelsWindow: numOrUndef('reelsWindow'),
+    targetAudience: el('targetAudience').value.trim(),
+    genres: el('genres').value.trim(),
+    discovery: el('discovery').value,
+    reviewBorderline: el('reviewBorderline').checked,
   };
 }
 
@@ -71,6 +75,10 @@ function fillForm(cfg) {
   el('risk').value = ['low', 'medium', 'high'].includes(cfg.risk) ? cfg.risk : 'medium';
   el('targetCount').value = cfg.targetCount ?? '';
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
+  el('targetAudience').value = cfg.targetAudience || '';
+  el('genres').value = Array.isArray(cfg.genres) ? cfg.genres.join(', ') : (cfg.genres || '');
+  el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
+  el('reviewBorderline').checked = !!cfg.reviewBorderline;
 }
 
 function campaignId() { return el('campaign').value; }
@@ -213,6 +221,66 @@ function startPolling() {
 function stopPolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
+}
+
+// --- Review queue (borderline matches) ------------------------------------
+
+function nicheEvidence(c) {
+  const n = c && c.evidence && c.evidence.niche;
+  return n && typeof n === 'object' ? n : {};
+}
+
+function renderReview(rows) {
+  const tb = el('review-rows');
+  if (!tb) return;
+  tb.innerHTML = '';
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="6" class="scout-hint">Nothing waiting for review.</td></tr>';
+    return;
+  }
+  for (const c of rows) {
+    const ev = nicheEvidence(c);
+    const niche = c.niche_score == null ? '—' : Number(c.niche_score).toFixed(2);
+    const genreAud = [ev.genre, ev.audienceMatch != null ? `aud ${Number(ev.audienceMatch).toFixed(2)}` : null]
+      .filter(Boolean).join(' · ') || '—';
+    const why = ev.reason || c.niche_reason || '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>@${c.username}</td>
+      <td>${fmt(c.followers)}</td>
+      <td>${niche}</td>
+      <td>${genreAud}</td>
+      <td>${why}</td>
+      <td style="white-space:nowrap">
+        <button data-approve="${c.id}" class="btn-primary small">Approve</button>
+        <button data-reject="${c.id}" class="ghost small">Reject</button>
+      </td>`;
+    tb.appendChild(tr);
+  }
+  tb.querySelectorAll('[data-approve]').forEach((b) =>
+    b.addEventListener('click', () => reviewAction(`/api/sourcing/candidates/${b.dataset.approve}/approve`)));
+  tb.querySelectorAll('[data-reject]').forEach((b) =>
+    b.addEventListener('click', () => reviewAction(`/api/sourcing/candidates/${b.dataset.reject}/reject`)));
+}
+
+async function reviewAction(path) {
+  try {
+    await api(path, { method: 'POST', body: JSON.stringify({}) });
+    await loadReview();
+    if (currentRun) await refreshRun().catch(() => {});
+  } catch (err) {
+    setStatus(err.message, 'err');
+  }
+}
+
+async function loadReview() {
+  if (!campaignId()) return;
+  try {
+    const rows = await api(`/api/sourcing/review?campaignId=${encodeURIComponent(campaignId())}`);
+    renderReview(rows);
+  } catch (err) {
+    setStatus(err.message, 'err');
+  }
 }
 
 // --- Paired hosts ---------------------------------------------------------
@@ -387,7 +455,9 @@ function onFrameClick(ev) {
 }
 
 function wire() {
-  el('campaign').addEventListener('change', () => { currentRun = null; el('run-card').hidden = true; stopPolling(); loadConfig(); });
+  el('campaign').addEventListener('change', () => { currentRun = null; el('run-card').hidden = true; stopPolling(); loadConfig(); loadReview(); });
+  const reviewRefresh = el('review-refresh');
+  if (reviewRefresh) reviewRefresh.addEventListener('click', loadReview);
   el('save-btn').addEventListener('click', saveDefaults);
   el('start-btn').addEventListener('click', startRun);
   el('stop-btn').addEventListener('click', stopRun);
@@ -399,5 +469,5 @@ function wire() {
 }
 
 wire();
-loadCampaigns().catch((err) => setStatus(err.message, 'err'));
+loadCampaigns().then(() => loadReview()).catch((err) => setStatus(err.message, 'err'));
 loadHosts().catch(() => { /* non-fatal if the hosts card fails */ });

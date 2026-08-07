@@ -37,6 +37,14 @@ function buildConfig(defaults = {}, override = {}) {
     targetCount: num(merged.targetCount) || 0,
     reelsWindow: num(merged.reelsWindow) || 12,
     nicheThreshold: num(merged.nicheThreshold),
+    // Route borderline passers (niche score just over the threshold) to a human
+    // review queue instead of auto-adding. reviewBand = how far above threshold
+    // still counts as "borderline".
+    reviewBorderline: merged.reviewBorderline === true || merged.reviewBorderline === 'true',
+    reviewBand: num(merged.reviewBand),
+    // 'reels' = explore/scroll reel-feed flow (watch+hear); else search→profile.
+    discovery: merged.discovery === 'reels' ? 'reels' : '',
+    clipSeconds: num(merged.clipSeconds),
   };
 }
 

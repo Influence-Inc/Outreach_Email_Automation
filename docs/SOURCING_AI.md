@@ -38,8 +38,26 @@ docs for current rates.
 | `SOURCING_ENGAGE_SAVE_PROB` | `0.1` | Save probability. |
 | `SOURCING_ENGAGE_SHARE_PROB` | `0` | Share probability (share action is deferred — see below). |
 | `SOURCING_ENGAGE_MAX_LIKES` / `_SAVES` / `_SHARES` | `20` / `10` / `3` | Per‑session hard caps. |
-| `SOURCING_PACING_MS` | `1800` | Human‑like delay between actions. |
+| `SOURCING_PACING_MS` | `1800` | Human‑like delay between actions (jittered ±40%). |
 | `SOURCING_CAPTURE_CAP` | `500` | Safety cap on captures per run. |
+| `SOURCING_TAP_JITTER_PX` | `5` | Random ± pixels added to every tap (anti‑flag). |
+| `SOURCING_ACTIVE_HOURS` | *(unset = always)* | Only scout inside this local‑time window, e.g. `8-23` or overnight `22-6`. Outside it the agent idle‑polls. |
+
+### Scouting rules (per campaign)
+
+- `discovery: "reels"` — use the explore/scroll reel‑feed flow (watch + hear +
+  occasionally engage); omit for the classic search → profile flow.
+- `targetAudience` / `genres` — fed to the Gemini judge (audience fit + on‑brand genres).
+- `reviewBorderline: true` (+ optional `reviewBand`, default `0.15`) — hold
+  near‑threshold AI matches in the **review queue** instead of auto‑adding.
+
+### Review queue
+
+When `reviewBorderline` is on, a passer whose niche score is within `reviewBand`
+of the threshold gets `decision = "review"` instead of being added. Admins
+approve/reject from the **Pending review** card on the Scout Creators page
+(`GET /api/sourcing/review`, `POST /api/sourcing/candidates/:id/approve|reject`);
+the Gemini reasoning (genre / audience / why) is shown inline.
 
 ### Scouting rules (per campaign)
 

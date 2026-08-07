@@ -40,6 +40,58 @@ async function listCandidates(runId) {
   );
 }
 
+// Candidates held for human review (decision='review'), newest first, optionally
+// scoped to one campaign. Powers the dashboard's "Pending review" queue.
+async function listReview({ campaignId = null, limit = 100 } = {}) {
+  const lim = Math.max(1, Math.min(500, Number(limit) || 100));
+  if (campaignId) {
+    return db.many(
+      `SELECT * FROM sourced_candidates
+        WHERE decision = 'review' AND campaign_id = $1
+        ORDER BY created_at DESC LIMIT $2`,
+      [campaignId, lim],
+    );
+  }
+  return db.many(
+    `SELECT * FROM sourced_candidates WHERE decision = 'review' ORDER BY created_at DESC LIMIT $1`,
+    [lim],
+  );
+}
+
+// Approve a reviewed candidate: promote it into the campaign (idempotent) and
+// bump the run's found count so the dashboard reflects the manual add.
+async function approveCandidate(id) {
+  const cand = await getCandidate(id);
+  if (!cand) return null;
+  if (cand.decision === 'added') return cand;
+  const creator = await insertPendingCreator({
+    campaignId: cand.campaign_id,
+    username: cand.username,
+    fullName: cand.full_name,
+    firstName: null,
+  });
+  await db.query(
+    `UPDATE sourced_candidates SET decision = 'added', creator_id = $2 WHERE id = $1`,
+    [id, creator.id],
+  );
+  await db.query(
+    `UPDATE sourcing_runs SET found_count = found_count + 1, updated_at = NOW() WHERE id = $1`,
+    [cand.run_id],
+  );
+  return { ...cand, decision: 'added', creator_id: creator.id };
+}
+
+async function rejectCandidate(id, reason = 'rejected in review') {
+  return db.one(
+    `UPDATE sourced_candidates SET decision = 'rejected', reject_reason = $2 WHERE id = $1 RETURNING *`,
+    [id, reason],
+  );
+}
+
+async function getCandidate(id) {
+  return db.one(`SELECT * FROM sourced_candidates WHERE id = $1`, [id]);
+}
+
 const RUN_COLS = { found_count: '', status: '', stats: '::jsonb', error: '', host_id: '' };
 
 async function updateRun(id, patch) {
@@ -122,4 +174,14 @@ function makeDeps(run, { nicheClassify = reelJudge.makeClassifier() } = {}) {
   };
 }
 
-module.exports = { createRun, getRun, listCandidates, updateRun, makeDeps };
+module.exports = {
+  createRun,
+  getRun,
+  listCandidates,
+  listReview,
+  approveCandidate,
+  rejectCandidate,
+  getCandidate,
+  updateRun,
+  makeDeps,
+};

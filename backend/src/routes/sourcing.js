@@ -24,6 +24,7 @@ const hostChannel = require('../services/hostChannel');
 const hostCommands = require('../services/hostCommands');
 const sourcingSession = require('../services/sourcingSession');
 const clipStore = require('../services/clipStore');
+const humanize = require('../services/humanize');
 const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
@@ -134,6 +135,41 @@ router.patch('/config/:campaignId', async (req, res, next) => {
     );
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(row.sourcing_defaults || {});
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Review queue (borderline matches) -------------------------------------
+// Admin-only (top-level siteAuth gate). Candidates whose niche score is just over
+// the threshold land here (when reviewBorderline is on) instead of auto-adding.
+
+router.get('/review', async (req, res, next) => {
+  try {
+    const campaignId = req.query.campaignId || req.query.campaign || null;
+    const rows = await store.listReview({ campaignId, limit: req.query.limit });
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/candidates/:id/approve', async (req, res, next) => {
+  try {
+    const row = await store.approveCandidate(Number(req.params.id));
+    if (!row) return res.status(404).json({ error: 'not found' });
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/candidates/:id/reject', async (req, res, next) => {
+  try {
+    const reason = (req.body && req.body.reason) || 'rejected in review';
+    const row = await store.rejectCandidate(Number(req.params.id), reason);
+    if (!row) return res.status(404).json({ error: 'not found' });
+    res.json(row);
   } catch (err) {
     next(err);
   }
@@ -309,6 +345,11 @@ router.post('/hosts/:id/session/claim', requireRemoteControl, requireHostOrSlack
     const hostId = Number(req.params.id);
     if (sourcingSession.isActive(hostId)) {
       return res.json({ active: true, runId: sourcingSession.activeRunId(hostId) });
+    }
+    // Anti-flag: don't start scouting outside human-plausible hours. The agent
+    // just idle-polls until the window reopens.
+    if (!humanize.withinActiveHours(new Date(), process.env.SOURCING_ACTIVE_HOURS)) {
+      return res.status(204).end();
     }
     // Claim like GET /runs/next (FOR UPDATE SKIP LOCKED), also binding host_id.
     const run = await db.withTransaction(async (client) => {

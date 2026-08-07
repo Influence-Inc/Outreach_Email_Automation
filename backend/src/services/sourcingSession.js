@@ -59,6 +59,8 @@ async function runSession({ hostId, run, deps }) {
     (run.config && run.config.pacingMs) || deps.pacingMs || process.env.SOURCING_PACING_MS || DEFAULT_PACING_MS,
   );
   const captureCap = Number(deps.captureCap || process.env.SOURCING_CAPTURE_CAP || DEFAULT_CAPTURE_CAP);
+  // Small tap-coordinate jitter so taps aren't pixel-perfect (anti-flag).
+  const tapJitterPx = Number(deps.tapJitterPx != null ? deps.tapJitterPx : process.env.SOURCING_TAP_JITTER_PX || 5);
 
   chan.beginSession(hostId);
   const driver = makeDriver({ hostId, channel: chan });
@@ -84,7 +86,7 @@ async function runSession({ hostId, run, deps }) {
     const clipStore = require('./clipStore');
     gen = (deps.scoutReels || scoutReels)({
       driver,
-      config: { pacingMs, clipSeconds: config.clipSeconds },
+      config: { pacingMs, clipSeconds: config.clipSeconds, tapJitterPx },
       opts,
       deps: {
         judge: deps.judge || reelJudge.makeClassifier(),
@@ -94,7 +96,7 @@ async function runSession({ hostId, run, deps }) {
       },
     });
   } else {
-    gen = scoutFn({ driver, config: { pacingMs }, opts });
+    gen = scoutFn({ driver, config: { pacingMs, tapJitterPx }, opts });
   }
 
   try {

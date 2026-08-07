@@ -32,6 +32,14 @@ test('buildConfig carries targetAudience + genres for the reel judge', () => {
   assert.deepStrictEqual(bare.genres, []);
 });
 
+test('buildConfig parses the review-queue knobs', () => {
+  const cfg = buildConfig({}, { reviewBorderline: 'true', reviewBand: '0.2' });
+  assert.strictEqual(cfg.reviewBorderline, true);
+  assert.strictEqual(cfg.reviewBand, 0.2);
+  const off = buildConfig({}, {});
+  assert.strictEqual(off.reviewBorderline, false);
+});
+
 test('buildConfig defaults risk to medium and drops junk numbers', () => {
   const cfg = buildConfig({}, { risk: 'bogus', floor: 'abc', targetCount: 5 });
   assert.strictEqual(cfg.risk, 'medium');

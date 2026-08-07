@@ -16,6 +16,7 @@
 
 const { readView, pickSearchTerms, IG_ANDROID_PACKAGE } = require('./sourcingNavigator');
 const engagementPolicy = require('./engagementPolicy');
+const { jitteredDelay, jitterTap } = require('./humanize');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -25,7 +26,7 @@ async function softTap({ driver, view, name, pacingMs }) {
   const t = view.targets && view.targets[name];
   if (!t) return false;
   await driver.tap(t.x, t.y);
-  await sleep(pacingMs);
+  await sleep(jitteredDelay(pacingMs));
   return true;
 }
 
@@ -38,18 +39,19 @@ async function enterReelsFeed({ driver, read, term, pacingMs }) {
   view = await read(driver);
   await softTap({ driver, view, name: 'searchBox', pacingMs });
   await driver.typeText(term);
-  await sleep(pacingMs);
+  await sleep(jitteredDelay(pacingMs));
   view = await read(driver);
   const first = (view.results || [])[0];
   if (first && view.targets && view.targets[`result:${first}`]) {
     const t = view.targets[`result:${first}`];
     await driver.tap(t.x, t.y);
-    await sleep(pacingMs);
+    await sleep(jitteredDelay(pacingMs));
   }
 }
 
 async function* scoutReels({ driver, config = {}, opts = {}, read = readView, deps = {} }) {
   const pacingMs = config.pacingMs ?? 1500;
+  const jitterPx = config.tapJitterPx || 0;
   const max = opts.max || Infinity;
   const clipSeconds = config.clipSeconds || 12;
   const judge = deps.judge || (async () => null);
@@ -63,7 +65,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
   const counters = engagementPolicy.newCounters();
 
   await driver.openApp(IG_ANDROID_PACKAGE);
-  await sleep(pacingMs);
+  await sleep(jitteredDelay(pacingMs));
   await enterReelsFeed({ driver, read, term: pickSearchTerms(opts)[0], pacingMs });
 
   let size = { width: 1080, height: 2400 };
@@ -113,26 +115,29 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       rng,
     });
     if (acts.like && view.targets && view.targets.like) {
-      await driver.tap(view.targets.like.x, view.targets.like.y);
+      const p = jitterTap(view.targets.like, jitterPx);
+      await driver.tap(p.x, p.y);
       counters.likes += 1;
-      await sleep(pacingMs);
+      await sleep(jitteredDelay(pacingMs));
     }
     if (acts.save && view.targets && view.targets.save) {
-      await driver.tap(view.targets.save.x, view.targets.save.y);
+      const p = jitterTap(view.targets.save, jitterPx);
+      await driver.tap(p.x, p.y);
       counters.saves += 1;
-      await sleep(pacingMs);
+      await sleep(jitteredDelay(pacingMs));
     }
 
     yield candidate;
     emitted += 1;
 
-    // Swipe up to the next reel.
+    // Swipe up to the next reel (jittered endpoints so the gesture isn't identical).
+    const jx = jitterTap({ x: Math.round(size.width / 2), y: 0 }, jitterPx).x;
     await driver.swipe({
-      x1: Math.round(size.width / 2), y1: Math.round(size.height * 0.8),
-      x2: Math.round(size.width / 2), y2: Math.round(size.height * 0.2),
+      x1: jx, y1: Math.round(size.height * 0.8),
+      x2: jx, y2: Math.round(size.height * 0.2),
       durationMs: 300,
     });
-    await sleep(pacingMs);
+    await sleep(jitteredDelay(pacingMs));
   }
 }
 
