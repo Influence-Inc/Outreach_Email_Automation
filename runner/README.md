@@ -23,20 +23,45 @@ Set these environment variables on the host:
 | --- | --- |
 | `RUNNER_BACKEND_URL`   | Deal Studio backend origin (no trailing slash). |
 | `RUNNER_HOST_TOKEN`    | Token the backend accepts as `x-api-token` on `/api/sourcing/*`. Preferred: a **per-host token** minted from the dashboard's "Paired phone-hosts" panel — stored as SHA-256 in `sourcing_hosts`, revocable individually, shown only once at mint time. The legacy global `DASHBOARD_API_TOKEN` still works (siteAuth continues to accept it), but per-host tokens are auditable per phone and can be revoked without rotating the shared credential. |
-| `RUNNER_RUN_ID`        | The `sourcing_runs.id` this process will drive. |
+| `RUNNER_RUN_ID`        | `auto` (recommended) to poll forever for the newest queued run, or a specific `sourcing_runs.id` to drive once and exit. |
 | `RUNNER_DRIVER`        | `mock` (default) or `android`. |
 | `RUNNER_DEVICE_UDID`   | The `adb` serial to target. Only needed when more than one phone is attached to the host. |
 | `RUNNER_BATCH_SIZE`    | Candidates per POST (default 5). |
 | `RUNNER_PACING_MS`     | Min ms between IG actions (default 1800 — human-like pacing). |
 | `RUNNER_DAILY_CAP`     | Hard stop after N captures/day (default 200). |
+| `RUNNER_IDLE_POLL_MS`  | `RUNNER_RUN_ID=auto` only: wait this long between polls when nothing is queued (default 15000). |
 
 ## Run
+
+**One-time setup (recommended):** `RUNNER_RUN_ID=auto` starts a standing worker —
+it polls the backend for the newest queued run, drives it to completion, then
+immediately checks for the next one, forever. Start it once and it keeps working
+for every run an admin queues from the dashboard afterwards, with nothing to
+re-type. Press `Ctrl+C` to stop it.
 
 ```bash
 cd runner
 npm install           # no extra packages needed
 npm run start:mock    # exercises the whole pipeline with no phone
+
 # ... or, with a paired Android phone connected over USB:
+RUNNER_DRIVER=android RUNNER_BACKEND_URL=... RUNNER_HOST_TOKEN=... RUNNER_RUN_ID=auto npm start
+```
+
+Tip: export the env vars once in your shell profile (`~/.zshrc` / `~/.bashrc`) so
+future sessions only need `cd runner && npm start`:
+
+```bash
+export RUNNER_DRIVER=android
+export RUNNER_BACKEND_URL=https://deals.influence.technology
+export RUNNER_HOST_TOKEN=<paste your per-host token>
+export RUNNER_RUN_ID=auto
+```
+
+To drive one specific run and exit (e.g. for a controlled test), set
+`RUNNER_RUN_ID` to a number instead of `auto`:
+
+```bash
 RUNNER_DRIVER=android RUNNER_BACKEND_URL=... RUNNER_HOST_TOKEN=... RUNNER_RUN_ID=42 npm start
 ```
 
@@ -53,8 +78,9 @@ No Appium, no extra npm packages — just `adb` (Google's own Android SDK tool).
    installed, and takes a real screenshot through the driver. Fix anything it flags
    before continuing.
 4. Pair the host in Deal Studio (**Scout creators → Paired phone-hosts**) and copy
-   the token into `RUNNER_HOST_TOKEN`. Start a run from the dashboard, grab its
-   `runId`, and start the runner as above.
+   the token into `RUNNER_HOST_TOKEN`. Start the runner with `RUNNER_RUN_ID=auto`
+   (see above) — it's now a standing worker, so start a run from the dashboard any
+   time and it picks it up on its next poll.
 
 See `PHASE_D_CHECKLIST.md` for the full step-by-step with expected output at
 each step.

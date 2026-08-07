@@ -11,6 +11,7 @@
 
 const { scoutCandidates } = require('./navigator/instagram');
 const { startLiveMirror } = require('./liveMirror');
+const { printDiagnostic } = require('./diagnose');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -80,4 +81,49 @@ async function runOnce({ driver, reader, backend, config, runOverride }) {
   return { run: latest, capturedToday };
 }
 
-module.exports = { runOnce };
+// Keeps calling runOnce() forever so `RUNNER_RUN_ID=auto` is a one-time setup: an
+// admin queues a run from the dashboard, this picks it up on its next poll,
+// finishes it, and immediately checks for the next one — no re-typing the runner
+// command per run. Fixed RUNNER_RUN_ID=<n> stays one-shot and never calls this
+// (see index.js).
+//
+// runOnceFn/sleepFn/shouldStop are injected (defaulting to the real runOnce, the
+// real timer, and "never stop") so tests can script a handful of iterations and a
+// clean stop with no real driver, backend, or multi-second timers. The real
+// SIGINT/SIGTERM wiring lives in index.js, as a thin wrapper flipping a stopping
+// flag that shouldStop reads.
+async function runForever({
+  driver,
+  reader,
+  backend,
+  config,
+  logger = console,
+  sleepFn = sleep,
+  shouldStop = () => false,
+  runOnceFn = runOnce,
+}) {
+  const log = logger && logger.log ? logger.log.bind(logger) : () => {};
+  const idleMs = Math.max(1000, Number(config.idlePollMs || 15000));
+
+  while (!shouldStop()) {
+    let result;
+    try {
+      result = await runOnceFn({ driver, reader, backend, config });
+    } catch (err) {
+      printDiagnostic(err, logger);
+      if (shouldStop()) break;
+      await sleepFn(idleMs);
+      continue;
+    }
+
+    if (result.idle) {
+      if (shouldStop()) break;
+      await sleepFn(idleMs);
+      continue;
+    }
+    log(`[runner] finished run #${result.run.id} status=${result.run.status} captured=${result.capturedToday}`);
+  }
+  log('[runner] stopped');
+}
+
+module.exports = { runOnce, runForever };

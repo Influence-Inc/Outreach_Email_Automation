@@ -6,7 +6,9 @@
 //
 //   RUNNER_BACKEND_URL     e.g. https://outreach.your.app  (no trailing slash)
 //   RUNNER_HOST_TOKEN      per-host machine token minted by the dashboard
-//   RUNNER_RUN_ID          the sourcing_runs id to drive (else long-polls for one)
+//   RUNNER_RUN_ID          a sourcing_runs id to drive once, or 'auto' to poll
+//                          forever for the newest queued run (one-time setup —
+//                          see RUNNER_IDLE_POLL_MS)
 //   RUNNER_DRIVER          'mock' | 'android'   (default 'mock')
 //   RUNNER_DEVICE_UDID     the adb serial to target. Only required when more
 //                          than one phone is attached to the host; adb
@@ -21,6 +23,8 @@
 //                          alongside scouting (default off)
 //   RUNNER_FRAME_MS        live-mirror frame upload interval, ms (default 3000)
 //   RUNNER_CONTROL_MS      live-mirror control drain interval, ms (default 1500)
+//   RUNNER_IDLE_POLL_MS    RUNNER_RUN_ID=auto only: wait this long between polls
+//                          when nothing is queued (default 15000)
 
 function loadConfig(env = process.env) {
   const backend = (env.RUNNER_BACKEND_URL || '').replace(/\/$/, '');
@@ -39,6 +43,7 @@ function loadConfig(env = process.env) {
     liveMirror: String(env.RUNNER_LIVE_MIRROR || '').toLowerCase() === 'on',
     frameMs: Number(env.RUNNER_FRAME_MS || 3000),
     controlMs: Number(env.RUNNER_CONTROL_MS || 1500),
+    idlePollMs: Number(env.RUNNER_IDLE_POLL_MS || 15000),
   };
   return cfg;
 }

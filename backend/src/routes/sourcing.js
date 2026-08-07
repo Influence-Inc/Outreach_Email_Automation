@@ -32,6 +32,20 @@ function requireLiveMirror(_req, res, next) {
   next();
 }
 
+// A run created via the dashboard (or the sourcingSweep auto-enqueue) starts
+// 'queued' and only becomes 'running' once real work actually lands on it —
+// either a runner claiming it via GET /runs/next, or (here) its first
+// candidate batch arriving. Only ever moves a run OFF 'queued'; every other
+// status ('running', 'paused', 'error', 'stopped', 'done') is left exactly as
+// it is, so a stray/late batch can never silently un-pause an admin's pause or
+// resurrect a run that already finished/stopped. Returns {} when nothing about
+// the status should change.
+function nextRunStatus(currentStatus, done) {
+  if (done) return { status: 'done' };
+  if (currentStatus === 'queued') return { status: 'running' };
+  return {};
+}
+
 // --- Paired hosts (per-runner token pairing) -------------------------------
 // Mint/list/revoke are admin-only — they sit behind the top-level siteAuth gate
 // mounted in server.js, so only a signed-in dashboard user reaches them. The
@@ -238,7 +252,7 @@ router.post('/runs/:id/candidates', requireHostOrSlack, async (req, res, next) =
     const done = run.target_count && found >= run.target_count;
     const updated = await store.updateRun(run.id, {
       found_count: found,
-      ...(done ? { status: 'done' } : {}),
+      ...nextRunStatus(run.status, done),
     });
     res.json({ run: updated, results });
   } catch (err) {
@@ -299,5 +313,9 @@ router.get('/hosts/:id/control', requireLiveMirror, requireHostOrSlack, async (r
     next(err);
   }
 });
+
+// Attach the pure helper to the router (which is itself a function, so
+// `app.use('/api/sourcing', sourcing)` still works) so it can be unit-tested.
+router.nextRunStatus = nextRunStatus;
 
 module.exports = router;
