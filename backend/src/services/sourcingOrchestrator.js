@@ -26,6 +26,11 @@ async function processCandidate(run, config, candidate, deps) {
   const niche = await nicheMatch(candidate, config, { classify: deps.nicheClassify });
   candidate.nicheScore = niche.nicheScore;
   candidate.nicheReason = niche.nicheReason;
+  // Preserve the multimodal verdict (genre / audience match / spoken topic) on the
+  // candidate's evidence so an admin can audit why it was matched.
+  if (niche.evidence) {
+    candidate.evidence = { ...(candidate.evidence || {}), niche: niche.evidence };
+  }
 
   // Rules 2/4/5 + niche threshold.
   const verdict = decide(candidate, config);

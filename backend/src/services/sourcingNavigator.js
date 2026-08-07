@@ -132,4 +132,4 @@ async function goBack({ driver, pacingMs, read = readView }) {
   await sleep(pacingMs);
 }
 
-module.exports = { scout, readView, IG_ANDROID_PACKAGE };
+module.exports = { scout, readView, pickSearchTerms, IG_ANDROID_PACKAGE };

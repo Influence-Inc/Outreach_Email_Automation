@@ -115,6 +115,24 @@ test('the injected AI classifier can rescue an off-keyword creator', async () =>
   assert.strictEqual(creators[0].username, 'vibes');
 });
 
+test('a multimodal classifier verdict is persisted as candidate evidence', async () => {
+  const { candidates, deps } = memStore();
+  deps.nicheClassify = async () => ({
+    score: 0.9,
+    reason: 'clearly on-brand',
+    source: 'gemini-video',
+    evidence: { source: 'gemini-video', genre: 'home fitness', audienceMatch: 0.8, spokenTopic: 'home workout' },
+  });
+  await processCandidate(
+    run,
+    { ...goodCfg, targetCount: 1 },
+    { username: 'mia', bio: 'lifestyle', reels: fitReels() },
+    deps,
+  );
+  assert.strictEqual(candidates[0].evidence.niche.genre, 'home fitness');
+  assert.strictEqual(candidates[0].evidence.niche.audienceMatch, 0.8);
+});
+
 test('processCandidate records a floor rejection', async () => {
   const { candidates, deps } = memStore();
   const res = await processCandidate(

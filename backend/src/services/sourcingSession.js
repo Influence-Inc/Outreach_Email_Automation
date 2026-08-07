@@ -67,16 +67,35 @@ async function runSession({ hostId, run, deps }) {
   try { await driver.wake(); } catch (_) { /* best-effort */ }
 
   const config = run.config || {};
-  const gen = scoutFn({
-    driver,
-    config: { pacingMs },
-    opts: {
-      keywords: config.keywords || [],
-      hashtags: config.hashtags || [],
-      seedAccounts: config.seedAccounts || [],
-      max: captureCap,
-    },
-  });
+  const opts = {
+    keywords: config.keywords || [],
+    hashtags: config.hashtags || [],
+    seedAccounts: config.seedAccounts || [],
+    max: captureCap,
+  };
+
+  // `discovery: 'reels'` drives the explore/scroll reel-feed flow (watch + hear +
+  // judge + occasionally engage); otherwise the search->profile flow.
+  let gen;
+  if (String(config.discovery || '').toLowerCase() === 'reels') {
+    const { scoutReels } = require('./sourcingReelsNavigator');
+    const engagementPolicy = require('./engagementPolicy');
+    const reelJudge = require('./reelJudge');
+    const clipStore = require('./clipStore');
+    gen = (deps.scoutReels || scoutReels)({
+      driver,
+      config: { pacingMs, clipSeconds: config.clipSeconds },
+      opts,
+      deps: {
+        judge: deps.judge || reelJudge.makeClassifier(),
+        getClip: deps.getClip || clipStore.take,
+        engagement: deps.engagement || { policy: engagementPolicy.loadPolicy(), decide: engagementPolicy.decide },
+        rng: deps.rng,
+      },
+    });
+  } else {
+    gen = scoutFn({ driver, config: { pacingMs }, opts });
+  }
 
   try {
     await runWith(run, config, generatorSource(gen), buildOrchestratorDeps(run, deps));

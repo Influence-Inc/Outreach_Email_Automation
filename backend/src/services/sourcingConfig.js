@@ -26,6 +26,11 @@ function buildConfig(defaults = {}, override = {}) {
   return {
     niche: merged.niche ? String(merged.niche).trim() : '',
     keywords: toKeywordList(merged.keywords),
+    // Free-text description of who the brand wants to reach — fed to the Gemini
+    // reel judge so it scores audience fit, not just topic.
+    targetAudience: merged.targetAudience ? String(merged.targetAudience).trim() : '',
+    // Optional allow-list of genres the reel judge should treat as on-brand.
+    genres: toKeywordList(merged.genres),
     floor: num(merged.floor),
     ceiling: num(merged.ceiling),
     risk: RISKS.includes(merged.risk) ? merged.risk : 'medium',

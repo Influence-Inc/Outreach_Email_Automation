@@ -125,7 +125,27 @@ const SIGNALS = {
     rids: ['profile_tab_icon_view_reels', 'row_profile_tab_reels', 'reels_tab'],
     labels: ['reels'],
   },
+  // Full-screen reel player engagement buttons. 'like' matches both the Like and
+  // Unlike states (same button); already-liked is detected separately so we never
+  // un-like a reel.
+  like: {
+    rids: ['like_button', 'row_feed_button_like', 'reel_like_button', 'clips_like'],
+    labels: ['like', 'unlike'],
+  },
+  save: {
+    rids: ['save_button', 'feed_button_save', 'reel_save_button', 'clips_save'],
+    labels: ['save', 'remove'],
+  },
+  share: {
+    rids: ['share_button', 'feed_button_share', 'reel_share_button', 'clips_share'],
+    labels: ['share', 'send'],
+  },
 };
+
+// Instagram throws these when it thinks activity is automated — the cue to stop
+// engaging immediately and back off.
+const ACTION_BLOCK_RE =
+  /action blocked|try again later|we restrict|temporarily blocked|restrict(?:ed)? (?:certain|some) activity|please wait a few (?:minutes|moments)/i;
 
 // ── captured-data extractors ────────────────────────────────────────────────
 
@@ -199,10 +219,36 @@ function extractResults(elements) {
   return { results, targets };
 }
 
+// Full-screen reel player: the reel's author handle, caption, and whether it's
+// already liked/saved (so engagement never toggles the wrong way).
+function extractFeed(elements) {
+  const authorEl =
+    findByRid(elements, ['reel_feed_username', 'clips_username', 'feed_username', 'author', 'username']) ||
+    elements.find((e) => isClickable(e) && looksLikeHandle(e.text));
+  const author = authorEl && looksLikeHandle(authorEl.text) ? norm(authorEl.text).replace(/^@/, '') : null;
+
+  const captionEl = findByRid(elements, ['clips_caption', 'reel_caption', 'caption']);
+  const caption = captionEl && captionEl.text ? String(captionEl.text).trim() : null;
+
+  const alreadyLiked = elements.some((e) => labelOf(e) === 'unlike');
+  const alreadySaved = elements.some((e) => labelOf(e) === 'remove' || ridLocal(e.rid).includes('saved'));
+
+  return { author, caption, alreadyLiked, alreadySaved };
+}
+
 // ── screen classification ───────────────────────────────────────────────────
 // Ordered most-specific first. Returns a coarse label the navigator branches on.
 
 function classifyScreen(elements) {
+  // Highest priority: an activity block means STOP engaging.
+  if (elements.some((e) => ACTION_BLOCK_RE.test(textAndDesc(e)))) return 'action_blocked';
+
+  // Full-screen reel player: like + share affordances plus a single reel author.
+  const feed = extractFeed(elements);
+  if (feed.author && resolveTarget(elements, SIGNALS.like) && resolveTarget(elements, SIGNALS.share)) {
+    return 'reels_feed';
+  }
+
   const hasReelOverlays = extractReels(elements).length >= 2;
   const reelsTabSelected = elements.some(
     (e) => labelOf(e) === 'reels' && (e.selected === true || e.selected === 'true'),
@@ -257,6 +303,15 @@ function readScreen(input = {}) {
     if (p.username) reading.username = p.username;
   } else if (screen === 'reels_tab') {
     reading.reels = extractReels(elements);
+  } else if (screen === 'reels_feed') {
+    const feed = extractFeed(elements);
+    reading.author = feed.author;
+    reading.caption = feed.caption;
+    reading.alreadyLiked = feed.alreadyLiked;
+    reading.alreadySaved = feed.alreadySaved;
+    add('like', SIGNALS.like);
+    add('save', SIGNALS.save);
+    add('share', SIGNALS.share);
   }
 
   return reading;
@@ -268,9 +323,11 @@ module.exports = {
   extractProfile,
   extractReels,
   extractResults,
+  extractFeed,
   resolveTarget,
   center,
   looksLikeHandle,
   looksLikeCount,
   SIGNALS,
+  ACTION_BLOCK_RE,
 };

@@ -38,6 +38,18 @@ test('each verb enqueues the matching command + args and returns the agent resul
   assert.strictEqual(channel.calls[0].hostId, 7);
 });
 
+test('recordClip enqueues with a longer timeout and returns { clipId }', async () => {
+  const calls = [];
+  const channel = {
+    enqueue(hostId, cmd, opts) { calls.push({ cmd, opts }); return { id: 1, promise: Promise.resolve({ clipId: 'clip_1' }) }; },
+  };
+  const d = makeRemoteDriver({ hostId: 4, channel });
+  assert.deepStrictEqual(await d.recordClip(12), { clipId: 'clip_1' });
+  assert.strictEqual(calls[0].cmd.op, 'recordClip');
+  assert.strictEqual(calls[0].cmd.args.seconds, 12);
+  assert.ok(calls[0].opts.timeoutMs >= 12000, 'timeout covers the recording window');
+});
+
 test('requires a hostId', () => {
   assert.throws(() => makeRemoteDriver({ channel: {} }), /hostId is required/);
 });

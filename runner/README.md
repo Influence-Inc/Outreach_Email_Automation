@@ -100,6 +100,13 @@ the phone → post the result → repeat until the run's done, then claim the ne
 Start it once and leave it running (Ctrl+C to stop). USB or Wi-Fi, same as scout
 mode; the auto-reconnect + keep-awake reliability applies here too.
 
+**For reel evaluation with audio** (backend `discovery: "reels"` mode), the host
+also needs **scrcpy 2.0+** on `PATH` (Android 11+ for audio) — `adb screenrecord`
+can't capture audio. macOS `brew install scrcpy`, Ubuntu `sudo apt install
+scrcpy`, Windows: the scrcpy release on PATH. The agent records short clips
+(video+audio) that the backend hands to Gemini. See
+[`docs/SOURCING_AI.md`](../docs/SOURCING_AI.md) for the full AI/engagement setup.
+
 ## Android setup
 
 No Appium, no extra npm packages — just `adb` (Google's own Android SDK tool).
@@ -140,7 +147,8 @@ revisited, add a new driver implementing the same `DeviceDriver` contract in
 - `src/driver/base.js` — the DeviceDriver contract.
 - `src/driver/mock.js` — fixture-replay driver used by tests.
 - `src/driver/android.js` — direct-`adb` driver (no Appium, no extra deps): adds
-  `dumpUi` (UI tree), `keepAwake`/`wake`, and transparent auto-reconnect.
+  `dumpUi` (UI tree), `keepAwake`/`wake`, transparent auto-reconnect, and
+  `recordClip` (scrcpy screen+audio capture for the reel judge).
 - `src/navigator/instagram.js` — the on-host scout flow (scout mode).
 - `src/agent.js` — agent-mode loop: claim → pull backend commands → execute →
   post result. The backend navigator (`backend/src/services/sourcingNavigator.js`)

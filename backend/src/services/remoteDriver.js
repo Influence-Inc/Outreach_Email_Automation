@@ -28,6 +28,12 @@ function makeRemoteDriver({ hostId, channel = commands, timeoutMs } = {}) {
     getWindowSize: () => call('getWindowSize', {}),
     keepAwake: () => call('keepAwake', {}),
     wake: () => call('wake', {}),
+    // Record a reel clip (video+audio) on the host; returns { clipId } once the
+    // agent has uploaded the mp4. Longer timeout to cover the recording window.
+    recordClip: (seconds = 12) =>
+      channel.enqueue(hostId, { op: 'recordClip', args: { seconds } }, {
+        timeoutMs: (Number(seconds) + 25) * 1000,
+      }).promise,
     close: async () => {},
   };
 }

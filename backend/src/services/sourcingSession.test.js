@@ -49,6 +49,18 @@ test('runs the navigator through runWithSource and brackets a channel session', 
   assert.strictEqual(session.isActive(9), false, 'active entry cleared when done');
 });
 
+test('discovery:reels routes to the reels-feed navigator', async () => {
+  let usedReels = false;
+  const deps = baseDeps({
+    runWithSource: async (run, config, source) => { await source.next(); return { status: 'done' }; },
+  });
+  deps.scoutReels = async function* scoutReels() { usedReels = true; yield { username: 'r' }; };
+  const run = { id: 9, config: { discovery: 'reels', keywords: ['x'], pacingMs: 0 } };
+  const entry = session.start({ hostId: 11, run, deps });
+  await entry.promise;
+  assert.strictEqual(usedReels, true);
+});
+
 test('does not start a competing session for a busy host', async () => {
   let release;
   const gate = new Promise((r) => { release = r; });

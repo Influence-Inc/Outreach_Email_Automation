@@ -32,6 +32,9 @@
 // (from `adb devices`) so every command targets the right one.
 
 const { execFile } = require('child_process');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
 const { DeviceDriver } = require('./base');
 const { IG_ANDROID_PACKAGE } = require('../navigator/instagram');
 
@@ -127,11 +130,19 @@ class AndroidDriver extends DeviceDriver {
     reconnectRetries = 3,
     reconnectBackoffMs = 1000,
     wakeOnEmpty = true,
+    scrcpyPath = 'scrcpy',
+    scrcpy = defaultExec,
+    readFile = fs.promises.readFile,
+    unlink = fs.promises.unlink,
   } = {}) {
     super();
     this.serial = serial;
     this.adbPath = adbPath;
     this._exec = exec;
+    this.scrcpyPath = scrcpyPath;
+    this._scrcpy = scrcpy;
+    this._readFile = readFile;
+    this._unlink = unlink;
     // Wi-Fi debugging shows up as an `ip:port` serial; treat that as Wi-Fi even
     // if the caller didn't say so, since reconnect differs (adb connect vs reconnect).
     this.isWifi = mode === 'wifi' || /:\d+$/.test(String(serial || ''));
@@ -264,6 +275,27 @@ class AndroidDriver extends DeviceDriver {
     await this._adb(['shell', 'uiautomator', 'dump', UI_DUMP_PATH]);
     const { stdout } = await this._adb(['exec-out', 'cat', UI_DUMP_PATH]);
     return parseUiXml(stdout.toString('utf8'));
+  }
+
+  // Record a short clip of the phone screen WITH audio (so the multimodal judge
+  // can hear the reel), using scrcpy — `adb screenrecord` cannot capture audio.
+  // scrcpy self-terminates at --time-limit; we read the mp4 back and clean up.
+  // Audio is captured on Android 11+ (default in scrcpy 2.0+). Returns raw bytes;
+  // the agent uploads them to the backend, which sends them to Gemini.
+  async recordClip({ seconds = 12 } = {}) {
+    const secs = Math.max(1, Math.round(seconds));
+    const file = path.join(os.tmpdir(), `reel-${Date.now()}-${Math.random().toString(36).slice(2)}.mp4`);
+    const args = [];
+    if (this.serial) args.push('--serial', this.serial);
+    args.push('--no-window', '--no-control', '--record-format=mp4', `--time-limit=${secs}`, `--record=${file}`);
+    try {
+      await this._scrcpy(this.scrcpyPath, args); // blocks until the time limit elapses
+      const data = await this._readFile(file);
+      if (!data || !data.length) throw new Error('scrcpy produced an empty recording');
+      return { mediaType: 'video/mp4', data };
+    } finally {
+      try { await this._unlink(file); } catch (_) { /* temp file may not exist */ }
+    }
   }
 
   async close() {

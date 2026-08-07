@@ -213,6 +213,38 @@ test('parseUiXml decodes entities, computes w/h from bounds, and skips boundless
   assert.ok(!els.some((e) => e.cls === 'android.view.View'), 'boundless node is skipped');
 });
 
+// --- recordClip (scrcpy, video + audio) ------------------------------------
+
+test('recordClip runs scrcpy with --time-limit + --record and returns the mp4 bytes', async () => {
+  const calls = [];
+  const d = new AndroidDriver({
+    exec: stubExec(),
+    serial: 'S1',
+    scrcpy: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; },
+    readFile: async () => Buffer.from('MP4DATA'),
+    unlink: async () => {},
+  });
+  const clip = await d.recordClip({ seconds: 10 });
+  assert.strictEqual(clip.mediaType, 'video/mp4');
+  assert.strictEqual(clip.data.toString(), 'MP4DATA');
+  assert.strictEqual(calls[0].cmd, 'scrcpy');
+  assert.deepStrictEqual(calls[0].args.slice(0, 2), ['--serial', 'S1']);
+  assert.ok(calls[0].args.includes('--time-limit=10'));
+  assert.ok(calls[0].args.some((a) => a.startsWith('--record=')));
+});
+
+test('recordClip cleans up the temp file and throws on an empty recording', async () => {
+  let unlinked = false;
+  const d = new AndroidDriver({
+    exec: stubExec(),
+    scrcpy: async () => ({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }),
+    readFile: async () => Buffer.alloc(0),
+    unlink: async () => { unlinked = true; },
+  });
+  await assert.rejects(() => d.recordClip({ seconds: 5 }), /empty recording/);
+  assert.strictEqual(unlinked, true);
+});
+
 // --- auto-reconnect --------------------------------------------------------
 
 test('retries a transient adb failure after an (USB) reconnect', async () => {

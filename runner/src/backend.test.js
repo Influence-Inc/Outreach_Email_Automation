@@ -82,3 +82,15 @@ test('pullCommands + postCommandResult hit the agent endpoints', async () => {
   assert.strictEqual(fetchImpl.calls[1].url, 'https://x/api/sourcing/hosts/5/commands/result');
   assert.strictEqual(fetchImpl.calls[1].opts.method, 'POST');
 });
+
+test('uploadClip POSTs raw bytes as octet-stream and returns the clipId', async () => {
+  const fetchImpl = fakeFetch({ status: 201, body: { clipId: 'clip_3' } });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  const out = await b.uploadClip(7, Buffer.from('MP4'), 'video/mp4');
+  const call = fetchImpl.calls[0];
+  assert.strictEqual(call.url, 'https://x/api/sourcing/hosts/7/clip');
+  assert.strictEqual(call.opts.method, 'POST');
+  assert.strictEqual(call.opts.headers['Content-Type'], 'video/mp4');
+  assert.strictEqual(call.opts.headers['x-api-token'], 'tkn');
+  assert.deepStrictEqual(out, { clipId: 'clip_3' });
+});

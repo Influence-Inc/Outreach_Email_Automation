@@ -10,6 +10,7 @@ const db = require('../db');
 const { findDuplicateCreator } = require('./duplicateGuard');
 const creatorDb = require('./creatorDb');
 const { insertPendingCreator } = require('./creatorInsert');
+const reelJudge = require('./reelJudge');
 
 // Created as 'queued', matching services/sourcingSweep.js's autoEnqueueRuns —
 // both paths that CREATE a run agree it starts life unclaimed. A run only
@@ -54,9 +55,10 @@ async function updateRun(id, patch) {
   return db.one(`UPDATE sourcing_runs SET ${sets.join(', ')} WHERE id = $1 RETURNING *`, params);
 }
 
-// Build the orchestrator deps bound to `run`. `nicheClassify` is optional (the
-// filters fall back to keyword scoring, and to Claude by default).
-function makeDeps(run, { nicheClassify } = {}) {
+// Build the orchestrator deps bound to `run`. `nicheClassify` defaults to the
+// composite reel judge (Gemini video when a clip + key are present -> Claude on
+// thumbnails/captions -> keyword). Injectable so tests can override it.
+function makeDeps(run, { nicheClassify = reelJudge.makeClassifier() } = {}) {
   return {
     nicheClassify,
 

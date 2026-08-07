@@ -75,6 +75,20 @@ function makeBackend({ backendUrl, hostToken, fetchImpl = globalThis.fetch }) {
     pullCommands: (hostId) => req('GET', `/api/sourcing/hosts/${hostId}/commands`),
     postCommandResult: (hostId, payload) =>
       req('POST', `/api/sourcing/hosts/${hostId}/commands/result`, payload),
+    // Upload a recorded reel clip as raw bytes (application/octet-stream so the
+    // backend's global JSON parser skips it). Returns { clipId }.
+    uploadClip: async (hostId, bytes, mediaType = 'video/mp4') => {
+      const res = await fetchImpl(base + `/api/sourcing/hosts/${hostId}/clip`, {
+        method: 'POST',
+        headers: { 'Content-Type': mediaType, 'x-api-token': hostToken },
+        body: bytes,
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) { /* non-json */ }
+      if (!res.ok) throw new Error(`POST /clip -> ${res.status} ${(json && json.error) || text}`);
+      return json || {};
+    },
   };
 }
 

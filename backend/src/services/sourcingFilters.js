@@ -249,7 +249,14 @@ async function nicheMatch(candidate, config, deps = {}) {
   try {
     const ai = await classify(candidate, config);
     if (ai && typeof ai.score === 'number') {
-      return { nicheScore: clamp01(ai.score), nicheReason: ai.reason || 'ai', source: 'ai' };
+      return {
+        nicheScore: clamp01(ai.score),
+        nicheReason: ai.reason || 'ai',
+        source: ai.source || 'ai',
+        // Rich provenance from a video/multimodal classifier (genre, audience
+        // match, spoken topic, …) so the orchestrator can persist WHY it matched.
+        evidence: ai.evidence || null,
+      };
     }
   } catch (_) {
     /* fall through to keywords */

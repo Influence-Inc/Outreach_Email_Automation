@@ -29,6 +29,22 @@ test('executeCommand maps ops to driver methods and shapes data results', async 
   await assert.rejects(() => executeCommand(driver, { op: 'nope' }), /unknown command op/);
 });
 
+test('executeCommand recordClip records, uploads the bytes, and returns the clipId', async () => {
+  const driver = { recordClip: async ({ seconds }) => ({ mediaType: 'video/mp4', data: Buffer.from(`MP4${seconds}`) }) };
+  const uploads = [];
+  const backend = { uploadClip: async (h, bytes, mt) => { uploads.push({ h, bytes: bytes.toString(), mt }); return { clipId: 'clip_9' }; } };
+  const out = await executeCommand(driver, { op: 'recordClip', args: { seconds: 8 } }, { backend, hostId: 5 });
+  assert.deepStrictEqual(out, { clipId: 'clip_9' });
+  assert.strictEqual(uploads[0].h, 5);
+  assert.strictEqual(uploads[0].bytes, 'MP48');
+  assert.strictEqual(uploads[0].mt, 'video/mp4');
+});
+
+test('executeCommand recordClip errors without backend context', async () => {
+  const driver = { recordClip: async () => ({ data: Buffer.from('x'), mediaType: 'video/mp4' }) };
+  await assert.rejects(() => executeCommand(driver, { op: 'recordClip', args: {} }), /backend \+ hostId/);
+});
+
 test('serveSession pulls, executes, posts results, and ends on done', async () => {
   const posted = [];
   let pulls = 0;

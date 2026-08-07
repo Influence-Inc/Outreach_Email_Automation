@@ -23,6 +23,7 @@ const { generateToken, hashToken, requireHostOrSlack } = require('../services/ho
 const hostChannel = require('../services/hostChannel');
 const hostCommands = require('../services/hostCommands');
 const sourcingSession = require('../services/sourcingSession');
+const clipStore = require('../services/clipStore');
 const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
@@ -360,6 +361,29 @@ router.post('/hosts/:id/commands/result', requireRemoteControl, requireHostOrSla
     next(err);
   }
 });
+
+// Agent -> backend: upload a recorded reel clip (raw mp4 bytes) and get a clipId.
+// Sent as application/octet-stream so the global 1 MB express.json parser skips
+// it (it only parses JSON), letting this route-level raw parser take the larger
+// body. The backend navigator hands the clip's bytes to the Gemini judge.
+router.post(
+  '/hosts/:id/clip',
+  requireRemoteControl,
+  requireHostOrSlack,
+  express.raw({ type: () => true, limit: '25mb' }),
+  (req, res, next) => {
+    try {
+      const buf = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!buf || !buf.length) return res.status(400).json({ error: 'empty clip body' });
+      const mediaType = req.get('content-type') || 'video/mp4';
+      const clipId = clipStore.put(Number(req.params.id), buf, mediaType);
+      res.status(201).json({ clipId });
+    } catch (err) {
+      if (/empty clip|too large/.test(err.message)) return res.status(413).json({ error: err.message });
+      next(err);
+    }
+  },
+);
 
 // --- Live screen mirror + human take-over ---------------------------------
 // Runner uploads the latest phone frame every N seconds; dashboards render it.

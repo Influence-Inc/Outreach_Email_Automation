@@ -126,6 +126,42 @@ test('reads reel view counts off the reels tab (desc "N views" + bare overlay)',
   assert.deepStrictEqual(r.reels.map((x) => x.views), [120000, 98400, 45000]);
 });
 
+test('reads a full-screen reel: author, caption, engagement targets', () => {
+  const elements = [
+    { rid: 'com.instagram.android:id/clips_username', cls: 'android.widget.TextView', text: 'home.fit.mia', clickable: true, bounds: bounds(60, 1800, 300, 50) },
+    { rid: 'com.instagram.android:id/clips_caption', cls: 'android.widget.TextView', text: 'home gym day', bounds: bounds(60, 1860, 900, 80) },
+    { rid: 'com.instagram.android:id/like_button', desc: 'Like', clickable: true, bounds: bounds(1000, 1000, 60, 60) },
+    { rid: 'com.instagram.android:id/save_button', desc: 'Save', clickable: true, bounds: bounds(1000, 1200, 60, 60) },
+    { rid: 'com.instagram.android:id/share_button', desc: 'Share', clickable: true, bounds: bounds(1000, 1100, 60, 60) },
+  ];
+  const r = sv.readScreen({ elements });
+  assert.strictEqual(r.screen, 'reels_feed');
+  assert.strictEqual(r.author, 'home.fit.mia');
+  assert.strictEqual(r.caption, 'home gym day');
+  assert.deepStrictEqual(r.targets.like, { x: 1030, y: 1030 });
+  assert.deepStrictEqual(r.targets.save, { x: 1030, y: 1230 });
+  assert.strictEqual(r.alreadyLiked, false);
+});
+
+test('detects an already-liked reel (Unlike) so engagement never toggles it off', () => {
+  const elements = [
+    { rid: 'com.instagram.android:id/clips_username', text: 'joe', clickable: true, bounds: bounds(60, 1800, 200, 50) },
+    { rid: 'com.instagram.android:id/like_button', desc: 'Unlike', clickable: true, bounds: bounds(1000, 1000, 60, 60) },
+    { rid: 'com.instagram.android:id/share_button', desc: 'Share', clickable: true, bounds: bounds(1000, 1100, 60, 60) },
+  ];
+  const r = sv.readScreen({ elements });
+  assert.strictEqual(r.screen, 'reels_feed');
+  assert.strictEqual(r.alreadyLiked, true);
+});
+
+test('classifies an Instagram action-block screen (stop engaging)', () => {
+  const elements = [
+    { cls: 'android.widget.TextView', text: 'Action Blocked', bounds: bounds(100, 100, 800, 60) },
+    { cls: 'android.widget.TextView', text: 'We restrict certain activity to protect our community', bounds: bounds(100, 200, 800, 120) },
+  ];
+  assert.strictEqual(sv.readScreen({ elements }).screen, 'action_blocked');
+});
+
 test('unknown screen when nothing matches, with empty targets', () => {
   const r = sv.readScreen({ elements: [{ cls: 'android.view.View', text: '', bounds: bounds(0, 0, 10, 10) }] });
   assert.strictEqual(r.screen, 'unknown');

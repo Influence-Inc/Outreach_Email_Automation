@@ -19,8 +19,10 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // Map one backend command to a local driver call. Ops that mutate the phone
 // resolve with null; dumpUi/getWindowSize/screenshot carry data back so the
-// backend navigator can read the screen.
-async function executeCommand(driver, cmd) {
+// backend navigator can read the screen. `recordClip` records a reel (video +
+// audio) and uploads the bytes, returning a clipId the backend judge consumes —
+// so it needs the backend client + hostId from `ctx`.
+async function executeCommand(driver, cmd, ctx = {}) {
   const a = (cmd && cmd.args) || {};
   switch (cmd.op) {
     case 'openApp': await driver.openApp(a.pkg); return null;
@@ -35,6 +37,12 @@ async function executeCommand(driver, cmd) {
     case 'screenshot': {
       const shot = await driver.screenshot();
       return { mediaType: shot.mediaType, dataBase64: shot.data.toString('base64') };
+    }
+    case 'recordClip': {
+      if (!ctx.backend || ctx.hostId == null) throw new Error('recordClip needs a backend + hostId');
+      const clip = await driver.recordClip({ seconds: a.seconds });
+      const { clipId } = await ctx.backend.uploadClip(ctx.hostId, clip.data, clip.mediaType);
+      return { clipId };
     }
     default:
       throw new Error(`unknown command op: ${cmd && cmd.op}`);
@@ -62,7 +70,7 @@ async function serveSession({ driver, backend, hostId, config, logger = console,
       let ok = true;
       let error = null;
       try {
-        result = await executeCommand(driver, cmd);
+        result = await executeCommand(driver, cmd, { backend, hostId });
       } catch (err) {
         ok = false;
         error = err.message;
