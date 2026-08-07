@@ -30,21 +30,35 @@ the failure actually is.
       — never the team's real one; IG will action it if it gets flagged
 - [ ] Backend URL you can reach (production Railway, staging, or local)
 
-## Step 1 — enable developer mode on the phone
+## Step 1 — enable developer mode + connect the phone
 
 1. Settings → About phone → tap "Build number" 7 times until it says
    "You are now a developer"
+
+Then connect **one of two ways**:
+
+**USB (simplest for the first run)**
+
 2. Settings → System → Developer options → enable **USB debugging**
 3. Plug the phone in via USB
 4. On the phone, tap **Allow** on the "Allow USB debugging?" prompt
 
+**Wi-Fi (Android 11+, no cable — the phone can sit on a shelf charging)**
+
+2. Developer options → enable **Wireless debugging** → "Pair device with pairing code"
+3. On the host: `adb pair <ip:pairingPort>` and enter the 6-digit code
+4. Then `adb connect <ip:port>` (the main Wireless-debugging ip:port)
+5. Set `RUNNER_ADB_MODE=wifi` and `RUNNER_DEVICE_UDID=<ip:port>` for the run. The
+   runner auto-reconnects (`adb connect`) if the Wi-Fi link drops mid-run.
+
 **Expected:** `adb devices` on the host lists your phone as `<serial> device`
-(not `unauthorized` or `offline`).
+(not `unauthorized` or `offline`). For Wi-Fi the serial is the `ip:port`.
 
 ```bash
 adb devices
 # List of devices attached
-# 12345ABCDE     device
+# 12345ABCDE     device          # USB
+# 192.168.1.9:5555   device      # Wi-Fi
 ```
 
 ## Step 2 — install runner deps + run preflight
@@ -151,30 +165,38 @@ the pass/reject log, and the campaign's creators table has a new row with
 | `spawn adb ENOENT` | `adb` isn't installed / not on PATH | Install Android platform-tools (see Prerequisites) |
 | `adb: more than one device/emulator` | Two+ phones attached | Set `RUNNER_DEVICE_UDID=<serial>` |
 | `openApp` runs but IG never opens | IG not installed on the phone | Install IG from Play Store; sign in; retry |
-| Screenshot comes back empty | Screen is locked | Wake the phone; disable auto-lock during the run |
-| Runner exits with `not implemented` from `ScreenReader.read` | Expected on the first live run | Send screenshots per step 6 below |
+| Screenshot comes back empty | Screen is locked | Handled automatically now — the driver wakes + retries, and `RUNNER_KEEP_AWAKE=on` (default) holds the screen on. Only fails if the lock is secured (PIN) — remove the lock on the dedicated phone. |
+| `adb` link keeps dropping | Flaky cable / Wi-Fi | Handled automatically — every adb call reconnects + retries (`RUNNER_ADB_RECONNECT_RETRIES`). For Wi-Fi, keep the phone on the same network; re-`adb pair` if the port rotated. |
+| Candidates come back empty / wrong targets | Screen-reader signals need calibration to this IG build | The reader runs and degrades to `screen: unknown` (never crashes). Dump a screen and adjust `SIGNALS`/extractors in `backend/src/services/screenVision.js` — see step 6. |
 
 Every failure above also gets an actionable "cause + fix" line automatically —
 the runner's `src/diagnose.js` recognizes these patterns and prints the fix,
 not just a raw stack trace.
 
-## Step 6 — first-live-run iteration loop
+## Step 6 — calibrate the screen reader to this IG build
 
-On the very first Track D run, the vision reader (`src/navigator/screenReader.js`)
-is intentionally the `not implemented` stub for real drivers — we build it
-against your actual IG screenshots rather than guessing what IG's Android UI
-looks like today. When you hit the `not implemented` error, capture the current
-screen and share:
+The vision reader is implemented and runs: on a real run the runner captures the
+phone's UI tree (`adb shell uiautomator dump`) and the backend
+(`backend/src/services/screenVision.js`) interprets it into `{screen, targets,
+results, profile, reels}`. It **degrades to `screen: unknown`** when it can't
+classify — it never throws — so a mis-calibrated signal makes the navigator fall
+back to a hardware Back or a human take-over via the live mirror, not crash the run.
+
+If candidates come back empty or a tap lands on the wrong thing, confirm the
+reader's signals against the actual app:
 
 ```bash
-adb exec-out screencap -p > screen-1-search-results.png
-adb exec-out screencap -p > screen-2-profile.png
-adb exec-out screencap -p > screen-3-reels-tab.png
+# on a typed search-results screen, then a profile, then the reels tab:
+adb shell uiautomator dump /sdcard/window_dump.xml && adb exec-out cat /sdcard/window_dump.xml
 ```
 
-Ship these three PNGs back — with those in hand I'll ship the first real
-`ScreenReader` implementation as a follow-up commit on PR #305 and you re-run
-step 5 with the vision layer live.
+Eyeball the `resource-id` / `content-desc` / `text` / `bounds` for the elements
+you expect (search box, result rows, Reels tab, followers count, reel view
+overlays). If a signal in `SIGNALS` or an extractor doesn't match, adjust the
+string(s) in `backend/src/services/screenVision.js` — no navigator or driver
+change needed — and add the real values as a fixture case in
+`backend/src/services/screenVision.test.js` to lock it against future IG drift.
+See `src/vision/PLACEHOLDERS.md` for the full contract + calibration notes.
 
 ## Step 7 — switch to persistent mode (one-time setup)
 

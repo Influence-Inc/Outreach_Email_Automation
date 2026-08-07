@@ -49,6 +49,9 @@ function makeBackend({ backendUrl, hostToken, fetchImpl = globalThis.fetch }) {
     postCandidates: (id, candidates) =>
       req('POST', `/api/sourcing/runs/${id}/candidates`, { candidates }),
     stopRun: (id) => req('POST', `/api/sourcing/runs/${id}/stop`),
+    // Server-side vision: send the parsed UI-element tree (+ device size) and get
+    // back the navigator's structured reading. Interpretation lives on the backend.
+    readScreen: (payload) => req('POST', '/api/sourcing/vision/read', payload),
     // Live mirror surface (only meaningful when SOURCING_LIVE_MIRROR=on on the
     // backend; each 404s otherwise, which the caller treats as "off").
     publishFrame: (hostId, payload) =>

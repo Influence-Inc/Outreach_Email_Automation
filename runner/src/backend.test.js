@@ -45,3 +45,16 @@ test('non-2xx responses throw with the backend error message', async () => {
   const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
   await assert.rejects(() => b.getRun(1), /bad request/);
 });
+
+test('readScreen POSTs the element tree + device size to the vision endpoint', async () => {
+  const fetchImpl = fakeFetch({ body: { screen: 'profile', targets: {} } });
+  const b = makeBackend({ backendUrl: 'https://x', hostToken: 'tkn', fetchImpl });
+  const r = await b.readScreen({ elements: [{ rid: 'a' }], width: 1080, height: 2400 });
+  const call = fetchImpl.calls[0];
+  assert.strictEqual(call.url, 'https://x/api/sourcing/vision/read');
+  assert.strictEqual(call.opts.method, 'POST');
+  const body = JSON.parse(call.opts.body);
+  assert.strictEqual(body.width, 1080);
+  assert.deepStrictEqual(body.elements, [{ rid: 'a' }]);
+  assert.strictEqual(r.screen, 'profile');
+});

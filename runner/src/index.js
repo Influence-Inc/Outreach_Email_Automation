@@ -24,8 +24,18 @@ async function main() {
   const cfg = loadConfig();
   assertConfig(cfg);
 
-  const { driver, reader } = await buildDriverAndReader(cfg);
+  // Build the backend client first — the real screen reader needs it (all screen
+  // interpretation runs server-side now).
   const backend = makeBackend({ backendUrl: cfg.backendUrl, hostToken: cfg.hostToken });
+  const { driver, reader } = await buildDriverAndReader(cfg, backend);
+
+  // Real Android: make the phone ready for a long standing run — establish the
+  // Wi-Fi link if any, keep the screen awake, and wake it now. All best-effort.
+  if (cfg.driver === 'android') {
+    if (driver.connect) await driver.connect().catch(() => {});
+    if (cfg.keepAwake && driver.keepAwake) await driver.keepAwake().catch(() => {});
+    if (driver.wake) await driver.wake().catch(() => {});
+  }
 
   if (cfg.runMode === 'auto') {
     let stopping = false;
@@ -53,19 +63,22 @@ async function main() {
   console.log(`[runner] finished run #${run.id} status=${run.status} captured=${capturedToday}`);
 }
 
-// The driver and the screen reader are a matched pair — the mock driver ships
+// The driver and the screen reader are a matched pair. The mock driver ships
 // with a canned fixture the mock reader knows how to decode. The real (Android)
-// driver pairs with the (deliberately not-yet-implemented) ScreenReader stub so
-// a real run fails loudly if the vision layer isn't wired up, instead of
-// pretending to scout with no signal.
-async function buildDriverAndReader(cfg) {
+// driver pairs with RealScreenReader, which captures the phone's UI tree and
+// asks the backend to interpret it — so the host stays a thin relay and every
+// scouting-logic change ships by deploying Deal Studio, not by touching here.
+async function buildDriverAndReader(cfg, backend) {
   if (cfg.driver === 'android') {
     const { AndroidDriver } = require('./driver/android');
-    const { ScreenReader } = require('./navigator/screenReader');
-    return {
-      driver: new AndroidDriver({ serial: cfg.deviceUdid }),
-      reader: new ScreenReader(),
-    };
+    const { RealScreenReader } = require('./vision/RealScreenReader');
+    const driver = new AndroidDriver({
+      serial: cfg.deviceUdid,
+      mode: cfg.adbMode,
+      reconnectRetries: cfg.reconnectRetries,
+      reconnectBackoffMs: cfg.reconnectBackoffMs,
+    });
+    return { driver, reader: new RealScreenReader({ driver, backend }) };
   }
   if (cfg.driver === 'mock') {
     const { buildSmokeFixture } = require('./mockFixture');

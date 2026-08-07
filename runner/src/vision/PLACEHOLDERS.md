@@ -1,101 +1,97 @@
-# Vision surface — what `ScreenReader.read()` must return
+# Vision surface — how the screen reader works now
 
 The Instagram Navigator (`../navigator/instagram.js`) is driver-agnostic on
 purpose. It never hard-codes on-screen coordinates — every tap decision goes
-through `ScreenReader.read(screenshot)`, which is the vision layer that turns
-a phone screenshot into structured data:
+through `ScreenReader.read(screenshot)`, the vision layer that turns a phone
+screen into structured data:
 
 ```js
-// screen classification + tap-target coordinates + captured data
 {
   screen: 'search' | 'search_results' | 'profile' | 'reels_tab' | 'unknown',
   targets: {
-    // pixel coordinates the navigator will tap. Only the fields relevant to
-    // the current screen need to be present.
+    // pixel coordinates the navigator taps. Only the fields relevant to the
+    // current screen need to be present.
     searchTab?:  { x, y },
     searchBox?:  { x, y },
     back?:       { x, y },
     reelsTab?:   { x, y },
     'result:<handle>'?: { x, y },   // one per search-result row
   },
-  // Populated on 'search_results'
-  results?: string[],               // ordered @handles visible on the results screen
-  // Populated on 'profile'
-  fullName?: string | null,
-  followers?: number | null,
-  bio?: string | null,
-  // Populated on 'reels_tab'
-  reels?: Array<{ views: number, likes?: number, comments?: number, caption?: string }>,
+  results?: string[],               // ordered @handles on a results screen
+  fullName?, followers?, bio?,      // profile header
+  reels?: Array<{ views: number, caption? }>,   // reels tab overlays
 }
 ```
 
-The **mock** driver ships with a `MockScreenReader` (in `../navigator/screenReader.js`)
-that pattern-matches on a canned `screenName` field. That is what the unit
-tests + `RUNNER_DRIVER=mock` use.
+## Where the interpretation lives (server-side)
 
-The **real** Android driver is wired to the abstract `ScreenReader` stub —
-`read()` throws `not implemented` — *by design*. Nothing about the real
-Instagram UI is guessed from a specification; we build the real reader
-against actual screenshots. `runner/src/diagnose.js` catches this exact error
-and prints an actionable "capture screens and share them" hint.
+Two readers implement the contract:
 
-## When Track D lands screenshots
+- **`MockScreenReader`** (`../navigator/screenReader.js`) — pattern-matches a
+  canned `screenName`. Used by the unit tests + `RUNNER_DRIVER=mock`.
+- **`RealScreenReader`** (`./RealScreenReader.js`) — the production reader for
+  `RUNNER_DRIVER=android`. It is a **thin client**: it captures the phone's UI
+  tree (`driver.dumpUi()` → `adb shell uiautomator dump`) plus the device pixel
+  size, and POSTs them to the Deal Studio backend
+  (`POST /api/sourcing/vision/read`). The backend
+  (`backend/src/services/screenVision.js`) does all the interpretation and
+  returns the shape above.
 
-The plan for Track D step 6 (see `PHASE_D_CHECKLIST.md`): capture three PNGs
-off the phone with `adb exec-out screencap -p > screen-N.png` and ship them:
+Interpretation runs **on the backend** so scouting logic ships by deploying Deal
+Studio — the paired host never needs a code update. The abstract `ScreenReader`
+stub that used to `throw 'not implemented'` is gone from the real path.
 
-- **screen-1-search-results.png** — after typing a keyword in Search; whatever
-  the top ~5 accounts row looks like now.
-- **screen-2-profile.png** — after tapping one of those accounts; header with
-  handle / bio / followers / the tab strip (Grid | Reels | Tagged).
-- **screen-3-reels-tab.png** — Reels tab, so the ▷ view-count overlay on each
-  reel thumbnail is visible.
+## Why the UI tree instead of pixel-guessing a vision model
 
-With those three, the follow-up work is:
+`uiautomator` bounds are **exact and deterministic**, so taps land where they
+should instead of where a model estimated a pixel. Accessibility labels
+("Search", "Reels", "Back") are far more stable across Instagram releases than
+resource-ids or coordinates. A screenshot can still be handed to a vision model
+in a later phase to enrich screens the tree can't fully resolve (that's what the
+optional `image` field on the endpoint is reserved for), but the Phase‑1 reader
+reads purely from the element tree.
 
-1. **Choose the vision strategy.** Two viable paths:
-   - **Claude vision** via `backend/src/services/claudeClient.js` `callClaudeMessages`
-     — send the screenshot + a JSON-strict prompt asking for the structured
-     shape above. Highest fidelity for bio/captions; costs an API call per
-     screen; the backend already loads `@anthropic-ai/sdk` so no new dep.
-   - **Local OCR + heuristics** (Tesseract or `@nut-tree/nut-js`) — cheaper
-     per screen, no API dependency, more brittle when IG changes the layout.
-   Recommendation: Claude vision for the first cut, revisit later if per-run
-     cost is a concern.
-2. **Implement `RealScreenReader`** in this directory (`vision/RealScreenReader.js`)
-   with `read(shot)` → the shape above.
-3. **Wire it into `../index.js`** — replace the `ScreenReader` stub used for
-   the `android` driver with `RealScreenReader`.
-4. **Add a fixture test** — decode each of the three real screenshots into
-   the structured shape and assert the values; that's how we lock the reader
-   against future IG UI drift.
+## Calibrating the match signals against a real device
 
-## Failure modes to guard against in the real reader
+The classification + target signals live in `SIGNALS` and the extractors in
+`backend/src/services/screenVision.js`. They match on resource-id suffixes and
+accessibility labels that are *plausible* for current Instagram but need a
+one-time confirmation against the real app:
 
-- **Abbreviated counts.** IG shows "23.4K", "1.2M" — always parse through
-  `backend/src/services/sourcingFilters.js` `parseCount()` (already exported)
-  so the same numeric normalization runs everywhere.
-- **Ambiguous reel thumbnails.** Some thumbnails don't show a view count
-  (photo posts on the Reels tab if IG mixes them; older reels with the
-  overlay hidden). The reader must return only the *reels* it read cleanly
-  and let the scoring rules gate on `reels.length >= minReels`.
-- **Light/dark mode + system font size.** IG on a personal phone can be in
-  either theme. The reader must handle both. If Claude vision is used, this
-  is essentially free; for OCR it needs two calibrations.
-- **Suspicious-activity / login walls.** When IG throws one of these the
-  screen won't match any known classification. `screen: 'unknown'` is the
-  correct return; the navigator's `back` gesture then falls back to a
-  hardware Back and the live-mirror + take-over feature (Phase 3c) lets an
-  admin resolve it manually.
+1. On a paired phone, dump a few screens and eyeball the attributes:
+   ```bash
+   adb shell uiautomator dump /sdcard/window_dump.xml && adb exec-out cat /sdcard/window_dump.xml
+   ```
+   Do this on: a typed **search results** screen, a **profile** header, and the
+   **reels tab**.
+2. If a target comes back missing or wrong, add/adjust the resource-id or label
+   in `SIGNALS` (navigation targets) or the extractor heuristics (results,
+   profile fields, reel view counts). These are just strings — no navigator or
+   driver change needed.
+3. Add the real values as a fixture case in
+   `backend/src/services/screenVision.test.js` so the reader is locked against
+   future Instagram UI drift.
 
-## Non-goals for the vision reader
+Because the reader **degrades to `screen: 'unknown'`** (never throws) when it
+can't classify, a mis-calibrated signal makes the navigator fall back to a
+hardware Back / a human take-over via the live mirror — it doesn't crash the
+standing run.
 
-- **Do NOT** try to read individual reel captions off the Reels tab thumbnail
-  overlay — captions only show after opening a reel. If Rule 3 (caption keyword
-  relevance) needs per-reel captions, that's a separate "open a reel" flow
-  costed at 12x per candidate; keep it best-effort per the spec.
-- **Do NOT** interpret follower counts as anything but display integers —
-  IG rounds/truncates aggressively.
-- **Do NOT** infer growth trends from the visible reels — the scoring rules
-  (`sourcingFilters.growthTrend`) do that already; the reader just reports
-  what's on screen.
+## Failure modes the reader already guards
+
+- **Abbreviated counts** ("23.4K", "1.2M") are parsed through
+  `sourcingFilters.parseCount()` so the same normalization runs everywhere.
+- **Ambiguous reel thumbnails** — only cleanly-read view counts are returned;
+  the scoring rules gate on `reels.length >= minReels`.
+- **Light/dark mode + font size** — irrelevant to the UI tree (text/desc are
+  theme-independent), unlike OCR.
+- **Suspicious-activity / login walls** — no known signals match, so the reader
+  returns `screen: 'unknown'` and the navigator/human recover.
+
+## Non-goals
+
+- **Do NOT** try to read per-reel captions off the reels-tab thumbnails —
+  captions only appear after opening a reel. If Rule 3 needs per-reel captions,
+  that's a separate "open a reel" flow, kept best-effort per the spec.
+- **Do NOT** infer growth trends in the reader — `sourcingFilters.growthTrend`
+  does that from the reported view window.

@@ -21,6 +21,7 @@ const { processCandidate } = require('../services/sourcingOrchestrator');
 const { buildConfig } = require('../services/sourcingConfig');
 const { generateToken, hashToken, requireHostOrSlack } = require('../services/hostTokens');
 const hostChannel = require('../services/hostChannel');
+const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
 
@@ -255,6 +256,34 @@ router.post('/runs/:id/candidates', requireHostOrSlack, async (req, res, next) =
       ...nextRunStatus(run.status, done),
     });
     res.json({ run: updated, results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Server-side screen reader (vision) ------------------------------------
+// The thin runner captures a screenshot + the Android UI-element tree and POSTs
+// the parsed element array here; the backend interprets it into the navigator's
+// reading ({screen, targets, results, profile fields, reels}). Moving the
+// interpretation server-side means scouting logic ships by deploying Deal Studio
+// — the paired host never needs updating. Element trees are small, so the global
+// 1 MB json limit is plenty; the raw screenshot is intentionally NOT accepted
+// here (it stays bounded and cheap).
+router.post('/vision/read', requireHostOrSlack, async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    if (!Array.isArray(body.elements)) {
+      return res.status(400).json({ error: 'elements array is required' });
+    }
+    if (body.elements.length > 4000) {
+      return res.status(413).json({ error: 'too many elements (>4000)' });
+    }
+    const reading = readScreen({
+      elements: body.elements,
+      width: Number(body.width) || null,
+      height: Number(body.height) || null,
+    });
+    res.json(reading);
   } catch (err) {
     next(err);
   }

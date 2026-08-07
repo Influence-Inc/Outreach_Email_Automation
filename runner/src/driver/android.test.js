@@ -7,7 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { AndroidDriver, escapeAdbText } = require('./android');
+const { AndroidDriver, escapeAdbText, parseUiXml } = require('./android');
 const { IG_ANDROID_PACKAGE } = require('../navigator/instagram');
 
 function stubExec() {
@@ -133,4 +133,138 @@ test('escapeAdbText percent-encodes spaces and backslash-escapes shell metachara
   assert.strictEqual(escapeAdbText('hello world'), 'hello%sworld');
   assert.strictEqual(escapeAdbText('a&b|c'), 'a\\&b\\|c');
   assert.strictEqual(escapeAdbText("it's \"quoted\""), 'it\\\'s%s\\"quoted\\"');
+});
+
+// --- keep-awake + wake -----------------------------------------------------
+
+test('keepAwake issues svc power stayon true', async () => {
+  const exec = stubExec();
+  const d = new AndroidDriver({ exec });
+  await d.keepAwake();
+  assert.deepStrictEqual(exec.calls[0].args, ['shell', 'svc', 'power', 'stayon', 'true']);
+});
+
+test('wake sends KEYCODE_WAKEUP then best-effort dismiss-keyguard', async () => {
+  const exec = stubExec();
+  const d = new AndroidDriver({ exec });
+  await d.wake();
+  assert.deepStrictEqual(exec.calls[0].args, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP']);
+  assert.deepStrictEqual(exec.calls[1].args, ['shell', 'wm', 'dismiss-keyguard']);
+});
+
+test('screenshot wakes once and retries on an empty capture, then returns bytes', async () => {
+  let shots = 0;
+  const calls = [];
+  const exec = async (_cmd, args) => {
+    calls.push(args);
+    if (args.includes('screencap')) {
+      shots += 1;
+      return { stdout: shots === 1 ? Buffer.alloc(0) : Buffer.from('PNG'), stderr: Buffer.alloc(0) };
+    }
+    return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+  };
+  const d = new AndroidDriver({ exec });
+  const shot = await d.screenshot();
+  assert.strictEqual(shot.data.toString(), 'PNG');
+  assert.ok(calls.some((a) => a.includes('KEYCODE_WAKEUP')), 'should have woken the phone');
+  assert.strictEqual(calls.filter((a) => a.includes('screencap')).length, 2);
+});
+
+test('screenshot still throws "screen locked" when waking does not help', async () => {
+  const exec = async () => ({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) });
+  const d = new AndroidDriver({ exec });
+  await assert.rejects(() => d.screenshot(), /screen locked/);
+});
+
+// --- dumpUi + parseUiXml ---------------------------------------------------
+
+test('dumpUi runs uiautomator dump, cats the file, and parses the tree', async () => {
+  const xml =
+    '<hierarchy rotation="0"><node text="hi" resource-id="com.x:id/a" ' +
+    'class="android.widget.TextView" content-desc="" clickable="true" selected="false" ' +
+    'bounds="[0,0][100,50]"/></hierarchy>';
+  const calls = [];
+  const exec = async (_cmd, args) => {
+    calls.push(args);
+    if (args.includes('cat')) return { stdout: Buffer.from(xml), stderr: Buffer.alloc(0) };
+    return { stdout: Buffer.from('UI hierchary dumped to: /sdcard/window_dump.xml'), stderr: Buffer.alloc(0) };
+  };
+  const d = new AndroidDriver({ exec });
+  const els = await d.dumpUi();
+  assert.deepStrictEqual(calls[0], ['shell', 'uiautomator', 'dump', '/sdcard/window_dump.xml']);
+  assert.deepStrictEqual(els, [
+    { rid: 'com.x:id/a', cls: 'android.widget.TextView', text: 'hi', desc: '', clickable: true, selected: false, bounds: { x: 0, y: 0, w: 100, h: 50 } },
+  ]);
+});
+
+test('parseUiXml decodes entities, computes w/h from bounds, and skips boundless nodes', () => {
+  const xml = [
+    '<hierarchy rotation="0">',
+    '<node index="0" class="android.widget.FrameLayout" bounds="[0,0][1080,2340]">',
+    '<node text="gym &amp; fitness" resource-id="com.instagram.android:id/bio" ',
+    'content-desc="bio" class="android.widget.TextView" clickable="false" selected="false" bounds="[10,20][210,80]"/>',
+    '<node text="" class="android.view.View" clickable="true"/>',
+    '</node></hierarchy>',
+  ].join('');
+  const els = parseUiXml(xml);
+  const bio = els.find((e) => e.rid.endsWith('/bio'));
+  assert.strictEqual(bio.text, 'gym & fitness');
+  assert.deepStrictEqual(bio.bounds, { x: 10, y: 20, w: 200, h: 60 });
+  assert.ok(!els.some((e) => e.cls === 'android.view.View'), 'boundless node is skipped');
+});
+
+// --- auto-reconnect --------------------------------------------------------
+
+test('retries a transient adb failure after an (USB) reconnect', async () => {
+  let firstTap = true;
+  const calls = [];
+  const exec = async (_cmd, args) => {
+    calls.push(args);
+    if (args.includes('tap') && firstTap) {
+      firstTap = false;
+      throw new Error('error: device offline');
+    }
+    return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+  };
+  const d = new AndroidDriver({ exec, reconnectBackoffMs: 0 });
+  await d.tap(5, 5);
+  assert.ok(calls.some((a) => a[0] === 'reconnect'), 'should have issued adb reconnect');
+  assert.strictEqual(calls.filter((a) => a.includes('tap')).length, 2, 'tap retried once');
+});
+
+test('reconnects over Wi-Fi with `adb connect ip:port`', async () => {
+  let failed = false;
+  const calls = [];
+  const exec = async (_cmd, args) => {
+    calls.push(args);
+    if (args.includes('tap') && !failed) {
+      failed = true;
+      throw new Error('cannot connect to 192.168.1.9:5555');
+    }
+    return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+  };
+  const d = new AndroidDriver({ exec, serial: '192.168.1.9:5555', reconnectBackoffMs: 0 });
+  await d.tap(1, 1);
+  assert.deepStrictEqual(calls.find((a) => a[0] === 'connect'), ['connect', '192.168.1.9:5555']);
+});
+
+test('does not retry a non-transient adb error', async () => {
+  let n = 0;
+  const exec = async () => { n += 1; throw new Error('some other failure'); };
+  const d = new AndroidDriver({ exec, reconnectBackoffMs: 0 });
+  await assert.rejects(() => d.tap(1, 1), /some other failure/);
+  assert.strictEqual(n, 1, 'called exactly once, no reconnect/retry');
+});
+
+test('gives up after reconnectRetries transient failures', async () => {
+  const calls = [];
+  const exec = async (_cmd, args) => {
+    calls.push(args);
+    if (args.includes('tap')) throw new Error('device offline');
+    return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+  };
+  const d = new AndroidDriver({ exec, reconnectRetries: 2, reconnectBackoffMs: 0 });
+  await assert.rejects(() => d.tap(1, 1), /device offline/);
+  // initial + 2 retries = 3 taps
+  assert.strictEqual(calls.filter((a) => a.includes('tap')).length, 3);
 });

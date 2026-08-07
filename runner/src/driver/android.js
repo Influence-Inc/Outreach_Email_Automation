@@ -16,6 +16,16 @@
 //                  main activity class name" trick — more robust than hard-
 //                  coding an activity name that IG can rename between releases)
 //   getWindowSize -> adb shell wm size
+//   dumpUi      -> adb shell uiautomator dump + cat        (structured UI tree)
+//   keepAwake   -> adb shell svc power stayon true         (screen never locks)
+//   wake        -> adb shell input keyevent KEYCODE_WAKEUP (+ dismiss keyguard)
+//
+// Reliability: `adb` links drop (a bumped USB cable, a Wi-Fi hiccup) and a
+// locked screen makes `screencap` return nothing. Both used to fail a whole
+// scouting run. Now every adb call goes through _execWithReconnect() which, on a
+// transient transport error, re-establishes the link (Wi-Fi: `adb connect
+// ip:port`; USB: `adb reconnect`) and retries — and screenshot() wakes the phone
+// once before giving up. This is what makes the one-time setup actually stay up.
 //
 // `adb` must be on PATH and the phone connected + authorized (see
 // runner/PHASE_D_CHECKLIST.md). If several devices are attached, pass `serial`
@@ -24,6 +34,16 @@
 const { execFile } = require('child_process');
 const { DeviceDriver } = require('./base');
 const { IG_ANDROID_PACKAGE } = require('../navigator/instagram');
+
+const UI_DUMP_PATH = '/sdcard/window_dump.xml';
+
+// adb errors that mean "the link dropped / device isn't reachable right now" —
+// worth a reconnect + retry. A locked-screen empty screenshot is NOT here: that
+// surfaces after exec succeeds and is handled in screenshot() by waking first.
+const TRANSIENT_ADB =
+  /device (?:offline|not found|unauthorized)|no devices\/?|error: closed|protocol fault|cannot connect|connection reset|device still (?:authorizing|connecting)|adb: device offline/i;
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // Injectable for tests (see android.test.js) — real usage leaves this as the
 // actual child_process.execFile, returning { stdout, stderr } as Buffers so
@@ -53,23 +73,144 @@ function escapeAdbText(text) {
     .replace(/ /g, '%s');
 }
 
+// Minimal XML entity decode for the text/content-desc attributes a UI dump
+// carries (captions and bios routinely contain & < > " ').
+function xmlUnescape(s) {
+  return String(s || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)));
+}
+
+// Parse a `uiautomator dump` XML into the flat element array the backend screen
+// reader consumes: [{ rid, cls, text, desc, clickable, selected, bounds:{x,y,w,h} }].
+// Nodes without a real bounds box are dropped (nothing to tap / read). Pure +
+// exported so it's unit-testable without a phone.
+function parseUiXml(xml) {
+  const out = [];
+  const nodeRe = /<node\b([^>]*?)\/?>/g;
+  const attrRe = /([\w:-]+)="([^"]*)"/g;
+  let m;
+  while ((m = nodeRe.exec(xml))) {
+    const attrs = {};
+    let a;
+    while ((a = attrRe.exec(m[1]))) attrs[a[1]] = a[2];
+    const b = attrs.bounds && attrs.bounds.match(/\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/);
+    if (!b) continue;
+    const x1 = Number(b[1]);
+    const y1 = Number(b[2]);
+    const x2 = Number(b[3]);
+    const y2 = Number(b[4]);
+    out.push({
+      rid: attrs['resource-id'] || '',
+      cls: attrs.class || '',
+      text: xmlUnescape(attrs.text || ''),
+      desc: xmlUnescape(attrs['content-desc'] || ''),
+      clickable: attrs.clickable === 'true',
+      selected: attrs.selected === 'true',
+      bounds: { x: x1, y: y1, w: x2 - x1, h: y2 - y1 },
+    });
+  }
+  return out;
+}
+
 class AndroidDriver extends DeviceDriver {
-  constructor({ serial = null, adbPath = 'adb', exec = defaultExec } = {}) {
+  constructor({
+    serial = null,
+    adbPath = 'adb',
+    exec = defaultExec,
+    mode = 'usb',
+    reconnectRetries = 3,
+    reconnectBackoffMs = 1000,
+    wakeOnEmpty = true,
+  } = {}) {
     super();
     this.serial = serial;
     this.adbPath = adbPath;
     this._exec = exec;
+    // Wi-Fi debugging shows up as an `ip:port` serial; treat that as Wi-Fi even
+    // if the caller didn't say so, since reconnect differs (adb connect vs reconnect).
+    this.isWifi = mode === 'wifi' || /:\d+$/.test(String(serial || ''));
+    this.reconnectRetries = Math.max(0, Number(reconnectRetries) || 0);
+    this.reconnectBackoffMs = Math.max(0, Number(reconnectBackoffMs) || 0);
+    this.wakeOnEmpty = wakeOnEmpty !== false;
+    this._reconnecting = false;
+  }
+
+  _isTransient(err) {
+    const hay = `${(err && err.message) || ''}\n${(err && err.stderr && err.stderr.toString()) || ''}`;
+    return TRANSIENT_ADB.test(hay);
+  }
+
+  // Re-establish the adb link. Best-effort: a failed reconnect attempt just
+  // means the following command retry fails too and we move to the next attempt.
+  async _reconnect(attempt) {
+    if (this.reconnectBackoffMs) await sleep(this.reconnectBackoffMs * attempt);
+    try {
+      if (this.isWifi && this.serial) {
+        // Wireless debugging: reconnect to the phone's ip:port.
+        await this._exec(this.adbPath, ['connect', this.serial]);
+      } else {
+        // USB: reset the host<->device connection for offline devices.
+        await this._exec(this.adbPath, this.serial ? ['-s', this.serial, 'reconnect'] : ['reconnect']);
+      }
+    } catch (_) {
+      /* ignore — the command retry below is the real signal */
+    }
+  }
+
+  // Run one adb invocation, transparently reconnecting + retrying on a transient
+  // transport error. The happy path is a single _exec call (identical args), so
+  // nothing here changes normal behavior — reconnect only kicks in on failure.
+  async _execWithReconnect(full) {
+    try {
+      return await this._exec(this.adbPath, full);
+    } catch (err) {
+      if (this._reconnecting || !this.reconnectRetries || !this._isTransient(err)) throw err;
+      this._reconnecting = true;
+      try {
+        for (let attempt = 1; attempt <= this.reconnectRetries; attempt += 1) {
+          await this._reconnect(attempt);
+          try {
+            return await this._exec(this.adbPath, full);
+          } catch (retryErr) {
+            if (attempt === this.reconnectRetries || !this._isTransient(retryErr)) throw retryErr;
+          }
+        }
+        throw err;
+      } finally {
+        this._reconnecting = false;
+      }
+    }
   }
 
   // Every adb invocation is prefixed with `-s <serial>` when one was given, so
   // commands target the right phone when several are attached to the host.
   async _adb(args) {
     const full = this.serial ? ['-s', this.serial, ...args] : args;
-    return this._exec(this.adbPath, full);
+    return this._execWithReconnect(full);
+  }
+
+  // Establish the Wi-Fi link up front (no-op on USB). Safe to call repeatedly.
+  async connect() {
+    if (this.isWifi && this.serial) {
+      try { await this._exec(this.adbPath, ['connect', this.serial]); }
+      catch (_) { /* preflight / first real command surfaces a hard failure */ }
+    }
   }
 
   async screenshot() {
-    const { stdout } = await this._adb(['exec-out', 'screencap', '-p']);
+    let { stdout } = await this._adb(['exec-out', 'screencap', '-p']);
+    // A locked / asleep screen returns no bytes. Wake once and retry before
+    // declaring the screen locked — keeps a long run alive across screen-offs.
+    if ((!stdout || !stdout.length) && this.wakeOnEmpty) {
+      await this.wake().catch(() => {});
+      ({ stdout } = await this._adb(['exec-out', 'screencap', '-p']));
+    }
     if (!stdout || !stdout.length) throw new Error('adb screencap returned no data — is the screen locked?');
     return { data: stdout, mediaType: 'image/png' };
   }
@@ -102,6 +243,29 @@ class AndroidDriver extends DeviceDriver {
     await this._adb(['shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1']);
   }
 
+  // Keep the screen on while the phone is charging/plugged so a long standing
+  // run never hits a locked screen mid-scout. Best-effort — some ROMs ignore it,
+  // which is why screenshot() also wakes on an empty capture.
+  async keepAwake() {
+    await this._adb(['shell', 'svc', 'power', 'stayon', 'true']);
+  }
+
+  // Wake the display and best-effort dismiss a non-secure keyguard so taps land.
+  async wake() {
+    await this._adb(['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP']);
+    try { await this._adb(['shell', 'wm', 'dismiss-keyguard']); }
+    catch (_) { /* not available on every device / secured lock screens */ }
+  }
+
+  // Dump the current screen's accessibility/UI tree and return it parsed. The
+  // backend screen reader turns this into {screen, targets, ...} — exact tap
+  // coordinates from real element bounds, no pixel-guessing.
+  async dumpUi() {
+    await this._adb(['shell', 'uiautomator', 'dump', UI_DUMP_PATH]);
+    const { stdout } = await this._adb(['exec-out', 'cat', UI_DUMP_PATH]);
+    return parseUiXml(stdout.toString('utf8'));
+  }
+
   async close() {
     // No persistent session to tear down — each command is a fresh adb call.
   }
@@ -122,4 +286,4 @@ class AndroidDriver extends DeviceDriver {
   }
 }
 
-module.exports = { AndroidDriver, escapeAdbText };
+module.exports = { AndroidDriver, escapeAdbText, parseUiXml, xmlUnescape };

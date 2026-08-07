@@ -59,14 +59,28 @@ const PATTERNS = [
       'if the host was revoked, mint a new one',
   },
   {
+    match: /cannot connect to|failed to connect to \d/i,
+    reason: 'adb could not reach the phone over Wi-Fi (Wireless debugging).',
+    fix:
+      "confirm the phone's Wireless-debugging IP:port (Developer options → Wireless debugging), " +
+      'set RUNNER_DEVICE_UDID to it, keep the phone on the same network, and re-pair if the port ' +
+      "rotated ('adb pair <ip:pairPort>' then 'adb connect <ip:port>')",
+  },
+  {
+    match: /uiautomator|null root node|could not get idle state/i,
+    reason: 'The Android UI dump (uiautomator) failed — usually a mid-animation or busy screen.',
+    fix:
+      'this is transient; the reader retries and falls back to screen=unknown. If it persists, ' +
+      'wake/unlock the phone and make sure Instagram is in the foreground',
+  },
+  {
     match: /not implemented/i,
     reason:
-      'The vision reader is not implemented for real drivers yet. This is expected on the ' +
-      'first live Track D run — the plan is to build it against real IG screenshots.',
+      'The abstract ScreenReader stub was used for a real run — the Android driver should be ' +
+      'paired with RealScreenReader (server-side interpretation).',
     fix:
-      'capture one screenshot per navigator screen (search results, profile, reels tab) with ' +
-      "'adb exec-out screencap -p > screen-N.png' and share them; see runner/PHASE_D_CHECKLIST.md " +
-      'step 6.',
+      'this indicates a wiring regression in src/index.js (buildDriverAndReader); the android ' +
+      'driver must be constructed with RealScreenReader({ driver, backend }).',
   },
 ];
 

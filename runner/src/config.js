@@ -25,6 +25,14 @@
 //   RUNNER_CONTROL_MS      live-mirror control drain interval, ms (default 1500)
 //   RUNNER_IDLE_POLL_MS    RUNNER_RUN_ID=auto only: wait this long between polls
 //                          when nothing is queued (default 15000)
+//   RUNNER_ADB_MODE        'usb' (default) | 'wifi'. Wi-Fi debugging (Android 11+
+//                          Wireless debugging) connects to an ip:port serial;
+//                          set RUNNER_DEVICE_UDID to that ip:port. Reconnect uses
+//                          `adb connect` for wifi, `adb reconnect` for usb.
+//   RUNNER_ADB_RECONNECT_RETRIES     transient-failure reconnect attempts (default 3)
+//   RUNNER_ADB_RECONNECT_BACKOFF_MS  base backoff between reconnect attempts (default 1000)
+//   RUNNER_KEEP_AWAKE      'on' (default) keeps the screen on for the run so a
+//                          locked screen never breaks capture; 'off' to disable.
 
 function loadConfig(env = process.env) {
   const backend = (env.RUNNER_BACKEND_URL || '').replace(/\/$/, '');
@@ -36,6 +44,10 @@ function loadConfig(env = process.env) {
     runMode: rawRunId === 'auto' ? 'auto' : 'fixed',
     driver: env.RUNNER_DRIVER || 'mock',
     deviceUdid: env.RUNNER_DEVICE_UDID || null,
+    adbMode: (env.RUNNER_ADB_MODE || 'usb').toLowerCase() === 'wifi' ? 'wifi' : 'usb',
+    reconnectRetries: Number(env.RUNNER_ADB_RECONNECT_RETRIES || 3),
+    reconnectBackoffMs: Number(env.RUNNER_ADB_RECONNECT_BACKOFF_MS || 1000),
+    keepAwake: String(env.RUNNER_KEEP_AWAKE || 'on').toLowerCase() !== 'off',
     batchSize: Number(env.RUNNER_BATCH_SIZE || 5),
     pacingMs: Number(env.RUNNER_PACING_MS || 1800),
     dailyCap: Number(env.RUNNER_DAILY_CAP || 200),
