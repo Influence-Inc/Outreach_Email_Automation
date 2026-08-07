@@ -46,6 +46,23 @@ immediately checks for the next one, forever. Start it once and it keeps working
 for every run an admin queues from the dashboard afterwards, with nothing to
 re-type. Press `Ctrl+C` to stop it.
 
+**Easiest — the guided wizard (recommended):**
+
+```bash
+cd runner
+npm install
+npm run setup            # asks for backend URL + token, USB/Wi-Fi, runs the
+                         # Wi-Fi pair/connect for you, verifies the phone, and
+                         # writes .runnerrc.json so nothing is re-typed later
+npm start                # reads .runnerrc.json
+npm run install-service  # optional: start on boot + restart on crash (one-time setup)
+```
+
+Config precedence: real env vars always override `.runnerrc.json`, so a one-off
+`RUNNER_RUN_ID=42 npm start` still works.
+
+**Or manually with env vars:**
+
 ```bash
 cd runner
 npm install           # no extra packages needed
@@ -53,16 +70,6 @@ npm run start:mock    # exercises the whole pipeline with no phone
 
 # ... or, with a paired Android phone connected over USB:
 RUNNER_DRIVER=android RUNNER_BACKEND_URL=... RUNNER_HOST_TOKEN=... RUNNER_RUN_ID=auto npm start
-```
-
-Tip: export the env vars once in your shell profile (`~/.zshrc` / `~/.bashrc`) so
-future sessions only need `cd runner && npm start`:
-
-```bash
-export RUNNER_DRIVER=android
-export RUNNER_BACKEND_URL=https://deals.influence.technology
-export RUNNER_HOST_TOKEN=<paste your per-host token>
-export RUNNER_RUN_ID=auto
 ```
 
 To drive one specific run and exit (e.g. for a controlled test), set

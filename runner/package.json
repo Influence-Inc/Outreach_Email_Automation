@@ -8,6 +8,9 @@
   "scripts": {
     "start": "node src/index.js",
     "start:mock": "RUNNER_DRIVER=mock node src/index.js",
+    "setup": "node scripts/setup.js",
+    "install-service": "node scripts/install-service.js",
+    "preflight": "node scripts/preflight.js",
     "test": "node --test"
   },
   "dependencies": {}

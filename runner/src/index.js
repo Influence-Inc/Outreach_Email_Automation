@@ -19,9 +19,12 @@
 const { loadConfig, assertConfig } = require('./config');
 const { makeBackend } = require('./backend');
 const { runOnce, runForever } = require('./main');
+const { resolveEnv } = require('./fileConfig');
 
 async function main() {
-  const cfg = loadConfig();
+  // Merge the persisted .runnerrc.json UNDER real env (env wins) so a one-time
+  // `npm run setup` means future runs need nothing re-typed.
+  const cfg = loadConfig(resolveEnv());
   assertConfig(cfg);
 
   // Build the backend client first — the real screen reader needs it (all screen
