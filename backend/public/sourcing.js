@@ -43,6 +43,14 @@ function fmt(n) {
   return String(v);
 }
 
+// Colour the last-seen time by freshness: green < 2 min, amber < 1 h, grey older.
+function seenFreshness(iso) {
+  if (!iso) return '<span class="scout-hint">never</span>';
+  const ageMs = Date.now() - new Date(iso).getTime();
+  const dot = ageMs < 2 * 60 * 1000 ? '#067647' : ageMs < 60 * 60 * 1000 ? '#b25e09' : '#9ca3af';
+  return `<span style="color:${dot}">●</span> ${new Date(iso).toLocaleString()}`;
+}
+
 function numOrUndef(id) {
   const raw = el(id).value;
   if (raw === '' || raw == null) return undefined;
@@ -296,13 +304,16 @@ async function loadHosts() {
     tb.innerHTML = '';
     for (const h of rows) {
       const tr = document.createElement('tr');
-      const seen = h.last_seen_at ? new Date(h.last_seen_at).toLocaleString() : '—';
       const plats = Array.isArray(h.platforms) ? h.platforms.join(', ') : '';
+      const session = h.sessionActive
+        ? `<span class="pill added">● scouting${h.activeRunId ? ` · run #${h.activeRunId}` : ''}</span>`
+        : '<span class="scout-hint">idle</span>';
       tr.innerHTML = `
         <td>${h.label}</td>
         <td>${plats}</td>
         <td><span class="pill ${h.status === 'active' ? 'added' : 'rejected'}">${h.status}</span></td>
-        <td>${seen}</td>
+        <td>${session}</td>
+        <td>${seenFreshness(h.last_seen_at)}</td>
         <td>${h.status === 'active' ? `<button data-host="${h.id}" class="ghost small revoke-host">Revoke</button>` : ''}</td>`;
       tb.appendChild(tr);
     }
@@ -471,3 +482,5 @@ function wire() {
 wire();
 loadCampaigns().then(() => loadReview()).catch((err) => setStatus(err.message, 'err'));
 loadHosts().catch(() => { /* non-fatal if the hosts card fails */ });
+// Keep the host-health tile live (connection freshness + active session).
+setInterval(() => loadHosts().catch(() => {}), 10000);

@@ -623,7 +623,9 @@ CREATE INDEX IF NOT EXISTS idx_sourcing_runs_campaign ON sourcing_runs(campaign_
 CREATE INDEX IF NOT EXISTS idx_sourcing_runs_status ON sourcing_runs(status);
 
 -- Every candidate the host captured for a run, with the scouting-rule verdict.
---   decision: pending | passed | rejected | added   (added = promoted to creators)
+--   decision: pending | review | rejected | added   (added = promoted to creators;
+--             review = borderline AI match held for human approval — free-text
+--             TEXT column, so this value needs no migration)
 -- `reels` holds the recent window as [{views,likes?,comments?,posted_at?,caption?}].
 -- The expression UNIQUE index keeps the same handle from being scouted twice for
 -- one campaign (Instagram handles are case-insensitive).

@@ -84,13 +84,25 @@ router.post('/hosts', async (req, res, next) => {
   }
 });
 
+// Annotate host rows with live health the DB doesn't hold: whether the backend
+// is currently driving a session on this host (and which run). Pure + exported
+// so it's unit-testable. Last-seen freshness is derived client-side from
+// last_seen_at.
+function annotateHostHealth(rows, session = sourcingSession) {
+  return (rows || []).map((h) => ({
+    ...h,
+    sessionActive: session.isActive(h.id),
+    activeRunId: session.activeRunId(h.id),
+  }));
+}
+
 router.get('/hosts', async (_req, res, next) => {
   try {
     const rows = await db.many(
       `SELECT id, label, platforms, status, last_seen_at, created_at
        FROM sourcing_hosts ORDER BY created_at DESC`,
     );
-    res.json(rows);
+    res.json(annotateHostHealth(rows));
   } catch (err) {
     next(err);
   }
@@ -480,8 +492,9 @@ router.get('/hosts/:id/control', requireLiveMirror, requireHostOrSlack, async (r
   }
 });
 
-// Attach the pure helper to the router (which is itself a function, so
-// `app.use('/api/sourcing', sourcing)` still works) so it can be unit-tested.
+// Attach the pure helpers to the router (which is itself a function, so
+// `app.use('/api/sourcing', sourcing)` still works) so they can be unit-tested.
 router.nextRunStatus = nextRunStatus;
+router.annotateHostHealth = annotateHostHealth;
 
 module.exports = router;
