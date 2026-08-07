@@ -176,6 +176,141 @@ test('the Claude-unavailable heuristic reads the new message, not our quoted ema
   assert.strictEqual(result.action, 'declined');
 });
 
+// ── Who wrote it is read from the message, not the address ─────────────────
+//
+// The sending address settles this far less often than it looks: a manager
+// commonly replies from the creator's own inbox, and a creator sometimes writes
+// from a second address. resolveGreeting therefore asks Claude to read the
+// message, and treats the answer as a suggestion that still has to pass the
+// same vetting as every other source.
+
+function fakeJudge(json) {
+  return {
+    messages: {
+      create: async () => ({ content: [{ type: 'text', text: JSON.stringify(json) }] }),
+    },
+  };
+}
+
+async function greetWith(judgeJson, creator, reply) {
+  negotiation._setClient(judgeJson ? fakeJudge(judgeJson) : null);
+  try {
+    return await negotiation.resolveGreeting(creator, reply);
+  } finally {
+    negotiation._setClient(null);
+  }
+}
+
+// Nothing here is legible to a pattern: it comes from Kam's own address, names
+// nobody but Alex, and never says "manager" or uses a third-person pronoun.
+const OPAQUE_MANAGER_REPLY = 'Thanks so much! We will take a look and come back to you on the split by Friday.\n\nBest,\nAlex';
+
+test('Claude promotes a same-address reply to a delegate when it is sure', async () => {
+  const before = negotiation.resolveSalutationFor(kam, OPAQUE_MANAGER_REPLY);
+  assert.strictEqual(before.isDelegate, false, 'patterns alone cannot tell — that is the point');
+
+  const g = await greetWith(
+    { sender_name: 'Alex', wrote_by: 'someone_else', confidence: 'high', why: 'agency "we" voice' },
+    kam,
+    OPAQUE_MANAGER_REPLY,
+  );
+  assert.strictEqual(g.name, 'Alex');
+  assert.strictEqual(g.isDelegate, true);
+});
+
+test('an unsure "someone else" does not flip the email into the third person', async () => {
+  const g = await greetWith(
+    { sender_name: 'Alex', wrote_by: 'someone_else', confidence: 'low', why: 'not clear' },
+    kam,
+    OPAQUE_MANAGER_REPLY,
+  );
+  assert.strictEqual(g.name, 'Alex');
+  assert.strictEqual(g.isDelegate, false, 'a guess must not license third-person phrasing');
+});
+
+test('Claude can demote a false delegate back to the creator, unsure or not', async () => {
+  // "Kam is my brand name, my page is under it" trips the pattern that looks for
+  // the creator being named with a speaking verb.
+  const reply = 'Kam is the name my page runs under. Happy with the structure — I would want 50% upfront.';
+  assert.strictEqual(negotiation.resolveSalutationFor(kam, reply).isDelegate, true);
+
+  const g = await greetWith(
+    { sender_name: 'Kam', wrote_by: 'creator', confidence: 'low', why: 'first-person about their own page' },
+    kam,
+    reply,
+  );
+  assert.strictEqual(g.name, 'Kam');
+  assert.strictEqual(g.isDelegate, false);
+});
+
+test('an unnamed third party is greeted "there", never by the creator name', async () => {
+  const reply = 'Passing this on to the team — we will confirm the split shortly.';
+  const g = await greetWith(
+    { sender_name: null, wrote_by: 'someone_else', confidence: 'high', why: 'writes as the team' },
+    kam,
+    reply,
+  );
+  assert.strictEqual(g.name, 'there');
+  assert.strictEqual(g.isDelegate, true);
+});
+
+test('a name Claude returns gets the same vetting as any other source', async () => {
+  for (const bad of ['Jennifer', 'the manager', 'Influence', 'It looks like a manager wrote this', '']) {
+    const g = await greetWith(
+      { sender_name: bad, wrote_by: 'creator', confidence: 'high', why: 'x' },
+      kam,
+      'Sounds good.',
+    );
+    assert.strictEqual(g.name, 'Kam', `"${bad}" must not become the greeting`);
+  }
+});
+
+test('a short form from Claude resolves to the creator, not a third party', async () => {
+  const kamran = { ...kam, first_name: 'Kamran' };
+  const g = await greetWith(
+    { sender_name: 'Kam', wrote_by: 'creator', confidence: 'high', why: 'signs Kam' },
+    kamran,
+    'Sounds good.\n\n- Kam',
+  );
+  assert.strictEqual(g.name, 'Kam');
+  assert.strictEqual(g.isDelegate, false);
+});
+
+test('with Claude unavailable the deterministic answer stands', async () => {
+  const g = await greetWith(null, kam, KAM_REPLY);
+  assert.deepStrictEqual(
+    { name: g.name, isDelegate: g.isDelegate },
+    { name: 'Kam', isDelegate: false },
+  );
+});
+
+test('a malformed judgement is discarded rather than trusted', async () => {
+  for (const junk of [{ wrote_by: 'maybe' }, { sender_name: 'Alex' }, {}]) {
+    const g = await greetWith(junk, kam, KAM_REPLY);
+    assert.strictEqual(g.name, 'Kam');
+    assert.strictEqual(g.isDelegate, false);
+  }
+});
+
+test('judgeSender is never shown the quoted thread', async () => {
+  let seen = null;
+  negotiation._setClient({
+    messages: {
+      create: async (args) => {
+        seen = args.messages[0].content;
+        return { content: [{ type: 'text', text: '{"sender_name":"Kam","wrote_by":"creator","confidence":"high","why":"x"}' }] };
+      },
+    },
+  });
+  try {
+    await negotiation.resolveGreeting(kam, KAM_REPLY);
+  } finally {
+    negotiation._setClient(null);
+  }
+  assert.ok(seen.includes('$5,000 figure'), 'it should see what they typed');
+  assert.ok(!seen.includes('- Jennifer'), 'it must not see our sign-off from the quoted thread');
+});
+
 test('a real delegate still gets the third-person instruction', async () => {
   const creator = {
     ...kam,

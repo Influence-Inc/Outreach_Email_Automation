@@ -13,7 +13,13 @@
 //   • a poisoned creators.reply_salutation heals instead of repeating forever
 const test = require('node:test');
 const assert = require('node:assert');
-const { resolveSalutation, salutationFor, sanitizeStored, isSamePerson } = require('./salutation');
+const {
+  resolveSalutation,
+  salutationFor,
+  sanitizeStored,
+  isSamePerson,
+  vetGreeting,
+} = require('./salutation');
 
 // The real reply that produced "Hi Jennifer," on an email to the creator Kam:
 // Kam signs off, then his client quotes our whole previous email, which ends
@@ -133,6 +139,77 @@ test('a different sending address is evidence of a delegate', () => {
   });
   assert.strictEqual(r.name, 'Claudia');
   assert.strictEqual(r.isDelegate, true);
+});
+
+// ── The address is a hint, not the answer ──────────────────────────────────
+//
+// Managers routinely reply from the creator's own inbox, and creators sometimes
+// write from a second address — so the sending address decides nothing on its
+// own. negotiation.resolveGreeting layers Claude's read of the message over
+// this; these are the patterns it falls back to when Claude is unavailable.
+
+const sameInbox = { senderEmail: 'kam@gmail.com', creatorEmail: 'kam@gmail.com' };
+
+test('a manager writing from the creator own inbox is still a delegate', () => {
+  const named = resolveSalutation(
+    'Kam',
+    'Thanks for the details. Kam has looked over the structure and he is happy with the figure, but he would want 50% upfront.\n\nBest,\nAlex',
+    sameInbox,
+  );
+  assert.strictEqual(named.name, 'Alex');
+  assert.strictEqual(named.isDelegate, true);
+
+  // …and with pronouns alone, no mention of the creator's name.
+  const pronouns = resolveSalutation(
+    'Kam',
+    'Thanks for sending this over. He is keen on the concept but wants 50% upfront before filming.\n\nBest,\nAlex',
+    sameInbox,
+  );
+  assert.strictEqual(pronouns.isDelegate, true);
+});
+
+test('an unnamed third party on the creator inbox is greeted "there", not by the creator name', () => {
+  const r = resolveSalutation(
+    'Kam',
+    'Kam asked me to get back to you — he is happy with the structure and would like 50% upfront.',
+    sameInbox,
+  );
+  assert.strictEqual(r.name, 'there', 'addressing the manager as the creator is the mistake to avoid');
+  assert.strictEqual(r.isDelegate, true);
+});
+
+test('first-person ownership of the page beats a mismatched sending address', () => {
+  // A creator writing from a second address of their own. Their words claim the
+  // account and the work, so the address mismatch must not make them a delegate.
+  const r = resolveSalutation('Kam', 'Sounds great — I will post it to my audience next week.\n\nBest,\nKam', {
+    senderEmail: 'kam.creates@gmail.com',
+    creatorEmail: 'kam@gmail.com',
+  });
+  assert.strictEqual(r.name, 'Kam');
+  assert.strictEqual(r.isDelegate, false);
+});
+
+test('the reported reply reads as the creator on every signal', () => {
+  const r = resolveSalutation('Kam', KAM_REPLY, sameInbox);
+  assert.strictEqual(r.name, 'Kam');
+  assert.strictEqual(r.isDelegate, false);
+});
+
+// ── Vetting a name proposed by Claude ──────────────────────────────────────
+
+test('vetGreeting rejects our own identity, role words and whole sentences', () => {
+  assert.strictEqual(vetGreeting('Jennifer', 'Kam'), null);
+  assert.strictEqual(vetGreeting('Influence', 'Kam'), null);
+  assert.strictEqual(vetGreeting('the manager', 'Kam'), null);
+  assert.strictEqual(vetGreeting('It looks like a manager wrote this', 'Kam'), null);
+  assert.strictEqual(vetGreeting('', 'Kam'), null);
+  assert.strictEqual(vetGreeting(null, 'Kam'), null);
+});
+
+test('vetGreeting keeps a real name and folds short forms into the creator', () => {
+  assert.strictEqual(vetGreeting('Alex', 'Kam'), 'Alex');
+  assert.strictEqual(vetGreeting('Kam', 'Kamran'), 'Kam'); // they go by the short form
+  assert.strictEqual(vetGreeting('Anvith', 'Anvith K'), 'Anvith K'); // stored name is fuller
 });
 
 test('the sender-email fallback still names a signature-less third party', () => {

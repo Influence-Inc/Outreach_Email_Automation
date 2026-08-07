@@ -59,6 +59,40 @@ Claude still *sees* the quoted thread on the classify call — the terms already
 discussed are real context — but it arrives under an explicit label saying the
 messages are already-sent, mostly ours.
 
+## Who wrote the reply — the creator, or someone acting for them?
+
+This decides two things: the name in "Hi X," and whether the email talks about
+the creator in the third person ("Kam's happy with the structure") or addresses
+its reader directly. Getting it wrong in the third-person direction is the more
+embarrassing failure, so the whole path is biased against it.
+
+The sending address barely helps — managers routinely reply from the creator's
+own inbox, and creators sometimes write from a second address — so it is only a
+tiebreaker. `negotiation.judgeSender()` asks Claude to read the message and
+answer `{sender_name, wrote_by, confidence, why}`, once per inbound, and the
+answer is cached on `creators.reply_salutation` / `reply_is_delegate` so the
+later offer / contract / follow-up sends reuse it without another call.
+
+The answer is treated as a suggestion, not as trusted output:
+
+- the proposed name goes through `salutation.vetGreeting()` — the same
+  guarantees as every other source, so it can never be our own manager name, a
+  role word, or a whole sentence;
+- **"someone else wrote this"** needs high confidence (or the patterns agreeing)
+  before it flips the email into the third person; **"the creator wrote this"**
+  always stands, because it reads correctly either way;
+- when the writer isn't the creator and named nobody, the greeting is
+  "Hi there," — addressing a manager by the creator's name is the mistake being
+  avoided;
+- no API key, a bad JSON body, or a failed call leaves the deterministic answer
+  in place.
+
+`salutation.judgeSenderHeuristically()` is that fallback: explicit relationship
+statements ("I'm Kam's manager", "my client"), third-person talk about the
+creator ("he'd want 50% upfront", "Kam asked me to reply"), first-person
+ownership of the account or the work ("my page", "I'd be producing the
+content"), and only then the sending address.
+
 ## Feed 1 — Delegate replies (live, per-reply)
 
 When Claude escalates a reply it can't handle, the creator lands in the

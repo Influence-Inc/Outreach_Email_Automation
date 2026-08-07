@@ -232,20 +232,88 @@ function isUnusableName(name, opts) {
   return ourIdentityNames(opts).has(n);
 }
 
-// Positive evidence that someone OTHER than the creator is corresponding, which
-// is what licenses third-person phrasing about the creator. A different name on
-// its own is not evidence — people sign with nicknames, and our own detection
-// can be wrong. We require either an explicit statement of the relationship or
-// a different sending address.
+// ── Is the writer the creator, or someone acting for them? ─────────────────
+//
+// The sending address answers this far less often than it looks: managers
+// routinely reply from the creator's own inbox, and creators sometimes write
+// from a second address. So the address is only a tiebreaker — the decision
+// comes from what the message SAYS about who is speaking.
+//
+// negotiation.js layers a Claude judgement on top of this (see judgeSender);
+// these patterns are the floor it falls back to when Claude is unavailable, and
+// the sanity check on what Claude returns.
+
+// Explicit statements of the relationship. Strongest signal, address-independent.
 const ON_BEHALF_RE = new RegExp(
-  `(?:\\bon behalf of\\b)|(?:\\b(?:i|we)\\s+(?:manage|represent|handle|look after|work with|work for)\\b)|(?:\\b(?:${ROLE_WORD})\\b)`,
+  '(?:\\bon behalf of\\b)' +
+    "|(?:\\b(?:i|we)\\s+(?:am|'m|are|'re)?\\s*(?:manage|manages|managing|represent|represents|handle|handles|look after|looks after|work with|work for)\\b)" +
+    `|(?:\\b(?:my|our)\\s+(?:client|talent|creator|artist|roster)\\b)` +
+    `|(?:\\b(?:${ROLE_WORD})\\b)`,
   'i',
 );
-function hasDelegateEvidence(message, { senderEmail, creatorEmail }) {
+
+// The creator speaking for themselves: first-person ownership of the account,
+// the content, or the fee. "recreating a format that performed well on MY PAGE",
+// "publish it to MY AUDIENCE", "I'd be investing the time to produce it".
+const FIRST_PERSON_OWNERSHIP_RE =
+  /\bmy\s+(?:page|audience|following|followers|content|feed|profile|account|channel|reel|reels|video|videos|post|posts|rate|rates|fee|fees|pricing|price|community|platform|instagram|ig|tiktok|socials?)\b|\bi(?:'?ll|'?d|'?m| will| would| can| am going to| have|'ve)?\s+(?:be\s+|been\s+)?(?:post|publish|creat|shoot|shoot|film|produc|record|upload)\w*\b/i;
+
+// Someone talking ABOUT the creator — a third party's tell, and the only one
+// that still works when they reply from the creator's own inbox.
+// "they" is deliberately absent from the pronoun test: it is the pronoun a
+// careful manager uses for the creator, but also the one a creator uses for the
+// brand or their own team ("they usually want a script"), and a wrong delegate
+// call is the more embarrassing error. Claude's read (negotiation.judgeSender)
+// is what catches the "they" cases; these patterns only need to be right.
+const THIRD_PERSON_RE = [
+  /\b(?:she|he)\s*(?:'s|'d|'ll|'ve)\B|\b(?:she|he)\s+(?:is|was|will|would|can|could|has|have|had|does|did|wants|prefers|charges|posts|likes|loves|needs|said)\b/i,
+  /\b(?:her|his|their)\s+(?:page|audience|following|followers|content|feed|profile|account|channel|rate|rates|fee|fees|schedule|availability|calendar|behalf|side|team)\b/i,
+  /\b(?:asked|wants|wanted|told)\s+me\s+to\b/i,
+  /\b(?:passing|forwarding)\s+(?:this|it)\s+(?:on|along)\s+to\b/i,
+];
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+// "Kam asked me to reply", "Kam is happy with the structure", "Kam's rate is…".
+// People very rarely narrate their OWN name in the body of an email — and the
+// signature is not part of what we scan here, since callers pass the message
+// text and the name has to appear in a speaking-about construction.
+function namesCreatorInThirdPerson(message, creatorFirstName) {
+  const name = firstToken(formatFirstName(creatorFirstName));
+  if (!name || name.length < 2) return false;
+  const re = new RegExp(
+    `\\b${escapeRe(name)}(?:'s)?\\s+(?:asked|wants|wanted|would|will|is|was|has|had|prefers|charges|said|says|mentioned|thinks|loves|likes|needs|rate|rates|fee|page|audience|content|schedule|availability)\\b`,
+    'i',
+  );
+  return re.test(message);
+}
+
+/**
+ * Deterministic read of who is writing. Returns `{ isDelegate, why }`.
+ *
+ * Order matters: an explicit relationship statement or third-person talk about
+ * the creator beats everything (those work from any address), first-person
+ * ownership then vetoes a mere address mismatch (a creator writing from a
+ * second address is still the creator), and only after that does a different
+ * sending address decide.
+ */
+function judgeSenderHeuristically(message, { senderEmail, creatorEmail, creatorFirstName } = {}) {
+  const s = String(message || '');
+  if (ON_BEHALF_RE.test(s)) {
+    return { isDelegate: true, strong: true, why: 'states a representing relationship' };
+  }
+  if (THIRD_PERSON_RE.some((re) => re.test(s)) || namesCreatorInThirdPerson(s, creatorFirstName)) {
+    return { isDelegate: true, strong: true, why: 'talks about the creator in the third person' };
+  }
+  if (FIRST_PERSON_OWNERSHIP_RE.test(s)) {
+    return { isDelegate: false, strong: true, why: 'claims the account/content/fee in the first person' };
+  }
   const senderNorm = bareAddress(senderEmail);
   const creatorNorm = bareAddress(creatorEmail);
-  if (senderNorm && creatorNorm && senderNorm !== creatorNorm) return true;
-  return ON_BEHALF_RE.test(String(message || ''));
+  if (senderNorm && creatorNorm && senderNorm !== creatorNorm) {
+    return { isDelegate: true, strong: false, why: "replied from an address other than the creator's" };
+  }
+  return { isDelegate: false, strong: false, why: 'nothing indicates a third party' };
 }
 
 // ── Resolution ─────────────────────────────────────────────────────────────
@@ -270,6 +338,11 @@ function resolveSalutation(creatorFirstName, inboundText, opts = {}) {
   const creatorToken = firstToken(fullCreatorName);
   const { senderEmail = null, creatorEmail = null } = opts;
   const message = stripQuotedReply(inboundText);
+  const judgement = judgeSenderHeuristically(message, {
+    senderEmail,
+    creatorEmail,
+    creatorFirstName,
+  });
   const creatorResult = (source) => ({
     name: fullCreatorName || 'there',
     isDelegate: false,
@@ -279,10 +352,13 @@ function resolveSalutation(creatorFirstName, inboundText, opts = {}) {
   // 1. A signature or self-introduction in the text they actually typed.
   const sender = detectSenderName(message);
   if (sender) {
-    if (isSamePerson(sender, fullCreatorName)) {
-      // The creator themselves. Greet by the stored name so a multi-word
-      // first_name ("Anvith K") stays intact — unless they signed a SHORTER
-      // form of it ("Kam" for "Kamran"), which is how they want to be called.
+    // Someone signing the creator's own name IS the creator — unless the
+    // message itself says otherwise ("Kam here on behalf of…" is rare, but an
+    // assistant signing the account owner's name is not).
+    if (isSamePerson(sender, fullCreatorName) && !judgement.isDelegate) {
+      // Greet by the stored name so a multi-word first_name ("Anvith K") stays
+      // intact — unless they signed a SHORTER form of it ("Kam" for "Kamran"),
+      // which is how they want to be called.
       const signedShortForm = creatorToken && sender.length < creatorToken.length;
       return {
         name: signedShortForm ? sender : fullCreatorName || sender,
@@ -290,12 +366,8 @@ function resolveSalutation(creatorFirstName, inboundText, opts = {}) {
         source: signedShortForm ? 'signature_short_form' : 'signature_creator',
       };
     }
-    if (!isUnusableName(sender, opts)) {
-      return {
-        name: sender,
-        isDelegate: hasDelegateEvidence(message, { senderEmail, creatorEmail }),
-        source: 'signature',
-      };
+    if (!isUnusableName(sender, opts) && !isSamePerson(sender, fullCreatorName)) {
+      return { name: sender, isDelegate: judgement.isDelegate, source: 'signature' };
     }
     // The only name in the message is ours (the classic case: quoted history we
     // failed to strip) or a filler word — ignore it and keep resolving.
@@ -313,13 +385,52 @@ function resolveSalutation(creatorFirstName, inboundText, opts = {}) {
     if (emailName) {
       if (isSamePerson(emailName, fullCreatorName)) return creatorResult('sender_email_creator');
       if (!isUnusableName(emailName, opts)) {
-        return { name: emailName, isDelegate: true, source: 'sender_email' };
+        return { name: emailName, isDelegate: judgement.isDelegate, source: 'sender_email' };
       }
     }
   }
 
-  // 3. The creator's own stored name, and "there" only when nothing is known.
+  // 3. Nobody named themselves, but the message is plainly written by someone
+  //    else — "Kam asked me to get back to you, he's happy with the structure",
+  //    sent from Kam's own inbox. Greeting them "Hi Kam," would address the
+  //    manager as the creator, which is the exact mistake this module exists to
+  //    stop; "Hi there," is the honest answer, and the delegate flag still gets
+  //    the creator referred to correctly in the body.
+  if (judgement.isDelegate && judgement.strong) {
+    return { name: 'there', isDelegate: true, source: 'unnamed_delegate' };
+  }
+
+  // 4. The creator's own stored name, and "there" only when nothing is known.
   return creatorResult(fullCreatorName ? 'creator' : 'unknown');
+}
+
+/**
+ * Vet a greeting name proposed by something other than this module — today,
+ * Claude's read of who wrote the reply (negotiation.judgeSender).
+ *
+ * Returns the name to use, or null when it should be discarded. The point is
+ * that a model's answer gets exactly the same guarantees the deterministic path
+ * has: it can never be our own name, never a role word or filler, and never a
+ * sentence that happened to come back where a name was asked for.
+ */
+function vetGreeting(name, creatorFirstName, opts = {}) {
+  const raw = String(name == null ? '' : name).trim();
+  if (!raw || raw.length > 40) return null;
+  const formatted = formatFirstName(raw);
+  if (!formatted) return null;
+  const tokens = formatted.split(/\s+/);
+  if (tokens.length > 2) return null; // a name, not a phrase
+  if (isSamePerson(formatted, creatorFirstName)) {
+    // Same rule as the signature path: the stored name wins ("Anvith K" over
+    // "Anvith"), except when they go by a shorter form of it ("Kam"/"Kamran").
+    const full = formatFirstName(creatorFirstName) || formatted;
+    const stored = firstToken(full);
+    const given = firstToken(formatted);
+    return stored && given && given.length < stored.length ? given : full;
+  }
+  if (isUnusableName(tokens[0], opts)) return null;
+  if (ROLE_MAILBOX_LOCALS.has(tokens[0].toLowerCase())) return null;
+  return formatted;
 }
 
 // Back-compat: the greeting name alone.
@@ -353,6 +464,8 @@ module.exports = {
   resolveSalutation,
   salutationFor,
   sanitizeStored,
+  vetGreeting,
+  judgeSenderHeuristically,
   detectSenderName,
   nameFromEmail,
   isSamePerson,

@@ -61,6 +61,7 @@ const {
   nameFromEmail,
   isSamePerson,
   sanitizeStored,
+  vetGreeting,
 } = require('./salutation');
 
 // Identities that are OURS on this creator's thread, so a greeting can never be
@@ -104,17 +105,124 @@ function storedSalutationFor(creator) {
 }
 
 // The greeting for an email we're about to send: the vetted cached value when
-// there is one (the inbound that produced it is often already consumed), else a
-// fresh resolution from whatever inbound text we still have.
-function greetingFor(creator, inboundText) {
-  return storedSalutationFor(creator) || resolveSalutationFor(creator, inboundText);
+// there is one (the inbound that produced it was resolved on arrival and is
+// usually already consumed), else a fresh read of whatever inbound text is
+// still on the row. The cache is what keeps this to at most one extra Claude
+// call per conversation rather than one per send.
+async function greetingFor(creator, inboundText) {
+  return storedSalutationFor(creator) || resolveGreeting(creator, inboundText);
 }
 
-// The same thing shaped as ctxFor() fields, for the call sites that spread it
-// straight into a context object.
+// A resolved greeting shaped as ctxFor() fields, for the call sites that spread
+// it straight into a context object.
+const asGreetingCtx = (g) => ({ salutation: g.name, isDelegate: g.isDelegate });
+// Deterministic-only, for callers that cannot await (and for tests). The send
+// paths use `await resolveGreeting(...)` instead, which reads the message.
 function greetingCtx(creator, inboundText) {
-  const { name, isDelegate } = resolveSalutationFor(creator, inboundText);
-  return { salutation: name, isDelegate };
+  return asGreetingCtx(resolveSalutationFor(creator, inboundText));
+}
+
+// ── Who wrote this reply? ──────────────────────────────────────────────────
+// Ask Claude to read the message and say whether the creator wrote it or
+// somebody acting for them did, and what that person is called.
+//
+// The pattern-matching in ./salutation can only see the shapes we thought to
+// write down, and the signal it leans on hardest — the sending address —
+// answers this less often than it looks: managers routinely reply from the
+// creator's own inbox, and creators sometimes write from a second address. Who
+// is speaking is a reading-comprehension question ("I'd be publishing this to
+// my audience" vs "Kam asked me to get back to you, he's happy with it"), so we
+// ask a reader.
+//
+// Everything about the result is treated as a suggestion, never as trusted
+// output: the name goes through the same vetting as every other source (it can
+// never be our own name, a role word, or a phrase), a claim that the creator
+// didn't write it is ignored when the model is unsure, and any failure — no API
+// key, a bad JSON body, a timeout — leaves the deterministic answer in place.
+// Runs once per inbound; the result is cached on the creator row, so the later
+// offer / contract sends reuse it without another call.
+const SENDER_JUDGE_SYSTEM = [
+  'You identify WHO WROTE an inbound email in an influencer-marketing negotiation. You do not write replies.',
+  'The brand side (us) is corresponding with a creator. The reply may be from the creator themselves, or from a manager, agent, assistant, or agency rep acting for them.',
+  '',
+  'Judge from what the message SAYS, not from the address it came from. A manager very often replies from the creator\'s own inbox, and a creator sometimes writes from a second address — the address is a weak hint, nothing more.',
+  '',
+  'The creator is writing when the message claims the account, the work, or the money in the first person: "my page", "my audience", "I\'d be producing the content", "my rate", "I\'m happy with the figure".',
+  'Somebody else is writing when the message talks ABOUT the creator: third-person pronouns for them ("she\'d post", "his audience"), naming them as a separate party ("Kam asked me to reply", "Kam is happy with the structure"), introducing a relationship ("I\'m Kam\'s manager", "I handle his brand deals", "my client"), or an agency "we" that is not the creator.',
+  'Mixed or unclear signals mean unsure — say so rather than guessing.',
+  '',
+  'Reply with STRICT JSON ONLY (no markdown fences):',
+  '{"sender_name": string|null, "wrote_by": "creator"|"someone_else", "confidence": "high"|"low", "why": string}',
+  '',
+  '- sender_name: the FIRST NAME of the person who wrote it, from their sign-off or self-introduction. null if the message never names them. Never guess, and never take a name from a greeting line — "Hi Jennifer," names the RECIPIENT (us), not the sender.',
+  '- wrote_by: "creator" if the creator themselves wrote it, "someone_else" if anyone else did.',
+  '- confidence: "high" only when the message itself makes it plain.',
+  '- why: one short phrase quoting the wording that decided it.',
+].join('\n');
+
+async function judgeSender(creator, message) {
+  const text = String(message || '').trim();
+  if (!text) return null;
+  const creatorName = formatFirstName(creator.first_name) || '(unknown)';
+  const managerName = process.env.MANAGER_NAME || process.env.SENDER_NAME || 'Jennifer';
+  const user = [
+    `The creator we are negotiating with is "${creatorName}" (${creator.email || 'address unknown'}).`,
+    `We write to them as "${managerName}" — that name in the message is US, never the sender.`,
+    `This reply arrived from: ${creator.latest_inbound_from_email || 'an address we did not capture'}.`,
+    'Quoted earlier messages have already been removed; what follows is only the new text they typed.',
+    '',
+    'MESSAGE:',
+    '"""',
+    text.slice(0, 4000),
+    '"""',
+  ].join('\n');
+  try {
+    const out = parseJsonLoose(await callClaudeText(SENDER_JUDGE_SYSTEM, user, 300));
+    if (!out || (out.wrote_by !== 'creator' && out.wrote_by !== 'someone_else')) return null;
+    return {
+      name: out.sender_name == null ? null : String(out.sender_name),
+      isDelegate: out.wrote_by === 'someone_else',
+      confident: out.confidence === 'high',
+      why: typeof out.why === 'string' ? out.why.slice(0, 200) : '',
+    };
+  } catch (e) {
+    console.warn(`[negotiation] judgeSender failed for creator ${creator.id}: ${e.message}`);
+    return null;
+  }
+}
+
+// The greeting for a reply we are about to write: the deterministic resolution,
+// then Claude's read of the message on top of it.
+//
+// Where they disagree, Claude wins on WHO wrote it — that is the judgement call
+// the patterns can't make — with one asymmetry kept deliberately: demoting a
+// delegate to the creator (second person, safe either way) needs no confidence,
+// while promoting to a delegate (which makes the email discuss its own reader in
+// the third person) needs the model to be sure.
+async function resolveGreeting(creator, inboundText) {
+  const base = resolveSalutationFor(creator, inboundText);
+  const judged = await judgeSender(creator, stripQuotedReply(inboundText));
+  if (!judged) return base;
+
+  // "Someone else wrote this" is the claim that turns the email third-person, so
+  // it needs Claude to be sure — or the deterministic read to agree with it.
+  // "The creator wrote this" reads correctly either way, so it always stands.
+  const isDelegate = judged.isDelegate && (judged.confident || base.isDelegate);
+  const source = `claude:${judged.why || (judged.isDelegate ? 'third party' : 'the creator')}`;
+  const proposed = judged.name
+    ? vetGreeting(judged.name, creator.first_name, ourIdentityOpts(creator))
+    : null;
+
+  if (proposed) return { name: proposed, isDelegate, source };
+
+  // Nobody named themselves. If a third party wrote it, greeting them by the
+  // creator's name would address the wrong person — stay unnamed instead.
+  if (isDelegate) return { name: 'there', isDelegate: true, source };
+  // The creator wrote it: keep whatever name we already had, except the unnamed
+  // placeholder the deterministic path falls back to when IT read a third party.
+  const name =
+    base.source === 'unnamed_delegate' ? formatFirstName(creator.first_name) || 'there' : base.name;
+  return { name, isDelegate: false, source };
 }
 
 // Did the sender explicitly ask to see references / a portfolio / other
@@ -889,7 +997,7 @@ async function buildOfferDraft(creatorId, { offer: rawOffer, instructions = '' }
     getReplyPromptNotes(),
     getReplyPromptOverrides(),
   ]);
-  const greeting = greetingFor(creator, creator.latest_inbound_text);
+  const greeting = await greetingFor(creator, creator.latest_inbound_text);
   const ctx = ctxFor(creator, {
     approvedOffer: offer,
     guidelines,
@@ -992,7 +1100,7 @@ async function buildReplyDraft(creatorId, { instructions = '' } = {}) {
     getReplyPromptNotes(),
     getReplyPromptOverrides(),
   ]);
-  const greeting = greetingFor(
+  const greeting = await greetingFor(
     creator,
     creator.delegate_question || creator.latest_inbound_text,
   );
@@ -1281,7 +1389,7 @@ async function processReply(creatorId) {
   // creator's behalf) and whether they asked to see references. Computed up
   // front so we can persist the salutation — a later offer email (sent at admin
   // approval, after the inbound text has been consumed) reads it back.
-  const greeting = resolveSalutationFor(creator, inbound.text);
+  const greeting = await resolveGreeting(creator, inbound.text);
   console.log(
     `[negotiation] creator ${creator.id}: greeting "${greeting.name}" ` +
       `(source=${greeting.source}, delegate=${greeting.isDelegate})`,
@@ -1893,7 +2001,7 @@ async function handleAcceptedReply(creatorId) {
     guidelines,
     replyNotes,
     replyOverrides,
-    ...greetingCtx(creator, inbound),
+    ...asGreetingCtx(await resolveGreeting(creator, inbound)),
     includeRefs: askedForReferences(inbound),
   });
   const result = await handleCreatorReply(creator, inbound, ctx);
@@ -2010,10 +2118,7 @@ async function surfaceReopenedReply(creatorId) {
       guidelines,
       replyNotes,
       replyOverrides,
-      salutation: salutationFor(creator.first_name, inbound, {
-        senderEmail: creator.latest_inbound_from_email,
-        creatorEmail: creator.email,
-      }),
+      ...asGreetingCtx(await resolveGreeting(creator, inbound)),
       includeRefs: askedForReferences(inbound),
     });
     let result = null;
@@ -2377,7 +2482,7 @@ async function sendApprovedOffer(
   // Greet whoever's been corresponding (a manager may have shared the rate on
   // the creator's behalf). The reply salutation was persisted when the rate
   // came in; fall back to re-parsing any still-present inbound, then the name.
-  const greeting = greetingFor(creator, creator.latest_inbound_text);
+  const greeting = await greetingFor(creator, creator.latest_inbound_text);
   const ctx = ctxFor(creator, {
     approvedOffer: offer,
     guidelines,
@@ -2554,6 +2659,8 @@ module.exports = {
   loadCreator,
   ctxFor,
   greetingCtx,
+  resolveGreeting,
+  judgeSender,
   resolveSalutationFor,
   salutationFor,
   detectSenderName,
