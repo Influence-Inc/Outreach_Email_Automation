@@ -13,6 +13,7 @@
 // circular require.
 
 const db = require('../db');
+const { stripQuotedReply } = require('./emailQuote');
 
 // Messages that get a free-text row in the dashboard's Rate-column timeline:
 // the creator's inbound replies, the manual / delegate replies we send, and our
@@ -78,11 +79,16 @@ async function loadThread(creatorId) {
 // terms from our proposals. Capped to a character budget — when the thread runs
 // long we keep the MOST RECENT messages, since the tail carries the final
 // agreed terms (earlier turns are superseded).
+//
+// Each message is de-quoted first. Bodies are stored exactly as received, so a
+// reply carries a copy of everything before it — which, under a [CREATOR]
+// label, presents OUR proposals as the creator's own words, and burns the
+// character budget re-reading the same thread once per turn.
 function renderTranscript(messages, { maxChars = 8000 } = {}) {
   const turns = (messages || [])
     .map((m) => {
       const who = m.direction === 'inbound' ? 'CREATOR' : 'MANAGER';
-      const body = String(m.body || '').replace(/\r/g, '').trim();
+      const body = stripQuotedReply(String(m.body || '').replace(/\r/g, ''));
       return body ? `[${who}]\n${body}` : '';
     })
     .filter(Boolean);

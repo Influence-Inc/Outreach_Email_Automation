@@ -194,6 +194,16 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_from_email TEXT;
 -- first name here so later emails (e.g. the admin-approved offer, sent after
 -- the inbound text has been consumed) still greet the right person.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS reply_salutation TEXT;
+-- Whether reply_salutation belongs to someone OTHER than the creator, decided
+-- when the reply came in by reading the message (negotiation.judgeSender asks
+-- Claude; services/salutation.js pattern-matches as the fallback). It is what
+-- licenses our emails to talk about the creator in the third person. NOT
+-- inferred from the sending address, which settles this far less often than it
+-- looks — managers routinely reply from the creator's own inbox. Stored rather
+-- than re-derived, because by the time an offer email goes out the inbound is
+-- gone and a name-vs-name comparison would call every short form ("Kam" for
+-- "Kamran") a third party. NULL on rows written before this column existed.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS reply_is_delegate BOOLEAN;
 -- The connected Instantly mailbox that handled the conversation (the webhook's
 -- email_account). Required as `eaccount` when sending a threaded reply via
 -- POST /api/v2/emails/reply.
