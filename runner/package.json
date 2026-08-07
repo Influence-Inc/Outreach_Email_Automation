@@ -11,6 +11,7 @@
     "setup": "node scripts/setup.js",
     "install-service": "node scripts/install-service.js",
     "preflight": "node scripts/preflight.js",
+    "calibrate": "node scripts/calibrate.js",
     "test": "node --test"
   },
   "dependencies": {}

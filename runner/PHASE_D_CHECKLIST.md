@@ -185,18 +185,23 @@ back to a hardware Back or a human take-over via the live mirror, not crash the 
 If candidates come back empty or a tap lands on the wrong thing, confirm the
 reader's signals against the actual app:
 
+**Fastest loop — the offline calibration tool (no backend, no DB):** pipe a dump
+straight through the exact reader the backend runs and see what it makes of the
+screen:
+
 ```bash
-# on a typed search-results screen, then a profile, then the reels tab:
-adb shell uiautomator dump /sdcard/window_dump.xml && adb exec-out cat /sdcard/window_dump.xml
+# on a typed search-results screen, then a profile, then the reels tab / a reel:
+adb shell uiautomator dump /sdcard/d.xml && adb exec-out cat /sdcard/d.xml | npm run calibrate
 ```
 
-Eyeball the `resource-id` / `content-desc` / `text` / `bounds` for the elements
-you expect (search box, result rows, Reels tab, followers count, reel view
-overlays). If a signal in `SIGNALS` or an extractor doesn't match, adjust the
-string(s) in `backend/src/services/screenVision.js` — no navigator or driver
-change needed — and add the real values as a fixture case in
+It prints the screen classification, the tap targets it found (with pixel
+coords), and the captured data. If a target is missing or `screen=unknown`,
+eyeball the `resource-id` / `content-desc` / `text` of the elements you expected
+and adjust the matching string(s) in `SIGNALS` (or an extractor) in
+`backend/src/services/screenVision.js` — no navigator or driver change needed —
+then add the real values as a fixture in
 `backend/src/services/screenVision.test.js` to lock it against future IG drift.
-See `src/vision/PLACEHOLDERS.md` for the full contract + calibration notes.
+See `src/vision/PLACEHOLDERS.md` for the full contract.
 
 ## Step 7 — switch to persistent mode (one-time setup)
 
