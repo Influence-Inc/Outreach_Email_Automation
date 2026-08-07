@@ -9,6 +9,12 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="/styles.css" />
   <style>
+    /* styles.css locks `body` to a fixed 100vh with overflow:hidden — that's
+       correct for the main dashboard, which scrolls internally via its own
+       .main.io-scroll region, but this page is a plain, taller-than-viewport
+       standalone page (no such region), so without this override everything
+       past the first screenful is trapped and unreachable. */
+    body { height: auto; min-height: 100vh; overflow: visible; }
     .scout-wrap { max-width: 1040px; margin: 0 auto; padding: 24px 20px 64px; }
     .scout-grid { display: grid; grid-template-columns: 140px 1fr; gap: 12px 16px; align-items: center; }
     .scout-grid label { font-weight: 600; font-size: 13px; }
