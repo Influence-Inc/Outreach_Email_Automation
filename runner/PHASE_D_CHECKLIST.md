@@ -108,6 +108,10 @@ Note the returned `run.id`.
 
 ## Step 5 — run the runner
 
+For this first controlled test, drive the specific run from step 4 by its id
+(instead of `auto`) so the loop stops after exactly one run — keeps the first
+diagnostic pass tight:
+
 ```bash
 cd runner
 RUNNER_DRIVER=android \
@@ -171,6 +175,31 @@ adb exec-out screencap -p > screen-3-reels-tab.png
 Ship these three PNGs back — with those in hand I'll ship the first real
 `ScreenReader` implementation as a follow-up commit on PR #305 and you re-run
 step 5 with the vision layer live.
+
+## Step 7 — switch to persistent mode (one-time setup)
+
+Once step 5's single controlled run works end-to-end, stop driving runs one at a
+time by id. Switch `RUNNER_RUN_ID` to `auto` and leave the runner running — it
+polls the backend forever, drives whatever run an admin queues from the Scout
+Creators page next, and immediately checks for another when that one finishes:
+
+```bash
+cd runner
+RUNNER_DRIVER=android \
+RUNNER_BACKEND_URL=<backend-url> \
+RUNNER_HOST_TOKEN=sk_...            # from step 3
+RUNNER_RUN_ID=auto \
+RUNNER_PACING_MS=2500 \
+npm start
+```
+
+This is the one-time setup: start it once, leave the terminal/host running, and
+every future run just needs someone to click "Start scouting run" on the
+dashboard — nothing to re-type here. Press `Ctrl+C` to stop it (it finishes the
+step it's on first). If nothing is queued it logs nothing and quietly polls
+again every `RUNNER_IDLE_POLL_MS` (default 15s); once a run lands you'll see the
+same phone activity and `[runner] finished run #<id> ...` line as step 5, then
+the terminal goes back to polling instead of exiting.
 
 ---
 

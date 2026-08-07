@@ -10,6 +10,12 @@ test('loadConfig applies defaults', () => {
   assert.strictEqual(cfg.batchSize, 5);
   assert.strictEqual(cfg.pacingMs, 1800);
   assert.strictEqual(cfg.dailyCap, 200);
+  assert.strictEqual(cfg.idlePollMs, 15000);
+});
+
+test('loadConfig reads RUNNER_IDLE_POLL_MS override', () => {
+  const cfg = loadConfig({ RUNNER_IDLE_POLL_MS: '5000' });
+  assert.strictEqual(cfg.idlePollMs, 5000);
 });
 
 test('loadConfig reads runId + trims trailing slash on backend url', () => {

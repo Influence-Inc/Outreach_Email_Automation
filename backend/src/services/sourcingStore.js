@@ -11,10 +11,18 @@ const { findDuplicateCreator } = require('./duplicateGuard');
 const creatorDb = require('./creatorDb');
 const { insertPendingCreator } = require('./creatorInsert');
 
+// Created as 'queued', matching services/sourcingSweep.js's autoEnqueueRuns —
+// both paths that CREATE a run agree it starts life unclaimed. A run only
+// becomes 'running' once a runner actually claims it (GET /runs/next) or its
+// first candidate batch lands (POST /runs/:id/candidates). That's what makes
+// a persistent runner in RUNNER_RUN_ID=auto mode able to discover a run the
+// instant an admin clicks "Start scouting run" on the dashboard — before this
+// fix, a manually-started run was inserted as 'running' directly, which
+// /runs/next's `WHERE status = 'queued'` claim query could never see.
 async function createRun({ campaignId, config, targetCount, createdBy = null, hostId = null }) {
   return db.one(
     `INSERT INTO sourcing_runs (campaign_id, host_id, config, status, target_count, created_by)
-     VALUES ($1, $2, $3::jsonb, 'running', $4, $5)
+     VALUES ($1, $2, $3::jsonb, 'queued', $4, $5)
      RETURNING *`,
     [campaignId, hostId, JSON.stringify(config), targetCount, createdBy],
   );

@@ -9,10 +9,16 @@
 // Drivers:
 //   RUNNER_DRIVER=mock      in-process fixture (no phone, no extra tools)
 //   RUNNER_DRIVER=android   real Android via adb only (default when unset)
+//
+// RUNNER_RUN_ID=auto is a one-time setup, not a per-run command: instead of
+// driving a single run and exiting, the runner polls the backend forever for
+// the newest queued run, drives it, and immediately checks for the next one.
+// Press Ctrl+C to stop. Fixed RUNNER_RUN_ID=<n> stays one-shot, for controlled
+// single-run testing.
 
 const { loadConfig, assertConfig } = require('./config');
 const { makeBackend } = require('./backend');
-const { runOnce } = require('./main');
+const { runOnce, runForever } = require('./main');
 
 async function main() {
   const cfg = loadConfig();
@@ -20,6 +26,22 @@ async function main() {
 
   const { driver, reader } = await buildDriverAndReader(cfg);
   const backend = makeBackend({ backendUrl: cfg.backendUrl, hostToken: cfg.hostToken });
+
+  if (cfg.runMode === 'auto') {
+    let stopping = false;
+    const stop = (signal) => {
+      if (stopping) return;
+      stopping = true;
+      // eslint-disable-next-line no-console
+      console.log(`\n[runner] ${signal} received — stopping after the current step...`);
+    };
+    process.once('SIGINT', () => stop('SIGINT'));
+    process.once('SIGTERM', () => stop('SIGTERM'));
+    // eslint-disable-next-line no-console
+    console.log('[runner] auto mode: this is a one-time setup — polling for queued runs forever. Press Ctrl+C to stop.');
+    await runForever({ driver, reader, backend, config: cfg, shouldStop: () => stopping });
+    return;
+  }
 
   const { run, capturedToday, idle } = await runOnce({ driver, reader, backend, config: cfg });
   if (idle) {

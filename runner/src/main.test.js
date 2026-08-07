@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { MockDriver } = require('./driver/mock');
 const { MockScreenReader } = require('./navigator/screenReader');
-const { runOnce } = require('./main');
+const { runOnce, runForever } = require('./main');
 
 function twoProfileFixture() {
   const screens = [
@@ -127,4 +127,78 @@ test('runOnce stops early when backend flips run to done', async () => {
     config: { runId: 43, batchSize: 1, pacingMs: 0, dailyCap: 100 },
   });
   assert.strictEqual(capturedToday, 1, 'stops after first captured candidate once run flips done');
+});
+
+// runForever is what makes RUNNER_RUN_ID=auto a one-time setup instead of a
+// per-run command. It's tested against an injected runOnceFn (not the real
+// navigator/driver) so each scenario controls exactly what runOnce "returns"
+// without needing a screen fixture — runOnce itself is already covered above.
+
+test('runForever loops through queued runs back-to-back with no idle sleep between them', async () => {
+  const results = [
+    { run: { id: 1, status: 'done' }, capturedToday: 2 },
+    { run: { id: 2, status: 'done' }, capturedToday: 1 },
+  ];
+  let call = 0;
+  const runOnceFn = async () => results[call++];
+  const sleeps = [];
+  await runForever({
+    driver: {}, reader: {}, backend: {}, config: { idlePollMs: 9999 },
+    runOnceFn,
+    sleepFn: async (ms) => sleeps.push(ms),
+    shouldStop: () => call >= 2,
+  });
+  assert.strictEqual(call, 2);
+  assert.deepStrictEqual(sleeps, [], 'never idled, so never slept');
+});
+
+test('runForever sleeps between idle polls, then stops once work shows up', async () => {
+  let call = 0;
+  const runOnceFn = async () => {
+    call += 1;
+    if (call < 3) return { run: null, capturedToday: 0, idle: true };
+    return { run: { id: 5, status: 'done' }, capturedToday: 1 };
+  };
+  const sleeps = [];
+  await runForever({
+    driver: {}, reader: {}, backend: {}, config: { idlePollMs: 5000 },
+    runOnceFn,
+    sleepFn: async (ms) => sleeps.push(ms),
+    shouldStop: () => call >= 3,
+  });
+  assert.strictEqual(call, 3);
+  assert.deepStrictEqual(sleeps, [5000, 5000]);
+});
+
+test('runForever survives an unexpected runOnce error and keeps polling', async () => {
+  let call = 0;
+  const runOnceFn = async () => {
+    call += 1;
+    if (call === 1) throw new Error('connect ECONNREFUSED 127.0.0.1:3000');
+    return { run: { id: 9, status: 'done' }, capturedToday: 0 };
+  };
+  const lines = [];
+  const logger = { log: (m) => lines.push(m), error: (m) => lines.push(m) };
+  const sleeps = [];
+  await runForever({
+    driver: {}, reader: {}, backend: {}, config: { idlePollMs: 1500 },
+    runOnceFn,
+    logger,
+    sleepFn: async (ms) => sleeps.push(ms),
+    shouldStop: () => call >= 2,
+  });
+  assert.strictEqual(call, 2, 'the loop continues past the thrown error instead of crashing');
+  assert.deepStrictEqual(sleeps, [1500]);
+  assert.ok(lines.some((l) => /FATAL/.test(l)), 'the error is diagnosed via printDiagnostic');
+});
+
+test('runForever never calls runOnce when already told to stop', async () => {
+  let call = 0;
+  const runOnceFn = async () => { call += 1; return { run: null, idle: true, capturedToday: 0 }; };
+  await runForever({
+    driver: {}, reader: {}, backend: {}, config: {},
+    runOnceFn,
+    shouldStop: () => true,
+  });
+  assert.strictEqual(call, 0);
 });
