@@ -973,6 +973,14 @@ function parseViewsInput(s) {
   return Number.isFinite(n) ? Math.round(n) : null;
 }
 
+// Parse a human "dollar amount" input ("$200", "1,500", "200 usd") into a whole
+// number of dollars, or null for blank/zero. Used by the performance-bonus
+// amount field on a video+bonus deal.
+function parseMoneyInput(s) {
+  const n = Number(String(s == null ? '' : s).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
 // Parse a human "extra points" input into a clean list of terms. Points are
 // separated by a new line or a semicolon — NOT a comma, since a single term
 // may itself contain commas ("2 revisions, at no extra cost"). Blank yields an
@@ -1025,11 +1033,18 @@ function renderEditableDeal(cell, r, data) {
   cell.appendChild(hint);
 
   const isViewBased = data.offerType === 'view_based';
-  // Offer-type toggle: flips View-based ↔ Video-based when the extraction
-  // shaped the wrong kind of deal. Also rewrites the deliverables text, the
-  // label chip, and the video count in a single PATCH — the paired fields
-  // stay consistent so the contract page and the Deals column re-render as
-  // one shape.
+  const isVideoBonus = data.offerType === 'video_bonus';
+  // Offer-type toggle: cycles View-based → Video-based → Video + bonus when the
+  // extraction shaped the wrong kind of deal (or to add a performance bonus).
+  // Each click rewrites the deliverables text, the label chip, the video count,
+  // and clears/keeps the paired view-floor & bonus fields in a single PATCH —
+  // so the contract page and the Deals column re-render as one consistent shape.
+  const TYPE_CYCLE = ['view_based', 'video_based', 'video_bonus'];
+  const TYPE_LABELS = { view_based: 'View-based', video_based: 'Video-based', video_bonus: 'Video + bonus' };
+  // Legacy deals carry no offerType and render as video-based, so fall back to
+  // that for anything not one of the three known shapes.
+  const currentType = TYPE_CYCLE.indexOf(data.offerType) >= 0 ? data.offerType : 'video_based';
+  const nextType = TYPE_CYCLE[(TYPE_CYCLE.indexOf(currentType) + 1) % TYPE_CYCLE.length];
   const typeLine = document.createElement('div');
   typeLine.className = 'deal-line';
   const typeTag = document.createElement('span');
@@ -1037,12 +1052,12 @@ function renderEditableDeal(cell, r, data) {
   typeTag.textContent = 'TYPE';
   const typeVal = document.createElement('span');
   typeVal.className = 'deal-val deal-toggle';
-  typeVal.textContent = isViewBased ? 'View-based' : 'Video-based';
-  typeVal.classList.toggle('on', !isViewBased);
-  typeVal.title = 'Click to switch the deal shape (view-based ↔ video-based)';
+  typeVal.textContent = TYPE_LABELS[currentType];
+  typeVal.classList.toggle('on', currentType !== 'view_based');
+  typeVal.title = 'Click to cycle the deal shape (view-based → video-based → video + bonus)';
   typeVal.onclick = async () => {
     try {
-      await saveContractField(r, { offerType: isViewBased ? 'video_based' : 'view_based' });
+      await saveContractField(r, { offerType: nextType });
     } catch (err) {
       toast(err.message);
     }
@@ -1142,7 +1157,27 @@ function renderEditableDeal(cell, r, data) {
 
   const bonusAmt = data.bonusAmount != null ? Number(data.bonusAmount) : null;
   const bonusViews = data.bonusThresholdViews != null ? Number(data.bonusThresholdViews) : null;
-  if (bonusAmt && bonusViews) {
+  if (isVideoBonus) {
+    // On a video+bonus deal the performance bonus is editable: a dollar amount
+    // and the combined-views threshold it unlocks past. The bonus is CARVED
+    // FROM the total fee (base = total − bonus), matching the contract page —
+    // so the RATE above stays the max total. The contract shows the Performance
+    // bonus row once BOTH fields are set; either one blank clears it.
+    appendEditableDealLine(cell, r, {
+      label: 'BONUS $',
+      value: bonusAmt && bonusAmt > 0 ? `$${fmtNum(bonusAmt)}` : '',
+      placeholder: 'e.g. $200 · carved from fee',
+      onSave: (v) => saveContractField(r, { bonusAmount: parseMoneyInput(v) }),
+    });
+    appendEditableDealLine(cell, r, {
+      label: 'BONUS VIEWS',
+      value: bonusViews && bonusViews > 0 ? fmtViews(bonusViews) : '',
+      placeholder: 'e.g. 500k',
+      onSave: (v) => saveContractField(r, { bonusThresholdViews: parseViewsInput(v) }),
+    });
+  } else if (bonusAmt && bonusViews) {
+    // A non-video+bonus deal that still carries bonus fields (legacy data) —
+    // show it read-only; switching the TYPE to Video + bonus makes it editable.
     const bonusLine = document.createElement('div');
     bonusLine.className = 'deal-line';
     const bonusTag = document.createElement('span');
@@ -1158,9 +1193,9 @@ function renderEditableDeal(cell, r, data) {
 
   // View-counting window — for how many days from posting a post's views count
   // toward the deal's guaranteed total / bonus. Editable on any deal WITH a view
-  // requirement: a view-based deal, or a video deal with a views bonus. Shows
-  // the effective value (default 30); clearing it falls back to that default.
-  const hasViewReq = isViewBased || (bonusAmt && bonusViews);
+  // requirement: a view-based deal, or a video+bonus deal. Shows the effective
+  // value (default 30); clearing it falls back to that default.
+  const hasViewReq = isViewBased || isVideoBonus || (bonusAmt && bonusViews);
   if (hasViewReq) {
     const viewDays = data.viewCountingDays != null
       ? Number(data.viewCountingDays)

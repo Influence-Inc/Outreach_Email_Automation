@@ -1012,6 +1012,8 @@ const EDITABLE_CONTRACT_FIELDS = [
   'minTotalViews',
   'minVideos',
   'viewCountingDays',
+  'bonusAmount',
+  'bonusThresholdViews',
   'platforms',
   'postingDeadline',
   'paidAdsIncluded',
@@ -1065,6 +1067,20 @@ function coerceContractPatch(patch, existing = {}) {
   // if one was sent, else default to 1 — the admin can bump it inline after.
   if (has('offerType')) {
     const raw = String(patch.offerType || '').trim().toLowerCase();
+    // The video count to give a video-shaped deal (video_based / video_bonus):
+    // an explicit same-patch numberOfVideos wins; otherwise preserve the count
+    // the contract already carries — so flipping BETWEEN the two video shapes
+    // keeps a 3-video deal at 3 instead of snapping back to 1 — and only when
+    // there's none (e.g. coming from a view-based deal) fall back to 1.
+    const videoCount = () => {
+      const nRaw = has('numberOfVideos') ? patch.numberOfVideos : null;
+      const nParsed = nRaw == null || nRaw === '' ? null : Math.round(Number(nRaw));
+      if (Number.isFinite(nParsed) && nParsed > 0) return nParsed;
+      const priorN = Number(
+        existingData.numberOfVideos != null ? existingData.numberOfVideos : existingData.numberOfDeliverables,
+      );
+      return Number.isFinite(priorN) && priorN > 0 ? priorN : 1;
+    };
     if (raw === 'view_based') {
       out.offerType = 'view_based';
       out.offerLabel = 'View-based deal';
@@ -1073,10 +1089,13 @@ function coerceContractPatch(patch, existing = {}) {
       out.numberOfVideos = null;
       // Cadence is a multi-video rhythm; a view-based deal has none.
       out.timeline = null;
+      // A view-based deal is priced by a guaranteed view total, not a flat
+      // package + performance bonus — drop any bonus carried over from a prior
+      // video+bonus classification so the contract stops promising it.
+      out.bonusAmount = null;
+      out.bonusThresholdViews = null;
     } else if (raw === 'video_based') {
-      const nRaw = has('numberOfVideos') ? patch.numberOfVideos : null;
-      const nParsed = nRaw == null || nRaw === '' ? null : Math.round(Number(nRaw));
-      const n = Number.isFinite(nParsed) && nParsed > 0 ? nParsed : 1;
+      const n = videoCount();
       out.offerType = 'video_based';
       out.offerLabel = 'Video-based deal';
       out.deliverables = deliverablesFor('video_based', n);
@@ -1091,6 +1110,30 @@ function coerceContractPatch(patch, existing = {}) {
       // The optional minimum-video floor is a view-based-only term; a
       // video-based deal already names an exact count, so clear any leftover
       // minimum carried over from a prior view-based classification.
+      out.minVideos = null;
+      // A flat video deal carries no performance bonus — clear any bonus left
+      // over from a prior video+bonus classification.
+      out.bonusAmount = null;
+      out.bonusThresholdViews = null;
+    } else if (raw === 'video_bonus') {
+      // A flat video package PLUS a performance bonus that unlocks once the
+      // combined views cross a threshold. It's a video-shaped deal (named
+      // video count, video deliverables text) like video_based, but keeps its
+      // bonus fields — the admin sets the bonus amount + threshold views in the
+      // dedicated BONUS lines. The bonus is CARVED FROM the total fee (base =
+      // total − bonus), which is exactly how the contract page renders it, so
+      // there's nothing to change about the fee here.
+      const n = videoCount();
+      out.offerType = 'video_bonus';
+      out.offerLabel = 'Video + bonus deal';
+      out.deliverables = deliverablesFor('video_based', n);
+      out.numberOfDeliverables = n;
+      out.numberOfVideos = n;
+      // Like a flat video deal, a video+bonus deal promises no guaranteed view
+      // FLOOR — the view number it carries is the BONUS threshold, not a floor —
+      // so clear any min-views / min-videos left over from a view-based shape.
+      out.minTotalViews = null;
+      out.guaranteedViews = null;
       out.minVideos = null;
     }
   }
@@ -1143,6 +1186,23 @@ function coerceContractPatch(patch, existing = {}) {
     const val = Number.isFinite(n) && n > 0 ? n : null;
     out.viewCountingDays = val;
     out.bonusWindowDays = val != null ? val : DEFAULT_VIEW_COUNTING_DAYS;
+  }
+  if (has('bonusAmount')) {
+    // The performance-bonus dollar amount on a video+bonus deal, CARVED FROM
+    // the total fee (the contract page shows base = total − bonus). Blank / zero
+    // clears it; a positive amount rounds to a whole dollar. The contract only
+    // renders a Performance bonus row once BOTH the amount and the threshold
+    // below are set, so a half-filled bonus simply doesn't show yet.
+    const raw = patch.bonusAmount;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    out.bonusAmount = Number.isFinite(n) && n > 0 ? n : null;
+  }
+  if (has('bonusThresholdViews')) {
+    // The combined-views threshold the bonus unlocks past. Blank / zero clears
+    // it; a positive count rounds to a whole number.
+    const raw = patch.bonusThresholdViews;
+    const n = raw == null || raw === '' ? null : Math.round(Number(raw));
+    out.bonusThresholdViews = Number.isFinite(n) && n > 0 ? n : null;
   }
   if (has('platforms')) {
     const arr = Array.isArray(patch.platforms)

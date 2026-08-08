@@ -276,10 +276,10 @@
       // row below, so it isn't repeated here.
       (isViewBased && minViews
         ? row('View counting window', countingWindowText)
-        : '') +
-      (d.bonusAmount && d.bonusThresholdViews
-        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if total views reach ' + fmtNum(d.bonusThresholdViews) + '. ' + countingWindowText)
         : '')
+      // The performance bonus is a payment term — it renders in full (with the
+      // base / bonus / total breakdown) in the Compensation & Payment section
+      // below, so it's intentionally NOT repeated here.
     ));
 
     // Cadence only makes sense when there's more than one video to pace out.
