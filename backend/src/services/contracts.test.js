@@ -822,6 +822,83 @@ test('combinedAdditionalTerms merges extracted + manual points, de-duplicated', 
   assert.deepStrictEqual(contracts.combinedAdditionalTerms(null), []);
 });
 
+test('isAutoSuppressedTerm flags the two standing perks (and paraphrases), leaves real terms', () => {
+  // The two standing perks pitched in every template — must never auto-appear.
+  const suppressed = [
+    'No paid ad rights required — organic use only',
+    'Full creative freedom — no overly promotional feel',
+    'Full creative freedom',
+    'Organic use only',
+    'No paid ad rights required',
+    'Content is for organic use only, no paid ads',
+    "Creative freedom — content shouldn't feel like an ad",
+    'No overly promotional feel',
+  ];
+  for (const t of suppressed) {
+    assert.ok(contracts.isAutoSuppressedTerm(t), `should suppress: ${t}`);
+  }
+  // Genuinely campaign-specific negotiated terms — including "No exclusivity
+  // required", which the team did NOT ask to hide — are left untouched.
+  const kept = [
+    'No exclusivity required',
+    'Deal is capped at a maximum of three videos across Instagram and TikTok',
+    "Views are counted over 7 days from each post's publish date",
+    'TikTok views count toward the 400,000 combined threshold only if that post exceeds 75,000 views',
+    'Any posts beyond the initial three videos require mutual agreement',
+    'Whitelisting 30 days',
+    '',
+    null,
+  ];
+  for (const t of kept) {
+    assert.ok(!contracts.isAutoSuppressedTerm(t), `should keep: ${JSON.stringify(t)}`);
+  }
+});
+
+test('combinedAdditionalTerms strips the standing perks from EXTRACTED terms but keeps hand-added ones', () => {
+  // Extraction echoes the standing perks back into additionalTerms — they are
+  // dropped automatically, while the surrounding campaign-specific terms stay.
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({
+      additionalTerms: [
+        'No exclusivity required',
+        'No paid ad rights required — organic use only',
+        'Full creative freedom — no overly promotional feel',
+        'Views are counted over 7 days from each post',
+      ],
+    }),
+    ['No exclusivity required', 'Views are counted over 7 days from each post'],
+  );
+  // But when the team adds a perk BY HAND from the Deals-column "Extra" field
+  // (manualTerms), it is shown — the suppression never touches manual points.
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({
+      additionalTerms: ['Full creative freedom — no overly promotional feel'],
+      manualTerms: ['Full creative freedom — no overly promotional feel'],
+    }),
+    ['Full creative freedom — no overly promotional feel'],
+  );
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({
+      manualTerms: ['No paid ad rights required — organic use only'],
+    }),
+    ['No paid ad rights required — organic use only'],
+  );
+});
+
+test('stripAutoSuppressedTerms drops only the standing perks from a list', () => {
+  assert.deepStrictEqual(
+    contracts.stripAutoSuppressedTerms([
+      'Whitelisting 30 days',
+      'Full creative freedom',
+      'Organic use only',
+      'No exclusivity required',
+    ]),
+    ['Whitelisting 30 days', 'No exclusivity required'],
+  );
+  assert.deepStrictEqual(contracts.stripAutoSuppressedTerms([]), []);
+  assert.deepStrictEqual(contracts.stripAutoSuppressedTerms(null), []);
+});
+
 test('coerceContractPatch: empty patch yields no changes', () => {
   assert.deepStrictEqual(contracts.coerceContractPatch({}), {});
 });

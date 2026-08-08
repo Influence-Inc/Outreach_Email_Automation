@@ -436,6 +436,45 @@ function baseContractData(creator, fee, offer) {
   };
 }
 
+// Two of the deal's STANDING PERKS are pitched in every outreach + negotiation
+// template (see negotiationTemplates.js) and restated by usageRightsFor's
+// "Organic only" wording, so the free-form thread extraction reliably echoes
+// them straight back into additionalTerms:
+//   • "Full creative freedom — no overly promotional feel"
+//   • "No paid ad rights required — organic use only"
+// Neither is a campaign-specific negotiated point, and the ad-rights line merely
+// duplicates the contract's own "Paid ads" / "Usage rights" rows. Per the team's
+// standing rule they must NEVER surface automatically — they belong under
+// Additional Terms ONLY when someone types them into the Deals-column "Extra"
+// field by hand (manualTerms), which this predicate is never applied to. Matches
+// the two CONCEPTS (not just the exact phrasings) since the extraction
+// paraphrases, but stays deliberately narrow so genuinely different negotiated
+// terms — "No exclusivity required" included — are left untouched.
+function isAutoSuppressedTerm(term) {
+  const s = String(term == null ? '' : term).toLowerCase();
+  if (!s.trim()) return false;
+  // "No paid ad rights required — organic use only" and close paraphrases: an
+  // ad-rights / paid-ads reference framed as not-required, or an organic-only
+  // usage statement.
+  const mentionsAdRights = /\b(?:paid )?ad(?:vertising)? rights?\b|\bpaid ads?\b/.test(s);
+  const negated = /\b(?:no|not|without|only|organic)\b/.test(s);
+  const organicOnly = /\borganic\b[^.]*\bonly\b|\borganic use\b/.test(s);
+  if ((mentionsAdRights && negated) || organicOnly) return true;
+  // "Full creative freedom — no overly promotional feel" and close paraphrases.
+  if (/\bcreative freedom\b/.test(s)) return true;
+  if (/\boverly promotional\b|\bpromotional feel\b|\bfeel(?:ing)? like an ad\b/.test(s)) return true;
+  return false;
+}
+
+// Drop the auto-suppressed standing-perk terms (see isAutoSuppressedTerm) from a
+// list of EXTRACTION-derived additional terms. Only ever applied to the
+// thread-extracted additionalTerms — never to the hand-entered manualTerms — so
+// the team can still add either perk explicitly from the Deals-column "Extra"
+// field.
+function stripAutoSuppressedTerms(terms) {
+  return (Array.isArray(terms) ? terms : []).filter((t) => !isAutoSuppressedTerm(t));
+}
+
 // The full list of extra points shown under the contract's "Additional Terms"
 // section: the terms the extraction pulled from the email thread
 // (additionalTerms) PLUS the points the team added by hand from the Deals
@@ -444,6 +483,11 @@ function baseContractData(creator, fee, offer) {
 // the read/sync boundary. Each entry is trimmed, blanks are dropped, and the
 // lists are de-duplicated case-insensitively with the extracted terms kept
 // first (a manual point that merely restates an extracted one won't double up).
+//
+// The auto-suppressed standing perks (isAutoSuppressedTerm) are stripped from
+// the EXTRACTED terms here too — a defence for contracts stored before the
+// extraction began filtering them — while the hand-added manual points pass
+// through untouched, so the team's explicit "Extra" additions always show.
 function combinedAdditionalTerms(data) {
   const norm = (arr) =>
     (Array.isArray(arr) ? arr : [])
@@ -451,7 +495,9 @@ function combinedAdditionalTerms(data) {
       .filter(Boolean);
   const out = [];
   const seen = new Set();
-  for (const t of [...norm(data && data.additionalTerms), ...norm(data && data.manualTerms)]) {
+  const extracted = stripAutoSuppressedTerms(norm(data && data.additionalTerms));
+  const manual = norm(data && data.manualTerms);
+  for (const t of [...extracted, ...manual]) {
     const key = t.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -530,7 +576,8 @@ Rules:
 - "upfrontPercent" / "remainderPercent": leave BOTH null unless the CREATOR explicitly demanded an upfront / advance / deposit payment in the thread. Payment is made in full on completion by default — do NOT invent an upfront split. When the creator did demand it, "upfrontPercent" is the portion up front and "remainderPercent" is the balance, and the two sum to 100. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
 - "paymentTerms" is the standard payment-METHOD clause only (e.g. "Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables"). It is NOT the upfront/remainder SCHEDULE — never describe a split here ("50% upfront…", "half now, half on delivery"): the split lives in upfrontPercent/remainderPercent. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
 - If a field is genuinely unknown, use null (or [] for array fields).
-- Put any extra negotiated terms (whitelisting, exclusivity windows, special timelines) into "additionalTerms" as short strings.`;
+- Put any extra negotiated terms (whitelisting, exclusivity windows, special timelines) into "additionalTerms" as short strings.
+- Do NOT put the deal's STANDING PERKS that appear in every pitch into "additionalTerms". Specifically leave out "full creative freedom" / "no overly promotional feel" / "won't feel like an ad", and "no paid ad rights required" / "organic use only" — these are handled by other fields and must never be echoed back as additional terms. Include only genuinely campaign-specific negotiated points.`;
 
 // Extract the campaign-specific contract fields. Merges Claude's structured JSON
 // over the deterministic base so the result is always complete, and never lets a
@@ -667,6 +714,14 @@ async function extractContractData(creator, opts = {}) {
   // completion).
   const hasSchedule = merged.upfrontPercent != null && merged.remainderPercent != null;
   merged.paymentTerms = paymentTermsFor(merged.paymentTermsDays, { hasSchedule });
+  // The deal's two standing perks ("full creative freedom / no overly
+  // promotional feel" and "no paid ad rights required / organic use only") are
+  // pitched in every template, so the extraction keeps echoing them back into
+  // additionalTerms. Per the team's standing rule they must NEVER appear
+  // automatically — only when added by hand from the Deals-column "Extra" field
+  // (manualTerms, a separate field this never touches). Strip them from the
+  // extracted list so the stored contract is clean at the source.
+  merged.additionalTerms = stripAutoSuppressedTerms(merged.additionalTerms);
   return merged;
 }
 
@@ -1482,6 +1537,8 @@ module.exports = {
   extractContractData,
   baseContractData,
   combinedAdditionalTerms,
+  isAutoSuppressedTerm,
+  stripAutoSuppressedTerms,
   createContractForCreator,
   getByToken,
   recordSubmission,
