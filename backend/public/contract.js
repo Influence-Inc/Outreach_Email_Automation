@@ -339,6 +339,19 @@
       row('Posts remain live for', (d.postLiveMonths || 6) + ' months')
     ));
 
+    // Additional terms — any extra points the team added to THIS contract
+    // (extra revisions, a special request, a one-off clause). Rendered as a
+    // bulleted list under its own section, and ONLY when there's at least one
+    // point, so a contract with none shows nothing here.
+    var extraTerms = Array.isArray(d.additionalTerms)
+      ? d.additionalTerms.map(function (t) { return String(t == null ? '' : t).trim(); }).filter(Boolean)
+      : [];
+    if (extraTerms.length) {
+      html += '<div class="section"><h2>Additional Terms</h2><ul class="term-list">' +
+        extraTerms.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') +
+        '</ul></div>';
+    }
+
     $('sections').innerHTML = html;
   }
 

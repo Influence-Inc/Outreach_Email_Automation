@@ -985,6 +985,7 @@ const EDITABLE_CONTRACT_FIELDS = [
   'paidAdsIncluded',
   'exclusivity',
   'upfrontPayment',
+  'additionalTerms',
 ];
 
 // Deliverables strings the base extraction uses; kept identical here so a
@@ -1144,6 +1145,21 @@ function coerceContractPatch(patch, existing = {}) {
       (Number.isFinite(Number(patch.upfrontPayment)) && Number(patch.upfrontPayment) > 0);
     const pct = Number.isFinite(Number(patch.upfrontPercent)) ? Number(patch.upfrontPercent) : undefined;
     Object.assign(out, paymentScheduleFor(wantSplit, pct));
+  }
+  if (has('additionalTerms')) {
+    // Extra points the team adds to THIS contract by hand from the Deals column
+    // (an extra round of revisions, a one-off request, a special clause) — the
+    // manual counterpart to the terms the extraction pulls from the thread.
+    // They render as their own "Additional Terms" section on the contract page.
+    // Accept either an array of points or a single string with points separated
+    // by a newline or a semicolon (NOT a comma — a term may itself contain
+    // commas), and normalise to a clean list of non-empty, trimmed strings. An
+    // empty result is stored as [] so clearing the field removes the section.
+    const raw = patch.additionalTerms;
+    const list = Array.isArray(raw)
+      ? raw
+      : String(raw == null ? '' : raw).split(/[\n;]+/);
+    out.additionalTerms = list.map((t) => String(t == null ? '' : t).trim()).filter(Boolean);
   }
   return out;
 }

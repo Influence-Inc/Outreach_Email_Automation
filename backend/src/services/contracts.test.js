@@ -754,6 +754,30 @@ test('coerceContractPatch: deadline aliases, exclusivity defaults, and unknown k
   assert.ok(!('compensation' in out), 'non-whitelisted fields are ignored');
 });
 
+test('coerceContractPatch: additionalTerms accept a semicolon/newline string or an array', () => {
+  // A single string is split on semicolons and newlines (not commas — a term
+  // may contain commas), trimmed, and emptied entries dropped.
+  assert.deepStrictEqual(
+    contracts.coerceContractPatch({ additionalTerms: 'Extra revision, at no cost; Rush delivery\n' }).additionalTerms,
+    ['Extra revision, at no cost', 'Rush delivery'],
+  );
+  // An array is normalised the same way (trimmed, blanks dropped).
+  assert.deepStrictEqual(
+    contracts.coerceContractPatch({ additionalTerms: [' Whitelisting 30 days ', '', 'Brand tag required'] }).additionalTerms,
+    ['Whitelisting 30 days', 'Brand tag required'],
+  );
+});
+
+test('coerceContractPatch: blank additionalTerms clears the section (stored as [])', () => {
+  // Clearing the field must persist an empty list — a real change, not a no-op —
+  // so the Additional Terms section is removed from the contract page.
+  for (const v of ['', '   ', ';\n;', []]) {
+    const out = contracts.coerceContractPatch({ additionalTerms: v });
+    assert.ok('additionalTerms' in out, `additionalTerms ${JSON.stringify(v)} is written`);
+    assert.deepStrictEqual(out.additionalTerms, [], `additionalTerms ${JSON.stringify(v)} → []`);
+  }
+});
+
 test('coerceContractPatch: empty patch yields no changes', () => {
   assert.deepStrictEqual(contracts.coerceContractPatch({}), {});
 });
