@@ -149,6 +149,23 @@ test('baseContractData surfaces video_bonus offer terms in the contract', () => 
   assert.strictEqual(d.bonusAmount, 750);
   assert.strictEqual(d.bonusThresholdViews, 550000);
   assert.strictEqual(d.bonusWindowDays, 30);
+  // The agreed fee (2500) is the offer's aggregate flat_fee, so the base is
+  // carved out of it (2500 − 750) and the total incl. bonus stays the aggregate.
+  assert.strictEqual(d.compensation, 1750);
+  assert.strictEqual(d.totalPayment, 2500);
+});
+
+test('baseContractData: a video_bonus deal uses the offer base_fee as the guaranteed base', () => {
+  // Panel-built offers carry the split explicitly: base_fee is the guaranteed
+  // base, flat_fee the aggregate. Compensation is the base, total incl. bonus
+  // the aggregate — the base never gets carved a second time.
+  const offer = {
+    offer_type: 'video_bonus', num_videos: 2, flat_fee: 5000, base_fee: 1500,
+    bonus_amount: 3500, bonus_threshold_views: 400000,
+  };
+  const d = contracts.baseContractData({ full_name: 'Sam' }, 5000, offer);
+  assert.strictEqual(d.compensation, 1500);
+  assert.strictEqual(d.totalPayment, 5000);
 });
 
 test('viewCountingDaysOf: only deals with a view requirement carry a window', () => {
@@ -703,6 +720,40 @@ test('coerceContractPatch: agreedFee writes both compensation and totalPayment',
   assert.strictEqual(out.compensation, 1600);
   assert.strictEqual(out.totalPayment, 1600);
   assert.strictEqual(contracts.coerceContractPatch({ agreedFee: 1599.6 }).compensation, 1600);
+});
+
+test('coerceContractPatch: on a video+bonus deal the fee is the base and the bonus is added on top', () => {
+  // The reported bug: an admin set the fee to $1500 on a video+bonus deal with a
+  // $3500 bonus. The old "base = total − bonus" math rendered Compensation as
+  // −$2000. The fee is the GUARANTEED BASE now, so it stands as the compensation
+  // and the total incl. bonus is base + bonus — never negative.
+  const existing = { offerType: 'video_bonus', compensation: 5000, totalPayment: 5000, bonusAmount: 3500, bonusThresholdViews: 400000 };
+  const out = contracts.coerceContractPatch({ agreedFee: '1500' }, existing);
+  assert.strictEqual(out.compensation, 1500, 'the fee is the guaranteed base');
+  assert.strictEqual(out.totalPayment, 5000, 'total incl. bonus = base + bonus');
+});
+
+test('coerceContractPatch: editing the bonus recomputes the total incl. bonus', () => {
+  // Raising the bonus keeps the base and lifts the total to base + bonus.
+  const existing = { offerType: 'video_bonus', compensation: 1500, totalPayment: 5000, bonusThresholdViews: 400000 };
+  const out = contracts.coerceContractPatch({ bonusAmount: '2000' }, existing);
+  assert.strictEqual(out.bonusAmount, 2000);
+  assert.strictEqual(out.compensation, 1500);
+  assert.strictEqual(out.totalPayment, 3500);
+  // Clearing the bonus collapses the total back to the base.
+  const cleared = contracts.coerceContractPatch({ bonusAmount: '' }, existing);
+  assert.strictEqual(cleared.bonusAmount, null);
+  assert.strictEqual(cleared.totalPayment, 1500);
+});
+
+test('coerceContractPatch: flipping a bonus deal to a flat type drops the bonus from the total', () => {
+  // A flat video-based deal carries no bonus, so the total collapses to the base
+  // once the type flips (the flip also nulls the bonus fields).
+  const existing = { offerType: 'video_bonus', compensation: 1500, totalPayment: 5000, bonusAmount: 3500, bonusThresholdViews: 400000 };
+  const out = contracts.coerceContractPatch({ offerType: 'video_based' }, existing);
+  assert.strictEqual(out.bonusAmount, null);
+  assert.strictEqual(out.compensation, 1500);
+  assert.strictEqual(out.totalPayment, 1500, 'no bonus → total equals the base');
 });
 
 test('coerceContractPatch: a blank or invalid agreedFee is ignored (never wipes the fee)', () => {
