@@ -352,8 +352,28 @@
           return String(t == null ? '' : t).trim();
         }).filter(Boolean);
       };
+      // The deal's two standing perks — "full creative freedom / no overly
+      // promotional feel" and "no paid ad rights required / organic use only" —
+      // are pitched in every template, so the thread extraction echoes them into
+      // additionalTerms. They must NEVER show automatically (mirrors
+      // contracts.js isAutoSuppressedTerm; kept in sync by hand since this
+      // browser script can't require the backend module). The hand-added manual
+      // points (the Deals-column "Extra" field) are left untouched, so the team
+      // can still add either perk explicitly.
+      var suppressed = function (t) {
+        var s = String(t == null ? '' : t).toLowerCase();
+        if (!s.trim()) return false;
+        var mentionsAdRights = /\b(?:paid )?ad(?:vertising)? rights?\b|\bpaid ads?\b/.test(s);
+        var negated = /\b(?:no|not|without|only|organic)\b/.test(s);
+        var organicOnly = /\borganic\b[^.]*\bonly\b|\borganic use\b/.test(s);
+        if ((mentionsAdRights && negated) || organicOnly) return true;
+        if (/\bcreative freedom\b/.test(s)) return true;
+        if (/\boverly promotional\b|\bpromotional feel\b|\bfeel(?:ing)? like an ad\b/.test(s)) return true;
+        return false;
+      };
+      var extracted = norm(d.additionalTerms).filter(function (t) { return !suppressed(t); });
       var list = [], seen = {};
-      norm(d.additionalTerms).concat(norm(d.manualTerms)).forEach(function (t) {
+      extracted.concat(norm(d.manualTerms)).forEach(function (t) {
         var key = t.toLowerCase();
         if (seen[key]) return;
         seen[key] = true;
