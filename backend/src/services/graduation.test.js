@@ -24,7 +24,7 @@ const origFetch = campaignsApi.fetchUpstreamCampaigns;
 const ENV_KEYS = [
   'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_WHATSAPP_FROM',
   'IMESSAGE_API_KEY', 'IMESSAGE_FROM_NUMBER',
-  'RESEND_API_KEY', 'CAMPAIGNS_API_TOKEN',
+  'RESEND_API_KEY', 'CAMPAIGNS_API_TOKEN', 'GRADUATION_EMAILS_PAUSED',
 ];
 async function withEnv(overrides, fn) {
   const saved = {};
@@ -204,15 +204,32 @@ test('sendGraduationEmailForCreator skips a creator with no email', async () => 
 
 // --- runGraduationSweep ----------------------------------------------------
 
+test('runGraduationSweep is paused by default (no env override)', async () => {
+  await withEnv({ ...CONFIGURED }, async () => {
+    let fetched = false;
+    campaignsApi.fetchUpstreamCampaigns = async () => {
+      fetched = true;
+      return [];
+    };
+    try {
+      const r = await graduation.runGraduationSweep();
+      assert.strictEqual(r.skipped, 'paused');
+      assert.strictEqual(fetched, false, 'paused sweep must not hit the campaigns API');
+    } finally {
+      restore();
+    }
+  });
+});
+
 test('runGraduationSweep skips when prerequisites are not configured', async () => {
-  await withEnv({}, async () => {
+  await withEnv({ GRADUATION_EMAILS_PAUSED: 'false' }, async () => {
     const r = await graduation.runGraduationSweep();
     assert.strictEqual(r.skipped, 'email_not_configured');
   });
 });
 
 test('runGraduationSweep only emails creators whose deliverables.allComplete is true', async () => {
-  await withEnv(CONFIGURED, async () => {
+  await withEnv({ ...CONFIGURED, GRADUATION_EMAILS_PAUSED: 'false' }, async () => {
     campaignsApi.fetchUpstreamCampaigns = async () => [
       {
         brandName: 'Acme',
