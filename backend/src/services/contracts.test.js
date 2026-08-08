@@ -884,6 +884,72 @@ test('coerceContractPatch: an unknown offerType value is ignored', () => {
   assert.ok(!('deliverables' in out), 'no paired-field rewrite either');
 });
 
+test('coerceContractPatch: offerType flip to video_bonus shapes a video deal that keeps its bonus', () => {
+  // Video + bonus is a flat video package (named count, video deliverables)
+  // PLUS a performance bonus — so it shapes like video_based but does NOT clear
+  // the bonus fields (unlike view/video flips, which drop them).
+  const toBonus = contracts.coerceContractPatch({ offerType: 'video_bonus' });
+  assert.strictEqual(toBonus.offerType, 'video_bonus');
+  assert.strictEqual(toBonus.offerLabel, 'Video + bonus deal');
+  assert.strictEqual(toBonus.numberOfVideos, 1, 'defaults to 1 video when no count is supplied');
+  assert.strictEqual(toBonus.numberOfDeliverables, 1);
+  assert.match(toBonus.deliverables, /1 short-form video\b/);
+  // A video+bonus deal promises no guaranteed view FLOOR (its view number is the
+  // bonus threshold), so the min-views floor and min-videos are cleared.
+  assert.strictEqual(toBonus.minTotalViews, null);
+  assert.strictEqual(toBonus.guaranteedViews, null);
+  assert.strictEqual(toBonus.minVideos, null);
+  // The bonus fields are NOT touched by the flip — the admin sets them next.
+  assert.ok(!('bonusAmount' in toBonus), 'bonus amount is left for the admin to set');
+  assert.ok(!('bonusThresholdViews' in toBonus), 'bonus threshold is left for the admin to set');
+
+  // Same-patch numberOfVideos wins over the 1 default, and the deliverables
+  // text is rewritten to match.
+  const three = contracts.coerceContractPatch({ offerType: 'video_bonus', numberOfVideos: 3 });
+  assert.strictEqual(three.numberOfVideos, 3);
+  assert.match(three.deliverables, /3 short-form videos/);
+});
+
+test('coerceContractPatch: flipping between the two video shapes preserves the video count', () => {
+  // A 3-video flat deal flipped to video+bonus (and back) must keep its count
+  // instead of snapping to 1 — the existing contract's count is the fallback.
+  const toBonus = contracts.coerceContractPatch({ offerType: 'video_bonus' }, { offerType: 'video_based', numberOfVideos: 3 });
+  assert.strictEqual(toBonus.numberOfVideos, 3);
+  assert.match(toBonus.deliverables, /3 short-form videos/);
+  const back = contracts.coerceContractPatch({ offerType: 'video_based' }, { offerType: 'video_bonus', numberOfVideos: 3 });
+  assert.strictEqual(back.numberOfVideos, 3);
+});
+
+test('coerceContractPatch: flipping away from video_bonus clears the bonus fields', () => {
+  // A view-based or flat video-based deal carries no performance bonus, so
+  // switching the type off video+bonus drops any bonus left on the contract.
+  for (const t of ['view_based', 'video_based']) {
+    const out = contracts.coerceContractPatch({ offerType: t });
+    assert.strictEqual(out.bonusAmount, null, `${t} clears bonusAmount`);
+    assert.strictEqual(out.bonusThresholdViews, null, `${t} clears bonusThresholdViews`);
+  }
+});
+
+test('coerceContractPatch: bonusAmount and bonusThresholdViews set positive values and clear on blank/zero', () => {
+  // The frontend parses "$200" / "500k" shorthand before PATCHing, so the
+  // backend receives plain numbers (numeric strings included), like agreedFee.
+  const set = contracts.coerceContractPatch({ bonusAmount: '200', bonusThresholdViews: 500000 });
+  assert.strictEqual(set.bonusAmount, 200);
+  assert.strictEqual(set.bonusThresholdViews, 500000);
+  // Decimals round to whole numbers.
+  assert.strictEqual(contracts.coerceContractPatch({ bonusAmount: 199.6 }).bonusAmount, 200);
+  // Blank / zero / negative → null (no bonus; the contract's Performance bonus
+  // row needs both fields, so clearing either removes it).
+  for (const v of ['', 0, -5]) {
+    assert.strictEqual(contracts.coerceContractPatch({ bonusAmount: v }).bonusAmount, null, `bonusAmount ${JSON.stringify(v)}`);
+    assert.strictEqual(
+      contracts.coerceContractPatch({ bonusThresholdViews: v }).bonusThresholdViews,
+      null,
+      `bonusThresholdViews ${JSON.stringify(v)}`,
+    );
+  }
+});
+
 // ── Post-acceptance term-change detection ───────────────────────────────────
 // No ANTHROPIC_API_KEY in the test env, so changesContractTerms exercises its
 // deterministic keyword fallback here — the same path production falls back to.
