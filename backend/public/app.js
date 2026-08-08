@@ -76,6 +76,118 @@ async function api(path, options = {}) {
 
 function el(id) { return document.getElementById(id); }
 
+// ── In-app dialogs (replace native confirm/alert) ───────────────────────────
+// The browser's confirm()/alert() are suppressible: after a page shows a few
+// native dialogs, Chrome offers a "prevent this page from creating additional
+// dialogs" checkbox. Once ticked, every later confirm() returns false with no
+// prompt and every alert() is swallowed — so confirm-gated buttons (Stop,
+// Delete, Send outreach, …) silently do nothing when clicked, and error
+// feedback disappears. These helpers use our own DOM so nothing the button
+// depends on can be muted by the browser.
+
+// Promise-based confirmation modal, styled like the email/intervention modals.
+// Resolves true on confirm, false on cancel/Escape/backdrop-click. Options:
+//   { title, message, confirmLabel, cancelLabel, danger }
+function confirmDialog(opts = {}) {
+  const {
+    title = 'Are you sure?',
+    message = '',
+    confirmLabel = 'Confirm',
+    cancelLabel = 'Cancel',
+    danger = false,
+  } = opts;
+
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'confirm-modal-backdrop';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'confirm-modal';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'confirm-modal-title';
+    titleEl.textContent = title;
+
+    const msgEl = document.createElement('div');
+    msgEl.className = 'confirm-modal-message';
+    // message may contain newlines (\n) — preserve them as line breaks.
+    msgEl.textContent = message;
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-modal-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'ghost small';
+    cancelBtn.textContent = cancelLabel;
+    const okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.className = danger ? 'btn-danger' : 'btn-primary';
+    okBtn.textContent = confirmLabel;
+    actions.append(cancelBtn, okBtn);
+
+    dialog.append(titleEl);
+    if (message) dialog.append(msgEl);
+    dialog.append(actions);
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+      resolve(result);
+    };
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') done(false);
+      else if (ev.key === 'Enter') { ev.preventDefault(); done(true); }
+    };
+    cancelBtn.addEventListener('click', () => done(false));
+    okBtn.addEventListener('click', () => done(true));
+    backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) done(false); });
+    document.addEventListener('keydown', onKey);
+    // Focus the confirm button so Enter/Space act on it immediately.
+    okBtn.focus();
+  });
+}
+
+// Non-blocking notification, replacing alert(). Stacks in the corner and
+// auto-dismisses. tone: 'error' (default) | 'warn' | 'success' | 'info'.
+let _toastHost = null;
+function toast(message, tone = 'error') {
+  if (!message) return;
+  if (!_toastHost) {
+    _toastHost = document.createElement('div');
+    _toastHost.className = 'toast-host';
+    document.body.appendChild(_toastHost);
+  }
+  const t = document.createElement('div');
+  t.className = `toast toast-${tone}`;
+  t.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+  const text = document.createElement('span');
+  text.className = 'toast-text';
+  text.textContent = String(message);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'toast-close';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.innerHTML = '✕';
+  const dismiss = () => {
+    if (!t.isConnected) return;
+    t.classList.add('leaving');
+    setTimeout(() => t.remove(), 200);
+  };
+  close.addEventListener('click', dismiss);
+  t.append(text, close);
+  _toastHost.appendChild(t);
+  // Errors linger longer than transient warnings/success so they're not missed.
+  const life = tone === 'error' ? 7000 : 4200;
+  setTimeout(dismiss, life);
+}
+
 function fmtDate(s) {
   if (!s) return '';
   return new Date(s).toLocaleString();
@@ -501,7 +613,7 @@ function makeEditable(td, { value, placeholder, onSave, allowEmpty = false }) {
       try {
         await onSave(next);
       } catch (err) {
-        alert(err.message);
+        toast(err.message);
       }
       refreshCreators();
       await refreshCampaigns();
@@ -921,7 +1033,7 @@ function renderEditableDeal(cell, r, data) {
     try {
       await saveContractField(r, { offerType: isViewBased ? 'video_based' : 'view_based' });
     } catch (err) {
-      alert(err.message);
+      toast(err.message);
     }
     await refreshCreators();
     await refreshCampaigns();
@@ -988,7 +1100,7 @@ function renderEditableDeal(cell, r, data) {
     try {
       await saveContractField(r, { paidAdsIncluded: !included });
     } catch (err) {
-      alert(err.message);
+      toast(err.message);
     }
     await refreshCreators();
     await refreshCampaigns();
@@ -1125,7 +1237,7 @@ const STOP_SVG =
 // installed.
 function launchDecideOffer(r, btn) {
   if (!r.instagram_username) {
-    alert('This creator has no Instagram username to open.');
+    toast('This creator has no Instagram username to open.', 'warn');
     return;
   }
   window.postMessage({ type: 'OEA_PING' }, window.location.origin);
@@ -1147,8 +1259,9 @@ function launchDecideOffer(r, btn) {
   setTimeout(() => {
     btn.textContent = prev;
     if (!extensionBridge.ready) {
-      alert(
+      toast(
         'Chrome extension not detected. Load the unpacked extension at chrome://extensions, then reload this page.',
+        'warn',
       );
     }
   }, 1500);
@@ -1236,7 +1349,7 @@ function makeSendIgDmButton(r) {
     try {
       const result = await api(`/api/creators/${r.id}/queue-ig-dm`, { method: 'POST' });
       if (!result || !result.job) {
-        alert('Server returned no job payload — nothing to send.');
+        toast('Server returned no job payload — nothing to send.');
         return;
       }
       // Refresh eagerly so the row already reflects "IG DM queued" while the
@@ -1245,7 +1358,7 @@ function makeSendIgDmButton(r) {
       await refreshCampaigns();
       startExtensionIgDmSend([result.job]);
     } catch (err) {
-      alert(err.message);
+      toast(err.message);
       btn.disabled = false;
     }
   };
@@ -1276,7 +1389,7 @@ function makeDismissFlagButton(r) {
       await refreshCreators();
       await refreshCampaigns();
     } catch (err) {
-      alert(err.message);
+      toast(err.message);
       btn.disabled = false;
     }
   };
@@ -1428,7 +1541,7 @@ function renderPortalOfferBlock(r) {
         send.textContent = 'Sent ✓';
         await refreshCreators();
       } catch (err) {
-        alert(err.message);
+        toast(err.message);
         send.textContent = prev;
         send.disabled = false;
       }
@@ -1534,15 +1647,21 @@ function renderStatusCell(r, cell) {
     stop.title = 'Stop outreach for this campaign — removes the lead from this Instantly campaign so no further emails are sent';
     stop.innerHTML = STOP_SVG;
     stop.onclick = async () => {
-      if (!confirm('Stop outreach for this creator in this campaign? This removes them from this Instantly campaign so no further outreach or follow-ups are sent. It does not affect any other campaign.')) return;
+      const ok = await confirmDialog({
+        title: 'Stop outreach for this creator?',
+        message: 'This removes them from this Instantly campaign so no further outreach or follow-ups are sent. It does not affect any other campaign.',
+        confirmLabel: 'Stop outreach',
+        danger: true,
+      });
+      if (!ok) return;
       stop.disabled = true;
       try {
         const res = await api(`/api/creators/${r.id}/stop-outreach`, { method: 'POST' });
-        if (res && res.warning) alert(res.warning);
+        if (res && res.warning) toast(res.warning, 'warn');
         await refreshCreators();
         await refreshCampaigns();
       } catch (err) {
-        alert(err.message);
+        toast(err.message);
         stop.disabled = false;
       }
     };
@@ -1555,10 +1674,24 @@ function renderStatusCell(r, cell) {
   del.title = 'Remove from campaign';
   del.innerHTML = TRASH_SVG;
   del.onclick = async () => {
-    if (!confirm('Remove this creator?')) return;
-    await api(`/api/creators/${r.id}`, { method: 'DELETE' });
-    await refreshCreators();
-    await refreshCampaigns();
+    const ok = await confirmDialog({
+      title: 'Remove this creator?',
+      message: 'They will be removed from this campaign.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    // Guard against a double-tap firing two DELETEs, and surface failures
+    // instead of silently doing nothing (the request or the refresh can fail).
+    del.disabled = true;
+    try {
+      await api(`/api/creators/${r.id}`, { method: 'DELETE' });
+      await refreshCreators();
+      await refreshCampaigns();
+    } catch (err) {
+      toast(err.message);
+      del.disabled = false;
+    }
   };
   top.appendChild(del);
 
@@ -1596,7 +1729,7 @@ function renderStatusCell(r, cell) {
         await refreshCreators();
         await refreshCampaigns();
       } catch (err) {
-        alert(err.message);
+        toast(err.message);
         send.disabled = false;
       }
     };
@@ -2578,12 +2711,12 @@ function buildOfferConfigurator(r, onRefresh) {
       if (acceptRateBtn.dataset.busy === '1') return;
       const rateStr = `$${fmtNum(r.quoted_rate)}`;
       const who = r.first_name || `@${r.instagram_username || 'this creator'}`;
-      if (
-        !confirm(
-          `Accept ${who}'s rate of ${rateStr}? We'll agree to their number — the contract goes out once the accepted deal is approved (brand POC go-ahead), flagged at the top of the campaign.`,
-        )
-      )
-        return;
+      const ok = await confirmDialog({
+        title: `Accept ${who}'s rate of ${rateStr}?`,
+        message: "We'll agree to their number — the contract goes out once the accepted deal is approved (brand POC go-ahead), flagged at the top of the campaign.",
+        confirmLabel: 'Accept rate',
+      });
+      if (!ok) return;
       acceptRateBtn.dataset.busy = '1';
       acceptRateBtn.disabled = true;
       approveBtn.disabled = true;
@@ -2604,7 +2737,13 @@ function buildOfferConfigurator(r, onRefresh) {
   }
 
   dismissBtn.onclick = async () => {
-    if (!confirm('Dismiss this offer without sending? The creator will no longer be flagged for you.')) return;
+    const ok = await confirmDialog({
+      title: 'Dismiss this offer without sending?',
+      message: 'The creator will no longer be flagged for you.',
+      confirmLabel: 'Dismiss',
+      danger: true,
+    });
+    if (!ok) return;
     approveBtn.disabled = true;
     dismissBtn.disabled = true;
     statusEl.textContent = 'Dismissing…';
@@ -3075,7 +3214,7 @@ el('sync-btn').addEventListener('click', async () => {
   }
 
   async function addCreator(c, btn) {
-    if (!state.selectedCampaignId) { alert('Select a campaign first.'); return; }
+    if (!state.selectedCampaignId) { toast('Select a campaign first.', 'warn'); return; }
     btn.disabled = true;
     const prev = btn.textContent;
     btn.textContent = 'Adding…';
@@ -3103,7 +3242,7 @@ el('sync-btn').addEventListener('click', async () => {
     } catch (err) {
       btn.textContent = prev;
       btn.disabled = false;
-      alert(`Failed to add: ${err.message}`);
+      toast(`Failed to add: ${err.message}`);
     }
   }
 })();
@@ -3121,7 +3260,7 @@ el('creator-form').addEventListener('submit', async (e) => {
     ),
   );
   if (!urls.length) {
-    alert('Paste at least one Instagram URL.');
+    toast('Paste at least one Instagram URL.', 'warn');
     return;
   }
   const status = el('add-status');
@@ -3233,8 +3372,14 @@ el('remove-all-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
   const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
   const count = c ? c.creator_count : 0;
-  if (!count) { alert('No creators to remove.'); return; }
-  if (!confirm(`Remove ALL ${count} creator(s) from this campaign? This permanently deletes them and cannot be undone.`)) return;
+  if (!count) { toast('No creators to remove.', 'info'); return; }
+  const okRemoveAll = await confirmDialog({
+    title: `Remove ALL ${count} creator(s) from this campaign?`,
+    message: 'This permanently deletes them and cannot be undone.',
+    confirmLabel: 'Remove all',
+    danger: true,
+  });
+  if (!okRemoveAll) return;
   const btn = el('remove-all-btn');
   btn.disabled = true;
   try {
@@ -3245,7 +3390,7 @@ el('remove-all-btn').addEventListener('click', async () => {
     await refreshCreators();
     await refreshCampaigns();
   } catch (err) {
-    alert(err.message);
+    toast(err.message);
   } finally {
     btn.disabled = false;
   }
@@ -3312,7 +3457,12 @@ el('send-emails-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
   const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
   const pendingCount = c ? c.email_found_count : '?';
-  if (!confirm(`Send outreach to ${pendingCount} pending creator(s)? This queues real emails in Instantly.`)) return;
+  const okSend = await confirmDialog({
+    title: `Send outreach to ${pendingCount} pending creator(s)?`,
+    message: 'This queues real emails in Instantly.',
+    confirmLabel: 'Send outreach',
+  });
+  if (!okSend) return;
   const btn = el('send-emails-btn');
   const status = el('fetch-status');
   btn.disabled = true;
@@ -3434,12 +3584,15 @@ el('send-ig-dms-btn').addEventListener('click', async () => {
   if (!state.selectedCampaignId) return;
   const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
   const queueCount = c ? c.ig_dm_queue_count : 0;
-  if (!queueCount) { alert('Nothing to send — every creator either has an email or has already been DM’d.'); return; }
-  if (!confirm(
-    `Send Instagram DMs to ${queueCount} creator(s) as Priority Message Requests?\n\n` +
-    `The Chrome extension will drive Instagram — keep the browser window focused ` +
-    `and don't switch away while it runs.`,
-  )) return;
+  if (!queueCount) { toast('Nothing to send — every creator either has an email or has already been DM’d.', 'info'); return; }
+  const okDms = await confirmDialog({
+    title: `Send Instagram DMs to ${queueCount} creator(s) as Priority Message Requests?`,
+    message:
+      'The Chrome extension will drive Instagram — keep the browser window focused ' +
+      "and don't switch away while it runs.",
+    confirmLabel: 'Send DMs',
+  });
+  if (!okDms) return;
   const btn = el('send-ig-dms-btn');
   btn.disabled = true;
   try {
@@ -3456,7 +3609,7 @@ el('send-ig-dms-btn').addEventListener('click', async () => {
     }
     startExtensionIgDmSend(result.jobs);
   } catch (err) {
-    alert(err.message);
+    toast(err.message);
   } finally {
     btn.disabled = false;
   }
@@ -4224,12 +4377,12 @@ function buildContractApprovalBlock(r) {
   const statusEl = block.querySelector('.delegate-status');
   const approveBtn = block.querySelector('.delegate-approve-contract');
   approveBtn.onclick = async () => {
-    if (
-      !confirm(
-        `Approve this deal${rateStr}? The contract will be generated and emailed to the creator for signing.`,
-      )
-    )
-      return;
+    const ok = await confirmDialog({
+      title: `Approve this deal${rateStr}?`,
+      message: 'The contract will be generated and emailed to the creator for signing.',
+      confirmLabel: 'Approve & send',
+    });
+    if (!ok) return;
     approveBtn.disabled = true;
     statusEl.textContent = 'Approving & sending contract…';
     try {
@@ -4334,7 +4487,12 @@ function buildReplyBlock(r) {
   };
 
   dismissBtn.onclick = async () => {
-    if (!confirm('Dismiss without replying? This clears it from Delegate.')) return;
+    if (!(await confirmDialog({
+      title: 'Dismiss without replying?',
+      message: 'This clears it from Delegate.',
+      confirmLabel: 'Dismiss',
+      danger: true,
+    }))) return;
     sendBtn.disabled = true; dismissBtn.disabled = true;
     try {
       await api(`/api/creators/${r.id}/dismiss-delegate`, { method: 'POST' });
@@ -4410,7 +4568,12 @@ function buildBriefBlock(r) {
   };
 
   dismissBtn.onclick = async () => {
-    if (!confirm('Dismiss without publishing? The brief hand-off clears from the list.')) return;
+    if (!(await confirmDialog({
+      title: 'Dismiss without publishing?',
+      message: 'The brief hand-off clears from the list.',
+      confirmLabel: 'Dismiss',
+      danger: true,
+    }))) return;
     publishBtn.disabled = true; dismissBtn.disabled = true;
     try {
       await api(`/api/creators/${r.id}/brief/dismiss`, { method: 'POST' });

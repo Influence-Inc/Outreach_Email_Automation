@@ -747,6 +747,67 @@ button:disabled { opacity: 0.5; cursor: default; }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 
+/* --- Confirmation modal (in-app replacement for native confirm()) --------- */
+/* Native confirm()/alert() can be muted by the browser's "prevent additional
+   dialogs" checkbox, which silently breaks confirm-gated buttons (Stop, Delete,
+   …). This modal is plain DOM, so it can't be suppressed. Sits above every
+   other overlay (email-modal 40, review-modal 50). */
+.confirm-modal-backdrop {
+  position: fixed; inset: 0; z-index: 60; background: rgba(20, 18, 15, 0.5);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.confirm-modal {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  width: min(440px, 100%);
+  padding: 22px 22px 18px;
+  box-shadow: 0 24px 60px rgba(20, 18, 15, 0.26);
+}
+.confirm-modal-title { font-size: 16px; font-weight: 600; color: var(--ink); line-height: 1.35; }
+.confirm-modal-message {
+  margin-top: 9px; font-size: 13.5px; line-height: 1.55; color: var(--ink-2);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.confirm-modal-actions {
+  display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;
+}
+.btn-danger {
+  border: 1px solid var(--warn); background: var(--warn); color: #fff;
+  font-weight: 600; font-size: 13px; padding: 8px 16px; border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.btn-danger:hover { background: #9d3d1a; border-color: #9d3d1a; }
+
+/* --- Toasts (in-app replacement for native alert()) ----------------------- */
+.toast-host {
+  position: fixed; right: 18px; bottom: 18px; z-index: 70;
+  display: flex; flex-direction: column; gap: 10px;
+  max-width: min(380px, calc(100vw - 36px)); pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 10px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-left: 3px solid var(--muted); border-radius: var(--radius-sm);
+  padding: 12px 12px 12px 14px; box-shadow: 0 12px 30px rgba(20, 18, 15, 0.18);
+  font-size: 13px; line-height: 1.45; color: var(--ink-2);
+  animation: toast-in 0.16s ease-out;
+}
+.toast.leaving { opacity: 0; transform: translateY(6px); transition: opacity 0.2s, transform 0.2s; }
+.toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-close {
+  border: none; background: transparent; color: var(--faint); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 3px 5px; border-radius: 6px; flex-shrink: 0;
+}
+.toast-close:hover { background: var(--surface-3); color: var(--ink-2); }
+.toast-error { border-left-color: var(--warn); }
+.toast-warn  { border-left-color: #c98a1a; }
+.toast-success { border-left-color: #147a52; }
+.toast-info  { border-left-color: var(--muted); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* Editable cells */
 .editable { cursor: text; border-radius: 6px; }
 .editable:hover { background: var(--surface-3); box-shadow: 0 0 0 4px var(--surface-3); }
