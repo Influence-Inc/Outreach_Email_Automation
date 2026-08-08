@@ -424,8 +424,40 @@ function baseContractData(creator, fee, offer) {
 
     guaranteedViews: minViews,
     specialNotes: null,
+    // Extra terms the extraction pulls FROM the email thread (whitelisting,
+    // exclusivity windows, special timelines). Regenerated on every
+    // re-extraction, so anything not in the thread doesn't survive here.
     additionalTerms: [],
+    // Extra points the team adds to THIS contract BY HAND from the Deals column
+    // — kept in their own field precisely so a re-extraction of the thread
+    // never wipes them (see updateContractTermsFromThread). Combined with
+    // additionalTerms only at the read/sync boundary (combinedAdditionalTerms).
+    manualTerms: [],
   };
+}
+
+// The full list of extra points shown under the contract's "Additional Terms"
+// section: the terms the extraction pulled from the email thread
+// (additionalTerms) PLUS the points the team added by hand from the Deals
+// column (manualTerms). The two are kept as separate fields so a re-extraction
+// of the thread can never wipe the manual ones; they're merged only here, at
+// the read/sync boundary. Each entry is trimmed, blanks are dropped, and the
+// lists are de-duplicated case-insensitively with the extracted terms kept
+// first (a manual point that merely restates an extracted one won't double up).
+function combinedAdditionalTerms(data) {
+  const norm = (arr) =>
+    (Array.isArray(arr) ? arr : [])
+      .map((t) => String(t == null ? '' : t).trim())
+      .filter(Boolean);
+  const out = [];
+  const seen = new Set();
+  for (const t of [...norm(data && data.additionalTerms), ...norm(data && data.manualTerms)]) {
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
 }
 
 const CONTRACT_SYSTEM = `You extract structured contract terms from an influencer-marketing email negotiation between a brand's manager and a creator, in the exact shape needed to populate a standard Influencer Agreement.
@@ -985,6 +1017,7 @@ const EDITABLE_CONTRACT_FIELDS = [
   'paidAdsIncluded',
   'exclusivity',
   'upfrontPayment',
+  'manualTerms',
 ];
 
 // Deliverables strings the base extraction uses; kept identical here so a
@@ -1145,6 +1178,23 @@ function coerceContractPatch(patch, existing = {}) {
     const pct = Number.isFinite(Number(patch.upfrontPercent)) ? Number(patch.upfrontPercent) : undefined;
     Object.assign(out, paymentScheduleFor(wantSplit, pct));
   }
+  if (has('manualTerms')) {
+    // Extra points the team adds to THIS contract by hand from the Deals column
+    // (an extra round of revisions, a one-off request, a special clause) — the
+    // manual counterpart to the terms the extraction pulls from the thread.
+    // They live in their OWN field so a later re-extraction of the thread can't
+    // wipe them, and are merged with the extracted terms only at render/sync
+    // time (see combinedAdditionalTerms). Accept either an array of points or a
+    // single string with points separated by a newline or a semicolon (NOT a
+    // comma — a term may itself contain commas), and normalise to a clean list
+    // of non-empty, trimmed strings. An empty result is stored as [] so
+    // clearing the field removes the section.
+    const raw = patch.manualTerms;
+    const list = Array.isArray(raw)
+      ? raw
+      : String(raw == null ? '' : raw).split(/[\n;]+/);
+    out.manualTerms = list.map((t) => String(t == null ? '' : t).trim()).filter(Boolean);
+  }
   return out;
 }
 
@@ -1262,6 +1312,14 @@ async function updateContractTermsFromThread(creatorId) {
     preferOfferType: priorData.offerType || null,
     preferNumVideos: priorCount,
   });
+  // Manual extra points (added by hand from the Deals column) are NOT derived
+  // from the thread, so the fresh extraction doesn't reproduce them — carry the
+  // prior contract's manual points across so a post-acceptance term change never
+  // silently drops them. They still render / sync merged with the re-extracted
+  // additionalTerms via combinedAdditionalTerms.
+  if (Array.isArray(priorData.manualTerms) && priorData.manualTerms.length) {
+    data.manualTerms = priorData.manualTerms;
+  }
   const row = await db.one(
     `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
     [existing.id, JSON.stringify(data)],
@@ -1363,6 +1421,7 @@ module.exports = {
   contractUrl,
   extractContractData,
   baseContractData,
+  combinedAdditionalTerms,
   createContractForCreator,
   getByToken,
   recordSubmission,

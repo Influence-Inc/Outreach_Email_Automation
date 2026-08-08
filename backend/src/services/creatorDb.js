@@ -136,8 +136,12 @@ function buildPayload(contract, creator) {
     // deal was correctly classified.
     guaranteedViews: d.offerType === 'video_based' ? undefined : intOrUndef(d.guaranteedViews),
     specialNotes: d.specialNotes,
-    additionalTerms:
-      Array.isArray(d.additionalTerms) && d.additionalTerms.length ? d.additionalTerms : undefined,
+    // The extracted thread terms combined with the team's hand-added manual
+    // points (see contracts.combinedAdditionalTerms) so manual extras sync too.
+    additionalTerms: (() => {
+      const merged = contracts.combinedAdditionalTerms(d);
+      return merged.length ? merged : undefined;
+    })(),
     // Contract
     contractRef: contract.token,
     contractUrl: contracts.contractUrl(contract.token),

@@ -973,6 +973,17 @@ function parseViewsInput(s) {
   return Number.isFinite(n) ? Math.round(n) : null;
 }
 
+// Parse a human "extra points" input into a clean list of terms. Points are
+// separated by a new line or a semicolon — NOT a comma, since a single term
+// may itself contain commas ("2 revisions, at no extra cost"). Blank yields an
+// empty list, which clears the Additional Terms section from the contract.
+function parseTermsInput(s) {
+  return String(s == null ? '' : s)
+    .split(/[\n;]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
 // PATCH a single contract deal field. Used by the editable Deals column.
 // For signed contracts, appends ?force=1 so the server allows the edit
 // without re-triggering signing or notifying the creator.
@@ -1114,6 +1125,19 @@ function renderEditableDeal(cell, r, data) {
     value: data.exclusivity && !/^none$/i.test(String(data.exclusivity).trim()) ? data.exclusivity : '',
     placeholder: 'None',
     onSave: (v) => saveContractField(r, { exclusivity: v }),
+  });
+
+  // Extra points — any additional clauses the team wants on THIS contract
+  // (an extra revision round, a special request, a one-off term). They render
+  // as an "Additional Terms" section on the contract page. Stored in their own
+  // `manualTerms` field so a later re-extraction of the email thread can't wipe
+  // them (the extraction-derived terms are shown on the contract, merged in).
+  // Separate multiple points with a semicolon; clearing the field removes them.
+  appendEditableDealLine(cell, r, {
+    label: 'EXTRA',
+    value: Array.isArray(data.manualTerms) ? data.manualTerms.join('; ') : '',
+    placeholder: 'point 1; point 2',
+    onSave: (v) => saveContractField(r, { manualTerms: parseTermsInput(v) }),
   });
 
   const bonusAmt = data.bonusAmount != null ? Number(data.bonusAmount) : null;
