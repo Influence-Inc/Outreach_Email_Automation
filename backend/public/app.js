@@ -1159,14 +1159,14 @@ function renderEditableDeal(cell, r, data) {
   const bonusViews = data.bonusThresholdViews != null ? Number(data.bonusThresholdViews) : null;
   if (isVideoBonus) {
     // On a video+bonus deal the performance bonus is editable: a dollar amount
-    // and the combined-views threshold it unlocks past. The bonus is CARVED
-    // FROM the total fee (base = total − bonus), matching the contract page —
-    // so the RATE above stays the max total. The contract shows the Performance
-    // bonus row once BOTH fields are set; either one blank clears it.
+    // and the combined-views threshold it unlocks past. The bonus is paid ON TOP
+    // of the RATE above (the guaranteed base), matching the contract page — so
+    // the contract's Total (incl. bonus) is base + bonus. The contract shows the
+    // Performance bonus row once BOTH fields are set; either one blank clears it.
     appendEditableDealLine(cell, r, {
       label: 'BONUS $',
       value: bonusAmt && bonusAmt > 0 ? `$${fmtNum(bonusAmt)}` : '',
-      placeholder: 'e.g. $200 · carved from fee',
+      placeholder: 'e.g. $200 · paid on top of base',
       onSave: (v) => saveContractField(r, { bonusAmount: parseMoneyInput(v) }),
     });
     appendEditableDealLine(cell, r, {

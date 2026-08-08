@@ -291,7 +291,14 @@
       row('Deadline', d.postingDeadline || d.deadline)
     ));
 
-    var compensation = d.totalPayment != null ? d.totalPayment : d.compensation;
+    // On a video+bonus deal the stored `compensation` is the GUARANTEED BASE and
+    // the performance bonus is paid ON TOP, so the total incl. bonus is base +
+    // bonus. Read the base straight off `compensation` — never derive it by
+    // subtracting the bonus, which drove a negative "Compensation" when the
+    // bonus was larger than an out-of-date total. Fall back to totalPayment only
+    // when compensation is absent (older rows that stored just the one figure).
+    var baseComp = d.compensation != null ? Number(d.compensation)
+      : (d.totalPayment != null ? Number(d.totalPayment) : null);
     var upPct = d.upfrontPercent, remPct = d.remainderPercent;
     var hasSchedule = Number(upPct) > 0 && Number(remPct) > 0;
     // Payment terms is a boilerplate payment-METHOD clause (bank transfer, net-N
@@ -310,14 +317,14 @@
       : 'completing and posting all agreed deliverables';
     var termsText = 'Direct bank transfer, initiated within ' + daysN + ' working days of ' + termsAnchor;
     var hasBonus = d.bonusAmount && d.bonusThresholdViews;
-    var baseComp = hasBonus ? compensation - Number(d.bonusAmount) : compensation;
+    var totalIncl = hasBonus && baseComp != null ? baseComp + Number(d.bonusAmount) : baseComp;
     html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(baseComp, d.currency), { big: true }) +
       (hasBonus
         ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if total views reach ' + fmtNum(d.bonusThresholdViews) + '. ' + countingWindowText)
         : '') +
       (hasBonus
-        ? row('Total (incl. bonus)', fmtMoney(compensation, d.currency))
+        ? row('Total (incl. bonus)', fmtMoney(totalIncl, d.currency))
         : '') +
       row('Currency', d.currency) +
       row('Payment terms', termsText) +

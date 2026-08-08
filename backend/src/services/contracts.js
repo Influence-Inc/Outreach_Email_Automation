@@ -334,6 +334,38 @@ function baseContractData(creator, fee, offer) {
   const deadlineHuman = deadlineDate.toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
   });
+
+  // Compensation split for a video+bonus deal. The agreed fee is the GUARANTEED
+  // BASE the creator is paid for the videos; the performance bonus is paid ON
+  // TOP once the views cross the threshold, so the total possible payout is
+  // base + bonus. `compensation` is the base and `totalPayment` is that total
+  // (the two are equal on every non-bonus deal). Prefer the offer's own split
+  // when it carries one (panel offers set base_fee + flat_fee); else, when the
+  // agreed `fee` IS the offer's aggregate flat_fee, carve the base out of it;
+  // failing both (a synthetic offer, or a re-extraction where the agreed fee is
+  // already the base) treat `fee` as the base. The base never goes negative.
+  const bonusAmt = bonus.amount != null && Number.isFinite(Number(bonus.amount)) && Number(bonus.amount) > 0
+    ? Math.round(Number(bonus.amount))
+    : 0;
+  const isBonusDeal = !!(offer && offer.offer_type === 'video_bonus') && bonusAmt > 0;
+  let baseCompensation = fee;
+  let totalIncludingBonus = fee;
+  if (isBonusDeal && fee != null && Number.isFinite(Number(fee))) {
+    if (offer.base_fee != null && Number.isFinite(Number(offer.base_fee))) {
+      baseCompensation = Math.max(0, Math.round(Number(offer.base_fee)));
+      totalIncludingBonus = offer.flat_fee != null && Number.isFinite(Number(offer.flat_fee))
+        ? Math.round(Number(offer.flat_fee))
+        : baseCompensation + bonusAmt;
+    } else if (
+      offer.flat_fee != null && Number.isFinite(Number(offer.flat_fee)) && Number(fee) === Number(offer.flat_fee)
+    ) {
+      totalIncludingBonus = Math.round(Number(offer.flat_fee));
+      baseCompensation = Math.max(0, totalIncludingBonus - bonusAmt);
+    } else {
+      baseCompensation = Math.max(0, Math.round(Number(fee)));
+      totalIncludingBonus = baseCompensation + bonusAmt;
+    }
+  }
   return {
     // Identity — kept for the Creator-DB sync payload mapping.
     creatorName: creator.full_name || creator.first_name || null,
@@ -396,9 +428,11 @@ function baseContractData(creator, fee, offer) {
     // Content availability.
     postLiveMonths: 6,
 
-    // Compensation.
-    compensation: fee,
-    totalPayment: fee,
+    // Compensation. `compensation` is the guaranteed base; `totalPayment` is the
+    // total incl. any performance bonus (== base on a non-bonus deal). See the
+    // baseCompensation / totalIncludingBonus split computed above.
+    compensation: baseCompensation,
+    totalPayment: totalIncludingBonus,
     currency: 'USD',
     paymentTermsDays: 7,
     paymentTerms: paymentTermsFor(7),
@@ -564,7 +598,7 @@ Rules:
 - "deliverables" describes WHAT the creator produces — never the posting rhythm. Do NOT tack a cadence, posting rhythm, or per-week/day/month frequency onto this field (no "posted at a cadence of 1-2 videos per week", no "1 per week", no "posted weekly"). Cadence lives in the "timeline" field only. Keep "deliverables" as a bare content description like "3 short-form videos" or "Short-form video content".
 - "minVideos" applies ONLY to view-based deals (KNOWN VALUES.acceptedOffer.offer_type is "view_based"). A view-based deal is priced by the TOTAL guaranteed views and normally has NO minimum number of videos — the creator posts as many as needed to reach the view total — so "minVideos" is null in the overwhelming majority of cases. Set it to a number ONLY when the thread explicitly states a MINIMUM count of videos/posts the creator must publish (e.g. "at least 3 videos", "a minimum of 2 posts", "you'll need to post at least 4 times"). Do NOT infer a minimum from the guaranteed-view number, from a single-post assumption, or from anything short of an explicit minimum-count statement. Always null for video-based or bonus deals — they already name an exact video count.
 - "viewCountingDays" is the number of days AFTER a post is published during which its views are counted toward the deal's guaranteed-view total or performance-bonus threshold. It applies ONLY to a deal WITH a view requirement — a view-based deal, or a video-based deal that carries a views bonus. Default to 30: return 30 unless the thread EXPLICITLY names a different counting window (e.g. "views counted over 60 days", "measured across the first 14 days from posting"). Return null for a flat video-based deal with no views target or bonus.
-- "compensation" and "totalPayment" both equal the final agreed fee as a plain number (no currency symbol). If the thread is unclear, use the provided agreed fee.
+- "compensation" is the guaranteed base fee as a plain number (no currency symbol) — the agreed fee the creator is paid for the deliverables. On a video+bonus deal the performance bonus is paid ON TOP, so "totalPayment" is base + bonus; on every other deal "totalPayment" equals "compensation". If the thread is unclear, use the provided agreed fee. (Both are re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
 - "currency" is a 3-letter ISO code (default "USD").
 - "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
 - "postingWindows" are suggested per-video windows, e.g. [{"label":"Video 1","range":"December 11 - 14"}]. Return null if the thread doesn't specify windows.
@@ -722,6 +756,21 @@ async function extractContractData(creator, opts = {}) {
   // (manualTerms, a separate field this never touches). Strip them from the
   // extracted list so the stored contract is clean at the source.
   merged.additionalTerms = stripAutoSuppressedTerms(merged.additionalTerms);
+  // Re-pin the compensation split deterministically (mirrors the usage-rights
+  // and payment-schedule pins above). The free-form extraction is told
+  // "compensation == the agreed fee" and would otherwise collapse the base/total
+  // split — or let a bonus larger than the base drive a negative "Compensation"
+  // on the contract page. `base.compensation` is the guaranteed base computed
+  // above; the total incl. bonus is base + whatever bonus survived the merge.
+  // Keep the merged value only when there's no deterministic base to pin to (a
+  // rare fee-less deal where the thread extraction is the sole fee source).
+  if (base.compensation != null) merged.compensation = base.compensation;
+  const mBonus = Number(merged.bonusAmount);
+  const mergedIsBonus = merged.offerType === 'video_bonus'
+    && Number.isFinite(mBonus) && mBonus > 0 && merged.bonusThresholdViews != null;
+  merged.totalPayment = mergedIsBonus && merged.compensation != null
+    ? Number(merged.compensation) + mBonus
+    : merged.compensation;
   return merged;
 }
 
@@ -1098,18 +1147,20 @@ function coerceContractPatch(patch, existing = {}) {
   const existingData = existing && typeof existing === 'object' ? existing : {};
   // The agreed fee — corrected from the Deals column when the deal's price
   // changed after the contract was drawn up (e.g. the creator confirmed a
-  // higher number). Writes both fee fields the contract page reads. The upfront
-  // split is stored as PERCENTAGES (not dollar amounts), so it re-scales against
-  // the new total automatically — nothing else to touch. Keyed off `agreedFee`
-  // (the Deals-column field name) only: the contract's own `compensation` key is
-  // deliberately NOT settable directly, so a stray extraction field can't slip
-  // a fee change through this whitelist.
+  // higher number). This is the GUARANTEED BASE the creator is paid; on a
+  // video+bonus deal the performance bonus is paid ON TOP of it, so the total
+  // incl. bonus (totalPayment) is reconciled to base + bonus at the end of this
+  // function — never below the base, which is what drove the reported negative
+  // "Compensation" when a bonus was subtracted from the fee. The upfront split
+  // is stored as PERCENTAGES (not dollar amounts), so it re-scales against the
+  // new base automatically. Keyed off `agreedFee` (the Deals-column field name)
+  // only: the contract's own `compensation` key is deliberately NOT settable
+  // directly, so a stray extraction field can't slip a fee change through here.
   if (has('agreedFee')) {
     const raw = patch.agreedFee;
     const n = raw == null || raw === '' ? null : Math.round(Number(raw));
     if (Number.isFinite(n) && n >= 0) {
       out.compensation = n;
-      out.totalPayment = n;
     }
   }
   // Offer type is a manual repair for a contract the extraction misclassified
@@ -1175,9 +1226,10 @@ function coerceContractPatch(patch, existing = {}) {
       // combined views cross a threshold. It's a video-shaped deal (named
       // video count, video deliverables text) like video_based, but keeps its
       // bonus fields — the admin sets the bonus amount + threshold views in the
-      // dedicated BONUS lines. The bonus is CARVED FROM the total fee (base =
-      // total − bonus), which is exactly how the contract page renders it, so
-      // there's nothing to change about the fee here.
+      // dedicated BONUS lines. The fee stays the GUARANTEED BASE and the bonus
+      // is paid ON TOP; the total incl. bonus is reconciled to base + bonus at
+      // the end of this function, so there's nothing to change about the fee
+      // here.
       const n = videoCount();
       out.offerType = 'video_bonus';
       out.offerLabel = 'Video + bonus deal';
@@ -1243,11 +1295,11 @@ function coerceContractPatch(patch, existing = {}) {
     out.bonusWindowDays = val != null ? val : DEFAULT_VIEW_COUNTING_DAYS;
   }
   if (has('bonusAmount')) {
-    // The performance-bonus dollar amount on a video+bonus deal, CARVED FROM
-    // the total fee (the contract page shows base = total − bonus). Blank / zero
-    // clears it; a positive amount rounds to a whole dollar. The contract only
-    // renders a Performance bonus row once BOTH the amount and the threshold
-    // below are set, so a half-filled bonus simply doesn't show yet.
+    // The performance-bonus dollar amount on a video+bonus deal, paid ON TOP of
+    // the guaranteed base fee (the contract page shows total = base + bonus).
+    // Blank / zero clears it; a positive amount rounds to a whole dollar. The
+    // contract only renders a Performance bonus row once BOTH the amount and the
+    // threshold below are set, so a half-filled bonus simply doesn't show yet.
     const raw = patch.bonusAmount;
     const n = raw == null || raw === '' ? null : Math.round(Number(raw));
     out.bonusAmount = Number.isFinite(n) && n > 0 ? n : null;
@@ -1309,6 +1361,32 @@ function coerceContractPatch(patch, existing = {}) {
       ? raw
       : String(raw == null ? '' : raw).split(/[\n;]+/);
     out.manualTerms = list.map((t) => String(t == null ? '' : t).trim()).filter(Boolean);
+  }
+
+  // Reconcile the compensation split. On a video+bonus deal the fee is the
+  // GUARANTEED BASE and the performance bonus is paid ON TOP, so the total incl.
+  // bonus is base + bonus; on every other deal the total equals the base.
+  // Recompute totalPayment from the effective base + bonus whenever this patch
+  // touched the fee, the bonus, or the offer type — so the contract's
+  // Compensation and Total (incl. bonus) rows can never disagree, and the base
+  // can never go negative (the reported bug, when the bonus was subtracted from
+  // the fee). Uses the patch's own values first, falling back to the contract's
+  // current data; does nothing when there's no base to anchor to.
+  if (has('agreedFee') || has('bonusAmount') || has('bonusThresholdViews') || has('offerType')) {
+    const effOfferType = 'offerType' in out ? out.offerType : (existingData.offerType || null);
+    const base = out.compensation != null ? Number(out.compensation)
+      : existingData.compensation != null ? Number(existingData.compensation)
+      : existingData.totalPayment != null ? Number(existingData.totalPayment)
+      : null;
+    if (base != null && Number.isFinite(base)) {
+      const bonusRaw = 'bonusAmount' in out
+        ? out.bonusAmount
+        : (existingData.bonusAmount != null ? existingData.bonusAmount : null);
+      const bonusVal = Number(bonusRaw);
+      const isBonus = effOfferType === 'video_bonus' && Number.isFinite(bonusVal) && bonusVal > 0;
+      out.compensation = base;
+      out.totalPayment = isBonus ? base + bonusVal : base;
+    }
   }
   return out;
 }

@@ -127,8 +127,11 @@ function buildPayload(contract, creator) {
     deadline: isoOrUndef(d.deadline),
     usageRights: d.usageRights,
     exclusivity: d.exclusivity,
-    // Commercial
-    compensation: numOrUndef(d.compensation),
+    // Commercial — sync the total possible payout (base + any performance
+    // bonus). `totalPayment` is that total; it equals `compensation` (the
+    // guaranteed base) on every non-bonus deal, and falls back to it on older
+    // rows that stored only the one figure.
+    compensation: numOrUndef(d.totalPayment != null ? d.totalPayment : d.compensation),
     currency: /^[A-Z]{3}$/.test(String(d.currency || '')) ? d.currency : 'USD',
     paymentTerms: d.paymentTerms,
     // A view floor is a view-based term — never sync one for a flat video-based
