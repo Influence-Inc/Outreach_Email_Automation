@@ -18,6 +18,20 @@ const email = require('./offerPortal/email');
 const campaignsApi = require('./campaignsApi');
 const { offerPortalConfig } = require('./offerPortal/config');
 
+// PAUSED: the one-time graduation / "congrats, let's keep in touch on
+// WhatsApp / iMessage" email is switched OFF. Deploying with this default in
+// place stops every graduation send immediately — no env change required. To
+// resume, set GRADUATION_EMAILS_PAUSED=false (or flip this default back to
+// false). Any other / unset value keeps the email paused.
+const GRADUATION_EMAILS_PAUSED_DEFAULT = true;
+
+function graduationEmailsPaused() {
+  const v = process.env.GRADUATION_EMAILS_PAUSED;
+  if (v === 'false' || v === '0' || v === 'no') return false;
+  if (v === 'true' || v === '1' || v === 'yes') return true;
+  return GRADUATION_EMAILS_PAUSED_DEFAULT;
+}
+
 const firstNameOf = (c) =>
   (c.first_name && String(c.first_name).trim()) ||
   (c.full_name ? String(c.full_name).trim().split(/\s+/)[0] : '') ||
@@ -133,6 +147,10 @@ async function sendGraduationEmailForCreator(creatorId, { brandName } = {}) {
 // send each their one-time graduation email. Gated on prerequisites so a misconfig
 // never burns Claude calls or hammers the upstream. Best-effort per creator.
 async function runGraduationSweep() {
+  // Outermost guard: while graduation emails are paused, do nothing — don't
+  // hit the campaigns API or burn Claude calls. Resume by setting
+  // GRADUATION_EMAILS_PAUSED=false.
+  if (graduationEmailsPaused()) return { skipped: 'paused' };
   if (!process.env.RESEND_API_KEY) return { skipped: 'email_not_configured' };
   if (!process.env.CAMPAIGNS_API_TOKEN) return { skipped: 'campaigns_api_not_configured' };
   const { whatsappNumber, imessageNumber } = businessConnectNumbers();
@@ -172,6 +190,7 @@ async function runGraduationSweep() {
 }
 
 module.exports = {
+  graduationEmailsPaused,
   businessConnectNumbers,
   personalizedCongrats,
   fallbackCongrats,
