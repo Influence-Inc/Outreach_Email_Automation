@@ -339,13 +339,28 @@
       row('Posts remain live for', (d.postLiveMonths || 6) + ' months')
     ));
 
-    // Additional terms — any extra points the team added to THIS contract
-    // (extra revisions, a special request, a one-off clause). Rendered as a
-    // bulleted list under its own section, and ONLY when there's at least one
-    // point, so a contract with none shows nothing here.
-    var extraTerms = Array.isArray(d.additionalTerms)
-      ? d.additionalTerms.map(function (t) { return String(t == null ? '' : t).trim(); }).filter(Boolean)
-      : [];
+    // Additional terms — any extra points on THIS contract: the terms the
+    // extraction pulled from the email thread (additionalTerms) plus the points
+    // the team added by hand from the dashboard (manualTerms), which live in
+    // their own field so a re-extraction never wipes them. Merged here (trimmed,
+    // blanks dropped, de-duplicated case-insensitively, extracted first) and
+    // rendered as a bulleted list under its own section — shown ONLY when there
+    // is at least one point, so a contract with none shows nothing here.
+    var extraTerms = (function () {
+      var norm = function (arr) {
+        return (Array.isArray(arr) ? arr : []).map(function (t) {
+          return String(t == null ? '' : t).trim();
+        }).filter(Boolean);
+      };
+      var list = [], seen = {};
+      norm(d.additionalTerms).concat(norm(d.manualTerms)).forEach(function (t) {
+        var key = t.toLowerCase();
+        if (seen[key]) return;
+        seen[key] = true;
+        list.push(t);
+      });
+      return list;
+    })();
     if (extraTerms.length) {
       html += '<div class="section"><h2>Additional Terms</h2><ul class="term-list">' +
         extraTerms.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') +

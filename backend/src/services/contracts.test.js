@@ -433,6 +433,26 @@ test('creatorDb.buildPayload maps a signed contract to the Creator-DB DTO', () =
   assert.ok(!Object.values(p).some((v) => v === null || v === '' || v === undefined));
 });
 
+test('creatorDb.buildPayload syncs extracted + manual extra points, merged', () => {
+  // Hand-added manual points sync to the Creator DB alongside the extracted
+  // thread terms, de-duplicated (see contracts.combinedAdditionalTerms).
+  const contract = {
+    token: 'tok789',
+    signed_at: '2026-07-06T12:00:00Z',
+    data: {
+      creatorName: 'Alex Lee',
+      email: 'alex@example.com',
+      instagramUsername: 'alexcreates',
+      compensation: 900,
+      currency: 'USD',
+      additionalTerms: ['Whitelisting 30 days'],
+      manualTerms: ['Extra revision round', 'whitelisting 30 days'],
+    },
+  };
+  const p = creatorDb.buildPayload(contract, { full_name: 'Alex Lee', email: 'alex@example.com', instagram_username: 'alexcreates' });
+  assert.deepStrictEqual(p.additionalTerms, ['Whitelisting 30 days', 'Extra revision round']);
+});
+
 test('creatorDb.buildPayload omits the view floor for a video-based deal', () => {
   // Defensive against a stale value on a contract generated before the deal
   // was correctly classified: a flat video-based deal promises no view floor,
@@ -754,28 +774,52 @@ test('coerceContractPatch: deadline aliases, exclusivity defaults, and unknown k
   assert.ok(!('compensation' in out), 'non-whitelisted fields are ignored');
 });
 
-test('coerceContractPatch: additionalTerms accept a semicolon/newline string or an array', () => {
-  // A single string is split on semicolons and newlines (not commas — a term
-  // may contain commas), trimmed, and emptied entries dropped.
+test('coerceContractPatch: manualTerms accept a semicolon/newline string or an array', () => {
+  // The team's hand-added extra points land in the manualTerms field. A single
+  // string is split on semicolons and newlines (not commas — a term may contain
+  // commas), trimmed, and emptied entries dropped.
   assert.deepStrictEqual(
-    contracts.coerceContractPatch({ additionalTerms: 'Extra revision, at no cost; Rush delivery\n' }).additionalTerms,
+    contracts.coerceContractPatch({ manualTerms: 'Extra revision, at no cost; Rush delivery\n' }).manualTerms,
     ['Extra revision, at no cost', 'Rush delivery'],
   );
   // An array is normalised the same way (trimmed, blanks dropped).
   assert.deepStrictEqual(
-    contracts.coerceContractPatch({ additionalTerms: [' Whitelisting 30 days ', '', 'Brand tag required'] }).additionalTerms,
+    contracts.coerceContractPatch({ manualTerms: [' Whitelisting 30 days ', '', 'Brand tag required'] }).manualTerms,
     ['Whitelisting 30 days', 'Brand tag required'],
+  );
+  // additionalTerms is extraction-owned, not directly editable from the Deals
+  // column — a patch to it is ignored (only manualTerms is whitelisted).
+  assert.ok(
+    !('additionalTerms' in contracts.coerceContractPatch({ additionalTerms: ['x'] })),
+    'additionalTerms is not directly editable',
   );
 });
 
-test('coerceContractPatch: blank additionalTerms clears the section (stored as [])', () => {
+test('coerceContractPatch: blank manualTerms clears the section (stored as [])', () => {
   // Clearing the field must persist an empty list — a real change, not a no-op —
   // so the Additional Terms section is removed from the contract page.
   for (const v of ['', '   ', ';\n;', []]) {
-    const out = contracts.coerceContractPatch({ additionalTerms: v });
-    assert.ok('additionalTerms' in out, `additionalTerms ${JSON.stringify(v)} is written`);
-    assert.deepStrictEqual(out.additionalTerms, [], `additionalTerms ${JSON.stringify(v)} → []`);
+    const out = contracts.coerceContractPatch({ manualTerms: v });
+    assert.ok('manualTerms' in out, `manualTerms ${JSON.stringify(v)} is written`);
+    assert.deepStrictEqual(out.manualTerms, [], `manualTerms ${JSON.stringify(v)} → []`);
   }
+});
+
+test('combinedAdditionalTerms merges extracted + manual points, de-duplicated', () => {
+  // The read/sync-boundary merge: extracted thread terms first, then the team's
+  // manual points, trimmed, blanks dropped, de-duplicated case-insensitively.
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({
+      additionalTerms: ['Whitelisting 30 days', ' '],
+      manualTerms: ['Extra revision round', 'whitelisting 30 days', ''],
+    }),
+    ['Whitelisting 30 days', 'Extra revision round'],
+  );
+  // Either field alone works, and a contract with neither yields an empty list.
+  assert.deepStrictEqual(contracts.combinedAdditionalTerms({ manualTerms: ['Only manual'] }), ['Only manual']);
+  assert.deepStrictEqual(contracts.combinedAdditionalTerms({ additionalTerms: ['Only extracted'] }), ['Only extracted']);
+  assert.deepStrictEqual(contracts.combinedAdditionalTerms({}), []);
+  assert.deepStrictEqual(contracts.combinedAdditionalTerms(null), []);
 });
 
 test('coerceContractPatch: empty patch yields no changes', () => {
