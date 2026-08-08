@@ -822,8 +822,8 @@ test('combinedAdditionalTerms merges extracted + manual points, de-duplicated', 
   assert.deepStrictEqual(contracts.combinedAdditionalTerms(null), []);
 });
 
-test('isAutoSuppressedTerm flags the two standing perks (and paraphrases), leaves real terms', () => {
-  // The two standing perks pitched in every template — must never auto-appear.
+test('isAutoSuppressedTerm flags the standing perks (and paraphrases), leaves real terms', () => {
+  // The standing perks pitched in every template — must never auto-appear.
   const suppressed = [
     'No paid ad rights required — organic use only',
     'Full creative freedom — no overly promotional feel',
@@ -833,14 +833,23 @@ test('isAutoSuppressedTerm flags the two standing perks (and paraphrases), leave
     'Content is for organic use only, no paid ads',
     "Creative freedom — content shouldn't feel like an ad",
     'No overly promotional feel',
+    // The standing "no exclusivity" perk, in its common paraphrases.
+    'No exclusivity required',
+    'No exclusivity',
+    'Non-exclusive',
+    'Non-exclusive deal',
+    'Not exclusive',
+    'Exclusivity: None',
   ];
   for (const t of suppressed) {
     assert.ok(contracts.isAutoSuppressedTerm(t), `should suppress: ${t}`);
   }
-  // Genuinely campaign-specific negotiated terms — including "No exclusivity
-  // required", which the team did NOT ask to hide — are left untouched.
+  // Genuinely campaign-specific negotiated terms are left untouched — including a
+  // real, negotiated exclusivity WINDOW, which is a legitimate term (only the
+  // standing "no exclusivity" perk above is dropped).
   const kept = [
-    'No exclusivity required',
+    '30-day exclusivity in the skincare category',
+    'Exclusive to Reve for 30 days after posting',
     'Deal is capped at a maximum of three videos across Instagram and TikTok',
     "Views are counted over 7 days from each post's publish date",
     'TikTok views count toward the 400,000 combined threshold only if that post exceeds 75,000 views',
@@ -863,10 +872,11 @@ test('combinedAdditionalTerms strips the standing perks from EXTRACTED terms but
         'No exclusivity required',
         'No paid ad rights required — organic use only',
         'Full creative freedom — no overly promotional feel',
+        '30-day exclusivity in the skincare category',
         'Views are counted over 7 days from each post',
       ],
     }),
-    ['No exclusivity required', 'Views are counted over 7 days from each post'],
+    ['30-day exclusivity in the skincare category', 'Views are counted over 7 days from each post'],
   );
   // But when the team adds a perk BY HAND from the Deals-column "Extra" field
   // (manualTerms), it is shown — the suppression never touches manual points.
@@ -893,7 +903,7 @@ test('stripAutoSuppressedTerms drops only the standing perks from a list', () =>
       'Organic use only',
       'No exclusivity required',
     ]),
-    ['Whitelisting 30 days', 'No exclusivity required'],
+    ['Whitelisting 30 days'],
   );
   assert.deepStrictEqual(contracts.stripAutoSuppressedTerms([]), []);
   assert.deepStrictEqual(contracts.stripAutoSuppressedTerms(null), []);

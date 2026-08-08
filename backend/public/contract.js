@@ -352,14 +352,16 @@
           return String(t == null ? '' : t).trim();
         }).filter(Boolean);
       };
-      // The deal's two standing perks — "full creative freedom / no overly
-      // promotional feel" and "no paid ad rights required / organic use only" —
-      // are pitched in every template, so the thread extraction echoes them into
-      // additionalTerms. They must NEVER show automatically (mirrors
-      // contracts.js isAutoSuppressedTerm; kept in sync by hand since this
-      // browser script can't require the backend module). The hand-added manual
-      // points (the Deals-column "Extra" field) are left untouched, so the team
-      // can still add either perk explicitly.
+      // The deal's standing perks — "full creative freedom / no overly
+      // promotional feel", "no paid ad rights required / organic use only", and
+      // "no exclusivity required" — are pitched in every template, so the thread
+      // extraction echoes them into additionalTerms. They must NEVER show
+      // automatically (mirrors contracts.js isAutoSuppressedTerm; kept in sync by
+      // hand since this browser script can't require the backend module). The
+      // hand-added manual points (the Deals-column "Extra" field) are left
+      // untouched, so the team can still add any of them explicitly. A genuinely
+      // negotiated exclusivity WINDOW is kept — only the standing "no
+      // exclusivity" perk is dropped.
       var suppressed = function (t) {
         var s = String(t == null ? '' : t).toLowerCase();
         if (!s.trim()) return false;
@@ -369,6 +371,13 @@
         if ((mentionsAdRights && negated) || organicOnly) return true;
         if (/\bcreative freedom\b/.test(s)) return true;
         if (/\boverly promotional\b|\bpromotional feel\b|\bfeel(?:ing)? like an ad\b/.test(s)) return true;
+        var noExclusivity =
+          /\bno\s+exclusivity\b/.test(s) ||
+          /\bwithout\s+exclusivity\b/.test(s) ||
+          /\bnon-?exclusiv/.test(s) ||
+          /\bnot\s+exclusiv/.test(s) ||
+          /\bexclusivity\s*[:=-]\s*(?:none|not required|no\b)/.test(s);
+        if (noExclusivity) return true;
         return false;
       };
       var extracted = norm(d.additionalTerms).filter(function (t) { return !suppressed(t); });

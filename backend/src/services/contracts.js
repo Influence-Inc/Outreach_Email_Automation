@@ -436,20 +436,23 @@ function baseContractData(creator, fee, offer) {
   };
 }
 
-// Two of the deal's STANDING PERKS are pitched in every outreach + negotiation
-// template (see negotiationTemplates.js) and restated by usageRightsFor's
-// "Organic only" wording, so the free-form thread extraction reliably echoes
-// them straight back into additionalTerms:
+// The deal's STANDING PERKS are pitched in every outreach + negotiation template
+// (see negotiationTemplates.js) and restated by usageRightsFor's "Organic only"
+// wording, so the free-form thread extraction reliably echoes them straight back
+// into additionalTerms:
 //   • "Full creative freedom — no overly promotional feel"
 //   • "No paid ad rights required — organic use only"
-// Neither is a campaign-specific negotiated point, and the ad-rights line merely
-// duplicates the contract's own "Paid ads" / "Usage rights" rows. Per the team's
-// standing rule they must NEVER surface automatically — they belong under
-// Additional Terms ONLY when someone types them into the Deals-column "Extra"
-// field by hand (manualTerms), which this predicate is never applied to. Matches
-// the two CONCEPTS (not just the exact phrasings) since the extraction
-// paraphrases, but stays deliberately narrow so genuinely different negotiated
-// terms — "No exclusivity required" included — are left untouched.
+//   • "No exclusivity required"
+// None is a campaign-specific negotiated point, and the ad-rights / exclusivity
+// lines merely duplicate the contract's own "Paid ads" / "Usage rights" and
+// "Exclusivity" rows. Per the team's standing rule they must NEVER surface
+// automatically — they belong under Additional Terms ONLY when someone types
+// them into the Deals-column "Extra" field by hand (manualTerms), which this
+// predicate is never applied to. Matches each CONCEPT (not just the exact
+// phrasings) since the extraction paraphrases, but stays deliberately narrow so
+// genuinely different negotiated terms are left untouched — in particular a real
+// negotiated exclusivity WINDOW ("30-day category exclusivity") is kept; only
+// the standing "no exclusivity" perk is dropped.
 function isAutoSuppressedTerm(term) {
   const s = String(term == null ? '' : term).toLowerCase();
   if (!s.trim()) return false;
@@ -463,6 +466,16 @@ function isAutoSuppressedTerm(term) {
   // "Full creative freedom — no overly promotional feel" and close paraphrases.
   if (/\bcreative freedom\b/.test(s)) return true;
   if (/\boverly promotional\b|\bpromotional feel\b|\bfeel(?:ing)? like an ad\b/.test(s)) return true;
+  // "No exclusivity required" and close paraphrases — the standing "no
+  // exclusivity" perk. Match ONLY the negated form so a genuinely negotiated
+  // exclusivity window ("30-day exclusivity", "exclusive in skincare") stays.
+  const noExclusivity =
+    /\bno\s+exclusivity\b/.test(s) ||
+    /\bwithout\s+exclusivity\b/.test(s) ||
+    /\bnon-?exclusiv/.test(s) ||
+    /\bnot\s+exclusiv/.test(s) ||
+    /\bexclusivity\s*[:=-]\s*(?:none|not required|no\b)/.test(s);
+  if (noExclusivity) return true;
   return false;
 }
 
@@ -577,7 +590,7 @@ Rules:
 - "paymentTerms" is the standard payment-METHOD clause only (e.g. "Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables"). It is NOT the upfront/remainder SCHEDULE — never describe a split here ("50% upfront…", "half now, half on delivery"): the split lives in upfrontPercent/remainderPercent. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
 - If a field is genuinely unknown, use null (or [] for array fields).
 - Put any extra negotiated terms (whitelisting, exclusivity windows, special timelines) into "additionalTerms" as short strings.
-- Do NOT put the deal's STANDING PERKS that appear in every pitch into "additionalTerms". Specifically leave out "full creative freedom" / "no overly promotional feel" / "won't feel like an ad", and "no paid ad rights required" / "organic use only" — these are handled by other fields and must never be echoed back as additional terms. Include only genuinely campaign-specific negotiated points.`;
+- Do NOT put the deal's STANDING PERKS that appear in every pitch into "additionalTerms". Specifically leave out "full creative freedom" / "no overly promotional feel" / "won't feel like an ad", "no paid ad rights required" / "organic use only", and "no exclusivity required" / "non-exclusive" — these are handled by other fields and must never be echoed back as additional terms. (A genuinely negotiated exclusivity WINDOW, e.g. "30-day category exclusivity", IS campaign-specific and still belongs here — only the standing "no exclusivity" perk is excluded.) Include only genuinely campaign-specific negotiated points.`;
 
 // Extract the campaign-specific contract fields. Merges Claude's structured JSON
 // over the deterministic base so the result is always complete, and never lets a
