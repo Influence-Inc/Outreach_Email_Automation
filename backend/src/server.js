@@ -10,6 +10,7 @@ const settings = require('./routes/settings');
 const webhook = require('./routes/webhook');
 const offerWebhook = require('./routes/offerWebhook');
 const { api: contractsApi, page: contractPage } = require('./routes/contracts');
+const contractPdf = require('./routes/contractPdf');
 const { api: offersApi, page: offerPage } = require('./routes/offers');
 const { api: briefsApi, page: briefPage } = require('./routes/briefs');
 const offerReview = require('./routes/offerReview');
@@ -114,6 +115,10 @@ app.use('/webhook', webhook);
 // Inbound WhatsApp + iMessage for the offer portal (old-creator negotiation).
 app.use('/webhook', offerWebhook);
 app.use('/api/contracts', contractsApi);
+// Signed-contract PDF download. NOT under /api/contracts — that prefix is
+// public (the creator signing page fetches it), and this returns the creator's
+// submitted details, so it stays behind the Slack gate above.
+app.use('/api/contract-pdf', contractPdf);
 // Offer-portal API — the public offer page fetches data + posts accept/decline/
 // counter here (resolved by unguessable token only).
 app.use('/api/offers', offersApi);
