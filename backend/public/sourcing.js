@@ -67,8 +67,6 @@ function readForm() {
     risk: el('risk').value,
     targetCount: numOrUndef('targetCount'),
     reelsWindow: numOrUndef('reelsWindow'),
-    targetAudience: el('targetAudience').value.trim(),
-    genres: el('genres').value.trim(),
     discovery: el('discovery').value,
     reviewBorderline: el('reviewBorderline').checked,
   };
@@ -83,8 +81,6 @@ function fillForm(cfg) {
   el('risk').value = ['low', 'medium', 'high'].includes(cfg.risk) ? cfg.risk : 'medium';
   el('targetCount').value = cfg.targetCount ?? '';
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
-  el('targetAudience').value = cfg.targetAudience || '';
-  el('genres').value = Array.isArray(cfg.genres) ? cfg.genres.join(', ') : (cfg.genres || '');
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
   el('reviewBorderline').checked = !!cfg.reviewBorderline;
 }
