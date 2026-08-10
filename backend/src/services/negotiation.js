@@ -940,7 +940,7 @@ async function draftOfferEmail(
                 'This is the FIRST reply (the creator gave their rate immediately), so FIRST cover the collaboration details by adapting REPLY 1, THEN present the approved offer in the same email:',
                 '--- REPLY 1 ---',
                 templates.REPLY1_BODY,
-                `Use brand "${v.brandName}" and the cadence "${v.cadence}" for timelines. Do NOT include the "Past content references" section — an offer email should not introduce references unprompted.`,
+                `Use brand "${v.brandName}" and the cadence "${v.cadence}" for timelines. Do NOT include the "Past content references" section — an offer email should not introduce references unprompted. Do NOT include the "Deliverables & Rates" section from REPLY 1 either — its vague, rate-dependent pitch ("a 2 or more video package deal") conflicts with the concrete approved offer you present below, which is the single source of deliverables and rates in this combined email.`,
               ].join('\n')
             : '',
         ].join('\n'),

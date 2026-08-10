@@ -365,6 +365,19 @@ test('reply1 keeps other sections intact when Usage Rights is stripped', () => {
   }
 });
 
+test('stripDeliverables removes the whole Deliverables & Rates block, keeps neighbours', () => {
+  const { body } = templates.reply1({ firstName: 'Dua', brandName: 'Acme' });
+  assert.ok(body.includes('**Deliverables & Rates**'), 'precondition: block is present');
+  const stripped = templates.stripDeliverables(body);
+  assert.ok(!stripped.includes('**Deliverables & Rates**'), 'block header removed');
+  assert.ok(!/2 or more video package/i.test(stripped), 'block bullets removed');
+  // The sections on either side of it are untouched.
+  assert.ok(stripped.includes('**Content Style**'), 'preceding section kept');
+  assert.ok(stripped.includes('**Platforms**'), 'following section kept');
+  // No blank-line scar left where the block used to be.
+  assert.ok(!/\n\n\n/.test(stripped), 'no doubled blank line left behind');
+});
+
 // ── 3. Formatting: bold headers, sender salutation ──────────────────────────
 
 test('reply1 bolds the section headers', () => {
@@ -398,6 +411,34 @@ test('offer email (combine) reuses REPLY1 details but never the references', () 
   const { body } = templates.offerEmail(offer, { firstName: 'Dua', salutation: 'Anvith', brandName: 'Acme' }, { combine: true });
   assert.ok(body.startsWith('Hi Anvith,'), 'greets the sender in combine mode');
   assert.ok(!body.includes('Past content references'), 'offer email never introduces references');
+});
+
+test('offer email (combine) drops the REPLY1 Deliverables & Rates block that conflicts with the offer', () => {
+  const offer = { offer_type: 'video_based', num_videos: 2, flat_fee: 1500 };
+  const { body } = templates.offerEmail(
+    offer,
+    { firstName: 'Dua', salutation: 'Anvith', brandName: 'Acme' },
+    { combine: true },
+  );
+  // The conflicting section — and its rate-dependent "2 or more video package"
+  // pitch — must not appear alongside the concrete offer.
+  assert.ok(!body.includes('**Deliverables & Rates**'), 'no REPLY1 deliverables header in the combined email');
+  assert.ok(!/\d+\s*or more video package/i.test(body), 'no vague "N or more video package" pitch');
+  // The rest of the REPLY 1 collaboration details still lead the email.
+  for (const h of ['**Content Style**', '**Platforms**', '**Timelines**']) {
+    assert.ok(body.includes(h), `expected ${h} to survive in the combined email`);
+  }
+  // The offer itself is the single source of deliverables/rates in the email.
+  assert.ok(body.includes('**Flat Package ($1,500)**'), 'the approved offer carries the deliverables/rates');
+  assert.ok(body.includes('**Payment details**'), 'payment section still present');
+});
+
+test('offer email (non-combine) is unaffected — no REPLY1 deliverables block to begin with', () => {
+  const offer = { offer_type: 'video_based', num_videos: 2, flat_fee: 1500 };
+  const { body } = templates.offerEmail(offer, { firstName: 'Dua', salutation: 'Dua', brandName: 'Acme' });
+  // A standalone offer never carried REPLY 1's collab details in the first place.
+  assert.ok(!body.includes('**Deliverables & Rates**'), 'standalone offer has no REPLY1 deliverables block');
+  assert.ok(body.startsWith('Hi Dua,\n\nThanks for sharing your rates!'), 'standalone offer opener intact');
 });
 
 test('offer email renders the video_bonus structure (base fee + bonus on threshold)', () => {

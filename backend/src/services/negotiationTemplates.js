@@ -109,6 +109,19 @@ function stripUsageRights(body) {
   return body.replace(/\*\*Usage Rights\*\*\n[^\n]*\n\n/, '');
 }
 
+// Remove the "Deliverables & Rates" block from a filled REPLY 1 body. Used in
+// combine mode (the creator gave their rate in the first reply, so REPLY 1's
+// details and the approved offer go out as ONE email). REPLY 1 pitches vague,
+// rate-dependent deliverables ("a 2 or more video package deal") that directly
+// conflict with the concrete offer presented in the same email — the offer is
+// the single source of deliverables and rates, so this block must be dropped.
+// Matches the header plus every following non-empty line up to the blank line
+// that precedes the next section, so it works regardless of how many bullets
+// the block carries.
+function stripDeliverables(body) {
+  return body.replace(/\*\*Deliverables & Rates\*\*\n(?:[^\n]+\n)+\n/, '');
+}
+
 // includeRefs: share the reference accounts (default FALSE — only when the
 // creator explicitly asked to see examples / a portfolio / other creators).
 // includeUsageRights: state that no ad rights are required (default TRUE,
@@ -383,13 +396,19 @@ function offerEmail(offer, vars, { combine = false, viewRange = null } = {}) {
   const isViewBased = offer && offer.offer_type === 'view_based';
   const videos = !isViewBased ? Number(offer.num_videos || 2) : 2;
   v.deadline = approxDeadline(videos, v.cadence);
-  // Combine mode reuses REPLY 1's details but never the references block — an
-  // offer email is not the place to introduce a portfolio unprompted. For a
+  // Combine mode reuses REPLY 1's details but drops two blocks: the references
+  // (an offer email is not the place to introduce a portfolio unprompted) and
+  // the "Deliverables & Rates" pitch (its rate-dependent, vague deliverables
+  // conflict with the concrete approved offer that follows — the offer is the
+  // single source of deliverables and rates in the combined email). For a
   // view-based approved offer, use the view-based REPLY 1 variant so no
   // "N-video package" language leaks into the combined lead.
   const reply1Body = isViewBased ? REPLY1_BODY_VIEW_BASED : REPLY1_BODY;
   const lead = combine
-    ? stripReferences(fill(reply1Body, v)).replace(/\n\nIf everything sounds good[\s\S]*$/, '\n')
+    ? stripDeliverables(stripReferences(fill(reply1Body, v))).replace(
+        /\n\nIf everything sounds good[\s\S]*$/,
+        '\n',
+      )
     : `Hi ${v.salutation},\n\nThanks for sharing your rates!\n`;
   const body = `${lead}\n${describeOffer(offer, v.brandName, viewRange)}\n\n${fill(PAYMENT_AND_CLOSE, v)}`;
   const subject = fill(REPLY1_SUBJECT, v);
@@ -499,6 +518,7 @@ module.exports = {
   declineDelay,
   stripReferences,
   stripUsageRights,
+  stripDeliverables,
   // Raw template strings (canonical content fed to Claude).
   REPLY1_SUBJECT,
   REPLY1_BODY,
