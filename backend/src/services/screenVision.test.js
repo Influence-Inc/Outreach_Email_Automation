@@ -2,15 +2,19 @@
 
 // Run with: npm test  (node --test)
 //
-// The screen reader is a pure function of a parsed Android UI-element tree, so
-// these fixtures represent plausible Instagram screens and assert the reading
-// the navigator will branch on. The exact resource-ids / labels get calibrated
-// against a real device later; what's locked here is the interpretation logic
-// (classification, target coordinates from bounds, captured-data extraction).
+// Two layers of fixtures:
+//   1. Synthetic node-arrays that exercise each classification / extractor path.
+//   2. Real Instagram `uiautomator dump` XML from a paired device (in
+//      __fixtures__/), so a live-IG UI change that breaks calibration fails a
+//      test loudly instead of silently returning `screen: unknown` in prod.
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
 const sv = require('./screenVision');
+const { parseUiXml } = require('../../../runner/src/driver/android');
+const FIX = (name) => parseUiXml(fs.readFileSync(path.join(__dirname, '__fixtures__', name), 'utf8'));
 
 const bounds = (x, y, w, h) => ({ x, y, w, h });
 
@@ -183,4 +187,32 @@ test('looksLikeHandle accepts IG handles, rejects names and empties', () => {
   assert.ok(sv.looksLikeHandle('@garage_gains'));
   assert.ok(!sv.looksLikeHandle('Mia Fit'));
   assert.ok(!sv.looksLikeHandle(''));
+});
+
+// --- Real IG fixtures (locked against future SIGNALS drift) -----------------
+// Each was captured from a real device on 2026-08-10 with `adb shell uiautomator
+// dump` and lives in __fixtures__/. If Instagram changes the UI enough to break
+// these, this file fails — pointing to exactly which reading regressed.
+
+test('real IG SERP for "homegym" -> search_results with reel-grid cards', () => {
+  const r = sv.readScreen({ elements: FIX('screen1-results.xml') });
+  assert.strictEqual(r.screen, 'search_results');
+  assert.ok(r.targets.back, 'has SERP back button target');
+  assert.ok(r.targets.searchBox, 'has search-box (edit query) target');
+  assert.ok(Array.isArray(r.reelResults) && r.reelResults.length >= 6, 'extracted reel cards');
+  assert.deepStrictEqual(r.reelResults[0], { index: 0, author: 'Amar Mujkanovic' });
+  assert.ok(r.targets['reelResult:0'], 'per-card tap target');
+});
+
+test('real IG profile (Reels sub-tab active) -> profile with full header + reels', () => {
+  const r = sv.readScreen({ elements: FIX('screen2-profile.xml') });
+  assert.strictEqual(r.screen, 'profile');
+  assert.strictEqual(r.username, 'amarmujkanovicc');
+  assert.strictEqual(r.fullName, 'Amar Mujkanovic');
+  assert.strictEqual(r.followers, 19500);      // parsed from content-desc="19.5Kfollowers"
+  assert.strictEqual(r.category, 'Fitness Model');
+  assert.match(r.bio, /dfyne\.official athlete/);
+  assert.ok(r.reels && r.reels.length >= 6, 'reels grid surfaced under active Reels sub-tab');
+  assert.ok(r.reels.some((x) => x.views === 2400000), 'reel view counts parsed (2.4M)');
+  assert.ok(r.targets.back && r.targets.reelsTab, 'nav + Reels-tab targets present');
 });

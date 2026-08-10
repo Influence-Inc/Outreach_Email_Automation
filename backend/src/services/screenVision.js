@@ -114,15 +114,30 @@ const SIGNALS = {
     labels: ['search and explore', 'search'],
   },
   searchBox: {
-    rids: ['action_bar_search_edit_text', 'search_edit_text', 'echo_text', 'search_box'],
+    // Real IG (2024+): the search entry on the home screen is a bottom-bar edit
+    // text; on a SERP page it becomes the "tap to edit query" affordance in the
+    // journey header. Kept alongside the older rids for backward-compat.
+    rids: [
+      'bottom_bar_search_edit_text', 'bottom_search_layout',
+      'serp_journey_header_edit_tap_target',
+      'action_bar_search_edit_text', 'search_edit_text', 'echo_text', 'search_box',
+    ],
     labels: ['search input', 'search for'],
   },
   back: {
-    rids: ['action_bar_button_back', 'back_button', 'button_back'],
+    rids: [
+      'serp_journey_header_back_button',
+      'action_bar_button_back', 'back_button', 'button_back',
+    ],
     labels: ['back', 'navigate up'],
   },
   reelsTab: {
-    rids: ['profile_tab_icon_view_reels', 'row_profile_tab_reels', 'reels_tab'],
+    // Real IG uses a single `profile_tab_icon_view` per tab (Grid | Reels | Photos-of-you)
+    // — the one with content-desc="Reels" is what we want. The `labels: ['reels']`
+    // matcher below catches it via the content-desc; the rids here stay as extras.
+    rids: [
+      'profile_tab_icon_view', 'profile_tab_icon_view_reels', 'row_profile_tab_reels', 'reels_tab',
+    ],
     labels: ['reels'],
   },
   // Full-screen reel player engagement buttons. 'like' matches both the Like and
@@ -150,25 +165,63 @@ const ACTION_BLOCK_RE =
 // ── captured-data extractors ────────────────────────────────────────────────
 
 function extractProfile(elements) {
-  const out = { username: null, fullName: null, followers: null, bio: null };
+  const out = { username: null, fullName: null, followers: null, bio: null, category: null };
 
   const title = findByRid(elements, ['action_bar_title', 'action_bar_large_title', 'title']);
   if (title && looksLikeHandle(title.text)) out.username = norm(title.text).replace(/^@/, '');
 
-  const fullNameEl = findByRid(elements, ['profile_header_full_name', 'full_name']);
+  // Real IG (2024+) rid is `profile_header_full_name_above_vanity`; older/synthetic
+  // fixtures use `profile_header_full_name`. Both work.
+  const fullNameEl = findByRid(elements, [
+    'profile_header_full_name_above_vanity', 'profile_header_full_name', 'full_name',
+  ]);
   if (fullNameEl && fullNameEl.text) out.fullName = String(fullNameEl.text).trim();
 
-  const bioEl = findByRid(elements, ['profile_header_bio_text', 'profile_header_bio', 'bio_text']);
-  if (bioEl && bioEl.text) out.bio = String(bioEl.text).trim();
+  // Business/category chip that sits just above the bio on many profiles.
+  const catEl = findByRid(elements, ['profile_header_business_category']);
+  if (catEl && catEl.text) out.category = String(catEl.text).trim();
 
-  // Followers: an explicit count node by resource-id, else a "<n> followers"
-  // label anywhere in the header.
-  const followersEl = findByRid(elements, ['followers_count', 'row_profile_header_textview_followers_count']);
-  if (followersEl) {
+  // Bio has no resource-id on current IG; it's a plain TextView, usually
+  // multi-line, sitting inside the profile header. Prefer a rid'd bio (older
+  // fixtures), then the "no-rid, multi-line" TextView within the header y-band.
+  const bioEl = findByRid(elements, ['profile_header_bio_text', 'profile_header_bio', 'bio_text']);
+  if (bioEl && bioEl.text) {
+    out.bio = String(bioEl.text).trim();
+  } else {
+    const header = findByRid(elements, ['profile_header_container']);
+    const headerTop = header && header.bounds ? header.bounds.y : 0;
+    const headerBot = header && header.bounds ? header.bounds.y + header.bounds.h : Infinity;
+    const bio = elements.find(
+      (e) =>
+        !e.rid &&
+        /textview/i.test(String(e.cls || '')) &&
+        e.text && (e.text.includes('\n') || e.text.includes('@')) &&
+        e.bounds && e.bounds.y >= headerTop && e.bounds.y <= headerBot,
+    );
+    if (bio) out.bio = String(bio.text).trim();
+  }
+
+  // Followers: prefer the explicit count node; else parse the accessibility
+  // description like "19.5Kfollowers" (real IG glues the count + label);
+  // else fall back to a "<n> followers" label anywhere in the header.
+  const followersEl = findByRid(elements, [
+    'profile_header_familiar_followers_value',
+    'followers_count',
+    'row_profile_header_textview_followers_count',
+  ]);
+  if (followersEl && (followersEl.text || followersEl.desc)) {
     out.followers = parseCount(followersEl.text || followersEl.desc);
   } else {
-    const labelled = elements.find((e) => /followers?\b/i.test(textAndDesc(e)));
-    if (labelled) out.followers = parseCount(labelled.text || labelled.desc);
+    const stacked = findByRid(elements, ['profile_header_followers_stacked_familiar']);
+    const stackedDesc = stacked && stacked.desc;
+    if (stackedDesc) {
+      const m = stackedDesc.match(/([\d][\d.,]*\s*[kmb]?)\s*followers?/i);
+      if (m) out.followers = parseCount(m[1]);
+    }
+    if (out.followers == null) {
+      const labelled = elements.find((e) => /followers?\b/i.test(textAndDesc(e)));
+      if (labelled) out.followers = parseCount(labelled.text || labelled.desc);
+    }
   }
   return out;
 }
@@ -192,6 +245,29 @@ function extractReels(elements) {
     }
   }
   return reels;
+}
+
+// Search results: on the "Accounts" chip, IG shows rows carrying a handle-shaped
+// text; on the "For you" chip, IG shows a REEL grid where each card's author
+// name lives only in the content-desc ("Reel by <Author Name> at row X, col Y").
+// Extract each: `results` (handles you can tap into a profile) + `reelResults`
+// (reel-card tap targets whose author is a display name, not a handle).
+function extractReelResults(elements) {
+  const reelResults = [];
+  const targets = {};
+  for (const e of elements) {
+    if (!isClickable(e)) continue;
+    if (!/grid_card_layout_container/.test(ridLocal(e.rid))) continue;
+    const m = String(e.desc || '').match(/^\s*Reel by\s+(.+?)\s+at row\s+\d+,\s*column\s+\d+/i);
+    if (!m) continue;
+    const author = m[1].trim();
+    const c = center(e.bounds);
+    if (!c) continue;
+    const idx = reelResults.length;
+    reelResults.push({ index: idx, author });
+    targets[`reelResult:${idx}`] = c;
+  }
+  return { reelResults, targets };
 }
 
 // Search results: the ordered list of @handles, plus a tap target per handle.
@@ -249,15 +325,30 @@ function classifyScreen(elements) {
     return 'reels_feed';
   }
 
+  // Profile — dominant over reels_tab: if the action bar shows a handle AND we
+  // see the profile header container, this is a profile (even when the Reels
+  // sub-tab is active and reel view overlays are visible; we still want the
+  // header data extracted). Falls back to the older followers+tabs heuristic
+  // so the synthetic test fixtures continue to pass.
+  const title = findByRid(elements, ['action_bar_title', 'action_bar_large_title', 'title']);
+  const hasProfileContainer = !!findByRid(elements, ['profile_header_container']);
+  if (title && looksLikeHandle(title.text) && hasProfileContainer) return 'profile';
+  const hasFollowers = elements.some((e) => /followers?\b/i.test(textAndDesc(e)));
+  const hasProfileTabs = !!resolveTarget(elements, SIGNALS.reelsTab);
+  if (hasFollowers && hasProfileTabs) return 'profile';
+
+  // Search results (SERP): IG's dedicated results page has a `serp_journey_header_*`
+  // frame regardless of which chip (For you / Accounts / Audio / Tags) is active.
+  // Classify here BEFORE reels_tab, otherwise the "For you" reels grid would
+  // steal the classification via its preview_clip_play_count overlays.
+  const hasSerpHeader = !!findByRid(elements, ['serp_journey_header_container', 'serp_journey_header_query_text']);
+  if (hasSerpHeader) return 'search_results';
+
   const hasReelOverlays = extractReels(elements).length >= 2;
   const reelsTabSelected = elements.some(
     (e) => labelOf(e) === 'reels' && (e.selected === true || e.selected === 'true'),
   );
   if (hasReelOverlays || reelsTabSelected) return 'reels_tab';
-
-  const hasFollowers = elements.some((e) => /followers?\b/i.test(textAndDesc(e)));
-  const hasProfileTabs = !!resolveTarget(elements, SIGNALS.reelsTab);
-  if (hasFollowers && hasProfileTabs) return 'profile';
 
   const searchBox = resolveTarget(elements, SIGNALS.searchBox);
   const { results } = extractResults(elements);
@@ -295,12 +386,26 @@ function readScreen(input = {}) {
     const { results, targets: rt } = extractResults(elements);
     reading.results = results;
     Object.assign(targets, rt);
+    // Also expose the reel-grid cards (the "For you" chip on the SERP): each
+    // carries the display name of an author whose reel is shown. Tapping opens
+    // the reel — where the @handle becomes readable via the reels_feed reader.
+    const { reelResults, targets: rrt } = extractReelResults(elements);
+    if (reelResults.length) {
+      reading.reelResults = reelResults;
+      Object.assign(targets, rrt);
+    }
   } else if (screen === 'profile') {
     const p = extractProfile(elements);
     reading.fullName = p.fullName;
     reading.followers = p.followers;
     reading.bio = p.bio;
+    reading.category = p.category || null;
     if (p.username) reading.username = p.username;
+    // A profile with the Reels sub-tab active shows reel view overlays too —
+    // surface them so the navigator gets one hop's worth of scoring data for
+    // free (Rule 2/4/5 don't require a separate reels_tab visit in that case).
+    const reels = extractReels(elements);
+    if (reels.length) reading.reels = reels;
   } else if (screen === 'reels_tab') {
     reading.reels = extractReels(elements);
   } else if (screen === 'reels_feed') {
@@ -323,6 +428,7 @@ module.exports = {
   extractProfile,
   extractReels,
   extractResults,
+  extractReelResults,
   extractFeed,
   resolveTarget,
   center,
