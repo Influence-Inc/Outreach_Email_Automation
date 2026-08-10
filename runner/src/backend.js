@@ -49,11 +49,46 @@ function makeBackend({ backendUrl, hostToken, fetchImpl = globalThis.fetch }) {
     postCandidates: (id, candidates) =>
       req('POST', `/api/sourcing/runs/${id}/candidates`, { candidates }),
     stopRun: (id) => req('POST', `/api/sourcing/runs/${id}/stop`),
+    // Server-side vision: send the parsed UI-element tree (+ device size) and get
+    // back the navigator's structured reading. Interpretation lives on the backend.
+    readScreen: (payload) => req('POST', '/api/sourcing/vision/read', payload),
     // Live mirror surface (only meaningful when SOURCING_LIVE_MIRROR=on on the
     // backend; each 404s otherwise, which the caller treats as "off").
     publishFrame: (hostId, payload) =>
       req('POST', `/api/sourcing/hosts/${hostId}/frame`, payload),
     pullControls: (hostId) => req('GET', `/api/sourcing/hosts/${hostId}/control`),
+
+    // Agent-mode surface (backend-driven scouting; SOURCING_REMOTE_CONTROL=on).
+    // claimSession returns { active, runId? } — 204 means nothing is queued.
+    claimSession: async (hostId) => {
+      const res = await fetchImpl(base + `/api/sourcing/hosts/${hostId}/session/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-token': hostToken },
+      });
+      if (res.status === 204) return { active: false };
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) { /* non-json */ }
+      if (!res.ok) throw new Error(`POST /session/claim -> ${res.status} ${(json && json.error) || text}`);
+      return json || { active: false };
+    },
+    pullCommands: (hostId) => req('GET', `/api/sourcing/hosts/${hostId}/commands`),
+    postCommandResult: (hostId, payload) =>
+      req('POST', `/api/sourcing/hosts/${hostId}/commands/result`, payload),
+    // Upload a recorded reel clip as raw bytes (application/octet-stream so the
+    // backend's global JSON parser skips it). Returns { clipId }.
+    uploadClip: async (hostId, bytes, mediaType = 'video/mp4') => {
+      const res = await fetchImpl(base + `/api/sourcing/hosts/${hostId}/clip`, {
+        method: 'POST',
+        headers: { 'Content-Type': mediaType, 'x-api-token': hostToken },
+        body: bytes,
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) { /* non-json */ }
+      if (!res.ok) throw new Error(`POST /clip -> ${res.status} ${(json && json.error) || text}`);
+      return json || {};
+    },
   };
 }
 

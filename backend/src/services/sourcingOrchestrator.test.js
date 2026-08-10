@@ -7,7 +7,7 @@
 // scouting rules, dedupes, and "adds" the passers via injected in-memory stores.
 const test = require('node:test');
 const assert = require('node:assert');
-const { runWithSource, arraySource, processCandidate } = require('./sourcingOrchestrator');
+const { runWithSource, arraySource, processCandidate, reviewDecision } = require('./sourcingOrchestrator');
 
 // In-memory implementation of the injected side effects.
 function memStore(seedCreators = []) {
@@ -113,6 +113,52 @@ test('the injected AI classifier can rescue an off-keyword creator', async () =>
 
   assert.strictEqual(stats.added, 1);
   assert.strictEqual(creators[0].username, 'vibes');
+});
+
+test('a multimodal classifier verdict is persisted as candidate evidence', async () => {
+  const { candidates, deps } = memStore();
+  deps.nicheClassify = async () => ({
+    score: 0.9,
+    reason: 'clearly on-brand',
+    source: 'gemini-video',
+    evidence: { source: 'gemini-video', genre: 'home fitness', audienceMatch: 0.8, spokenTopic: 'home workout' },
+  });
+  await processCandidate(
+    run,
+    { ...goodCfg, targetCount: 1 },
+    { username: 'mia', bio: 'lifestyle', reels: fitReels() },
+    deps,
+  );
+  assert.strictEqual(candidates[0].evidence.niche.genre, 'home fitness');
+  assert.strictEqual(candidates[0].evidence.niche.audienceMatch, 0.8);
+});
+
+test('reviewDecision: off by default; borderline -> review, clear -> add', () => {
+  assert.strictEqual(reviewDecision({ nicheScore: 0.5 }, {}), 'add'); // reviewBorderline off
+  const cfg = { reviewBorderline: true, nicheThreshold: 0.4, reviewBand: 0.15 };
+  assert.strictEqual(reviewDecision({ nicheScore: 0.5 }, cfg), 'review'); // 0.5 < 0.55
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, cfg), 'add');
+  assert.strictEqual(reviewDecision({ nicheScore: null }, cfg), 'add'); // unassessed niche
+});
+
+test('a borderline passer is held for review, not auto-added', async () => {
+  const { candidates, creators, deps } = memStore();
+  deps.nicheClassify = async () => ({ score: 0.5, reason: 'borderline' });
+  const cfg = { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, reviewBorderline: true, reviewBand: 0.15, targetCount: 5 };
+  const res = await processCandidate(run, cfg, { username: 'maybe', bio: 'x', reels: fitReels() }, deps);
+  assert.strictEqual(res.decision, 'review');
+  assert.strictEqual(res.added, false);
+  assert.strictEqual(candidates[0].decision, 'review');
+  assert.strictEqual(creators.length, 0, 'not promoted into the campaign');
+});
+
+test('a clear passer above the review band is still auto-added', async () => {
+  const { creators, deps } = memStore();
+  deps.nicheClassify = async () => ({ score: 0.95, reason: 'clear' });
+  const cfg = { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, reviewBorderline: true, reviewBand: 0.15, targetCount: 5 };
+  const res = await processCandidate(run, cfg, { username: 'clear', bio: 'x', reels: fitReels() }, deps);
+  assert.strictEqual(res.decision, 'added');
+  assert.strictEqual(creators.length, 1);
 });
 
 test('processCandidate records a floor rejection', async () => {

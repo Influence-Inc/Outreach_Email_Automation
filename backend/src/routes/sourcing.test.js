@@ -35,3 +35,17 @@ test('nextRunStatus never un-pauses a paused run', () => {
 test('nextRunStatus leaves error alone (not queued, so no implicit resume)', () => {
   assert.deepStrictEqual(sourcing.nextRunStatus('error', false), {});
 });
+
+test('annotateHostHealth marks which host has a live backend session', () => {
+  const session = { isActive: (id) => id === 2, activeRunId: (id) => (id === 2 ? 99 : null) };
+  const out = sourcing.annotateHostHealth([{ id: 1, label: 'a' }, { id: 2, label: 'b' }], session);
+  assert.strictEqual(out[0].sessionActive, false);
+  assert.strictEqual(out[0].activeRunId, null);
+  assert.strictEqual(out[1].sessionActive, true);
+  assert.strictEqual(out[1].activeRunId, 99);
+  assert.strictEqual(out[1].label, 'b'); // original fields preserved
+});
+
+test('annotateHostHealth tolerates empty input', () => {
+  assert.deepStrictEqual(sourcing.annotateHostHealth(null, { isActive: () => false, activeRunId: () => null }), []);
+});

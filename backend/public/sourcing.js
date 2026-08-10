@@ -43,6 +43,14 @@ function fmt(n) {
   return String(v);
 }
 
+// Colour the last-seen time by freshness: green < 2 min, amber < 1 h, grey older.
+function seenFreshness(iso) {
+  if (!iso) return '<span class="scout-hint">never</span>';
+  const ageMs = Date.now() - new Date(iso).getTime();
+  const dot = ageMs < 2 * 60 * 1000 ? '#067647' : ageMs < 60 * 60 * 1000 ? '#b25e09' : '#9ca3af';
+  return `<span style="color:${dot}">●</span> ${new Date(iso).toLocaleString()}`;
+}
+
 function numOrUndef(id) {
   const raw = el(id).value;
   if (raw === '' || raw == null) return undefined;
@@ -59,6 +67,10 @@ function readForm() {
     risk: el('risk').value,
     targetCount: numOrUndef('targetCount'),
     reelsWindow: numOrUndef('reelsWindow'),
+    targetAudience: el('targetAudience').value.trim(),
+    genres: el('genres').value.trim(),
+    discovery: el('discovery').value,
+    reviewBorderline: el('reviewBorderline').checked,
   };
 }
 
@@ -71,6 +83,10 @@ function fillForm(cfg) {
   el('risk').value = ['low', 'medium', 'high'].includes(cfg.risk) ? cfg.risk : 'medium';
   el('targetCount').value = cfg.targetCount ?? '';
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
+  el('targetAudience').value = cfg.targetAudience || '';
+  el('genres').value = Array.isArray(cfg.genres) ? cfg.genres.join(', ') : (cfg.genres || '');
+  el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
+  el('reviewBorderline').checked = !!cfg.reviewBorderline;
 }
 
 function campaignId() { return el('campaign').value; }
@@ -215,6 +231,66 @@ function stopPolling() {
   pollTimer = null;
 }
 
+// --- Review queue (borderline matches) ------------------------------------
+
+function nicheEvidence(c) {
+  const n = c && c.evidence && c.evidence.niche;
+  return n && typeof n === 'object' ? n : {};
+}
+
+function renderReview(rows) {
+  const tb = el('review-rows');
+  if (!tb) return;
+  tb.innerHTML = '';
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="6" class="scout-hint">Nothing waiting for review.</td></tr>';
+    return;
+  }
+  for (const c of rows) {
+    const ev = nicheEvidence(c);
+    const niche = c.niche_score == null ? '—' : Number(c.niche_score).toFixed(2);
+    const genreAud = [ev.genre, ev.audienceMatch != null ? `aud ${Number(ev.audienceMatch).toFixed(2)}` : null]
+      .filter(Boolean).join(' · ') || '—';
+    const why = ev.reason || c.niche_reason || '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>@${c.username}</td>
+      <td>${fmt(c.followers)}</td>
+      <td>${niche}</td>
+      <td>${genreAud}</td>
+      <td>${why}</td>
+      <td style="white-space:nowrap">
+        <button data-approve="${c.id}" class="btn-primary small">Approve</button>
+        <button data-reject="${c.id}" class="ghost small">Reject</button>
+      </td>`;
+    tb.appendChild(tr);
+  }
+  tb.querySelectorAll('[data-approve]').forEach((b) =>
+    b.addEventListener('click', () => reviewAction(`/api/sourcing/candidates/${b.dataset.approve}/approve`)));
+  tb.querySelectorAll('[data-reject]').forEach((b) =>
+    b.addEventListener('click', () => reviewAction(`/api/sourcing/candidates/${b.dataset.reject}/reject`)));
+}
+
+async function reviewAction(path) {
+  try {
+    await api(path, { method: 'POST', body: JSON.stringify({}) });
+    await loadReview();
+    if (currentRun) await refreshRun().catch(() => {});
+  } catch (err) {
+    setStatus(err.message, 'err');
+  }
+}
+
+async function loadReview() {
+  if (!campaignId()) return;
+  try {
+    const rows = await api(`/api/sourcing/review?campaignId=${encodeURIComponent(campaignId())}`);
+    renderReview(rows);
+  } catch (err) {
+    setStatus(err.message, 'err');
+  }
+}
+
 // --- Paired hosts ---------------------------------------------------------
 
 let latestHosts = [];
@@ -228,13 +304,16 @@ async function loadHosts() {
     tb.innerHTML = '';
     for (const h of rows) {
       const tr = document.createElement('tr');
-      const seen = h.last_seen_at ? new Date(h.last_seen_at).toLocaleString() : '—';
       const plats = Array.isArray(h.platforms) ? h.platforms.join(', ') : '';
+      const session = h.sessionActive
+        ? `<span class="pill added">● scouting${h.activeRunId ? ` · run #${h.activeRunId}` : ''}</span>`
+        : '<span class="scout-hint">idle</span>';
       tr.innerHTML = `
         <td>${h.label}</td>
         <td>${plats}</td>
         <td><span class="pill ${h.status === 'active' ? 'added' : 'rejected'}">${h.status}</span></td>
-        <td>${seen}</td>
+        <td>${session}</td>
+        <td>${seenFreshness(h.last_seen_at)}</td>
         <td>${h.status === 'active' ? `<button data-host="${h.id}" class="ghost small revoke-host">Revoke</button>` : ''}</td>`;
       tb.appendChild(tr);
     }
@@ -387,7 +466,9 @@ function onFrameClick(ev) {
 }
 
 function wire() {
-  el('campaign').addEventListener('change', () => { currentRun = null; el('run-card').hidden = true; stopPolling(); loadConfig(); });
+  el('campaign').addEventListener('change', () => { currentRun = null; el('run-card').hidden = true; stopPolling(); loadConfig(); loadReview(); });
+  const reviewRefresh = el('review-refresh');
+  if (reviewRefresh) reviewRefresh.addEventListener('click', loadReview);
   el('save-btn').addEventListener('click', saveDefaults);
   el('start-btn').addEventListener('click', startRun);
   el('stop-btn').addEventListener('click', stopRun);
@@ -399,5 +480,7 @@ function wire() {
 }
 
 wire();
-loadCampaigns().catch((err) => setStatus(err.message, 'err'));
+loadCampaigns().then(() => loadReview()).catch((err) => setStatus(err.message, 'err'));
 loadHosts().catch(() => { /* non-fatal if the hosts card fails */ });
+// Keep the host-health tile live (connection freshness + active session).
+setInterval(() => loadHosts().catch(() => {}), 10000);

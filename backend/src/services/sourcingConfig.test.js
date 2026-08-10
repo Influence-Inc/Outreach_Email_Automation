@@ -19,6 +19,27 @@ test('buildConfig merges defaults + overrides and coerces types', () => {
   assert.strictEqual(cfg.reelsWindow, 12);
 });
 
+test('buildConfig carries targetAudience + genres for the reel judge', () => {
+  const cfg = buildConfig(
+    { niche: 'fitness' },
+    { targetAudience: '  women 25-34 beginners ', genres: 'fitness, wellness' },
+  );
+  assert.strictEqual(cfg.targetAudience, 'women 25-34 beginners');
+  assert.deepStrictEqual(cfg.genres, ['fitness', 'wellness']);
+  // absent -> empty, never undefined
+  const bare = buildConfig({}, {});
+  assert.strictEqual(bare.targetAudience, '');
+  assert.deepStrictEqual(bare.genres, []);
+});
+
+test('buildConfig parses the review-queue knobs', () => {
+  const cfg = buildConfig({}, { reviewBorderline: 'true', reviewBand: '0.2' });
+  assert.strictEqual(cfg.reviewBorderline, true);
+  assert.strictEqual(cfg.reviewBand, 0.2);
+  const off = buildConfig({}, {});
+  assert.strictEqual(off.reviewBorderline, false);
+});
+
 test('buildConfig defaults risk to medium and drops junk numbers', () => {
   const cfg = buildConfig({}, { risk: 'bogus', floor: 'abc', targetCount: 5 });
   assert.strictEqual(cfg.risk, 'medium');

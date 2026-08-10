@@ -18,6 +18,27 @@ test('loadConfig reads RUNNER_IDLE_POLL_MS override', () => {
   assert.strictEqual(cfg.idlePollMs, 5000);
 });
 
+test('loadConfig applies adb reliability defaults (usb, retries, keep-awake on)', () => {
+  const cfg = loadConfig({});
+  assert.strictEqual(cfg.adbMode, 'usb');
+  assert.strictEqual(cfg.reconnectRetries, 3);
+  assert.strictEqual(cfg.reconnectBackoffMs, 1000);
+  assert.strictEqual(cfg.keepAwake, true);
+});
+
+test('loadConfig reads Wi-Fi mode, keep-awake off, and a custom retry count', () => {
+  const cfg = loadConfig({
+    RUNNER_ADB_MODE: 'wifi',
+    RUNNER_KEEP_AWAKE: 'off',
+    RUNNER_ADB_RECONNECT_RETRIES: '5',
+    RUNNER_ADB_RECONNECT_BACKOFF_MS: '250',
+  });
+  assert.strictEqual(cfg.adbMode, 'wifi');
+  assert.strictEqual(cfg.keepAwake, false);
+  assert.strictEqual(cfg.reconnectRetries, 5);
+  assert.strictEqual(cfg.reconnectBackoffMs, 250);
+});
+
 test('loadConfig reads runId + trims trailing slash on backend url', () => {
   const cfg = loadConfig({
     RUNNER_BACKEND_URL: 'https://x.example/',
@@ -50,4 +71,28 @@ test('assertConfig accepts RUNNER_RUN_ID=auto (poll queued runs)', () => {
   assert.strictEqual(cfg.runId, null);
   assert.strictEqual(cfg.runMode, 'auto');
   assert.doesNotThrow(() => assertConfig(cfg));
+});
+
+test('scout mode is the default; agent mode reads RUNNER_MODE + poll interval', () => {
+  assert.strictEqual(loadConfig({}).mode, 'scout');
+  const cfg = loadConfig({ RUNNER_MODE: 'agent', RUNNER_AGENT_POLL_MS: '250' });
+  assert.strictEqual(cfg.mode, 'agent');
+  assert.strictEqual(cfg.agentPollMs, 250);
+});
+
+test('agent mode requires RUNNER_HOST_ID (not RUNNER_RUN_ID)', () => {
+  const missing = loadConfig({
+    RUNNER_BACKEND_URL: 'https://x.example',
+    RUNNER_HOST_TOKEN: 't',
+    RUNNER_MODE: 'agent',
+  });
+  assert.throws(() => assertConfig(missing), /RUNNER_HOST_ID/);
+
+  const ok = loadConfig({
+    RUNNER_BACKEND_URL: 'https://x.example',
+    RUNNER_HOST_TOKEN: 't',
+    RUNNER_MODE: 'agent',
+    RUNNER_HOST_ID: '4',
+  });
+  assert.doesNotThrow(() => assertConfig(ok));
 });
