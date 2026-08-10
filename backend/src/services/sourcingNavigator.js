@@ -83,6 +83,9 @@ async function* scout({ driver, config = {}, opts = {}, read = readView }) {
     await sleep(jitteredDelay(pacingMs));
 
     view = await read(driver);
+
+    // Classic path: IG returned an "Accounts" list of @handle rows (still on
+    // some builds / when the Accounts chip is active).
     const results = Array.isArray(view.results) ? view.results : [];
     for (const handle of results) {
       if (emitted >= max) return;
@@ -93,8 +96,63 @@ async function* scout({ driver, config = {}, opts = {}, read = readView }) {
       }
       await goBack({ driver, pacingMs, jitterPx, read });
     }
+
+    // Reels-first path: current IG (2024+) shows a "For you" REELS GRID after
+    // typing a keyword — each card's author is only in content-desc. Tap a card
+    // → the reels_feed player exposes the real @handle + an authorProfile tap
+    // target → open the profile → read header + reels. Go back TWICE to return
+    // to the SERP (profile -> reels_feed -> SERP).
+    const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
+    for (const rr of reelResults) {
+      if (emitted >= max) return;
+      const profile = await captureViaReel({ driver, reelIndex: rr.index, pacingMs, jitterPx, read });
+      if (profile) {
+        yield profile;
+        emitted += 1;
+      }
+      await goBack({ driver, pacingMs, jitterPx, read }); // profile -> reels_feed
+      await goBack({ driver, pacingMs, jitterPx, read }); // reels_feed -> SERP
+    }
+
     await goBack({ driver, pacingMs, jitterPx, read });
   }
+}
+
+// Reels-first capture: tap a reel card on the SERP -> read @handle from the
+// reels_feed -> tap the author to open their profile -> read header + reels.
+// Returns null if any hop lost its tap target (search UI drift); the outer loop
+// then just moves on to the next reel card.
+async function captureViaReel({ driver, reelIndex, pacingMs, jitterPx = 0, read = readView }) {
+  const serp = await read(driver);
+  const card = serp.targets && serp.targets[`reelResult:${reelIndex}`];
+  if (!card) return null;
+  await humanTap(driver, { x: card.x, y: card.y }, jitterPx, pacingMs);
+
+  const feed = await read(driver);
+  if (!feed.author || !feed.targets || !feed.targets.authorProfile) return null;
+  await humanTap(driver, feed.targets.authorProfile, jitterPx, pacingMs);
+
+  // Read the profile. On current IG the profile often opens with the Reels
+  // sub-tab already selected, in which case screenVision already surfaces reels
+  // alongside the header — no extra tap. If not, open the Reels tab.
+  let header = await read(driver);
+  if (!(Array.isArray(header.reels) && header.reels.length) && header.targets && header.targets.reelsTab) {
+    await humanTap(driver, header.targets.reelsTab, jitterPx, pacingMs);
+    header = await read(driver);
+  }
+
+  return {
+    username: header.username || feed.author,
+    full_name: header.fullName || null,
+    followers: header.followers ?? null,
+    bio: header.bio || null,
+    reels: Array.isArray(header.reels) ? header.reels : [],
+    evidence: {
+      capturedAt: new Date().toISOString(),
+      screens: ['reels_feed', 'profile'],
+      source: 'backend-navigator:reels-first',
+    },
+  };
 }
 
 async function openAndCaptureProfile({ driver, handle, pacingMs, jitterPx = 0, read = readView }) {
