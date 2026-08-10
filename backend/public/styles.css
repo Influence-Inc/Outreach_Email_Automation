@@ -554,6 +554,15 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--faint);
 }
 .cr-rate .deal-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The "Extra" clauses can be several paragraphs of pasted legal text — preview
+   the first few lines only so one long term can't stretch the whole row. The
+   full text is still what the click-to-edit textarea opens with. */
+.cr-rate .deal-terms {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 /* Editable Deals column (pending contracts). A faint header tells the admin the
    terms below are editable; the paid-ads value is a click-to-toggle chip. */
@@ -811,10 +820,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* Editable cells */
 .editable { cursor: text; border-radius: 6px; }
 .editable:hover { background: var(--surface-3); box-shadow: 0 0 0 4px var(--surface-3); }
-.editable input {
+.editable input, .editable textarea {
   width: 100%; box-sizing: border-box; padding: 5px 7px; font: inherit;
   border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface);
 }
+/* Multi-line editor (the Deals-column "Extra" clauses) — roomy enough to see a
+   pasted block, and resizable when it's longer than that. */
+.editable textarea { min-height: 120px; line-height: 1.45; resize: vertical; }
 
 /* --- Campaign-page delegations + intervention pop-up --------------------- */
 /* Banner above the creator table: how many creators need a human right now.

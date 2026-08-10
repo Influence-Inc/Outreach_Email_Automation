@@ -577,13 +577,20 @@ function setSearchQuery(next) {
   refreshCreators();
 }
 
-function makeEditable(td, { value, placeholder, onSave, allowEmpty = false }) {
+// `multiline` swaps the one-line input for a textarea — used by fields whose
+// value is a block of pasted prose (the Deals-column "Extra" clauses). A
+// single-line input silently flattens a pasted block's line breaks into spaces,
+// which is exactly the structure that says where one clause ends and the next
+// begins, so those fields need the textarea to keep it. Enter then types a new
+// line; Cmd/Ctrl+Enter (or clicking away) saves.
+function makeEditable(td, { value, placeholder, onSave, allowEmpty = false, multiline = false }) {
   td.classList.add('editable');
-  td.title = 'Click to edit';
+  td.title = multiline ? 'Click to edit · ⌘/Ctrl+Enter to save' : 'Click to edit';
   td.addEventListener('click', () => {
-    if (td.querySelector('input')) return;
-    const input = document.createElement('input');
-    input.type = 'text';
+    if (td.querySelector('input, textarea')) return;
+    const input = document.createElement(multiline ? 'textarea' : 'input');
+    if (multiline) input.rows = 8;
+    else input.type = 'text';
     input.value = value || '';
     input.placeholder = placeholder || '';
     td.innerHTML = '';
@@ -620,7 +627,7 @@ function makeEditable(td, { value, placeholder, onSave, allowEmpty = false }) {
     };
 
     input.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') {
+      if (ev.key === 'Enter' && (!multiline || ev.metaKey || ev.ctrlKey)) {
         ev.preventDefault();
         commit();
       } else if (ev.key === 'Escape') {
@@ -981,17 +988,6 @@ function parseMoneyInput(s) {
   return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
 }
 
-// Parse a human "extra points" input into a clean list of terms. Points are
-// separated by a new line or a semicolon — NOT a comma, since a single term
-// may itself contain commas ("2 revisions, at no extra cost"). Blank yields an
-// empty list, which clears the Additional Terms section from the contract.
-function parseTermsInput(s) {
-  return String(s == null ? '' : s)
-    .split(/[\n;]+/)
-    .map((t) => t.trim())
-    .filter(Boolean);
-}
-
 // PATCH a single contract deal field. Used by the editable Deals column.
 // For signed contracts, appends ?force=1 so the server allows the edit
 // without re-triggering signing or notifying the creator.
@@ -1006,19 +1002,30 @@ function saveContractField(r, patch) {
 
 // Render one editable "TAG · value" deal line whose value is a click-to-edit
 // text field (reuses the same makeEditable helper as the rate cell).
-function appendEditableDealLine(cell, r, { label, value, placeholder, onSave }) {
+// `editValue` overrides what the editor opens with when the cell's compact
+// preview isn't the text to edit (the "Extra" clauses, previewed on one line but
+// edited as the full block); `valueClass` and `multiline` are passed through for
+// those longer fields.
+function appendEditableDealLine(cell, r, { label, value, editValue, placeholder, onSave, valueClass, multiline }) {
   const lineDiv = document.createElement('div');
   lineDiv.className = 'deal-line';
   const tag = document.createElement('span');
   tag.className = 'deal-tag';
   tag.textContent = label;
   const val = document.createElement('span');
-  val.className = 'deal-val';
+  val.className = valueClass ? `deal-val ${valueClass}` : 'deal-val';
   val.textContent = value == null || value === '' ? '—' : value;
   lineDiv.appendChild(tag);
   lineDiv.appendChild(val);
   cell.appendChild(lineDiv);
-  makeEditable(val, { value: value == null ? '' : String(value), placeholder, allowEmpty: true, onSave });
+  const editable = editValue !== undefined ? editValue : value;
+  makeEditable(val, {
+    value: editable == null ? '' : String(editable),
+    placeholder,
+    allowEmpty: true,
+    multiline,
+    onSave,
+  });
 }
 
 // The editable deal terms shown under the rate once a contract exists — the
@@ -1142,17 +1149,27 @@ function renderEditableDeal(cell, r, data) {
     onSave: (v) => saveContractField(r, { exclusivity: v }),
   });
 
-  // Extra points — any additional clauses the team wants on THIS contract
-  // (an extra revision round, a special request, a one-off term). They render
-  // as an "Additional Terms" section on the contract page. Stored in their own
-  // `manualTerms` field so a later re-extraction of the email thread can't wipe
-  // them (the extraction-derived terms are shown on the contract, merged in).
-  // Separate multiple points with a semicolon; clearing the field removes them.
+  // Extra points — any additional clauses the team wants on THIS contract (an
+  // extra revision round, a special request, the block of clauses a creator sent
+  // over email). They render as an "Additional Terms" section on the contract
+  // page. Stored in their own `manualTerms` field so a later re-extraction of the
+  // email thread can't wipe them (the extraction-derived terms are shown on the
+  // contract, merged in — minus any the extraction merely restates from here).
+  //
+  // Edited as a multi-line block so a pasted set of clauses keeps the structure
+  // that says where each one ends: a blank line starts a new point, and the
+  // lines inside a clause stay part of it. The raw text is sent as-is and split
+  // server-side (contracts.splitManualTerms), so there is one parser, not two.
+  // The cell itself previews the points on one line; clearing it removes them.
+  const manualTerms = Array.isArray(data.manualTerms) ? data.manualTerms : [];
   appendEditableDealLine(cell, r, {
     label: 'EXTRA',
-    value: Array.isArray(data.manualTerms) ? data.manualTerms.join('; ') : '',
-    placeholder: 'point 1; point 2',
-    onSave: (v) => saveContractField(r, { manualTerms: parseTermsInput(v) }),
+    value: manualTerms.map((t) => String(t).replace(/\s+/g, ' ').trim()).join(' · '),
+    editValue: manualTerms.join('\n\n'),
+    placeholder: 'One point per line · blank line between pasted clauses',
+    multiline: true,
+    valueClass: 'deal-terms',
+    onSave: (v) => saveContractField(r, { manualTerms: v }),
   });
 
   const bonusAmt = data.bonusAmount != null ? Number(data.bonusAmount) : null;
