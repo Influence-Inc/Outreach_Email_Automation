@@ -522,14 +522,194 @@ function stripAutoSuppressedTerms(terms) {
   return (Array.isArray(terms) ? terms : []).filter((t) => !isAutoSuppressedTerm(t));
 }
 
+// ── Parsing the Deals-column "Extra" field ─────────────────────────────────
+// The field is where the team pastes the extra clauses a creator asked for over
+// email, so its value is rarely a tidy one-liner: it is usually a block of prose
+// clauses, each of which may run over several lines and carry semicolons of its
+// own ("…upon written notice for material breach; if terminated for reasons not
+// caused by…"). Splitting such a block on EVERY semicolon chopped single clauses
+// into fragments, so the separator is taken from the structure the author
+// actually used:
+//
+//   • blank lines → paragraph-separated clauses. Single newlines INSIDE a
+//     paragraph are kept, so a clause kept together with its own sub-points
+//     (a termination clause listing its 25% / 50% / 100% tiers) stays one point.
+//   • newlines → one point per line.
+//   • neither → a single line, where a semicolon is the only separator on offer;
+//     splitOnPointSemicolons decides which ones actually separate.
+//
+// An array is accepted as-is (the API shape, and what a re-save round-trips).
+// Every point is trimmed, a trailing separator semicolon is dropped, and blanks
+// are removed — an empty result is stored as [], so clearing the field removes
+// the Additional Terms section.
+function splitManualTerms(raw) {
+  if (Array.isArray(raw)) return cleanManualTerms(raw);
+  const s = String(raw == null ? '' : raw).replace(/\r\n?/g, '\n').trim();
+  const parts = /\n[^\S\n]*\n/.test(s)
+    ? s.split(/\n(?:[^\S\n]*\n)+/)
+    : s.includes('\n')
+      ? s.split(/\n+/)
+      : splitOnPointSemicolons(s);
+  return cleanManualTerms(parts);
+}
+
+function cleanManualTerms(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((t) => String(t == null ? '' : t).trim().replace(/\s*;$/, '').trim())
+    .filter(Boolean);
+}
+
+// A point longer than this that continues in lower case after a semicolon is
+// prose, not a new point — see splitOnPointSemicolons.
+const PROSE_POINT_CHARS = 40;
+
+// Semicolons in a single-line value are ambiguous: a separator between short
+// hand-typed points ("Extra revision round; rush delivery"), but ordinary
+// punctuation inside a pasted clause ("…for material breach; if terminated…").
+// Tell them apart by what the semicolon joins — one that continues an
+// already-long point in lower case (or with a bracketed sub-item) is
+// punctuation and is put back; every other one separates.
+function splitOnPointSemicolons(s) {
+  const out = [];
+  for (const piece of String(s).split(';')) {
+    const prev = out.length ? out[out.length - 1] : null;
+    if (prev !== null && /^\s*[a-z([]/.test(piece) && prev.trim().length > PROSE_POINT_CHARS) {
+      out[out.length - 1] = `${prev};${piece}`;
+    } else {
+      out.push(piece);
+    }
+  }
+  return out;
+}
+
+// ── A hand-entered term supersedes the extraction's version of it ───────────
+// The Deals-column "Extra" field is where the team pastes the clauses a creator
+// asked for over email — verbatim, in the creator's own wording. Those same
+// clauses are in the email THREAD, so the free-form extraction picks them up
+// too and writes its own condensed paraphrase into additionalTerms. Rendering
+// both put every pasted clause on the contract TWICE — once chopped down by the
+// extraction ("Termination clause: either party may terminate upon written
+// notice for material breach; …") and once in full ("Termination: Either party
+// may terminate this Agreement upon written notice to the other party…") —
+// which is the reported bug.
+//
+// The hand-entered text is authoritative (someone read the email and typed it),
+// so an extracted term is dropped whenever a manual term already covers the
+// same ground. Manual points are never dropped, and an extracted term with no
+// manual counterpart is never touched.
+
+// The standard legal clauses a creator sends as a block and the team pastes
+// whole. Each entry is one WHOLE-CLAUSE topic: a contract carrying both a
+// manual and an extracted version of the same topic is always saying the same
+// thing twice. Matched against each term; the first hit wins, so the more
+// specific topics come first. Anything outside this list has no topic and is
+// only ever superseded by a near-verbatim restatement (see coveredByManual).
+const CLAUSE_TOPICS = [
+  ['termination', /\bterminat(?:e|es|ed|ing|ion)\b/],
+  ['revisions', /\brevisions?\b|\bre-?shoots?\b|\brounds? of edits?\b/],
+  ['indemnification', /\bindemnif\w*\b|\bhold(?:s|ing)? harmless\b/],
+  // The client carries the risk of its own products, services and claims. Needs
+  // the harm/damages/claims language too, so an ordinary "the brand is
+  // responsible for shipping the samples" is not mistaken for this clause.
+  [
+    'client-responsibility',
+    /\b(?:client|company|brand)\b[^.]{0,80}?\bresponsib\w*[^.]{0,80}?\b(?:harm|damage|claim|liab|legal)/,
+  ],
+  ['governing-law', /\bgoverning law\b|\bgoverned by\b[^.]{0,80}?\blaws?\b|\blaws? of the state of\b/],
+  [
+    'ftc-disclosure',
+    /\bftc\b|\bendorsement guides?\b|\b16 ?c\.?\s?f\.?\s?r\.?|\bpaid[- ]partnership\b|#ad\b|#sponsored\b|\bmaterial connection\b/,
+  ],
+];
+
+// The clause topic a term is about, or null when it isn't one of the standard
+// clauses above.
+function clauseTopicOf(term) {
+  const s = String(term == null ? '' : term).toLowerCase();
+  if (!s.trim()) return null;
+  for (const [topic, re] of CLAUSE_TOPICS) {
+    if (re.test(s)) return topic;
+  }
+  return null;
+}
+
+// Every number a term states, normalised so "$6,000" / "6000" and "(25%)" /
+// "25%" compare equal. Used as a safety guard: a paraphrase of the same clause
+// restates its figures, so an extracted term naming a number the manual text
+// never mentions is saying something genuinely extra and is kept.
+function termNumbers(s) {
+  const found = String(s == null ? '' : s).match(/\d[\d,]*(?:\.\d+)?/g) || [];
+  return new Set(found.map((n) => n.replace(/,/g, '').replace(/\.0+$/, '')).filter(Boolean));
+}
+
+// Words carried by nearly every legal sentence — they say nothing about WHICH
+// clause a term is, so they're left out of the overlap measure below.
+const TERM_STOPWORDS = new Set(
+  ('the and for any all not are shall will may must with from that this these those such other than '
+    + 'has have been its their his her our your out off per each into upon under over about above '
+    + 'unless prior after before within during subject required require requires including include '
+    + 'includes provided provide party parties agreement content creator influencer talent agency')
+    .split(' '),
+);
+
+// The distinctive words of a term, lower-cased and de-duplicated.
+function termTokens(s) {
+  return new Set(
+    String(s == null ? '' : s)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(' ')
+      .filter((w) => w.length > 2 && !TERM_STOPWORDS.has(w)),
+  );
+}
+
+// Is this extracted term already covered by one of the hand-entered ones?
+// Three signals, cheapest first:
+//   1. the same text (case / whitespace-insensitive) — the plain duplicate;
+//   2. the same standard clause topic — the extraction's condensed rewrite of a
+//      clause the team pasted whole, which is what put the reported contract's
+//      termination / revisions / indemnification / governing-law / FTC points on
+//      the page twice;
+//   3. near-verbatim restatement — 80%+ of the extracted term's distinctive
+//      words appear in the manual one, which catches a paraphrase of a clause
+//      outside the topic list.
+// Signals 2 and 3 additionally require the manual text to state every number the
+// extracted term does, so a term carrying a figure the team's version never
+// mentions ("14 days' notice" against a termination clause with no notice
+// period) is kept rather than silently lost.
+function coveredByManual(term, manualTerms) {
+  const key = String(term).trim().replace(/\s+/g, ' ').toLowerCase();
+  const topic = clauseTopicOf(term);
+  const tokens = termTokens(term);
+  const numbers = termNumbers(term);
+  for (const manual of manualTerms) {
+    if (key === String(manual).trim().replace(/\s+/g, ' ').toLowerCase()) return true;
+    const manualNumbers = termNumbers(manual);
+    if ([...numbers].some((n) => !manualNumbers.has(n))) continue;
+    if (topic && topic === clauseTopicOf(manual)) return true;
+    // Two distinctive words is the floor — below that ("30 days") a term is too
+    // thin for word overlap to mean anything.
+    if (tokens.size >= 2) {
+      const manualTokens = termTokens(manual);
+      const shared = [...tokens].filter((w) => manualTokens.has(w)).length;
+      if (shared / tokens.size >= 0.8) return true;
+    }
+  }
+  return false;
+}
+
 // The full list of extra points shown under the contract's "Additional Terms"
 // section: the terms the extraction pulled from the email thread
 // (additionalTerms) PLUS the points the team added by hand from the Deals
 // column (manualTerms). The two are kept as separate fields so a re-extraction
 // of the thread can never wipe the manual ones; they're merged only here, at
 // the read/sync boundary. Each entry is trimmed, blanks are dropped, and the
-// lists are de-duplicated case-insensitively with the extracted terms kept
-// first (a manual point that merely restates an extracted one won't double up).
+// extracted terms are kept first.
+//
+// Extracted terms already covered by a hand-entered one are dropped
+// (coveredByManual), so a clause the team pasted from the creator's email shows
+// once, in the creator's own words, instead of alongside the extraction's
+// condensed rewrite of it.
 //
 // The auto-suppressed standing perks (isAutoSuppressedTerm) are stripped from
 // the EXTRACTED terms here too — a defence for contracts stored before the
@@ -542,8 +722,10 @@ function combinedAdditionalTerms(data) {
       .filter(Boolean);
   const out = [];
   const seen = new Set();
-  const extracted = stripAutoSuppressedTerms(norm(data && data.additionalTerms));
   const manual = norm(data && data.manualTerms);
+  const extracted = stripAutoSuppressedTerms(norm(data && data.additionalTerms)).filter(
+    (t) => !coveredByManual(t, manual),
+  );
   for (const t of [...extracted, ...manual]) {
     const key = t.toLowerCase();
     if (seen.has(key)) continue;
@@ -1360,20 +1542,12 @@ function coerceContractPatch(patch, existing = {}) {
   }
   if (has('manualTerms')) {
     // Extra points the team adds to THIS contract by hand from the Deals column
-    // (an extra round of revisions, a one-off request, a special clause) — the
-    // manual counterpart to the terms the extraction pulls from the thread.
-    // They live in their OWN field so a later re-extraction of the thread can't
-    // wipe them, and are merged with the extracted terms only at render/sync
-    // time (see combinedAdditionalTerms). Accept either an array of points or a
-    // single string with points separated by a newline or a semicolon (NOT a
-    // comma — a term may itself contain commas), and normalise to a clean list
-    // of non-empty, trimmed strings. An empty result is stored as [] so
-    // clearing the field removes the section.
-    const raw = patch.manualTerms;
-    const list = Array.isArray(raw)
-      ? raw
-      : String(raw == null ? '' : raw).split(/[\n;]+/);
-    out.manualTerms = list.map((t) => String(t == null ? '' : t).trim()).filter(Boolean);
+    // (an extra round of revisions, a one-off request, a clause the creator sent
+    // over email) — the manual counterpart to the terms the extraction pulls
+    // from the thread. They live in their OWN field so a later re-extraction of
+    // the thread can't wipe them, and are merged with the extracted terms only
+    // at render/sync time (see combinedAdditionalTerms).
+    out.manualTerms = splitManualTerms(patch.manualTerms);
   }
 
   // Reconcile the compensation split. On a video+bonus deal the fee is the
@@ -1630,6 +1804,9 @@ module.exports = {
   combinedAdditionalTerms,
   isAutoSuppressedTerm,
   stripAutoSuppressedTerms,
+  splitManualTerms,
+  clauseTopicOf,
+  coveredByManual,
   createContractForCreator,
   getByToken,
   recordSubmission,

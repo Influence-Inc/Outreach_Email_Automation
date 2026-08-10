@@ -177,7 +177,10 @@
   function rowsWrap(inner) { return inner ? '<div class="rows">' + inner + '</div>' : ''; }
 
   // ── Render the read-only contract sections (v1 layout, no Additional Terms) ──
-  function renderSections(d) {
+  // `combined` is the server's ready-made Additional Terms list (see the
+  // /api/contracts/:token payload); the local merge below is only the fallback
+  // for a page served alongside an older API response.
+  function renderSections(d, combined) {
     var html = '';
 
     html += section('Parties', rowsWrap(
@@ -349,11 +352,14 @@
     // Additional terms — any extra points on THIS contract: the terms the
     // extraction pulled from the email thread (additionalTerms) plus the points
     // the team added by hand from the dashboard (manualTerms), which live in
-    // their own field so a re-extraction never wipes them. Merged here (trimmed,
-    // blanks dropped, de-duplicated case-insensitively, extracted first) and
-    // rendered as a bulleted list under its own section — shown ONLY when there
-    // is at least one point, so a contract with none shows nothing here.
-    var extraTerms = (function () {
+    // their own field so a re-extraction never wipes them. The server merges the
+    // two (dropping the extraction's paraphrase of a hand-pasted clause, which
+    // otherwise put the same point on the contract twice) and sends the finished
+    // list as `combinedTerms`; the local merge below is the fallback for an older
+    // API response that carries only the two raw fields. Rendered as a bulleted
+    // list under its own section — shown ONLY when there is at least one point,
+    // so a contract with none shows nothing here.
+    var extraTerms = Array.isArray(combined) ? combined : (function () {
       var norm = function (arr) {
         return (Array.isArray(arr) ? arr : []).map(function (t) {
           return String(t == null ? '' : t).trim();
@@ -556,7 +562,7 @@
         var d = c.data || {};
         $('eyebrow').textContent = [d.brandName, d.campaignName].filter(Boolean).join(' · ') || 'Collaboration';
         $('subhead').textContent = d.creatorName ? 'Prepared for ' + d.creatorName : '';
-        renderSections(d);
+        renderSections(d, c.combinedTerms);
 
 
         // Populate the country dropdown.

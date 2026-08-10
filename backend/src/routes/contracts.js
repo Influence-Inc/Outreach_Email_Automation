@@ -23,6 +23,12 @@ api.get('/:token', async (req, res, next) => {
       token: c.token,
       status: c.status,
       data: c.data,
+      // The "Additional Terms" bullets, merged and de-duplicated server-side
+      // (contracts.combinedAdditionalTerms): the thread-extracted terms plus the
+      // team's hand-added points, minus the extraction's own paraphrase of any
+      // clause the team pasted by hand. Sent ready-to-render so the signing page
+      // and the dashboard sync show exactly the same list.
+      combinedTerms: contracts.combinedAdditionalTerms(c.data),
       signedAt: c.signed_at,
       signerName: c.signer_name,
     });

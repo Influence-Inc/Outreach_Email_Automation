@@ -452,7 +452,8 @@ test('creatorDb.buildPayload maps a signed contract to the Creator-DB DTO', () =
 
 test('creatorDb.buildPayload syncs extracted + manual extra points, merged', () => {
   // Hand-added manual points sync to the Creator DB alongside the extracted
-  // thread terms, de-duplicated (see contracts.combinedAdditionalTerms).
+  // thread terms, de-duplicated (see contracts.combinedAdditionalTerms) — a
+  // point restated by hand syncs in the team's own wording, once.
   const contract = {
     token: 'tok789',
     signed_at: '2026-07-06T12:00:00Z',
@@ -467,7 +468,7 @@ test('creatorDb.buildPayload syncs extracted + manual extra points, merged', () 
     },
   };
   const p = creatorDb.buildPayload(contract, { full_name: 'Alex Lee', email: 'alex@example.com', instagram_username: 'alexcreates' });
-  assert.deepStrictEqual(p.additionalTerms, ['Whitelisting 30 days', 'Extra revision round']);
+  assert.deepStrictEqual(p.additionalTerms, ['Extra revision round', 'whitelisting 30 days']);
 });
 
 test('creatorDb.buildPayload omits the view floor for a video-based deal', () => {
@@ -826,9 +827,9 @@ test('coerceContractPatch: deadline aliases, exclusivity defaults, and unknown k
 });
 
 test('coerceContractPatch: manualTerms accept a semicolon/newline string or an array', () => {
-  // The team's hand-added extra points land in the manualTerms field. A single
-  // string is split on semicolons and newlines (not commas — a term may contain
-  // commas), trimmed, and emptied entries dropped.
+  // The team's hand-added extra points land in the manualTerms field, split by
+  // splitManualTerms (never on commas — a term may contain commas), trimmed,
+  // with empty entries dropped.
   assert.deepStrictEqual(
     contracts.coerceContractPatch({ manualTerms: 'Extra revision, at no cost; Rush delivery\n' }).manualTerms,
     ['Extra revision, at no cost', 'Rush delivery'],
@@ -858,13 +859,15 @@ test('coerceContractPatch: blank manualTerms clears the section (stored as [])',
 
 test('combinedAdditionalTerms merges extracted + manual points, de-duplicated', () => {
   // The read/sync-boundary merge: extracted thread terms first, then the team's
-  // manual points, trimmed, blanks dropped, de-duplicated case-insensitively.
+  // manual points, trimmed and blanks dropped. A point the team restated by hand
+  // shows once, in THEIR wording — the hand-entered text is authoritative, so the
+  // extraction's copy of it is the one that goes.
   assert.deepStrictEqual(
     contracts.combinedAdditionalTerms({
       additionalTerms: ['Whitelisting 30 days', ' '],
       manualTerms: ['Extra revision round', 'whitelisting 30 days', ''],
     }),
-    ['Whitelisting 30 days', 'Extra revision round'],
+    ['Extra revision round', 'whitelisting 30 days'],
   );
   // Either field alone works, and a contract with neither yields an empty list.
   assert.deepStrictEqual(contracts.combinedAdditionalTerms({ manualTerms: ['Only manual'] }), ['Only manual']);
@@ -958,6 +961,181 @@ test('stripAutoSuppressedTerms drops only the standing perks from a list', () =>
   );
   assert.deepStrictEqual(contracts.stripAutoSuppressedTerms([]), []);
   assert.deepStrictEqual(contracts.stripAutoSuppressedTerms(null), []);
+});
+
+// The clauses a creator sent over email and the team pasted into the
+// Deals-column "Extra" field, verbatim — the reported case. Trimmed here to the
+// opening of each clause; the assertions below only care about which points
+// survive, not their full text.
+const PASTED_CLAUSES = [
+  'Termination: Either party may terminate this Agreement upon written notice to the other party in '
+    + "the event of a material breach of this Agreement by the other party. In the event of termination "
+    + "for reasons not caused by Influencer's breach or failure to perform, the Brand shall compensate "
+    + 'Influencer as follows: Twenty-five percent (25%) of the total agreed Fee if termination occurs '
+    + 'after submission and approval of the script/concept, Fifty percent (50%) after submission of the '
+    + 'draft content and One hundred percent (100%) if the final content has been posted.',
+  'Revisions/Edits: The Influencer shall be responsible for a maximum of one (1) rounds of revisions '
+    + 'or edits per content. No reshoots shall be required unless the Influencer has failed to follow '
+    + 'the approved script or concept.',
+  'Indemnification: The Company shall indemnify and hold harmless the Creator and Agency from any '
+    + "third-party claims, damages, or liabilities arising from the Company's breach of this Agreement.",
+  'Client Responsibility: The Client shall be fully responsible for any harm, damages, costs, claims, '
+    + "or legal matters arising from the Client's products, services, or claims/information provided by "
+    + 'the Client for inclusion in the Creator’s content.',
+  'Governing Law: This Agreement will be governed by and construed in accordance with the laws of the '
+    + 'state of California.',
+  'Advertising Disclosures (FTC Compliance): All Content created and posted by Talent under this '
+    + "Agreement shall clearly and conspicuously disclose Talent's material connection to the Brand, in "
+    + "accordance with the FTC's Endorsement Guides (16 C.F.R. Part 255).",
+];
+
+// The extraction's own condensed rewrite of those same clauses — it reads the
+// very email the team pasted from, so it echoes each one back in short form.
+const EXTRACTED_ECHOES = [
+  'Termination clause: either party may terminate upon written notice for material breach; if '
+    + "terminated for reasons not caused by creator's breach, creator is compensated 25% of fee after "
+    + 'script/concept approval, 50% after draft submission, and 100% after final content is posted.',
+  'Maximum 1 round of revisions per content; no reshoots required unless creator failed to follow '
+    + 'approved script/concept; any additional reshoots requested by client subject to additional fee.',
+  'Company shall indemnify and hold harmless Creator and Agency from third-party claims arising from '
+    + "Company's breach, misuse of deliverables, or materials/instructions provided by Company.",
+  'Client is fully responsible for any harm, damages, or legal matters arising from Client’s '
+    + "products, services, or claims/information provided for inclusion in creator's content.",
+  'Governing law: State of California.',
+  'FTC compliance: all content must include clear and conspicuous disclosure of material connection to '
+    + 'Brand (e.g. #ad, #sponsored, or platform paid-partnership label) visible without expansion.',
+];
+
+test('combinedAdditionalTerms drops the extraction’s rewrite of a hand-pasted clause', () => {
+  // The reported bug: the team pastes the creator's clauses into "Extra", the
+  // extraction pulls the SAME clauses off the thread in its own condensed
+  // wording, and the contract listed every point twice — once chopped down,
+  // once in full. The hand-entered text wins; only the extracted terms with no
+  // manual counterpart come through.
+  const merged = contracts.combinedAdditionalTerms({
+    additionalTerms: EXTRACTED_ECHOES.concat([
+      'Usage rights and paid ads limited to 30 days at the current $6,000 rate.',
+    ]),
+    manualTerms: PASTED_CLAUSES,
+  });
+  assert.deepStrictEqual(
+    merged,
+    ['Usage rights and paid ads limited to 30 days at the current $6,000 rate.'].concat(PASTED_CLAUSES),
+  );
+  // Without the pasted clauses the extracted terms are untouched — the drop is
+  // driven by the manual points, never by the terms themselves.
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({ additionalTerms: EXTRACTED_ECHOES }),
+    EXTRACTED_ECHOES,
+  );
+});
+
+test('combinedAdditionalTerms keeps an extracted term the manual clause does not cover', () => {
+  // A term on the same topic that states a figure the hand-entered clause never
+  // mentions is saying something extra — dropping it would lose a negotiated
+  // point, so the numbers have to line up before a term is superseded.
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({
+      additionalTerms: ["Termination requires 14 days' written notice"],
+      manualTerms: ['Termination: either party may terminate for material breach.'],
+    }),
+    ["Termination requires 14 days' written notice", 'Termination: either party may terminate for material breach.'],
+  );
+  // Different subjects entirely: an unrelated extracted term survives a full
+  // block of pasted clauses.
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({
+      additionalTerms: ["Views are counted over 7 days from each post's publish date"],
+      manualTerms: PASTED_CLAUSES,
+    }),
+    ["Views are counted over 7 days from each post's publish date"].concat(PASTED_CLAUSES),
+  );
+});
+
+test('clauseTopicOf recognises the standard pasted clauses, and nothing else', () => {
+  const topics = ['termination', 'revisions', 'indemnification', 'client-responsibility', 'governing-law', 'ftc-disclosure'];
+  // Both wordings of each clause — the creator's and the extraction's — land on
+  // the same topic, which is what pairs them up.
+  PASTED_CLAUSES.forEach((t, i) => assert.strictEqual(contracts.clauseTopicOf(t), topics[i], `manual: ${topics[i]}`));
+  EXTRACTED_ECHOES.forEach((t, i) => assert.strictEqual(contracts.clauseTopicOf(t), topics[i], `extracted: ${topics[i]}`));
+  // Ordinary negotiated terms are not one of the standard clauses — including a
+  // term that merely says someone is responsible for something, which must not
+  // read as the Client Responsibility clause.
+  for (const t of [
+    'Usage rights and paid ads limited to 30 days at the current $6,000 rate.',
+    'Whitelisting 30 days',
+    '30-day exclusivity in the skincare category',
+    'The brand is responsible for shipping the product samples before filming',
+    '',
+    null,
+  ]) {
+    assert.strictEqual(contracts.clauseTopicOf(t), null, `no topic: ${JSON.stringify(t)}`);
+  }
+});
+
+test('combinedAdditionalTerms drops a near-verbatim restatement outside the standard clauses', () => {
+  // Not one of the standard clause topics, but plainly the same point written
+  // out at length by hand — the extraction's short version goes.
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({
+      additionalTerms: ['Whitelisting 30 days'],
+      manualTerms: ['Whitelisting: the Brand may whitelist the content for 30 days from posting.'],
+    }),
+    ['Whitelisting: the Brand may whitelist the content for 30 days from posting.'],
+  );
+  // A different window is a different term, and both stay.
+  assert.deepStrictEqual(
+    contracts.combinedAdditionalTerms({
+      additionalTerms: ['Whitelisting 60 days'],
+      manualTerms: ['Whitelisting: the Brand may whitelist the content for 30 days from posting.'],
+    }),
+    ['Whitelisting 60 days', 'Whitelisting: the Brand may whitelist the content for 30 days from posting.'],
+  );
+});
+
+test('splitManualTerms: a pasted block splits on its structure, not on every semicolon', () => {
+  // Blank lines separate clauses; the lines INSIDE a clause stay part of it, so
+  // a termination clause keeps its 25% / 50% / 100% tiers as one point. The
+  // trailing separator semicolon the author typed is dropped.
+  const pasted = 'Termination: the Brand shall compensate the Influencer as follows:\n'
+    + 'Twenty-five percent (25%) after approval of the script;\n\n'
+    + 'Governing Law: the laws of the state of California.;';
+  assert.deepStrictEqual(contracts.splitManualTerms(pasted), [
+    'Termination: the Brand shall compensate the Influencer as follows:\nTwenty-five percent (25%) after approval of the script',
+    'Governing Law: the laws of the state of California.',
+  ]);
+  // No blank lines — one point per line, semicolons inside a line left alone.
+  assert.deepStrictEqual(contracts.splitManualTerms('Rush delivery\nNo reshoots; unless the brief changed'), [
+    'Rush delivery',
+    'No reshoots; unless the brief changed',
+  ]);
+  // A single line is all a one-line paste survives as, so its semicolons are the
+  // only separators available: they split short hand-typed points, but a long
+  // clause continued in lower case is prose and stays whole.
+  assert.deepStrictEqual(contracts.splitManualTerms('point 1; point 2'), ['point 1', 'point 2']);
+  assert.deepStrictEqual(contracts.splitManualTerms('Extra revision, at no cost; Rush delivery\n'), [
+    'Extra revision, at no cost',
+    'Rush delivery',
+  ]);
+  assert.deepStrictEqual(
+    contracts.splitManualTerms(
+      'Termination: either party may terminate upon written notice for material breach; if terminated '
+        + 'for reasons not caused by the creator, the creator is compensated.; Governing Law: California.',
+    ),
+    [
+      'Termination: either party may terminate upon written notice for material breach; if terminated '
+        + 'for reasons not caused by the creator, the creator is compensated.',
+      'Governing Law: California.',
+    ],
+  );
+  // Arrays (the API shape, and what a re-save round-trips) pass through cleaned.
+  assert.deepStrictEqual(contracts.splitManualTerms([' Whitelisting 30 days ', '', 'Brand tag required']), [
+    'Whitelisting 30 days',
+    'Brand tag required',
+  ]);
+  for (const blank of ['', '   ', ';\n;', '\r\n\r\n', [], null, undefined]) {
+    assert.deepStrictEqual(contracts.splitManualTerms(blank), [], `blank: ${JSON.stringify(blank)}`);
+  }
 });
 
 test('coerceContractPatch: empty patch yields no changes', () => {
