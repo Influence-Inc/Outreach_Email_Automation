@@ -212,7 +212,27 @@ test('real IG profile (Reels sub-tab active) -> profile with full header + reels
   assert.strictEqual(r.followers, 19500);      // parsed from content-desc="19.5Kfollowers"
   assert.strictEqual(r.category, 'Fitness Model');
   assert.match(r.bio, /dfyne\.official athlete/);
-  assert.ok(r.reels && r.reels.length >= 6, 'reels grid surfaced under active Reels sub-tab');
-  assert.ok(r.reels.some((x) => x.views === 2400000), 'reel view counts parsed (2.4M)');
+  // 6 unique reel view counts on this profile (the deduper drops the twin
+  // parent-desc + child-text copies real IG emits for each reel).
+  assert.deepStrictEqual(
+    r.reels.map((x) => x.views),
+    [8706, 17000, 7093, 212000, 2400000, 481000],
+  );
   assert.ok(r.targets.back && r.targets.reelsTab, 'nav + Reels-tab targets present');
+});
+
+test('real IG full-screen reel -> reels_feed with author, caption, engagement targets', () => {
+  const r = sv.readScreen({ elements: FIX('screen4-reel-feed.xml') });
+  assert.strictEqual(r.screen, 'reels_feed');
+  assert.strictEqual(r.author, 'katrina_pahomova');
+  // Caption lives in a nested content-desc on current IG (empty on the caption node itself).
+  assert.match(r.caption, /Your hook decides/);
+  assert.strictEqual(r.alreadyLiked, false);
+  assert.strictEqual(r.alreadySaved, false);
+  assert.ok(r.targets.like, 'like button target');
+  assert.ok(r.targets.save, 'save button target');
+  assert.ok(r.targets.share, 'share (direct_share_button) target');
+  assert.ok(r.targets.authorProfile, 'authorProfile target for opening the creator profile from a reel');
+  // NEW: the like_count / comment_count / save_count texts must NOT leak into reels.
+  assert.strictEqual(r.reels, undefined);
 });

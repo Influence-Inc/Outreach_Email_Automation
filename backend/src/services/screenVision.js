@@ -94,6 +94,17 @@ function findByRid(elements, names) {
   return elements.find((e) => names.some((n) => ridLocal(e.rid).includes(n))) || null;
 }
 
+// Prioritized variant: try each rid signal in ORDER, returning the first element
+// whose rid contains it. Prevents a broad name (e.g. 'author') from matching a
+// container that appears earlier in the tree than the specific element we want.
+function findByRidPriority(elements, names) {
+  for (const n of names) {
+    const e = elements.find((el) => ridLocal(el.rid).includes(n));
+    if (e) return e;
+  }
+  return null;
+}
+
 function findByLabel(elements, names) {
   return (
     elements.find((e) => {
@@ -152,8 +163,17 @@ const SIGNALS = {
     labels: ['save', 'remove'],
   },
   share: {
-    rids: ['share_button', 'feed_button_share', 'reel_share_button', 'clips_share'],
+    // The "send to a friend" button in a reel — direct_share_button on current
+    // IG. NOT the multi-step Repost, which is a separate control.
+    rids: ['direct_share_button', 'share_button', 'feed_button_share', 'reel_share_button', 'clips_share'],
     labels: ['share', 'send'],
+  },
+  // The tap target that opens a reel's creator profile from the full-screen reel
+  // player. Enables the reels-first search flow (search → tap a reel → open the
+  // author profile) that current IG surfaces by default for keyword queries.
+  authorProfile: {
+    rids: ['clips_author_info_component', 'clips_author_username', 'clips_author_profile_pic'],
+    labels: [],
   },
 };
 
@@ -231,20 +251,40 @@ function extractProfile(elements) {
 // the scoring rules, so returning only cleanly-read counts is correct.
 function extractReels(elements) {
   const reels = [];
+  // Only look at elements whose rid or desc hints at "reel/clip/video" — this
+  // is what keeps like_count / comment_count / save_count texts (also on the
+  // reel-feed screen and shaped like numbers) from being mistaken for views.
+  const REEL_HINT = /reel|clip|video|play_count|preview_clip_play_count/i;
+  // Real IG desc patterns are either "View Count 1.2M" or "1.2M views" — this
+  // regex accepts both; the number cannot end in a period (so "42943. View
+  // likes" from the like_count desc no longer sneaks in).
+  const VIEWS_RE =
+    /view\s*count[^\d]{0,3}(\d[\d,]*(?:\.\d+)?\s*[kmb]?)\b|(\d[\d,]*(?:\.\d+)?\s*[kmb]?)\s+views?\b/i;
   for (const e of elements) {
-    // "1.2M views" in a content-description, or a bare "1.2M" overlay text.
     const desc = String(e.desc || '');
-    const m = desc.match(/([\d][\d.,]*\s*[kmb]?)\s*views?/i);
+    if (!REEL_HINT.test(ridLocal(e.rid) + ' ' + desc)) continue;
+    // 1) counts embedded in the desc: "Reel by X. View Count 2.4M. Double tap..."
+    const m = desc.match(VIEWS_RE);
     if (m) {
-      const v = parseCount(m[1]);
+      const v = parseCount(m[1] || m[2]);
       if (Number.isFinite(v)) { reels.push({ views: v }); continue; }
     }
-    if (looksLikeCount(e.text) && /reel|clip|video/i.test(ridLocal(e.rid) + ' ' + desc)) {
+    // 2) bare count in the text of a reel/clip overlay (preview_clip_play_count).
+    if (looksLikeCount(e.text)) {
       const v = parseCount(e.text);
       if (Number.isFinite(v)) reels.push({ views: v });
     }
   }
-  return reels;
+  // Dedupe: on current IG a reel's view count often appears twice — once inside
+  // the parent container's content-desc ("...View Count 17K...") and again as
+  // the bare-text of the inner preview_clip_play_count overlay. Keep first-seen.
+  // Small risk of losing a genuine twin count; a reel is one of many signals.
+  const seen = new Set();
+  return reels.filter((r) => {
+    if (seen.has(r.views)) return false;
+    seen.add(r.views);
+    return true;
+  });
 }
 
 // Search results: on the "Accounts" chip, IG shows rows carrying a handle-shaped
@@ -298,13 +338,33 @@ function extractResults(elements) {
 // Full-screen reel player: the reel's author handle, caption, and whether it's
 // already liked/saved (so engagement never toggles the wrong way).
 function extractFeed(elements) {
+  // Priority match: try the specific author-username rid FIRST so a container
+  // like `clips_author_info_component` (empty text, matches broader 'author')
+  // doesn't win over the actual username field.
   const authorEl =
-    findByRid(elements, ['reel_feed_username', 'clips_username', 'feed_username', 'author', 'username']) ||
+    findByRidPriority(elements, ['clips_author_username', 'reel_feed_username', 'clips_username', 'feed_username']) ||
     elements.find((e) => isClickable(e) && looksLikeHandle(e.text));
   const author = authorEl && looksLikeHandle(authorEl.text) ? norm(authorEl.text).replace(/^@/, '') : null;
 
+  // Caption: current IG's caption text lives in a nested content-desc on an
+  // anonymous ViewGroup INSIDE clips_caption_component, not on the .text of the
+  // component itself. Prefer .text if present (old fixtures / other builds);
+  // otherwise find the desc-bearing element within the caption's y-band.
   const captionEl = findByRid(elements, ['clips_caption', 'reel_caption', 'caption']);
-  const caption = captionEl && captionEl.text ? String(captionEl.text).trim() : null;
+  let caption = null;
+  if (captionEl) {
+    if (captionEl.text) {
+      caption = String(captionEl.text).trim();
+    } else if (captionEl.bounds) {
+      const { y, h } = captionEl.bounds;
+      const inner = elements.find(
+        (e) =>
+          e !== captionEl && e.desc && e.bounds &&
+          e.bounds.y >= y && e.bounds.y + e.bounds.h <= y + h + 10,
+      );
+      if (inner && inner.desc) caption = String(inner.desc).trim();
+    }
+  }
 
   const alreadyLiked = elements.some((e) => labelOf(e) === 'unlike');
   const alreadySaved = elements.some((e) => labelOf(e) === 'remove' || ridLocal(e.rid).includes('saved'));
@@ -417,6 +477,7 @@ function readScreen(input = {}) {
     add('like', SIGNALS.like);
     add('save', SIGNALS.save);
     add('share', SIGNALS.share);
+    add('authorProfile', SIGNALS.authorProfile);
   }
 
   return reading;
@@ -431,6 +492,7 @@ module.exports = {
   extractReelResults,
   extractFeed,
   resolveTarget,
+  findByRidPriority,
   center,
   looksLikeHandle,
   looksLikeCount,
