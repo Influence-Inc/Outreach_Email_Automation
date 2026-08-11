@@ -41,9 +41,16 @@ async function enterReelsFeed({ driver, read, term, pacingMs }) {
   await driver.typeText(term);
   await sleep(jitteredDelay(pacingMs));
   view = await read(driver);
+  // Prefer an @handle result row (older IG / Accounts chip). On current IG the
+  // keyword SERP is the "For you" REEL GRID — tap the first reel card to drop
+  // straight into the full-screen reel player, which is what the loop scrolls.
   const first = (view.results || [])[0];
   if (first && view.targets && view.targets[`result:${first}`]) {
     const t = view.targets[`result:${first}`];
+    await driver.tap(t.x, t.y);
+    await sleep(jitteredDelay(pacingMs));
+  } else if (view.reelResults && view.reelResults.length && view.targets && view.targets['reelResult:0']) {
+    const t = view.targets['reelResult:0'];
     await driver.tap(t.x, t.y);
     await sleep(jitteredDelay(pacingMs));
   }

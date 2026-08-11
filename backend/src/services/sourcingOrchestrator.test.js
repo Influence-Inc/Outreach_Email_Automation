@@ -161,6 +161,27 @@ test('a clear passer above the review band is still auto-added', async () => {
   assert.strictEqual(creators.length, 1);
 });
 
+test('reels-mode candidate (no view window) is niche-scored and routed to review', async () => {
+  const { candidates, creators, deps } = memStore();
+  deps.nicheClassify = async () => ({ score: 0.9, reason: 'clearly on-brand', source: 'gemini-video' });
+  // A reel off the feed: caption only, no views. In profiles mode this would be
+  // rejected for "0 reels"; in reels mode it's niche-scored and held for review.
+  const cand = { username: 'reelcreator', reels: [{ caption: 'home gym' }], evidence: { source: 'reels-feed' } };
+  const res = await processCandidate(run, { ...goodCfg, discovery: 'reels', targetCount: 1 }, cand, deps);
+  assert.strictEqual(res.decision, 'review');
+  assert.strictEqual(res.added, false);
+  assert.strictEqual(candidates[0].decision, 'review');
+  assert.strictEqual(creators.length, 0, 'not auto-added — awaits human confirmation of reach');
+});
+
+test('reels-mode still rejects an off-niche reel', async () => {
+  const { candidates, deps } = memStore();
+  deps.nicheClassify = async () => ({ score: 0.2, reason: 'off-niche' });
+  const res = await processCandidate(run, { ...goodCfg, discovery: 'reels', nicheThreshold: 0.5 }, { username: 'x', reels: [{ caption: 'cooking' }] }, deps);
+  assert.strictEqual(res.decision, 'rejected');
+  assert.match(candidates[0].reject_reason, /below/);
+});
+
 test('processCandidate records a floor rejection', async () => {
   const { candidates, deps } = memStore();
   const res = await processCandidate(

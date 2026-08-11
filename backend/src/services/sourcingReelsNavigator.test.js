@@ -59,6 +59,33 @@ test('scrolls the feed, records + judges each reel, engages strong matches only'
   assert.ok(driver.ops.some((o) => o[0] === 'swipe'));
 });
 
+test('enters the reel feed by tapping a reel card when the SERP is a reel grid (current IG)', async () => {
+  const driver = fakeDriver();
+  // No @handle result rows — only a reel grid (reelResults + reelResult:0 target),
+  // exactly what current IG returns for a keyword search.
+  const views = [
+    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
+    { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
+    { screen: 'search_results', reelResults: [{ index: 0, author: 'Mia' }], targets: { 'reelResult:0': { x: 181, y: 320 } } },
+    // after tapping the card we're in the full-screen reel player:
+    { screen: 'reels_feed', author: 'mia', caption: 'gym', targets: { like: { x: 9, y: 9 } } },
+    { screen: 'home', targets: {} }, // ends the loop
+  ];
+  const deps = {
+    judge: async () => ({ score: 0.9 }),
+    getClip: async () => ({ buf: Buffer.from('X'), mediaType: 'video/mp4' }),
+    engagement: { policy: { enabled: false }, decide: () => ({ like: false, save: false, share: false }) },
+  };
+  const out = [];
+  for await (const c of scoutReels({ driver, config: { pacingMs: 0 }, opts: { keywords: ['homegym'], max: 1 }, read: scriptedRead(views), deps })) {
+    out.push(c);
+  }
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].username, 'mia');
+  // tapped the reel card to enter the feed
+  assert.ok(driver.ops.some((o) => o[0] === 'tap' && o[1] === 181 && o[2] === 320), 'tapped reelResult:0');
+});
+
 test('stops immediately on an action_blocked screen (backoff)', async () => {
   const driver = fakeDriver();
   const views = [

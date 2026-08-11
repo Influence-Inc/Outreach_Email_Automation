@@ -46,7 +46,11 @@ docs for current rates.
 ### Scouting rules (per campaign)
 
 - `discovery: "reels"` — use the explore/scroll reel‑feed flow (watch + hear +
-  occasionally engage); omit for the classic search → profile flow.
+  occasionally engage); omit for the classic search → profile flow. A reel off
+  the feed has no multi‑reel view window, so reels‑mode candidates are scored on
+  the Gemini niche match **only** (the floor/risk/stability rules don't apply)
+  and are **always routed to the review queue** — a human confirms reach before
+  they're added. (Profiles mode keeps the full deterministic rules + auto‑add.)
 - `targetAudience` / `genres` — fed to the Gemini judge (audience fit + on‑brand genres).
 - `reviewBorderline: true` (+ optional `reviewBand`, default `0.15`) — hold
   near‑threshold AI matches in the **review queue** instead of auto‑adding.
