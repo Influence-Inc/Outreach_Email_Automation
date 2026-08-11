@@ -105,6 +105,24 @@ test('nicheMatch uses an injected AI classifier, else falls back to keywords', a
   assert.ok(fallback.nicheScore > 0);
 });
 
+test('decideReel gates on niche score only (no view window)', () => {
+  // A reel captured off the feed: caption only, no views. decide() would reject
+  // it for "0 reels", but decideReel passes it on niche score alone.
+  const reel = { username: 'a', nicheScore: 0.8, reels: [{ caption: 'home gym workout' }] };
+  const pass = F.decideReel(reel, { nicheThreshold: 0.5 });
+  assert.strictEqual(pass.pass, true);
+  assert.strictEqual(pass.reelCount, 0);
+  assert.strictEqual(pass.viewFloorPass, null);
+
+  const low = F.decideReel({ username: 'b', nicheScore: 0.3 }, { nicheThreshold: 0.5 });
+  assert.strictEqual(low.pass, false);
+  assert.match(low.rejectReason, /below 0\.5/);
+
+  // Falls back to keyword score when no AI score is attached.
+  const kw = F.decideReel({ username: 'c', reels: [{ caption: 'gym day' }] }, { keywords: ['gym'], nicheThreshold: 0.4 });
+  assert.strictEqual(kw.pass, true);
+});
+
 test('decide passes a well-matched creator', () => {
   const cand = { username: 'coach', bio: 'fitness', reels: reelsOf(Array(12).fill(100000), 'gym day') };
   const out = F.decide(cand, {

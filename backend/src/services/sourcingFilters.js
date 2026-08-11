@@ -319,6 +319,34 @@ function decide(candidate, config = {}) {
   return evalResult;
 }
 
+// Niche-only verdict for a single reel captured off the reel feed (discovery
+// mode 'reels'). There's no multi-reel view window to apply the floor / risk /
+// stability / minReels rules to, so we gate purely on the (Gemini) niche score;
+// reach gets confirmed by a human in the review queue. Same shape as decide().
+function decideReel(candidate, config = {}) {
+  const cfg = { ...DEFAULTS, ...config };
+  const nicheScore =
+    typeof candidate.nicheScore === 'number'
+      ? candidate.nicheScore
+      : keywordNicheScore(candidate, cfg);
+  const threshold = cfg.nicheThreshold ?? DEFAULTS.nicheThreshold;
+  const pass = nicheScore != null && nicheScore >= threshold;
+  return {
+    views: [],
+    reelCount: 0,
+    viewFloorPass: null,
+    riskProfile: null,
+    stabilityScore: null,
+    growthTrend: null,
+    nicheScore: nicheScore == null ? null : nicheScore,
+    nicheReason: candidate.nicheReason || null,
+    pass,
+    rejectReason: pass
+      ? null
+      : `niche score ${nicheScore == null ? 'unassessed' : nicheScore} below ${threshold}`,
+  };
+}
+
 module.exports = {
   DEFAULTS,
   parseCount,
@@ -337,6 +365,7 @@ module.exports = {
   nicheMatch,
   defaultClassify,
   decide,
+  decideReel,
   clamp01,
   round3,
 };

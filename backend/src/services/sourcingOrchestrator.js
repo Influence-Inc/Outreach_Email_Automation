@@ -11,7 +11,7 @@
 // routes/sourcing.js builds the production `deps` from db, duplicateGuard,
 // creatorDb and the shared creator-insert helper.
 
-const { nicheMatch, decide } = require('./sourcingFilters');
+const { nicheMatch, decide, decideReel } = require('./sourcingFilters');
 
 const REVIEW_BAND_DEFAULT = 0.15;
 
@@ -47,8 +47,11 @@ async function processCandidate(run, config, candidate, deps) {
     candidate.evidence = { ...(candidate.evidence || {}), niche: niche.evidence };
   }
 
-  // Rules 2/4/5 + niche threshold.
-  const verdict = decide(candidate, config);
+  // Reels-mode candidates (single reel off the feed, judged by Gemini) have no
+  // multi-reel view window, so they use a niche-only verdict; everything else
+  // uses the full deterministic rules.
+  const reelsMode = String(config.discovery || '').toLowerCase() === 'reels';
+  const verdict = reelsMode ? decideReel(candidate, config) : decide(candidate, config);
 
   // Persist the candidate + its evaluation. persistCandidate returns the row, or
   // null when this handle was already scouted for the campaign (unique index).
@@ -95,8 +98,10 @@ async function processCandidate(run, config, candidate, deps) {
     }
   }
 
-  // Trust dial: hold borderline passers for a human instead of auto-adding.
-  if (reviewDecision(verdict, config) === 'review') {
+  // Trust dial: reels-mode passers always go to review (no reach verified on the
+  // feed — a human confirms). Profiles-mode uses the borderline dial.
+  const disposition = reelsMode ? 'review' : reviewDecision(verdict, config);
+  if (disposition === 'review') {
     await deps.updateCandidate(row.id, { decision: 'review' });
     return { decision: 'review', added: false, candidateId: row.id };
   }
