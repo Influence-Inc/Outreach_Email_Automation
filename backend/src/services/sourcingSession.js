@@ -61,6 +61,12 @@ async function runSession({ hostId, run, deps }) {
   const captureCap = Number(deps.captureCap || process.env.SOURCING_CAPTURE_CAP || DEFAULT_CAPTURE_CAP);
   // Small tap-coordinate jitter so taps aren't pixel-perfect (anti-flag).
   const tapJitterPx = Number(deps.tapJitterPx != null ? deps.tapJitterPx : process.env.SOURCING_TAP_JITTER_PX || 5);
+  const log = (deps.logger && deps.logger.log) ? deps.logger.log.bind(deps.logger) : console.log;
+  log(
+    `[sourcing-session] run #${run.id} host ${hostId}: starting ` +
+    `(discovery=${(run.config && run.config.discovery) || 'profiles'}, ` +
+    `keywords=[${((run.config && run.config.keywords) || []).join(', ')}])`,
+  );
 
   chan.beginSession(hostId);
   const driver = makeDriver({ hostId, channel: chan });
@@ -100,7 +106,12 @@ async function runSession({ hostId, run, deps }) {
   }
 
   try {
-    await runWith(run, config, generatorSource(gen), buildOrchestratorDeps(run, deps));
+    const result = await runWith(run, config, generatorSource(gen), buildOrchestratorDeps(run, deps));
+    const stats = (result && result.stats) || {};
+    log(
+      `[sourcing-session] run #${run.id} host ${hostId}: ended status=${result && result.status} ` +
+      `scanned=${stats.scanned || 0} added=${stats.added || 0} review=${stats.review || 0} rejected=${stats.rejected || 0}`,
+    );
   } finally {
     try { if (gen.return) await gen.return(); } catch (_) { /* generator already done */ }
     chan.endSession(hostId);
