@@ -27,6 +27,14 @@ function enabled() {
   return String(process.env.SOURCING_REMOTE_CONTROL || '').toLowerCase() === 'on';
 }
 
+// One terse line per command lifecycle event, only when the surface is live, so
+// a run is traceable from the Railway logs: which op was enqueued, whether its
+// result POST matched the awaiting promise, and exactly when a timeout fired.
+// (Matched=false or a missing result line is the fingerprint of a lost result.)
+function trace(msg) {
+  if (enabled()) console.log(`[cmd] ${msg}`);
+}
+
 function ensure(hostId) {
   let s = HOSTS.get(hostId);
   if (!s) { s = { queue: [], inflight: new Map(), done: false, seq: 0 }; HOSTS.set(hostId, s); }
@@ -58,11 +66,13 @@ function enqueue(hostId, { op, args = {} } = {}, { timeoutMs = DEFAULT_TIMEOUT_M
   const timer = setTimeout(() => {
     if (s.inflight.has(id)) {
       s.inflight.delete(id);
+      trace(`host ${hostId} TIMEOUT ${op} id=${id} after ${timeoutMs}ms`);
       rejectFn(new Error(`command '${op}' timed out after ${timeoutMs}ms`));
     }
   }, timeoutMs);
-  s.inflight.set(id, { resolve: resolveFn, reject: rejectFn, timer });
+  s.inflight.set(id, { op, resolve: resolveFn, reject: rejectFn, timer });
   s.queue.push({ id, op, args });
+  trace(`host ${hostId} enqueue ${op} id=${id} (timeout ${timeoutMs}ms)`);
   return { id, promise };
 }
 
@@ -80,11 +90,12 @@ function pull(hostId) {
 // `error`. Returns false when the id is unknown (already timed out / reset).
 function resolve(hostId, id, { ok = true, result = null, error = null } = {}) {
   const s = HOSTS.get(hostId);
-  if (!s) return false;
+  if (!s) { trace(`host ${hostId} result id=${id} matched=false (no session for host)`); return false; }
   const p = s.inflight.get(Number(id));
-  if (!p) return false;
+  if (!p) { trace(`host ${hostId} result id=${id} matched=false (unknown/expired — already timed out or reset)`); return false; }
   clearTimeout(p.timer);
   s.inflight.delete(Number(id));
+  trace(`host ${hostId} result ${p.op} id=${id} matched=true ok=${ok}`);
   if (ok) p.resolve(result);
   else p.reject(new Error(error || 'agent reported command failure'));
   return true;

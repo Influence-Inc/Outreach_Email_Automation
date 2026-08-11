@@ -54,6 +54,8 @@ async function executeCommand(driver, cmd, ctx = {}) {
 async function serveSession({ driver, backend, hostId, config, logger = console, shouldStop = () => false, sleepFn = sleep }) {
   const pollMs = Math.max(0, Number(config.agentPollMs || 400));
   const warn = (...a) => (logger.warn || logger.log || (() => {})).call(logger, ...a);
+  const log = (...a) => (logger.log || (() => {})).call(logger, ...a);
+  let idlePolls = 0;
 
   while (!shouldStop()) {
     let pulled;
@@ -66,6 +68,7 @@ async function serveSession({ driver, backend, hostId, config, logger = console,
     }
     const cmds = (pulled && pulled.commands) || [];
     for (const cmd of cmds) {
+      idlePolls = 0;
       let result = null;
       let ok = true;
       let error = null;
@@ -75,14 +78,27 @@ async function serveSession({ driver, backend, hostId, config, logger = console,
         ok = false;
         error = err.message;
       }
+      // One concise line per device command so a run is traceable from the
+      // terminal (which op ran, and whether it succeeded).
+      const extra = cmd.op === 'dumpUi' && Array.isArray(result) ? ` (${result.length} nodes)` : '';
+      log(`[agent] ${cmd.op}${ok ? ` ✓${extra}` : ` ✗ ${error}`}`);
       try {
         await backend.postCommandResult(hostId, { id: cmd.id, ok, result, error });
       } catch (err) {
         warn('[agent] result post failed:', err.message);
       }
     }
-    if (pulled && pulled.done && !cmds.length) return; // session finished
-    if (!cmds.length) await sleepFn(pollMs);
+    if (pulled && pulled.done && !cmds.length) {
+      log('[agent] backend ended the session');
+      return; // session finished
+    }
+    if (!cmds.length) {
+      // If the backend never sends a command, surface that instead of looping
+      // silently — the usual cause is the navigator ending before it drives.
+      idlePolls += 1;
+      if (idlePolls === 12) warn('[agent] no commands from backend yet (session started but nothing to run)');
+      await sleepFn(pollMs);
+    }
   }
 }
 
