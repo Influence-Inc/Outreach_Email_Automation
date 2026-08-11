@@ -70,9 +70,13 @@ async function runSession({ hostId, run, deps }) {
 
   chan.beginSession(hostId);
   const driver = makeDriver({ hostId, channel: chan });
-  // Ready the phone (agent maps these to adb). Best-effort.
-  try { await driver.keepAwake(); } catch (_) { /* best-effort */ }
-  try { await driver.wake(); } catch (_) { /* best-effort */ }
+  // Ready the phone (agent maps these to adb). Best-effort — but surface a
+  // failure instead of swallowing it: a keepAwake/wake timeout here is the
+  // earliest sign the command channel isn't round-tripping (the agent executes
+  // the op but its result never settles the backend's await), which otherwise
+  // only shows up later as the first non-best-effort op (openApp) timing out.
+  try { await driver.keepAwake(); } catch (err) { log(`[sourcing-session] keepAwake failed: ${(err && err.message) || err}`); }
+  try { await driver.wake(); } catch (err) { log(`[sourcing-session] wake failed: ${(err && err.message) || err}`); }
 
   const config = run.config || {};
   const opts = {

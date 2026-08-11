@@ -16,10 +16,13 @@ const commands = require('./hostCommands');
 
 function makeRemoteDriver({ hostId, channel = commands, timeoutMs } = {}) {
   if (hostId == null) throw new Error('hostId is required');
-  const call = (op, args) => channel.enqueue(hostId, { op, args }, { timeoutMs }).promise;
+  const call = (op, args, opts) => channel.enqueue(hostId, { op, args }, { timeoutMs, ...opts }).promise;
   return {
     hostId,
-    openApp: (pkg) => call('openApp', { pkg }),
+    // A cold launch of a heavy app (Instagram) over Wi-Fi adb can take well over
+    // the 30s default — `monkey` waits for the launcher activity to come up — so
+    // openApp gets a generous window; every other op stays on the default.
+    openApp: (pkg) => call('openApp', { pkg }, { timeoutMs: timeoutMs || 60_000 }),
     tap: (x, y) => call('tap', { x, y }),
     swipe: (opts) => call('swipe', opts || {}),
     typeText: (text) => call('type', { text }),
