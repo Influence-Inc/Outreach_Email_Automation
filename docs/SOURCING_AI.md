@@ -74,10 +74,19 @@ search → profile flow.
 The Gemini verdict (`genre`, `audienceMatch`, `language`, `spokenTopic`, `reason`)
 is stored on `sourced_candidates.evidence.niche` so every match is auditable.
 
-## Host setup: scrcpy (for audio capture)
+## Host setup: audio capture
 
-`adb screenrecord` cannot capture audio, so the host needs **scrcpy 2.0+** on
-`PATH` (Android **11+** for audio; 12+ works out of the box):
+**On the Android app host ([`android-agent/`](../android-agent)) there is
+nothing to install.** The app captures screen + internal audio natively through
+`MediaProjection` + `AudioPlaybackCapture`, so the rest of this section applies
+only to the legacy laptop runner. (One caveat: an app may set
+`allowAudioPlaybackCapture="false"`, in which case the clip records with silent
+audio — video always works.)
+
+### Legacy laptop runner: scrcpy
+
+`adb screenrecord` cannot capture audio, so a **laptop** host needs **scrcpy
+2.0+** on `PATH` (Android **11+** for audio; 12+ works out of the box):
 
 - macOS: `brew install scrcpy`
 - Ubuntu: `sudo apt install scrcpy` (or the Genymobile release)

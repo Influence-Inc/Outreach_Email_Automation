@@ -108,10 +108,23 @@ Same rules as the laptop setup, and for the same reasons:
 
 ## Status / caveats
 
-Verified by unit test: the `dumpUi` wire shape.
+**Covered by unit tests** (`./gradlew :app:testDebugUnitTest`, 15 tests):
 
-Tested by inspection only — this has not yet run against a physical device, so
-expect the first live run to need small calibration:
+- the `dumpUi` element shape `screenVision.js` matches on, including that
+  `bounds` is `{x,y,w,h}` and not left/top/right/bottom;
+- the HTTP contract — endpoint paths, the `x-api-token` header, `204` meaning
+  idle rather than failure, the `{id, ok, result, error}` result envelope, and
+  that a numeric command id goes back as a **number** (stringifying it would
+  strand the backend navigator's await until it timed out);
+- the two errors that otherwise strand an operator — `remote control disabled`
+  and a rejected token — surface as instructions, not bare status codes.
+
+`BackendClient.kt` and `UiElement.kt` are deliberately free of Android imports
+so those tests run on a plain JVM.
+
+**Not yet exercised on a physical device.** The accessibility, screenshot and
+media paths are written against the platform APIs but have not been run on real
+hardware, so expect the first live run to need small calibration:
 
 - **`recordClip`** is the least-exercised path. An app can opt out of audio
   capture (`allowAudioPlaybackCapture="false"`), in which case the clip records
