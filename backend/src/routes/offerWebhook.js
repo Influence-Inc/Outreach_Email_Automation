@@ -354,12 +354,58 @@ function pickMatch(rows, fromDigits) {
   return suffix;
 }
 
+// Resolve the inbound number to the creator ROW the conversation is actually
+// about. Two steps, because one person can own several rows:
+//
+//   1. Identify the PERSON by phone (pickMatch over every row that has a number).
+//   2. Re-point to the row carrying their LIVE offer.
+//
+// Step 2 is what makes Used creators work. A Used creator has ONE ROW PER
+// CAMPAIGN (schema: UNIQUE (campaign_id, instagram_url)) — same person, same
+// phone, N rows — and step 1 returns an arbitrary one (unordered scan), which in
+// practice is an OLDER, finished campaign. The new campaign's pending offer
+// hangs off a DIFFERENT creator_id, so it stays invisible: the brief never
+// fires and "Hi" falls through to the generic support deflection.
 async function matchCreator(contactColumn, fromDigits) {
   const rows = await db.many(
-    `SELECT id, whatsapp, imessage, first_name, full_name, established_channel, ${contactColumn} AS contact
+    `SELECT id, whatsapp, imessage, first_name, full_name, established_channel, instagram_url,
+            ${contactColumn} AS contact
      FROM creators WHERE ${contactColumn} IS NOT NULL`,
   );
-  return pickMatch(rows, fromDigits);
+  const matched = pickMatch(rows, fromDigits);
+  if (!matched || !matched.instagram_url) return matched;
+
+  // Same person (same Instagram profile), whichever campaign row holds the
+  // newest live offer. Nothing pending anywhere → keep the matched row.
+  const live = await db.one(
+    `SELECT c.id, c.whatsapp, c.imessage, c.first_name, c.full_name, c.established_channel, c.instagram_url
+       FROM creators c
+       JOIN offers o ON o.creator_id = c.id AND o.status = 'pending'
+      WHERE c.instagram_url = $1
+      ORDER BY o.created_at DESC
+      LIMIT 1`,
+    [matched.instagram_url],
+  );
+  if (!live || live.id === matched.id) return matched;
+
+  // The live row may not have the phone yet — the Creator-DB backfill that fills
+  // it is TTL-gated (see segmentation.segmentCreators), so a freshly added
+  // campaign row can be blank for hours. Carry the number over (and persist it,
+  // so later inbounds match this row directly) or the reply has no destination
+  // and sendOfferBriefing bails with no_contact_for_channel.
+  if (!live[contactColumn] && matched[contactColumn]) {
+    live[contactColumn] = matched[contactColumn];
+    try {
+      await db.query(
+        `UPDATE creators SET ${contactColumn} = COALESCE(${contactColumn}, $2), updated_at = NOW()
+         WHERE id = $1`,
+        [live.id, matched[contactColumn]],
+      );
+    } catch (err) {
+      console.error('[offer-webhook] contact backfill failed', err.message);
+    }
+  }
+  return live;
 }
 
 // Pure routing for an inbound reply: which backend action it maps to. Keeps the
@@ -709,6 +755,7 @@ router.normalizeMetaWebhook = normalizeMetaWebhook;
 router.twilioWebhookUrl = twilioWebhookUrl;
 router.eventType = eventType;
 router.pickMatch = pickMatch;
+router.matchCreator = matchCreator;
 router.decideInboundAction = decideInboundAction;
 
 module.exports = router;
