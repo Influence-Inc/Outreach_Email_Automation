@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Sourcing Agent</string>
+    <string name="accessibility_label">Sourcing Agent — device control</string>
+    <string name="accessibility_description">Lets Deal Studio drive Instagram on this phone for creator sourcing: reads the screen, and taps, swipes and types on behalf of the backend navigator.</string>
+</resources>

@@ -107,6 +107,14 @@ the phone → post the result → repeat until the run's done, then claim the ne
 Start it once and leave it running (Ctrl+C to stop). USB or Wi-Fi, same as scout
 mode; the auto-reconnect + keep-awake reliability applies here too.
 
+> **No laptop, no adb:** [`android-agent/`](../android-agent) is an on-device
+> Android app that implements this exact same loop natively — the phone reaches
+> out to the backend instead of a computer reaching in over adb. Same endpoints,
+> same host token, no backend changes. It removes the `adb pair`/`adb connect`
+> setup, the same-LAN requirement, and the scrcpy dependency for reel audio.
+> This Node runner remains the right choice when you want the host on a
+> computer, or for `scout` mode.
+
 **For reel evaluation with audio** (backend `discovery: "reels"` mode), the host
 also needs **scrcpy 2.0+** on `PATH` (Android 11+ for audio) — `adb screenrecord`
 can't capture audio. macOS `brew install scrcpy`, Ubuntu `sudo apt install

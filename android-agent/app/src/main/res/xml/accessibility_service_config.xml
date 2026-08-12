@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  canRetrieveWindowContent -> the node tree behind `dumpUi`
+  canPerformGestures       -> tap / swipe
+  canTakeScreenshot        -> `screenshot` with no MediaProjection prompt (API 30+)
+
+  accessibilityEventTypes is deliberately typeWindowStateChanged only: the agent
+  polls on demand and never reacts to events, so there is no reason to have the
+  system wake this process for every view scroll.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/accessibility_description"
+    android:notificationTimeout="100" />
