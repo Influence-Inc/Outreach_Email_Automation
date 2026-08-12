@@ -44,8 +44,6 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: android-agent
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3

@@ -47,4 +47,7 @@ dependencies {
     // real implementation in so the payload-shape tests actually execute.
     testImplementation("org.json:json:20240303")
     testImplementation("junit:junit:4.13.2")
+    // Stub backend for the HTTP contract tests. The JDK's com.sun.net.httpserver
+    // is not on Android's API surface, so it cannot be used here.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
