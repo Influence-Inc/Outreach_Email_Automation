@@ -16,9 +16,26 @@ function parseDevices(stdout) {
     });
 }
 
+// The Wireless debugging screen shows the address as one "ip:port" string, so
+// people paste the whole thing into a field that only wants the ip (or only the
+// port). Be forgiving: pull the intended piece out of whatever was pasted, so a
+// pasted "192.168.1.5:44209" never assembles into a doubled "ip:port:ip:port"
+// that adb rejects with "protocol fault".
+function hostFromInput(input) {
+  const v = String(input || '').trim();
+  const i = v.lastIndexOf(':');
+  return i === -1 ? v : v.slice(0, i); // strip a trailing :port if present
+}
+function portFromInput(input, fallback = '') {
+  const v = String(input || '').trim();
+  const m = v.match(/(\d{2,5})\s*$/); // the port is the trailing run of digits
+  return m ? m[1] : (fallback || v);
+}
+
 // Android 11+ wireless-debugging handshake, then the persistent connection.
-function adbPairArgs({ host, pairPort }) { return ['pair', `${host}:${pairPort}`]; }
-function adbConnectArgs({ host, port }) { return ['connect', `${host}:${port}`]; }
+// host/port are normalized first so a pasted "ip:port" in either field is fine.
+function adbPairArgs({ host, pairPort }) { return ['pair', `${hostFromInput(host)}:${portFromInput(pairPort)}`]; }
+function adbConnectArgs({ host, port }) { return ['connect', `${hostFromInput(host)}:${portFromInput(port)}`]; }
 
 // Turn wizard answers into the { RUNNER_*: value } object written to .runnerrc.json.
 function buildConfigFromAnswers(a = {}) {
@@ -35,7 +52,9 @@ function buildConfigFromAnswers(a = {}) {
 
   if (a.adbMode === 'wifi') {
     cfg.RUNNER_ADB_MODE = 'wifi';
-    if (a.wifiHost && a.wifiPort) cfg.RUNNER_DEVICE_UDID = `${a.wifiHost}:${a.wifiPort}`;
+    const host = hostFromInput(a.wifiHost);
+    const port = portFromInput(a.wifiPort);
+    if (host && port) cfg.RUNNER_DEVICE_UDID = `${host}:${port}`;
   } else if (a.deviceUdid) {
     cfg.RUNNER_DEVICE_UDID = a.deviceUdid;
   }
@@ -56,4 +75,7 @@ function missingKeys(cfg = {}) {
   return missing;
 }
 
-module.exports = { parseDevices, adbPairArgs, adbConnectArgs, buildConfigFromAnswers, missingKeys };
+module.exports = {
+  parseDevices, adbPairArgs, adbConnectArgs, buildConfigFromAnswers, missingKeys,
+  hostFromInput, portFromInput,
+};

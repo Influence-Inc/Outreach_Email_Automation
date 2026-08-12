@@ -19,6 +19,27 @@ test('adb pair/connect arg builders', () => {
   assert.deepStrictEqual(s.adbConnectArgs({ host: '192.168.1.9', port: 5555 }), ['connect', '192.168.1.9:5555']);
 });
 
+test('hostFromInput / portFromInput tolerate a pasted full ip:port in any field', () => {
+  assert.strictEqual(s.hostFromInput('192.168.1.5:44209'), '192.168.1.5');
+  assert.strictEqual(s.hostFromInput('192.168.1.5'), '192.168.1.5');
+  assert.strictEqual(s.hostFromInput('  192.168.1.5:44209  '), '192.168.1.5');
+  assert.strictEqual(s.portFromInput('46451'), '46451');
+  assert.strictEqual(s.portFromInput('192.168.1.5:46451'), '46451');
+  assert.strictEqual(s.portFromInput('', '5555'), '5555');
+});
+
+test('pair/connect builders survive a full ip:port pasted into every field', () => {
+  // The exact mistake that produced "protocol fault": ip:port in BOTH fields.
+  assert.deepStrictEqual(
+    s.adbPairArgs({ host: '192.168.1.5:44209', pairPort: '192.168.1.5:46451' }),
+    ['pair', '192.168.1.5:46451'],
+  );
+  assert.deepStrictEqual(
+    s.adbConnectArgs({ host: '192.168.1.5:44209', port: '192.168.1.5:44209' }),
+    ['connect', '192.168.1.5:44209'],
+  );
+});
+
 test('buildConfigFromAnswers (agent + wifi) writes the right RUNNER_* keys', () => {
   const cfg = s.buildConfigFromAnswers({
     backendUrl: 'https://deals.influence.technology/',

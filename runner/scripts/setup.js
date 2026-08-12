@@ -16,6 +16,7 @@ const readline = require('readline');
 const { spawnSync } = require('child_process');
 const {
   parseDevices, adbPairArgs, adbConnectArgs, buildConfigFromAnswers, missingKeys,
+  hostFromInput, portFromInput,
 } = require('../src/setup');
 const { writeConfigFile, configPath } = require('../src/fileConfig');
 
@@ -42,14 +43,26 @@ async function main() {
   let wifiHost = '';
   let wifiPort = '';
   if (adbMode === 'wifi') {
-    console.log('\nOn the phone: Developer options -> Wireless debugging -> "Pair device with pairing code".');
-    wifiHost = await ask('Phone IP');
-    const pairPort = await ask('Pairing port (from the pairing dialog)');
-    const code = await ask('6-digit pairing code');
+    console.log('\nOn the phone: Developer options -> Wireless debugging.');
+    console.log('Keep the "Pair device with pairing code" popup OPEN while you answer — its');
+    console.log('port + code change every time you open it and expire after a minute or two.');
+    console.log('Tip: you can paste the whole "ip:port" into any field; only the right piece is used.\n');
+    // The popup and the main screen show TWO different ports. Pull the correct
+    // piece out of each answer (hostFromInput/portFromInput) so a pasted full
+    // "ip:port" can't assemble into a doubled address adb rejects.
+    wifiHost = hostFromInput(await ask('Phone IP (just the address, e.g. 192.168.1.5)'));
+    const pairPort = portFromInput(await ask('Pairing port — the number after ":" in the PAIRING POPUP (e.g. 46451)'));
+    const code = await ask('6-digit pairing code (from the same popup)');
     console.log('Pairing...');
     const pair = adb([...adbPairArgs({ host: wifiHost, pairPort }), code]);
     process.stdout.write(pair.stdout || pair.stderr || '');
-    wifiPort = await ask('Wireless-debugging port (the main ip:PORT, not the pairing port)', '5555');
+    if ((pair.stderr || '').includes('protocol fault') || (pair.stdout || '').includes('protocol fault')) {
+      console.log('⚠  Pairing failed — usually the popup expired or the wrong port was used.');
+      console.log('   Re-open "Pair device with pairing code" for fresh numbers and re-run setup.');
+    }
+    wifiPort = portFromInput(
+      await ask('Wireless-debugging port — the number after ":" on the MAIN screen (NOT the popup; on Android 11+ it is NOT 5555)', '5555'),
+    );
     console.log('Connecting...');
     const conn = adb(adbConnectArgs({ host: wifiHost, port: wifiPort }));
     process.stdout.write(conn.stdout || conn.stderr || '');
