@@ -107,6 +107,21 @@ the phone → post the result → repeat until the run's done, then claim the ne
 Start it once and leave it running (Ctrl+C to stop). USB or Wi-Fi, same as scout
 mode; the auto-reconnect + keep-awake reliability applies here too.
 
+> ### ⚠️ Agent mode now ships as an Android app
+>
+> **[`android-agent/`](../android-agent) is the supported way to run agent
+> mode.** It implements this exact loop natively on the phone — the phone
+> reaches out to the backend instead of a computer reaching in over adb. Same
+> endpoints, same host token, no backend changes.
+>
+> It removes `adb pair` / `adb connect`, the rotating wireless-debugging port,
+> the same-LAN requirement, the scrcpy install for reel audio, and the laptop
+> itself. Start there.
+>
+> Agent mode on this Node runner is kept as a fallback (and for hosts that must
+> live on a computer). `scout` mode — the navigator running on the host rather
+> than the backend — is still Node-only and unaffected.
+
 **For reel evaluation with audio** (backend `discovery: "reels"` mode), the host
 also needs **scrcpy 2.0+** on `PATH` (Android 11+ for audio) — `adb screenrecord`
 can't capture audio. macOS `brew install scrcpy`, Ubuntu `sudo apt install

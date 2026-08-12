@@ -1,0 +1,15 @@
+# Android / Gradle build output
+build/
+.gradle/
+local.properties
+*.apk
+*.aab
+*.iml
+.idea/
+captures/
+.cxx/
+
+# The wrapper jar is a binary; generate it with `gradle wrapper` (see README).
+gradle/wrapper/gradle-wrapper.jar
+gradlew
+gradlew.bat

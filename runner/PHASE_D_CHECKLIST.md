@@ -1,5 +1,18 @@
 # Phase D — Android live E2E checklist
 
+> ### ⚠️ Read this first
+>
+> This checklist covers the **laptop + adb** path. For creator sourcing you
+> almost certainly want the on-device app instead:
+> **[`android-agent/README.md`](../android-agent/README.md)**.
+>
+> It replaces every step below — no `adb`, no pairing code, no platform-tools,
+> no scrcpy, no laptop. Install the APK, paste the backend URL + host token +
+> host ID, flip one accessibility toggle, press Start.
+>
+> Stay here only if you need `scout` mode (the navigator running on the host) or
+> you specifically want the host on a computer.
+
 The runner package already ships the Android driver (`src/driver/android.js`)
 and the vision-driven Instagram Navigator. Android needs **no Appium and no
 extra software** — the driver talks to the phone directly through `adb`
