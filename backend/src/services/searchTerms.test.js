@@ -3,14 +3,30 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { normalizeTerms, expandTerms, toWords, MAX_TERMS } = require('./searchTerms');
+const { normalizeTerms, expandTerms, splitTerms, MAX_TERMS } = require('./searchTerms');
 
 // ── normalizeTerms ──────────────────────────────────────────────────────────
 
-test('a multi-word keyword becomes one search per word', () => {
+// A comma separates keywords; a space does not. "iphone photos" is the phrase
+// the operator meant to search for, not two separate searches.
+test('a comma separates keywords, a space does not', () => {
+  assert.deepStrictEqual(
+    normalizeTerms({ keywords: ['iphone photos, instagram story ideas'] }),
+    ['iphone photos', 'instagram story ideas'],
+  );
+});
+
+test('a multi-word keyword stays one search', () => {
   assert.deepStrictEqual(
     normalizeTerms({ keywords: ['home gym workout'] }),
-    ['home', 'gym', 'workout'],
+    ['home gym workout'],
+  );
+});
+
+test('spacing around the comma does not leak into the term', () => {
+  assert.deepStrictEqual(
+    normalizeTerms({ keywords: ['  iphone photos   ,instagram   story ideas  '] }),
+    ['iphone photos', 'instagram story ideas'],
   );
 });
 
@@ -38,26 +54,25 @@ test('duplicates across sources collapse, case-insensitively', () => {
   );
 });
 
-test('stopwords and short tokens never become a search', () => {
+// Filtering applies to single words WE derived, never to a phrase that was
+// typed in — an operator who wrote it meant it.
+test('a configured phrase is taken exactly as typed', () => {
   assert.deepStrictEqual(
-    normalizeTerms({ keywords: ['the best gym for you', 'a it'] }),
-    ['best', 'gym'],
+    normalizeTerms({ keywords: ['the best gym for you'] }),
+    ['the best gym for you'],
   );
 });
 
-test('generic creator-speak is dropped — it matches everyone', () => {
-  assert.deepStrictEqual(
-    normalizeTerms({ keywords: ['fitness content creator reels'] }),
-    ['fitness'],
-  );
+test('a derived single word that is pure noise is dropped', () => {
+  assert.deepStrictEqual(normalizeTerms({ niche: 'the, reels, yoga' }), ['yoga']);
 });
 
 // A run may legitimately be created with a niche and no keywords (routes/sourcing.js
 // only requires one of the two). That used to search nothing at all.
 test('a niche-only run still produces search terms', () => {
   assert.deepStrictEqual(
-    normalizeTerms({ niche: 'home fitness' }),
-    ['home', 'fitness'],
+    normalizeTerms({ niche: 'iphone photos, instagram story ideas' }),
+    ['iphone photos', 'instagram story ideas'],
   );
 });
 
@@ -78,8 +93,8 @@ test('empty and malformed input degrade to an empty list, not a crash', () => {
   assert.deepStrictEqual(normalizeTerms({ keywords: ['', '   ', '#', '@'] }), []);
 });
 
-test('punctuation around a word is stripped', () => {
-  assert.deepStrictEqual(toWords('  yoga, pilates/barre '), ['yoga', 'pilates', 'barre']);
+test('punctuation around a term is stripped, inner spaces kept', () => {
+  assert.deepStrictEqual(splitTerms('  yoga , iphone photos! '), ['yoga', 'iphone photos']);
 });
 
 // ── expandTerms ─────────────────────────────────────────────────────────────
@@ -107,14 +122,22 @@ test('suggested terms come back normalized', async () => {
   assert.deepStrictEqual(out, ['kettlebell', 'mobility', 'calisthenics']);
 });
 
-// The model is instructed to return single words, so the guard matters: a phrase
-// slipping through would reintroduce exactly the multi-word query this fixes.
-test('a phrase from the model collapses to a single word', async () => {
+test('a suggested phrase is kept whole', async () => {
+  const out = await expandTerms(
+    { niche: 'photography' },
+    { gemini: stubGemini('{"terms":["iphone photography tips"]}') },
+  );
+  assert.deepStrictEqual(out, ['iphone photography tips']);
+});
+
+// A model that ignores the "no commas" instruction would otherwise inject one
+// unsearchable mega-query.
+test('a comma-joined reply contributes its first term, not the whole string', async () => {
   const out = await expandTerms(
     { niche: 'home fitness' },
-    { gemini: stubGemini('{"terms":["home gym setup"]}') },
+    { gemini: stubGemini('{"terms":["home gym setup, kettlebell flows"]}') },
   );
-  assert.deepStrictEqual(out, ['home']);
+  assert.deepStrictEqual(out, ['home gym setup']);
 });
 
 test('terms already being searched are not suggested again', async () => {

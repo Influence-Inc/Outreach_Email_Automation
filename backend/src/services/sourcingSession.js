@@ -120,7 +120,12 @@ async function runSession({ hostId, run, deps }) {
     const clipStore = require('./clipStore');
     gen = (deps.scoutReels || scoutReels)({
       driver,
-      config: { pacingMs, clipSeconds: config.clipSeconds, tapJitterPx },
+      config: {
+        pacingMs,
+        clipSeconds: config.clipSeconds,
+        reelsWindow: config.reelsWindow,
+        tapJitterPx,
+      },
       opts,
       deps: {
         judge: deps.judge || reelJudge.makeClassifier(),
@@ -136,7 +141,12 @@ async function runSession({ hostId, run, deps }) {
     const clipStore = require('./clipStore');
     gen = scoutFn({
       driver,
-      config: { pacingMs, tapJitterPx, clipSeconds: config.clipSeconds },
+      config: {
+        pacingMs,
+        tapJitterPx,
+        clipSeconds: config.clipSeconds,
+        reelsWindow: config.reelsWindow,
+      },
       opts,
       deps: { getClip: deps.getClip || clipStore.take },
     });

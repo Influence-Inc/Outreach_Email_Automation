@@ -59,16 +59,14 @@ docs for current rates.
 ### Search terms
 
 `services/searchTerms.js` decides what the scout actually types into Instagram
-search. Every term is a **single word** — a multi‑word keyword like
-`"home gym workout"` becomes three searches, because phrase queries return far
-less, and leftover text in the search box used to compound terms into queries
-like `fitnesshomegym`.
+search. **A comma separates keywords; a space does not.** So
+`iphone photos, instagram story ideas` is two searches — `iphone photos`, then
+`instagram story ideas` — each typed with its spaces intact.
 
 Order is `hashtags → keywords → seedAccounts → (niche, only if nothing else was
 configured) → AI suggestions`, de‑duplicated and capped at 24 searches per run.
-Hashtags and `@handles` are never split — they are single Instagram entities.
-A keyword you typed as one word is taken at face value; stopword/length
-filtering only applies where the phrase is split for you.
+A keyword you typed is taken exactly as typed; stopword/length filtering applies
+only to single words *derived* for you (from the niche, or suggested by Gemini).
 
 With `GEMINI_API_KEY` set, the run additionally asks Gemini for extra
 single‑word terms from the campaign's `niche` / `genres` / `targetAudience`.

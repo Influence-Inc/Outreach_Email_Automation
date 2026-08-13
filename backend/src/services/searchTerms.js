@@ -4,11 +4,15 @@
 //
 // Two separate problems, both of which made keyword scouting unreliable:
 //
-// 1. MULTI-WORD QUERIES. A configured keyword like "home gym workout" was typed
-//    into IG search as one long phrase, which returns far less than searching
-//    the words individually — and any leftover text in the search box compounded
-//    into nonsense queries ("fitnesshomegym"). Every term this module emits is a
-//    SINGLE word, so each search is one clean query.
+// 1. WHAT COUNTS AS ONE KEYWORD. A COMMA separates keywords; spaces inside one
+//    do not. "iphone photos, instagram story ideas" is two searches — "iphone
+//    photos" and then "instagram story ideas" — each typed with its spaces
+//    intact, because that is the phrase the operator meant to search for.
+//
+//    (This module briefly split on whitespace too, to stop queries compounding
+//    into nonsense like "fitnesshomegym". That was the wrong fix for the right
+//    symptom: the compounding came from typeText appending to a search box that
+//    still held the previous query, and is fixed there.)
 //
 // 2. A NICHE WITH NO KEYWORDS. `POST /runs` accepts a run with only a `niche`
 //    (see routes/sourcing.js), but the navigator only ever searched
@@ -17,16 +21,16 @@
 //    fallback source of terms.
 //
 // [expandTerms] adds the optional AI layer: given the campaign's niche/genres,
-// ask Gemini for additional single-word terms real creators actually tag
-// themselves with. It is key-optional — with no GEMINI_API_KEY it returns []
-// and the caller just scouts the configured terms, same as before.
+// ask Gemini for additional terms real creators actually tag themselves with.
+// It is key-optional — with no GEMINI_API_KEY it returns [] and the caller just
+// scouts the configured terms, same as before.
 
 const { parseJsonLoose } = require('./claudeClient');
 const geminiClient = require('./geminiClient');
 
 // Words that are never worth a search on their own. Searching "the" or "for"
-// burns a whole scout iteration on noise, and splitting phrases makes it much
-// easier to end up with one.
+// burns a whole scout iteration on noise. Only applied to SINGLE words we
+// derived ourselves — a configured keyword is taken as typed.
 const STOPWORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'your', 'you', 'are',
   'was', 'were', 'has', 'have', 'had', 'not', 'but', 'all', 'any', 'can',
@@ -38,69 +42,67 @@ const STOPWORDS = new Set([
   'posts', 'video', 'videos',
 ]);
 
-// Below this a token is too generic to be a useful Instagram query.
+// Below this a single derived word is too generic to be a useful query.
 const MIN_LENGTH = 3;
 
 // Hard ceiling on how many searches one run will perform. Each term is a full
 // search → results → profiles pass, so an unbounded list would run for hours.
 const MAX_TERMS = 24;
 
-/** Strip the leading sigil and any surrounding punctuation from one token. */
+/**
+ * Tidy one keyword without breaking it up: strip a leading #/@, trim
+ * surrounding punctuation, collapse runs of whitespace, lowercase. Internal
+ * spaces survive — they are part of the phrase.
+ */
 function clean(token) {
   return String(token || '')
     .trim()
     .replace(/^[#@]+/, '')
     .replace(/^[^\p{L}\p{N}_.]+|[^\p{L}\p{N}_.]+$/gu, '')
+    .replace(/\s+/g, ' ')
     .toLowerCase();
 }
 
-/** Is this a term worth spending a search on? */
+/** Any letter or digit at all — the bar for a term the operator typed. */
+function hasContent(term) {
+  return !!term && /[\p{L}\p{N}]/u.test(term);
+}
+
+/** Is this single word worth spending a search on? */
 function usable(term) {
   if (!term || term.length < MIN_LENGTH) return false;
   if (STOPWORDS.has(term)) return false;
   return /[\p{L}\p{N}]/u.test(term);
 }
 
-function split(phrase) {
-  return String(phrase || '').split(/[\s,/|]+/).map(clean).filter(Boolean);
-}
-
 /**
- * Split a phrase into individual searchable words, dropping noise.
+ * Split a field into keywords on COMMAS (and newlines, for pasted lists).
  *
- * Used for terms WE derive — the niche, and anything a model suggested — where
- * stopwords and stray fragments are expected.
- *
- * Handles and hashtags are deliberately NOT put through this: "@home.gym" and
- * "#homegym" are single Instagram entities, and breaking them apart would search
- * for things that do not exist.
+ * Never on spaces: "iphone photos" is one keyword, not two.
  */
-function toWords(phrase) {
-  return split(phrase).filter(usable);
+function splitTerms(value) {
+  return String(value || '')
+    .split(/[,\n]+/)
+    .map(clean)
+    .filter(Boolean);
+}
+
+/** Keywords exactly as configured — each comma-separated phrase, kept whole. */
+function toConfigured(value) {
+  return splitTerms(value).filter(hasContent);
 }
 
 /**
- * A configured keyword.
- *
- * A single token is taken at face value — an operator who typed one word meant
- * it, even if it is short or would otherwise read as a stopword. Filtering only
- * applies when we are splitting a phrase ourselves, since that is where the
- * noise words come from.
+ * Terms WE derive — from the niche, or suggested by a model — where a stray
+ * stopword is a real possibility, so single-word noise is dropped. Multi-word
+ * phrases are kept whole, same as configured keywords.
  */
-function toConfigured(phrase) {
-  const parts = split(phrase);
-  if (parts.length <= 1) return parts.filter((t) => /[\p{L}\p{N}]/u.test(t));
-  return parts.filter(usable);
-}
-
-/** A handle or hashtag stays whole; only its sigil and punctuation are stripped. */
-function toWhole(token) {
-  const t = clean(token);
-  return usable(t) ? [t] : [];
+function toDerived(value) {
+  return splitTerms(value).filter((t) => (t.includes(' ') ? hasContent(t) : usable(t)));
 }
 
 /**
- * Build the ordered, de-duplicated, single-word search list for a run.
+ * Build the ordered, de-duplicated list of searches for a run.
  *
  * Order is deliberate — the operator's own hashtags and keywords are searched
  * before anything derived, so an explicitly configured term is never crowded out
@@ -119,27 +121,27 @@ function normalizeTerms(opts = {}) {
     }
   };
 
-  for (const h of opts.hashtags || []) push(toWhole(h));
+  for (const h of opts.hashtags || []) push(splitTerms(h).filter(hasContent));
   for (const k of opts.keywords || []) push(toConfigured(k));
-  for (const a of opts.seedAccounts || []) push(toWhole(a));
+  for (const a of opts.seedAccounts || []) push(splitTerms(a).filter(hasContent));
 
   // Only fall back to the niche when nothing explicit was configured — a run
   // may legitimately be created with a niche and no keywords at all.
-  if (!out.length) push(toWords(opts.niche));
+  if (!out.length) push(toDerived(opts.niche));
 
   // Extra terms (AI-suggested) always come last.
-  push((opts.extraTerms || []).flatMap(toWords));
+  push((opts.extraTerms || []).flatMap(toDerived));
 
   return out;
 }
 
 /**
- * Ask Gemini for additional single-word Instagram search terms for this niche.
+ * Ask Gemini for additional Instagram search terms for this niche.
  *
  * Returns [] on every failure path — no API key, a refused request, malformed
- * JSON — so scouting always proceeds on the configured terms. Model output is
- * pushed back through the same normalisation as operator input, so a model that
- * ignores the instruction and returns phrases cannot inject a multi-word query.
+ * JSON — so scouting always proceeds on the configured terms. Model output goes
+ * back through the same normalisation as operator input, so a comma-joined reply
+ * contributes one usable term rather than a single unsearchable mega-query.
  */
 async function expandTerms(
   { niche, genres = [], targetAudience = '', existing = [], limit = 8 } = {},
@@ -158,9 +160,9 @@ async function expandTerms(
     '',
     `Return up to ${limit} ADDITIONAL search terms that creators in this niche`,
     'actually use in their handles, bios and hashtags.',
-    'Rules: each term is a SINGLE word with no spaces; lowercase; no "#" or "@";',
-    'no generic words like "content", "creator", "reels"; do not repeat any term',
-    'already being searched.',
+    'Rules: each term is one to three words (a phrase is fine, a comma is not);',
+    'lowercase; no "#" or "@"; no generic words like "content", "creator",',
+    '"reels"; do not repeat any term already being searched.',
     '',
     'Respond as JSON: {"terms": ["term1", "term2", ...]}',
   ]
@@ -183,11 +185,11 @@ async function expandTerms(
   const known = new Set(existing.map(clean));
   const out = [];
   for (const candidate of raw) {
-    // A phrase from the model collapses to its first usable word rather than
-    // being dropped outright.
-    const [word] = toWords(candidate);
-    if (!word || known.has(word) || out.includes(word)) continue;
-    out.push(word);
+    // A model that ignores the instruction and returns a comma-joined list
+    // contributes its first term rather than one unusable mega-query.
+    const [term] = toDerived(candidate);
+    if (!term || known.has(term) || out.includes(term)) continue;
+    out.push(term);
     if (out.length >= limit) break;
   }
   return out;
@@ -203,7 +205,7 @@ module.exports = {
   normalizeTerms,
   expandTerms,
   expansionEnabled,
-  toWords,
+  splitTerms,
   STOPWORDS,
   MIN_LENGTH,
   MAX_TERMS,
