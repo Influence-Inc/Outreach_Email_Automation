@@ -59,6 +59,9 @@ async function tapTarget({ driver, view, name, pacingMs, jitterPx = 0 }) {
   await humanTap(driver, { x: t.x, y: t.y }, jitterPx, pacingMs);
 }
 
+// Screens a keyword loop can continue from — where the next result is reachable.
+const SERP_SCREENS = ['search_results', 'search'];
+
 // How many reels to read off a creator's grid before scoring them. One screen of
 // the grid shows about six, so this needs a scroll or two.
 const REELS_PER_PROFILE = 12;
@@ -66,6 +69,11 @@ const REELS_PER_PROFILE = 12;
 // Safety bound on the scroll loop — a grid that stops yielding new reels exits
 // earlier, this only caps a creator with a very long back catalogue.
 const MAX_REEL_SCROLLS = 6;
+
+// Safety bound on scrolling a reels FEED for creators. Generous, because the
+// feed repeats accounts and dead reels (no author target) burn iterations
+// without producing a candidate; the run's own target count stops it first.
+const MAX_FEED_SCROLLS = 60;
 
 // Real device pixels, for scroll geometry. Falls back to a common phone size so
 // a driver without getWindowSize still scrolls sensibly.
@@ -92,6 +100,9 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const screen = await deviceSize(driver);
   const terms = pickSearchTerms(opts);
   let emitted = 0;
+  // Creators already analysed, across every keyword — a feed surfaces the same
+  // popular accounts repeatedly, and re-opening one burns a slot against N.
+  const seenCreators = new Set();
 
   for (const term of terms) {
     if (emitted >= max) return;
@@ -122,15 +133,28 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       view = await read(driver);
     }
 
-    // REELS FIRST. Current IG (2024+) answers a keyword with a "For you" reels
-    // grid, and that is the surface worth scouting: a reel proves the creator is
-    // actively posting the content we searched for, where an Accounts row only
-    // proves the handle matched the string. Tap a card → the reels_feed player
-    // exposes the real @handle + an authorProfile tap target → open the profile
-    // → read header + reels. Go back TWICE to return to the SERP
-    // (profile -> reels_feed -> SERP).
-    // For each reel the keyword surfaced: open it, hop to its creator, analyse
-    // the creator, then come back and do the next one — until Nth creator.
+    // The chip can land on either of two surfaces, so handle both.
+    //
+    // SURFACE A — a full-screen scrollable feed. There are no cards to tap by
+    // index; creators are found by scrolling reel to reel, opening each one's
+    // profile, and coming back to carry on scrolling.
+    if (view.screen === 'reels_feed') {
+      for await (const profile of scoutReelFeed({
+        driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip,
+        remaining: max - emitted, seen: seenCreators,
+      })) {
+        yield profile;
+        emitted += 1;
+        if (emitted >= max) return;
+      }
+      await ensureInInstagram({ driver, read, pacingMs, jitterPx });
+      continue;
+    }
+
+    // SURFACE B — a "For you" reels GRID. A reel proves the creator is actively
+    // posting the content we searched for, where an Accounts row only proves the
+    // handle matched the string. Tap a card → the reels_feed player exposes the
+    // real @handle + an authorProfile target → open the profile → analyse.
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
       if (emitted >= max) return;
@@ -141,8 +165,9 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         yield profile;
         emitted += 1;
       }
-      await goBack({ driver, pacingMs, jitterPx, read }); // profile -> reels_feed
-      await goBack({ driver, pacingMs, jitterPx, read }); // reels_feed -> SERP
+      // However deep this creator took us (reel player -> profile -> feed), come
+      // back to the results page — and no further.
+      await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 4 });
     }
 
     // Fallback: an "Accounts" list of @handle rows, on builds (or with the
@@ -159,11 +184,75 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
           yield profile;
           emitted += 1;
         }
-        await goBack({ driver, pacingMs, jitterPx, read });
+        await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 4 });
       }
     }
 
-    await goBack({ driver, pacingMs, jitterPx, read });
+    // Next keyword starts by tapping the search tab, which is reachable from any
+    // in-app screen — so rather than pressing back again (the press that used to
+    // exit Instagram), just make sure we are still inside the app.
+    await ensureInInstagram({ driver, read, pacingMs, jitterPx });
+  }
+}
+
+/**
+ * Scroll a reels feed, opening each distinct creator's profile for analysis.
+ *
+ * This is what the results page's Reels / Explore chip lands on when Instagram
+ * answers a keyword with a full-screen player rather than a grid of cards.
+ * There is nothing to tap by index, so the loop is: read the reel on screen →
+ * open its creator → analyse → back to the feed → swipe to the next reel, until
+ * the Nth creator is sourced.
+ *
+ * `seen` is shared across keywords: a feed re-surfaces popular accounts, and
+ * analysing one twice would spend a slot against N for a creator already added.
+ */
+async function* scoutReelFeed({
+  driver, read = readView, pacingMs, jitterPx = 0, screen,
+  clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
+}) {
+  const size = screen || { width: 1080, height: 2400 };
+  let produced = 0;
+
+  for (let i = 0; i < MAX_FEED_SCROLLS && produced < remaining; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const feed = await read(driver);
+    if (feed.screen !== 'reels_feed') return; // scrolled out of the feed
+
+    const author = feed.author ? String(feed.author).toLowerCase() : null;
+    const link = feed.targets && feed.targets.authorProfile;
+
+    if (link && !(author && seen.has(author))) {
+      if (author) seen.add(author);
+      // eslint-disable-next-line no-await-in-loop
+      await humanTap(driver, link, jitterPx, pacingMs);
+      // eslint-disable-next-line no-await-in-loop
+      const profile = await analyseProfile({
+        driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip,
+        fallbackUsername: feed.author || null,
+        source: 'backend-navigator:feed-scroll',
+        screens: ['reels_feed', 'profile', 'reels_tab'],
+      });
+      if (profile) {
+        yield profile;
+        produced += 1;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 4 });
+    }
+
+    // Swipe up to the next reel (jittered endpoints so the gesture isn't identical).
+    const jx = jitterTap({ x: Math.round(size.width / 2), y: 0 }, jitterPx).x;
+    // eslint-disable-next-line no-await-in-loop
+    await driver.swipe({
+      x1: jx,
+      y1: Math.round(size.height * 0.8),
+      x2: jx,
+      y2: Math.round(size.height * 0.2),
+      durationMs: 300,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(jitteredDelay(pacingMs));
   }
 }
 
@@ -291,7 +380,13 @@ async function captureReelClip({
   } catch (_) {
     /* recording is enrichment, never a reason to drop the candidate */
   }
-  await goBack({ driver, pacingMs, jitterPx, read }); // reel player -> reels grid
+  // Back to the grid — but only as far as the grid, so a recording that never
+  // opened the player does not press back out of the profile.
+  await backTo({
+    driver, read, pacingMs, jitterPx,
+    wanted: ['reels_tab', 'profile'],
+    maxHops: 2,
+  });
   return clip;
 }
 
@@ -314,9 +409,10 @@ async function openAndCaptureProfile({
   return { ...profile, username: handle };
 }
 
-async function goBack({ driver, pacingMs, jitterPx = 0, read = readView }) {
-  const view = await read(driver);
-  const t = view.targets && view.targets.back;
+// One back press, using the on-screen affordance when the reader found one and
+// the system back gesture otherwise.
+async function pressBack({ driver, view, pacingMs, jitterPx = 0 }) {
+  const t = view && view.targets && view.targets.back;
   if (t) {
     await humanTap(driver, { x: t.x, y: t.y }, jitterPx, pacingMs);
   } else {
@@ -324,6 +420,47 @@ async function goBack({ driver, pacingMs, jitterPx = 0, read = readView }) {
     await driver.swipe({ x1: 5, y1: 400, x2: 200, y2: 400, durationMs: 250 });
     await sleep(jitteredDelay(pacingMs));
   }
+}
+
+async function goBack({ driver, pacingMs, jitterPx = 0, read = readView }) {
+  await pressBack({ driver, view: await read(driver), pacingMs, jitterPx });
+}
+
+/**
+ * Back out until the current screen is one of `wanted`.
+ *
+ * Counting back presses was what walked the agent out of Instagram entirely. A
+ * capture that bails early — a reel card whose author never resolved, a profile
+ * link that moved — pushes fewer screens than the caller assumed, so a fixed
+ * "go back twice" kept pressing past the results page and out of the app.
+ * Reading between hops makes the number of presses follow what is actually on
+ * screen, and costs nothing when we are already where we want to be.
+ */
+async function backTo({ driver, read = readView, pacingMs, jitterPx = 0, wanted, maxHops = 4 }) {
+  let view = await read(driver);
+  for (let hop = 0; hop < maxHops; hop += 1) {
+    if (wanted.includes(view.screen)) return view;
+    // eslint-disable-next-line no-await-in-loop
+    await pressBack({ driver, view, pacingMs, jitterPx });
+    // eslint-disable-next-line no-await-in-loop
+    view = await read(driver);
+  }
+  return view;
+}
+
+/**
+ * Recover if we are no longer anywhere readable inside Instagram.
+ *
+ * Backing out too far, or IG dropping to the launcher, used to leave every
+ * subsequent tap landing on whatever happened to be under the coordinates.
+ * Relaunching is always safe: openApp on an already-foreground IG is a no-op.
+ */
+async function ensureInInstagram({ driver, read = readView, pacingMs, jitterPx = 0 }) {
+  const view = await read(driver);
+  if (view && view.screen && view.screen !== 'unknown') return view;
+  await driver.openApp(IG_ANDROID_PACKAGE);
+  await sleep(jitteredDelay(pacingMs));
+  return read(driver);
 }
 
 module.exports = { scout, readView, pickSearchTerms, IG_ANDROID_PACKAGE };

@@ -329,22 +329,66 @@ function extractReels(elements) {
 // name lives only in the content-desc ("Reel by <Author Name> at row X, col Y").
 // Extract each: `results` (handles you can tap into a profile) + `reelResults`
 // (reel-card tap targets whose author is a display name, not a handle).
+// Deliberately tolerant. The original matcher required BOTH the
+// `grid_card_layout_container` resource-id AND a content-desc shaped exactly
+// like "Reel by <Name> at row R, column C" — two guesses at once, and on a real
+// device neither held, so the reels grid read as empty and the scout fell
+// through to the accounts list every time. Now either signal alone is enough,
+// and the author is optional (the @handle is read properly from the reel player
+// on the next hop anyway).
+const REEL_CARD_RID = /grid_card_layout_container|clips_grid|reel_item|clip_thumbnail|media_thumbnail/i;
+const REEL_CARD_DESC = /^\s*reel\b/i;
+const REEL_BY_RE = /reel by\s+(.+?)(?:\s+at row\s+\d+.*)?$/i;
+
 function extractReelResults(elements) {
   const reelResults = [];
   const targets = {};
   for (const e of elements) {
     if (!isClickable(e)) continue;
-    if (!/grid_card_layout_container/.test(ridLocal(e.rid))) continue;
-    const m = String(e.desc || '').match(/^\s*Reel by\s+(.+?)\s+at row\s+\d+,\s*column\s+\d+/i);
-    if (!m) continue;
-    const author = m[1].trim();
+    const rid = ridLocal(e.rid);
+    const desc = String(e.desc || '').trim();
+    if (!REEL_CARD_RID.test(rid) && !REEL_CARD_DESC.test(desc)) continue;
     const c = center(e.bounds);
     if (!c) continue;
+    const m = desc.match(REEL_BY_RE);
     const idx = reelResults.length;
-    reelResults.push({ index: idx, author });
+    reelResults.push({ index: idx, author: m ? m[1].trim() : null });
     targets[`reelResult:${idx}`] = c;
   }
   return { reelResults, targets };
+}
+
+// The REELS (or EXPLORE) chip in the search results' top strip.
+//
+// Matching it by label alone picked whichever element happened to mention
+// "reels" first — often a reel card's own description rather than the tab. A
+// results-page tab lives in the top strip of the screen and its label is exactly
+// "reels", so require both, and prefer an element whose resource-id looks like a
+// tab when several qualify.
+//
+// "Explore" is accepted as a second choice: some builds label the same
+// scroll-a-feed-of-matching-reels surface that way, and either one gets the
+// scout to a feed it can scroll for creators.
+const TOP_STRIP_LABELS = ['reels', 'reels tab', 'explore', 'explore tab'];
+
+function findSearchReelsTab(elements, height) {
+  const topBand = Number.isFinite(height) && height > 0 ? height * 0.35 : Infinity;
+  const candidates = elements.filter((e) => {
+    if (!e.bounds || e.bounds.y > topBand) return false;
+    return TOP_STRIP_LABELS.includes(labelOf(e));
+  });
+  if (!candidates.length) return null;
+
+  // Prefer Reels over Explore, and a tab-shaped resource-id over a bare label.
+  const byPreference = [...candidates].sort((a, b) => {
+    const rank = (e) => {
+      const isReels = labelOf(e).startsWith('reels') ? 0 : 1;
+      const isTabbish = /tab|chip|serp|clips/i.test(ridLocal(e.rid)) ? 0 : 1;
+      return isReels * 2 + isTabbish;
+    };
+    return rank(a) - rank(b);
+  });
+  return byPreference[0];
 }
 
 // Search results: the ordered list of @handles, plus a tap target per handle.
@@ -476,7 +520,16 @@ function readScreen(input = {}) {
   add('searchBox', SIGNALS.searchBox);
   add('back', SIGNALS.back);
   add('reelsTab', SIGNALS.reelsTab);
-  if (screen === 'search_results') add('searchReelsTab', SIGNALS.searchReelsTab);
+  // Resolved on every screen rather than only when classification says
+  // "search_results": tapping the chip changes the page enough that the
+  // classifier may call it something else, and the navigator only consults this
+  // target immediately after a search anyway.
+  {
+    const el = findByRid(elements, SIGNALS.searchReelsTab.rids)
+      || findSearchReelsTab(elements, input.height);
+    const c = el && center(el.bounds);
+    if (c) targets.searchReelsTab = c;
+  }
 
   const reading = { screen, targets };
 
@@ -526,6 +579,18 @@ function readScreen(input = {}) {
     add('save', SIGNALS.save);
     add('share', SIGNALS.share);
     add('authorProfile', SIGNALS.authorProfile);
+  }
+
+  // A reels grid can outlive a screen the classifier could not name — tapping
+  // the results-page Reels chip changes the layout enough to do exactly that.
+  // Surface the cards anyway, rather than reporting nothing and letting the
+  // scout fall back to the accounts list it was meant to stop using.
+  if (!reading.reelResults && (screen === 'search_results' || screen === 'unknown')) {
+    const { reelResults, targets: rrt } = extractReelResults(elements);
+    if (reelResults.length) {
+      reading.reelResults = reelResults;
+      Object.assign(targets, rrt);
+    }
   }
 
   return reading;
