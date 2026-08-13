@@ -17,6 +17,7 @@
 
 const { readScreen } = require('./screenVision');
 const { jitteredDelay, jitterTap } = require('./humanize');
+const { normalizeTerms } = require('./searchTerms');
 
 const IG_ANDROID_PACKAGE = 'com.instagram.android';
 
@@ -45,13 +46,11 @@ async function readView(driver) {
   return readScreen({ elements, width, height });
 }
 
+// One search term per search, always a single word — see services/searchTerms.js
+// for why (multi-word phrases returned far less, and leftover text in the search
+// box compounded terms into queries like "fitnesshomegym").
 function pickSearchTerms(opts) {
-  const raw = [
-    ...(opts.hashtags || []),
-    ...(opts.keywords || []),
-    ...(opts.seedAccounts || []),
-  ];
-  return raw.map((s) => String(s).trim()).filter(Boolean);
+  return normalizeTerms(opts);
 }
 
 async function tapTarget({ driver, view, name, pacingMs, jitterPx = 0 }) {
@@ -84,24 +83,13 @@ async function* scout({ driver, config = {}, opts = {}, read = readView }) {
 
     view = await read(driver);
 
-    // Classic path: IG returned an "Accounts" list of @handle rows (still on
-    // some builds / when the Accounts chip is active).
-    const results = Array.isArray(view.results) ? view.results : [];
-    for (const handle of results) {
-      if (emitted >= max) return;
-      const profile = await openAndCaptureProfile({ driver, handle, pacingMs, jitterPx, read });
-      if (profile) {
-        yield profile;
-        emitted += 1;
-      }
-      await goBack({ driver, pacingMs, jitterPx, read });
-    }
-
-    // Reels-first path: current IG (2024+) shows a "For you" REELS GRID after
-    // typing a keyword — each card's author is only in content-desc. Tap a card
-    // → the reels_feed player exposes the real @handle + an authorProfile tap
-    // target → open the profile → read header + reels. Go back TWICE to return
-    // to the SERP (profile -> reels_feed -> SERP).
+    // REELS FIRST. Current IG (2024+) answers a keyword with a "For you" reels
+    // grid, and that is the surface worth scouting: a reel proves the creator is
+    // actively posting the content we searched for, where an Accounts row only
+    // proves the handle matched the string. Tap a card → the reels_feed player
+    // exposes the real @handle + an authorProfile tap target → open the profile
+    // → read header + reels. Go back TWICE to return to the SERP
+    // (profile -> reels_feed -> SERP).
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
       if (emitted >= max) return;
@@ -112,6 +100,22 @@ async function* scout({ driver, config = {}, opts = {}, read = readView }) {
       }
       await goBack({ driver, pacingMs, jitterPx, read }); // profile -> reels_feed
       await goBack({ driver, pacingMs, jitterPx, read }); // reels_feed -> SERP
+    }
+
+    // Fallback: an "Accounts" list of @handle rows, on builds (or with the
+    // Accounts chip active) where no reels grid came back. Only used when the
+    // reels path found nothing, so a single keyword is never scouted twice.
+    if (!reelResults.length) {
+      const results = Array.isArray(view.results) ? view.results : [];
+      for (const handle of results) {
+        if (emitted >= max) return;
+        const profile = await openAndCaptureProfile({ driver, handle, pacingMs, jitterPx, read });
+        if (profile) {
+          yield profile;
+          emitted += 1;
+        }
+        await goBack({ driver, pacingMs, jitterPx, read });
+      }
     }
 
     await goBack({ driver, pacingMs, jitterPx, read });

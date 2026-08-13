@@ -18,6 +18,7 @@ const { makeRemoteDriver } = require('./remoteDriver');
 const { scout } = require('./sourcingNavigator');
 const commands = require('./hostCommands');
 const store = require('./sourcingStore');
+const searchTerms = require('./searchTerms');
 
 const DEFAULT_PACING_MS = 1800; // human-like pacing between IG actions (anti-flag)
 const DEFAULT_CAPTURE_CAP = 500; // safety cap on captures per run
@@ -83,8 +84,31 @@ async function runSession({ hostId, run, deps }) {
     keywords: config.keywords || [],
     hashtags: config.hashtags || [],
     seedAccounts: config.seedAccounts || [],
+    niche: config.niche || '',
     max: captureCap,
   };
+
+  // Optional AI layer: turn the campaign's niche/genres into extra single-word
+  // search terms. Purely additive — the operator's own keywords are still
+  // searched first, and with no GEMINI_API_KEY this is a no-op (see
+  // services/searchTerms.js). Never allowed to fail a run.
+  if (searchTerms.expansionEnabled()) {
+    try {
+      const existing = searchTerms.normalizeTerms(opts);
+      const extra = await searchTerms.expandTerms({
+        niche: config.niche,
+        genres: config.genres || [],
+        targetAudience: config.targetAudience || '',
+        existing,
+      });
+      if (extra.length) {
+        opts.extraTerms = extra;
+        log(`[sourcing-session] run #${run.id}: AI added search terms [${extra.join(', ')}]`);
+      }
+    } catch (err) {
+      log(`[sourcing-session] search-term expansion failed: ${(err && err.message) || err}`);
+    }
+  }
 
   // `discovery: 'reels'` drives the explore/scroll reel-feed flow (watch + hear +
   // judge + occasionally engage); otherwise the search->profile flow.
