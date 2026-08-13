@@ -40,6 +40,9 @@ class AgentService : Service() {
         const val EXTRA_PROJECTION_DATA = "projection_data"
         const val ACTION_STOP = "technology.influence.sourcingagent.STOP"
 
+        /** How long to wait between retries once the backend says the mirror is off. */
+        private const val MIRROR_DISABLED_RETRY_MS = 30_000L
+
         /** Polled by the setup screen — simpler than a bound service for one string. */
         @Volatile
         var status: String = "idle"
@@ -48,6 +51,10 @@ class AgentService : Service() {
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        /** Why the dashboard's phone view is or isn't receiving frames. */
+        @Volatile
+        var mirrorStatus: String = "off"
     }
 
     private val running = AtomicBoolean(false)
@@ -88,6 +95,8 @@ class AgentService : Service() {
         worker = Thread(::loop, "sourcing-agent").apply { start() }
         if (prefs.liveMirror) {
             mirror = Thread(::mirrorLoop, "sourcing-mirror").apply { start() }
+        } else {
+            mirrorStatus = "off — tick \"Stream the screen\" before starting"
         }
         return START_STICKY
     }
@@ -179,16 +188,23 @@ class AgentService : Service() {
      * Feed the dashboard's "Watch phone" panel and execute admin take-over taps.
      *
      * Runs alongside the command loop rather than inside it, so a mirror hiccup
-     * can never stall scouting. The whole loop switches itself off on a 404,
-     * which is the backend saying SOURCING_LIVE_MIRROR is not enabled.
+     * can never stall scouting.
+     *
+     * A 404 means SOURCING_LIVE_MIRROR is off on the backend. That used to end
+     * this loop for good, which made an operator who then switched the flag on
+     * have to reinstall before frames appeared — and told them nothing in the
+     * meantime. Now it backs off and keeps retrying, and says so in [mirrorStatus]
+     * so the reason is visible on the setup screen instead of being a blank panel.
      */
     private fun mirrorLoop() {
         val backend = BackendClient(prefs.backendUrl, prefs.hostToken)
         val hostId = prefs.hostId
+        var backoffMs = prefs.frameMs
 
         while (running.get()) {
             val service = SourcingAccessibilityService.instance
             if (service == null) {
+                mirrorStatus = "waiting for the accessibility service"
                 sleep(prefs.frameMs)
                 continue
             }
@@ -203,18 +219,24 @@ class AgentService : Service() {
                     width = w,
                     height = h,
                 )
+                mirrorStatus = "streaming (${jpeg.size / 1024} KB/frame)"
+                backoffMs = prefs.frameMs
             } catch (e: BackendException) {
                 if (e.status == 404) {
-                    Log.i(TAG, "live mirror disabled on the backend — stopping frame loop")
-                    return
+                    mirrorStatus = "backend has SOURCING_LIVE_MIRROR off — set it and redeploy"
+                    // Retry slowly; the flag can be switched on without a reinstall.
+                    backoffMs = MIRROR_DISABLED_RETRY_MS
+                } else {
+                    mirrorStatus = "publish failed: ${e.message}"
+                    Log.w(TAG, "publishFrame failed: ${e.message}")
                 }
-                Log.w(TAG, "publishFrame failed: ${e.message}")
             } catch (e: Exception) {
+                mirrorStatus = "capture failed: ${e.message}"
                 Log.w(TAG, "frame capture failed: ${e.message}")
             }
 
             runCatching { drainControls(backend, hostId) }
-            sleep(prefs.frameMs)
+            sleep(backoffMs)
         }
     }
 

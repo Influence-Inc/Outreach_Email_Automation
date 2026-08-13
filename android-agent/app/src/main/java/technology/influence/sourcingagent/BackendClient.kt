@@ -115,6 +115,25 @@ class BackendClient(baseUrl: String, private val token: String) {
     }
 
     /**
+     * Ask the backend to interpret a screen, exactly as the navigator does.
+     *
+     * Used by the setup screen's "Test screen read" so an operator can see what
+     * the backend makes of whatever Instagram is showing right now — which
+     * screen it classified, and which tap targets it resolved. Without this a
+     * mis-read is invisible: the navigator simply stops advancing and the run
+     * ends with nothing captured.
+     */
+    fun readScreen(elements: JSONArray, width: Int, height: Int): JSONObject {
+        val payload = JSONObject().apply {
+            put("elements", elements)
+            put("width", width)
+            put("height", height)
+        }
+        val (status, body) = request("POST", "/api/sourcing/vision/read", payload.toString())
+        return expectJson("POST", "/vision/read", status, body)
+    }
+
+    /**
      * Drain admin take-over ops queued from the dashboard's phone view.
      *
      * Note the op fields are flat (`{op:"tap", x, y}`), not nested under `args`

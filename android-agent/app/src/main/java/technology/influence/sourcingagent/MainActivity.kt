@@ -32,6 +32,9 @@ class MainActivity : AppCompatActivity() {
     private var projectionResultCode: Int = 0
     private var projectionData: Intent? = null
 
+    /** Last "Test screen read" verdict, shown under the status block. */
+    private var diagnostic: String? = null
+
     private val ui = Handler(Looper.getMainLooper())
 
     private val requestProjection = registerForActivityResult(
@@ -73,18 +76,75 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.toggleAgent.setOnClickListener { if (AgentService.isRunning) stopAgent() else startAgent() }
+        binding.testRead.setOnClickListener { startDiagnostic() }
 
         askForOptionalPermissions()
     }
 
+    // ── screen-read diagnostic ──────────────────────────────────────────────
+
+    /**
+     * Read the current screen through the backend and report the verdict.
+     *
+     * Delayed rather than immediate: the interesting screen is whatever
+     * Instagram is showing, and tapping a button in this app necessarily puts
+     * this app in the foreground. Six seconds is enough to switch across.
+     */
+    private fun startDiagnostic() {
+        save()
+        if (!SourcingAccessibilityService.isRunning()) {
+            toast("Enable the accessibility service first (step 1)")
+            return
+        }
+        val gaps = prefs.missing()
+        if (gaps.isNotEmpty()) {
+            toast("Still needed: ${gaps.joinToString(", ")}")
+            return
+        }
+        diagnostic = "reading in 6s — switch to Instagram now"
+        render()
+        toast("Switch to Instagram now — reading the screen in 6 seconds")
+        ui.postDelayed(::runDiagnostic, 6_000L)
+    }
+
+    private fun runDiagnostic() {
+        Thread {
+            val text = runCatching { readCurrentScreen() }
+                .getOrElse { "diagnostic failed: ${it.message}" }
+            ui.post {
+                diagnostic = text
+                render()
+            }
+        }.start()
+    }
+
+    private fun readCurrentScreen(): String {
+        val service = SourcingAccessibilityService.instance
+            ?: return "accessibility service is not attached"
+
+        val elements = service.dumpElements()
+        val (width, height) = service.windowSize()
+        val reading = BackendClient(prefs.backendUrl, prefs.hostToken)
+            .readScreen(elements.toJsonArray(), width, height)
+
+        return ScreenDiagnostic.parse(
+            elementCount = elements.size,
+            withResourceId = elements.count { it.rid.isNotEmpty() },
+            reading = reading,
+        ).render()
+    }
+
     override fun onResume() {
         super.onResume()
-        poll()
+        ui.post(pollRunnable)
     }
 
     override fun onPause() {
         super.onPause()
-        ui.removeCallbacksAndMessages(null)
+        // Only stop the status refresh. Cancelling everything here would also
+        // kill the pending "Test screen read", whose whole point is to fire
+        // after the operator has switched away to Instagram.
+        ui.removeCallbacks(pollRunnable)
         save()
     }
 
@@ -144,9 +204,11 @@ class MainActivity : AppCompatActivity() {
     // ── status ──────────────────────────────────────────────────────────────
 
     /** One-second refresh instead of a bound service — it is a single string. */
-    private fun poll() {
-        render()
-        ui.postDelayed(::poll, 1_000L)
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            render()
+            ui.postDelayed(this, 1_000L)
+        }
     }
 
     private fun render() {
@@ -157,7 +219,14 @@ class MainActivity : AppCompatActivity() {
             appendLine("accessibility : $a11y")
             appendLine("screen capture: $capture")
             appendLine("agent         : ${if (AgentService.isRunning) "running" else "stopped"}")
-            append("status        : ${AgentService.status}")
+            appendLine("status        : ${AgentService.status}")
+            append("phone view    : ${AgentService.mirrorStatus}")
+            diagnostic?.let {
+                appendLine()
+                appendLine()
+                appendLine("── screen read ──")
+                append(it)
+            }
         }
     }
 
