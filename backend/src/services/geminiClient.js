@@ -25,12 +25,21 @@ const BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 const MAX_INLINE_BYTES = 18 * 1024 * 1024; // inline request payload ceiling (~20MB API cap)
 
-function apiKey() { return process.env.GEMINI_API_KEY || ''; }
+// Env values pasted through a dashboard/host UI (e.g. Railway) frequently arrive
+// wrapped in quotes or with stray whitespace — `"gemini-2.5-flash-lite"` or
+// ` AIza…`. Those characters get URL-encoded into the request (a model of
+// `%22gemini-2.5-flash-lite%22`, a key beginning with `%20`), which Google
+// rejects with a 404 NotFound / 403 that is very hard to diagnose from the
+// dashboard. Strip surrounding quotes and trim so a slightly-off value still works.
+function clean(v) {
+  return String(v == null ? '' : v).trim().replace(/^['"]+|['"]+$/g, '').trim();
+}
+function apiKey() { return clean(process.env.GEMINI_API_KEY); }
 function available() { return !!apiKey(); }
-function model() { return process.env.GEMINI_MODEL || DEFAULT_MODEL; }
+function model() { return clean(process.env.GEMINI_MODEL) || DEFAULT_MODEL; }
 
 function mediaResolution() {
-  const r = String(process.env.GEMINI_MEDIA_RESOLUTION || 'low').toLowerCase();
+  const r = (clean(process.env.GEMINI_MEDIA_RESOLUTION) || 'low').toLowerCase();
   if (r === 'medium') return 'MEDIA_RESOLUTION_MEDIUM';
   if (r === 'high') return 'MEDIA_RESOLUTION_HIGH';
   if (r === 'default') return 'MEDIA_RESOLUTION_MEDIUM'; // API has no explicit "default" enum; medium is the middle
@@ -110,12 +119,69 @@ async function classifyReelVideo(opts) {
   return parseJsonLoose(text);
 }
 
+// The model names the key can actually use for generateContent — Google's own
+// answer to a 404 ("call ListModels to see the list of available models"). Bare
+// ids (no "models/" prefix), filtered to those that support generateContent, so
+// the value drops straight into GEMINI_MODEL. Returns [] on any failure.
+async function listModels({ fetchImpl = globalThis.fetch } = {}) {
+  const key = apiKey();
+  if (!key || !fetchImpl) return [];
+  const url = `${BASE}/models?pageSize=200&key=${encodeURIComponent(key)}`;
+  try {
+    const res = await fetchImpl(url);
+    if (!res.ok) return [];
+    const json = await res.json().catch(() => null);
+    return ((json && json.models) || [])
+      .filter((m) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+      .map((m) => String(m.name || '').replace(/^models\//, ''))
+      .filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
+// Diagnostic: a tiny text-only round-trip that surfaces the REAL outcome (HTTP
+// status + error body) instead of the graceful null `generate()` returns. Lets an
+// admin confirm the configured key + model actually reach a live model — a 404
+// here means the model name isn't served for this key on v1beta; a 403/400 means
+// the key is wrong. On failure it also lists the models the key CAN use for
+// generateContent, so the fix (set GEMINI_MODEL to one of them) is right there.
+// Never echoes the key. Used by GET /api/sourcing/gemini/health.
+async function ping({ fetchImpl = globalThis.fetch } = {}) {
+  const key = apiKey();
+  const mdl = model();
+  if (!key) return { available: false, model: mdl, ok: false, error: 'GEMINI_API_KEY is not set' };
+  if (!fetchImpl) return { available: true, model: mdl, ok: false, error: 'fetch is not available' };
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: 'Reply with the JSON {"ok":true} and nothing else.' }] }],
+    generationConfig: { temperature: 0, maxOutputTokens: 20, responseMimeType: 'application/json' },
+  };
+  const url = `${BASE}/models/${encodeURIComponent(mdl)}:generateContent?key=${encodeURIComponent(key)}`;
+  try {
+    const res = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      const availableModels = await listModels({ fetchImpl });
+      return { available: true, model: mdl, ok: false, status: res.status, error: String(t).slice(0, 300), availableModels };
+    }
+    return { available: true, model: mdl, ok: true, status: 200 };
+  } catch (err) {
+    return { available: true, model: mdl, ok: false, error: err.message };
+  }
+}
+
 module.exports = {
   available,
   model,
   mediaResolution,
   generate,
   classifyReelVideo,
+  ping,
+  listModels,
   approxBytes,
   MAX_INLINE_BYTES,
   DEFAULT_MODEL,

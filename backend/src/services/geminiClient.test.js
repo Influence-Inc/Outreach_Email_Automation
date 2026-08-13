@@ -60,6 +60,82 @@ test('honors GEMINI_MODEL + GEMINI_MEDIA_RESOLUTION overrides', async () => {
   assert.strictEqual(JSON.parse(call.opts.body).generationConfig.mediaResolution, 'MEDIA_RESOLUTION_MEDIUM');
 });
 
+test('strips quotes/whitespace from env values so a mistyped model/key still resolves', async () => {
+  // The exact Railway mistake: values pasted WITH quotes / a leading space.
+  process.env.GEMINI_API_KEY = ' "k" ';
+  process.env.GEMINI_MODEL = '"gemini-2.5-flash-lite"';
+  assert.strictEqual(gc.available(), true);
+  assert.strictEqual(gc.model(), 'gemini-2.5-flash-lite');
+  const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 0.7 }) });
+  await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'x', fetchImpl });
+  // The URL must carry the clean model + clean key — no %22 (quote) or %20 (space).
+  assert.match(fetchImpl.calls[0].url, /models\/gemini-2\.5-flash-lite:generateContent\?key=k$/);
+});
+
+test('ping() surfaces the real HTTP status/error (e.g. a 404 for a bad model)', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  process.env.GEMINI_MODEL = 'gemini-2.5-flash-lite';
+  const bad = fakeFetch({ ok: false, status: 404, text: '{"error":{"message":"models/x is not found"}}' });
+  const r = await gc.ping({ fetchImpl: bad });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.status, 404);
+  assert.strictEqual(r.model, 'gemini-2.5-flash-lite');
+  assert.match(r.error, /not found/);
+  assert.ok(Array.isArray(r.availableModels), 'a failed ping lists what the key can use');
+
+  const good = fakeFetch({ json: verdictResponse({ ok: true }) });
+  assert.deepStrictEqual(await gc.ping({ fetchImpl: good }), { available: true, model: 'gemini-2.5-flash-lite', ok: true, status: 200 });
+});
+
+test('ping() on 404 reports the models the key can actually use', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  process.env.GEMINI_MODEL = 'gemini-2.5-flash-lite';
+  // First call (generateContent) 404s; second call (ListModels) succeeds.
+  let n = 0;
+  const fetchImpl = async () => {
+    n += 1;
+    if (n === 1) return { ok: false, status: 404, async text() { return 'not found'; }, async json() { return {}; } };
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          models: [
+            { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] }, // filtered out
+          ],
+        };
+      },
+      async text() { return ''; },
+    };
+  };
+  const r = await gc.ping({ fetchImpl });
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(r.availableModels, ['gemini-2.5-flash']);
+});
+
+test('listModels returns generateContent-capable bare ids', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const fetchImpl = fakeFetch({
+    json: {
+      models: [
+        { name: 'models/gemini-2.5-flash-lite', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+        { name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] },
+      ],
+    },
+  });
+  assert.deepStrictEqual(await gc.listModels({ fetchImpl }), ['gemini-2.5-flash-lite']);
+});
+
+test('ping() reports the missing key without a request', async () => {
+  clearEnv();
+  const fetchImpl = fakeFetch({ json: verdictResponse({ ok: true }) });
+  const r = await gc.ping({ fetchImpl });
+  assert.strictEqual(r.available, false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(fetchImpl.calls.length, 0);
+});
+
 test('returns null (no request) when no API key is set', async () => {
   clearEnv();
   const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 1 }) });
