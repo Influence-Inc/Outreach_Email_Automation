@@ -119,11 +119,34 @@ async function classifyReelVideo(opts) {
   return parseJsonLoose(text);
 }
 
+// The model names the key can actually use for generateContent — Google's own
+// answer to a 404 ("call ListModels to see the list of available models"). Bare
+// ids (no "models/" prefix), filtered to those that support generateContent, so
+// the value drops straight into GEMINI_MODEL. Returns [] on any failure.
+async function listModels({ fetchImpl = globalThis.fetch } = {}) {
+  const key = apiKey();
+  if (!key || !fetchImpl) return [];
+  const url = `${BASE}/models?pageSize=200&key=${encodeURIComponent(key)}`;
+  try {
+    const res = await fetchImpl(url);
+    if (!res.ok) return [];
+    const json = await res.json().catch(() => null);
+    return ((json && json.models) || [])
+      .filter((m) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+      .map((m) => String(m.name || '').replace(/^models\//, ''))
+      .filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
 // Diagnostic: a tiny text-only round-trip that surfaces the REAL outcome (HTTP
 // status + error body) instead of the graceful null `generate()` returns. Lets an
 // admin confirm the configured key + model actually reach a live model — a 404
-// here means the model name is wrong/misquoted; a 403/400 means the key is. Never
-// echoes the key. Used by GET /api/sourcing/gemini/health.
+// here means the model name isn't served for this key on v1beta; a 403/400 means
+// the key is wrong. On failure it also lists the models the key CAN use for
+// generateContent, so the fix (set GEMINI_MODEL to one of them) is right there.
+// Never echoes the key. Used by GET /api/sourcing/gemini/health.
 async function ping({ fetchImpl = globalThis.fetch } = {}) {
   const key = apiKey();
   const mdl = model();
@@ -142,7 +165,8 @@ async function ping({ fetchImpl = globalThis.fetch } = {}) {
     });
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      return { available: true, model: mdl, ok: false, status: res.status, error: String(t).slice(0, 300) };
+      const availableModels = await listModels({ fetchImpl });
+      return { available: true, model: mdl, ok: false, status: res.status, error: String(t).slice(0, 300), availableModels };
     }
     return { available: true, model: mdl, ok: true, status: 200 };
   } catch (err) {
@@ -157,6 +181,7 @@ module.exports = {
   generate,
   classifyReelVideo,
   ping,
+  listModels,
   approxBytes,
   MAX_INLINE_BYTES,
   DEFAULT_MODEL,

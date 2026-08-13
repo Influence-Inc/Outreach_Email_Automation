@@ -81,9 +81,50 @@ test('ping() surfaces the real HTTP status/error (e.g. a 404 for a bad model)', 
   assert.strictEqual(r.status, 404);
   assert.strictEqual(r.model, 'gemini-2.5-flash-lite');
   assert.match(r.error, /not found/);
+  assert.ok(Array.isArray(r.availableModels), 'a failed ping lists what the key can use');
 
   const good = fakeFetch({ json: verdictResponse({ ok: true }) });
   assert.deepStrictEqual(await gc.ping({ fetchImpl: good }), { available: true, model: 'gemini-2.5-flash-lite', ok: true, status: 200 });
+});
+
+test('ping() on 404 reports the models the key can actually use', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  process.env.GEMINI_MODEL = 'gemini-2.5-flash-lite';
+  // First call (generateContent) 404s; second call (ListModels) succeeds.
+  let n = 0;
+  const fetchImpl = async () => {
+    n += 1;
+    if (n === 1) return { ok: false, status: 404, async text() { return 'not found'; }, async json() { return {}; } };
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          models: [
+            { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] }, // filtered out
+          ],
+        };
+      },
+      async text() { return ''; },
+    };
+  };
+  const r = await gc.ping({ fetchImpl });
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(r.availableModels, ['gemini-2.5-flash']);
+});
+
+test('listModels returns generateContent-capable bare ids', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const fetchImpl = fakeFetch({
+    json: {
+      models: [
+        { name: 'models/gemini-2.5-flash-lite', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+        { name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] },
+      ],
+    },
+  });
+  assert.deepStrictEqual(await gc.listModels({ fetchImpl }), ['gemini-2.5-flash-lite']);
 });
 
 test('ping() reports the missing key without a request', async () => {
