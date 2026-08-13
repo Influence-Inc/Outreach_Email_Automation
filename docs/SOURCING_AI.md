@@ -18,9 +18,9 @@ Claude‑on‑thumbnails, then keyword scoring — the pipeline still runs.
 ## Cost
 
 Gemini bills video at 1 fps: **66 tokens/frame** at `media_resolution=low` (258 at
-default) **+ 32 tokens/sec audio**. On `gemini-2.5-flash-lite` + low res, judging
-~12 s per reel is **~$1.50 for 5,000 reels** (well under budget). See the model
-docs for current rates.
+default) **+ 32 tokens/sec audio**. On the flash-lite tier + low res, judging
+~12 s per reel runs a few dollars per 5,000 reels (well under budget). See the
+model docs for current rates.
 
 ## Configuration
 
@@ -29,14 +29,8 @@ docs for current rates.
 | Var | Default | Meaning |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | *(unset)* | Enables the multimodal judge. Unset ⇒ falls back to Claude/keywords. **Paste the raw value — no surrounding quotes, no leading space.** |
-| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Judge model. Quotes/whitespace are stripped, but a wrong name ⇒ `404 NotFound`. |
+| `GEMINI_MODEL` | `gemini-flash-lite-latest` | Judge model. Quotes/whitespace are stripped. The default is Google's rolling alias for the current flash-lite model — a pinned generation (e.g. `gemini-2.5-flash-lite`) can 404 later with `"this model is no longer available to new users"` even though nothing in this repo changed; pin a dated snapshot only if you need reproducibility across a model upgrade. |
 | `GEMINI_MEDIA_RESOLUTION` | `low` | `low` (cheapest) / `medium` / `high`. |
-
-> **Verify the key/model without the phone:** hit `GET /api/sourcing/gemini/health`
-> (admin-authed) — it does a tiny text-only call and returns the real
-> `{ ok, status, error, model }`. `ok:true` ⇒ Gemini is reachable; a `404` ⇒ the
-> model name is wrong/misquoted; a `403/400` ⇒ the key is. This is the fastest way
-> to tell a Gemini misconfig from a phone/navigation problem.
 | `SOURCING_REMOTE_CONTROL` | off | `on` enables backend‑driven scouting + the reel pipeline (agent mode). |
 | `SOURCING_AI_SEARCH_TERMS` | on when `GEMINI_API_KEY` is set | `off` disables AI search‑term expansion (see *Search terms* below). |
 | `SOURCING_ENGAGEMENT` | off | `on` allows like/save. **Off = watch‑only (near‑zero ban risk).** |
@@ -49,6 +43,14 @@ docs for current rates.
 | `SOURCING_CAPTURE_CAP` | `500` | Safety cap on captures per run. |
 | `SOURCING_TAP_JITTER_PX` | `5` | Random ± pixels added to every tap (anti‑flag). |
 | `SOURCING_ACTIVE_HOURS` | *(unset = always)* | Only scout inside this local‑time window, e.g. `8-23` or overnight `22-6`. Outside it the agent idle‑polls. |
+
+> **Verify the key/model without the phone:** hit `GET /api/sourcing/gemini/health`
+> (admin-authed) — it does a tiny text-only call and returns the real
+> `{ ok, status, error, model }`. `ok:true` ⇒ Gemini is reachable; a `404` ⇒ the
+> model name is wrong/misquoted/deprecated for your key (the response also lists
+> `availableModels` — the exact ids your key can use); a `403/400` ⇒ the key
+> itself. This is the fastest way to tell a Gemini misconfig from a phone/
+> navigation problem.
 
 ### Scouting rules (per campaign)
 

@@ -11,18 +11,25 @@
 //
 // Key-optional: with no GEMINI_API_KEY every call returns null so the caller
 // (reelJudge -> nicheMatch) falls back to Claude, then keyword scoring. Cost is
-// held down with media_resolution=low (66 tokens/frame) by default — ~$1.50 per
-// 5,000 reels on gemini-2.5-flash-lite.
+// held down with media_resolution=low (66 tokens/frame) by default — a few
+// dollars per 5,000 reels on the flash-lite tier.
 //
 // Env:
 //   GEMINI_API_KEY           enables the client (unset => disabled)
-//   GEMINI_MODEL             default 'gemini-2.5-flash-lite'
+//   GEMINI_MODEL             default 'gemini-flash-lite-latest'
 //   GEMINI_MEDIA_RESOLUTION  'low' (default) | 'medium' | 'default' | 'high'
 
 const { parseJsonLoose } = require('./claudeClient');
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
+// A pinned generation (e.g. "gemini-2.5-flash-lite") can go 404 out from under a
+// deployment with no code change: Google periodically retires a generation for
+// "new" API keys ("this model is no longer available to new users") while still
+// serving it to older keys. Google's own rolling alias sidesteps that — it always
+// points at a currently-served model in the same cost tier, no redeploy needed to
+// chase deprecations. Pin a dated snapshot instead if reproducibility across a
+// model upgrade matters more than never-goes-404.
+const DEFAULT_MODEL = 'gemini-flash-lite-latest';
 const MAX_INLINE_BYTES = 18 * 1024 * 1024; // inline request payload ceiling (~20MB API cap)
 
 // Env values pasted through a dashboard/host UI (e.g. Railway) frequently arrive
