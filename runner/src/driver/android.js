@@ -247,6 +247,13 @@ class AndroidDriver extends DeviceDriver {
     await this._adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME']);
   }
 
+  // Commit a typed search query (the keyboard's Search key). Without this IG
+  // only shows as-you-type ACCOUNT suggestions, never the keyword's content
+  // results. KEYCODE_ENTER fires the IME action on the focused field.
+  async submitSearch() {
+    await this._adb(['shell', 'input', 'keyevent', 'KEYCODE_ENTER']);
+  }
+
   // `monkey -p <pkg> -c LAUNCHER 1` launches the app's default launcher
   // activity without us needing to know its class name — robust across IG
   // app updates that might rename the activity.
