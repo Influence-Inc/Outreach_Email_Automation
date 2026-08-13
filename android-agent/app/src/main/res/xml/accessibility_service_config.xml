@@ -4,14 +4,25 @@
   canPerformGestures       -> tap / swipe
   canTakeScreenshot        -> `screenshot` with no MediaProjection prompt (API 30+)
 
-  accessibilityEventTypes is deliberately typeWindowStateChanged only: the agent
-  polls on demand and never reacts to events, so there is no reason to have the
-  system wake this process for every view scroll.
+  flagIncludeNotImportantViews is REQUIRED, not an optimisation. Without it the
+  platform hides every view whose importantForAccessibility resolves to "no",
+  which on Instagram is most of the layout — including the containers that carry
+  the resource-ids backend/src/services/screenVision.js matches on
+  (profile_tab_icon_view, clips_author_info_component, bottom_bar_search_edit_text).
+  `uiautomator dump` sets this flag internally, so omitting it here is what made
+  the on-device tree a small subset of what the laptop runner used to send: the
+  navigator could open a profile and then find no Reels tab to continue to.
+
+  flagReportViewIds is what populates viewIdResourceName at all; without it every
+  element arrives with an empty `rid` and only content-desc matching survives.
+
+  accessibilityEventTypes stays narrow: the agent polls on demand and never
+  reacts to events, so there is no reason to wake this process for every scroll.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows|flagReportViewIds"
     android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"

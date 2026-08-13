@@ -100,6 +100,20 @@
             android:layout_marginTop="8dp"
             android:text="3. Start agent" />
 
+        <Button
+            android:id="@+id/testRead"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Test screen read (open Instagram first)" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Reads whatever is on screen in 6 seconds and reports what the backend makes of it. Use this when a run stops early."
+            android:textSize="12sp" />
+
         <TextView
             android:id="@+id/status"
             android:layout_width="match_parent"

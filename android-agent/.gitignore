@@ -9,7 +9,6 @@ local.properties
 captures/
 .cxx/
 
-# The wrapper jar is a binary; generate it with `gradle wrapper` (see README).
-gradle/wrapper/gradle-wrapper.jar
-gradlew
-gradlew.bat
+# gradlew, gradlew.bat, and gradle/wrapper/gradle-wrapper.jar are committed on
+# purpose — Android Studio expects them and it is what lets the "Open project"
+# path work with zero terminal commands.

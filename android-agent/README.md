@@ -45,7 +45,26 @@ those names. `app/src/test/…/UiElementTest.kt` pins that contract.
 
 ## Build
 
-Needs Android Studio (Koala or newer) or a local Android SDK.
+### No local toolchain: download the APK from CI
+
+`.github/workflows/android-agent.yml` builds the APK and runs the unit tests on
+every push that touches this folder. To get an installable build without
+installing anything on your machine:
+
+1. Open the repo's **Actions** tab → the latest **Android agent** run.
+2. Download the **`sourcing-agent-debug-apk`** artifact (a zip).
+3. Unzip, transfer `app-debug.apk` to the phone (AirDrop, Drive, email, USB).
+4. Tap it on the phone. Android will ask permission to install from that source
+   the first time — allow it, then install.
+
+That is the whole build step. Skip the rest of this section unless you want to
+develop the app.
+
+### Locally, with Android Studio
+
+Needs Android Studio (Koala or newer) or a local Android SDK. **Open the
+`android-agent/` folder itself** — it is the Gradle root. Opening the repo root
+will not import the project.
 
 ```bash
 # Android Studio: File → Open → select the android-agent/ folder, then Run.

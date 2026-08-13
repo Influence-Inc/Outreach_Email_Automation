@@ -1,11 +1,22 @@
 package technology.influence.sourcingagent
 
+import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
  * Flattens the accessibility node tree into [UiElement]s — the on-device
  * replacement for `adb shell uiautomator dump`.
+ *
+ * Two things make this match what uiautomator produced, and both were learned
+ * the hard way on a real device:
+ *
+ *  1. The service must set `flagIncludeNotImportantViews` (see
+ *     res/xml/accessibility_service_config.xml). Without it most of Instagram's
+ *     layout is invisible here.
+ *  2. Reading only `rootInActiveWindow` misses dialogs, bottom sheets and IME
+ *     overlays that live in their own windows. uiautomator walks every window,
+ *     so [collect] does too.
  *
  * The element shape itself lives in `UiElement.kt`, free of Android imports, so
  * the backend wire contract stays testable on a plain JVM.
@@ -20,7 +31,30 @@ object UiTree {
 
     private const val MAX_DEPTH = 64
 
-    /** Flatten an accessibility node tree, depth-first, in screen order. */
+    /**
+     * Walk every window, active one first.
+     *
+     * Order matters: `screenVision.js` resolves a target by taking the FIRST
+     * element matching a signal, so the foreground window's elements must come
+     * before any background window that happens to share a resource-id.
+     */
+    fun collect(service: AccessibilityService): List<UiElement> {
+        val out = ArrayList<UiElement>(512)
+
+        val active = service.rootInActiveWindow
+        val activeWindowId = active?.windowId
+        if (active != null) walk(active, out, 0)
+
+        for (window in service.windows) {
+            if (out.size >= MAX_ELEMENTS) break
+            if (window.id == activeWindowId) continue // already walked above
+            val root = window.root ?: continue
+            walk(root, out, 0)
+        }
+        return out
+    }
+
+    /** Single-root variant, kept for callers that already hold a node. */
     fun collect(root: AccessibilityNodeInfo?): List<UiElement> {
         val out = ArrayList<UiElement>(256)
         if (root != null) walk(root, out, 0)

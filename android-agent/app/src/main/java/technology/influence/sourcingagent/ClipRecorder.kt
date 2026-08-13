@@ -87,10 +87,15 @@ class ClipRecorder(
         val stopping = AtomicBoolean(false)
 
         try {
-            muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            // Non-null locals for the worker threads to close over; the nullable
+            // vars above exist only so the finally block can release whatever
+            // managed to get created.
+            val mux = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer = mux
 
             // ── video ───────────────────────────────────────────────────────
-            videoEncoder = MediaCodec.createEncoderByType(VIDEO_MIME)
+            val vEncoder = MediaCodec.createEncoderByType(VIDEO_MIME)
+            videoEncoder = vEncoder
             val videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME, width, height).apply {
                 setInteger(
                     MediaFormat.KEY_COLOR_FORMAT,
@@ -100,9 +105,9 @@ class ClipRecorder(
                 setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
             }
-            videoEncoder.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            val inputSurface = videoEncoder.createInputSurface()
-            videoEncoder.start()
+            vEncoder.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val inputSurface = vEncoder.createInputSurface()
+            vEncoder.start()
 
             virtualDisplay = projection.createVirtualDisplay(
                 "sourcing-agent-clip",
@@ -122,14 +127,14 @@ class ClipRecorder(
             }
             audioEncoder = audio?.encoder
             audioRecord = audio?.record
-            state.expectedTracks = if (audioEncoder != null) 2 else 1
+            state.expectedTracks = if (audio != null) 2 else 1
 
             // ── drain both encoders until the clock runs out ────────────────
             val videoThread = Thread {
-                drain(videoEncoder!!, muxer!!, state, isVideo = true, stopping = stopping)
+                drain(vEncoder, mux, state, isVideo = true, stopping = stopping)
             }
-            val audioThread = audioEncoder?.let { enc ->
-                Thread { pumpAudio(audioRecord!!, enc, muxer!!, state, stopping) }
+            val audioThread = audio?.let { pipeline ->
+                Thread { pumpAudio(pipeline.record, pipeline.encoder, mux, state, stopping) }
             }
 
             videoThread.start()
@@ -137,7 +142,7 @@ class ClipRecorder(
 
             Thread.sleep(durationMs)
             stopping.set(true)
-            videoEncoder.signalEndOfInputStream()
+            vEncoder.signalEndOfInputStream()
 
             videoThread.join(10_000)
             audioThread?.join(10_000)

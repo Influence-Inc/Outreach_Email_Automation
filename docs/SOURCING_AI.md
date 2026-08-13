@@ -32,6 +32,7 @@ docs for current rates.
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Judge model. |
 | `GEMINI_MEDIA_RESOLUTION` | `low` | `low` (cheapest) / `medium` / `high`. |
 | `SOURCING_REMOTE_CONTROL` | off | `on` enables backend‑driven scouting + the reel pipeline (agent mode). |
+| `SOURCING_AI_SEARCH_TERMS` | on when `GEMINI_API_KEY` is set | `off` disables AI search‑term expansion (see *Search terms* below). |
 | `SOURCING_ENGAGEMENT` | off | `on` allows like/save. **Off = watch‑only (near‑zero ban risk).** |
 | `SOURCING_ENGAGE_MIN_SCORE` | `0.75` | Only engage reels at/above this niche score. |
 | `SOURCING_ENGAGE_LIKE_PROB` | `0.2` | Per‑eligible‑reel like probability (keeps it occasional). |
@@ -54,6 +55,36 @@ docs for current rates.
 - `targetAudience` / `genres` — fed to the Gemini judge (audience fit + on‑brand genres).
 - `reviewBorderline: true` (+ optional `reviewBand`, default `0.15`) — hold
   near‑threshold AI matches in the **review queue** instead of auto‑adding.
+
+### Search terms
+
+`services/searchTerms.js` decides what the scout actually types into Instagram
+search. Every term is a **single word** — a multi‑word keyword like
+`"home gym workout"` becomes three searches, because phrase queries return far
+less, and leftover text in the search box used to compound terms into queries
+like `fitnesshomegym`.
+
+Order is `hashtags → keywords → seedAccounts → (niche, only if nothing else was
+configured) → AI suggestions`, de‑duplicated and capped at 24 searches per run.
+Hashtags and `@handles` are never split — they are single Instagram entities.
+A keyword you typed as one word is taken at face value; stopword/length
+filtering only applies where the phrase is split for you.
+
+With `GEMINI_API_KEY` set, the run additionally asks Gemini for extra
+single‑word terms from the campaign's `niche` / `genres` / `targetAudience`.
+These are **purely additive and always last**, so your own keywords are searched
+first. Disable with `SOURCING_AI_SEARCH_TERMS=off`. With no key, or on any
+model/network failure, expansion returns nothing and scouting proceeds on the
+configured terms.
+
+### Search flow: reels first
+
+For a keyword the navigator scouts the **reels grid** IG returns, taps a card to
+reach the full‑screen player, reads the real `@handle` there, and opens that
+creator's profile. A reel proves the creator is actively posting the content you
+searched for; an "Accounts" row only proves the handle matched the string. The
+Accounts list is used as a fallback, and only when the reels path found nothing,
+so one keyword is never scouted twice.
 
 ### Review queue
 

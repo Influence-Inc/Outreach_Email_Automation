@@ -2,6 +2,8 @@ package technology.influence.sourcingagent
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Path
@@ -151,11 +153,21 @@ class SourcingAccessibilityService : AccessibilityService() {
     // ── text ────────────────────────────────────────────────────────────────
 
     /**
-     * Append text to the focused input, the way `adb shell input text` does.
+     * Put `text` into the focused input, replacing whatever is there.
      *
-     * ACTION_SET_TEXT replaces rather than appends, so the existing value is
-     * carried forward explicitly — otherwise typing a second keyword into the
-     * IG search box would wipe the first.
+     * This deliberately does NOT mimic `adb shell input text`, which appends at
+     * the caret. adb synthesises real key events into a field the navigator had
+     * usually just opened empty; here a stale query routinely survives on the
+     * search box between keywords, and appending turned "fitness" followed by
+     * "homegym" into a search for "fitnesshomegym". Replacing is both the
+     * predictable behaviour and the one the navigator actually wants.
+     *
+     * Three things beyond the obvious, all needed for Instagram's search box:
+     *  - the field must be focused, or the text is set on a view that ignores it;
+     *  - the caret is moved to the end so IG's TextWatcher sees a normal edit;
+     *  - if ACTION_SET_TEXT is refused (some IG builds reject it on the SERP
+     *    header) fall back to a clipboard paste, which goes through the ordinary
+     *    input path.
      */
     fun typeText(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
@@ -163,14 +175,40 @@ class SourcingAccessibilityService : AccessibilityService() {
             ?: firstEditable(root)
             ?: return false
 
-        val existing = target.text?.toString().orEmpty()
+        if (!target.isFocused) target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+
         val args = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                existing + text,
-            )
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
-        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            moveCaretToEnd(target, text.length)
+            return true
+        }
+        return pasteOver(target, text)
+    }
+
+    private fun moveCaretToEnd(target: AccessibilityNodeInfo, length: Int) {
+        val selection = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, length)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, length)
+        }
+        target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection)
+    }
+
+    /** Select everything already in the field, then paste over it. */
+    private fun pasteOver(target: AccessibilityNodeInfo, text: String): Boolean {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("sourcing-agent", text))
+
+        val existing = target.text?.toString().orEmpty()
+        if (existing.isNotEmpty()) {
+            val selectAll = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, existing.length)
+            }
+            target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectAll)
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
     }
 
     private fun firstEditable(node: AccessibilityNodeInfo, depth: Int = 0): AccessibilityNodeInfo? {
@@ -185,8 +223,12 @@ class SourcingAccessibilityService : AccessibilityService() {
 
     // ── reading the screen ──────────────────────────────────────────────────
 
-    /** The flattened node tree the backend screen reader consumes. */
-    fun dumpElements(): List<UiElement> = UiTree.collect(rootInActiveWindow)
+    /**
+     * The flattened node tree the backend screen reader consumes — every
+     * window, not just the active one, so dialogs and bottom sheets are visible
+     * the way they were in a `uiautomator dump`.
+     */
+    fun dumpElements(): List<UiElement> = UiTree.collect(this)
 
     /** Real display size in pixels, matching `adb shell wm size`. */
     fun windowSize(): Pair<Int, Int> {
