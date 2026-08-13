@@ -358,23 +358,37 @@ function extractReelResults(elements) {
   return { reelResults, targets };
 }
 
-// The REELS chip on the search results page.
+// The REELS (or EXPLORE) chip in the search results' top strip.
 //
 // Matching it by label alone picked whichever element happened to mention
 // "reels" first — often a reel card's own description rather than the tab. A
 // results-page tab lives in the top strip of the screen and its label is exactly
 // "reels", so require both, and prefer an element whose resource-id looks like a
 // tab when several qualify.
+//
+// "Explore" is accepted as a second choice: some builds label the same
+// scroll-a-feed-of-matching-reels surface that way, and either one gets the
+// scout to a feed it can scroll for creators.
+const TOP_STRIP_LABELS = ['reels', 'reels tab', 'explore', 'explore tab'];
+
 function findSearchReelsTab(elements, height) {
   const topBand = Number.isFinite(height) && height > 0 ? height * 0.35 : Infinity;
   const candidates = elements.filter((e) => {
     if (!e.bounds || e.bounds.y > topBand) return false;
-    const label = labelOf(e);
-    return label === 'reels' || label === 'reels tab';
+    return TOP_STRIP_LABELS.includes(labelOf(e));
   });
   if (!candidates.length) return null;
-  const tabbish = candidates.find((e) => /tab|chip|serp|clips/i.test(ridLocal(e.rid)));
-  return tabbish || candidates[0];
+
+  // Prefer Reels over Explore, and a tab-shaped resource-id over a bare label.
+  const byPreference = [...candidates].sort((a, b) => {
+    const rank = (e) => {
+      const isReels = labelOf(e).startsWith('reels') ? 0 : 1;
+      const isTabbish = /tab|chip|serp|clips/i.test(ridLocal(e.rid)) ? 0 : 1;
+      return isReels * 2 + isTabbish;
+    };
+    return rank(a) - rank(b);
+  });
+  return byPreference[0];
 }
 
 // Search results: the ordered list of @handles, plus a tap target per handle.
