@@ -150,3 +150,149 @@ test('skips a results row whose tap target is missing (no crash)', async () => {
   for await (const c of gen) out.push(c);
   assert.strictEqual(out.length, 0);
 });
+
+// ── keyword search flow ─────────────────────────────────────────────────────
+
+function driverWithSearch() {
+  const ops = [];
+  return {
+    ops,
+    openApp: async (pkg) => ops.push(['openApp', pkg]),
+    tap: async (x, y) => ops.push(['tap', x, y]),
+    typeText: async (t) => ops.push(['type', t]),
+    submitSearch: async () => ops.push(['submitSearch']),
+    swipe: async (o) => ops.push(['swipe', o]),
+    getWindowSize: async () => ({ width: 1080, height: 2400 }),
+    dumpUi: async () => [],
+    recordClip: async (s) => { ops.push(['recordClip', s]); return { clipId: 'clip_1' }; },
+  };
+}
+
+// Views are consumed one per read(), so these sequences mirror the exact hops:
+// searchTab -> searchBox -> (submit) SERP -> profile link -> header -> reels grid.
+const OPEN_SEARCH = [
+  { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
+  { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
+];
+const BACK = { x: 3, y: 3 };
+
+// Typing alone leaves IG on its as-you-type ACCOUNT suggestions, which match the
+// raw string against handles — the reason keyword scouting surfaced profiles
+// whose NAME contained the keyword instead of creators posting about it.
+test('commits the query and moves to the search page reels chip', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 640, y: 180 }, back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['homegym'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  const order = driver.ops.map((o) => o[0]);
+  assert.ok(order.includes('submitSearch'), 'pressed the keyboard Search key');
+  assert.ok(order.indexOf('type') < order.indexOf('submitSearch'), 'typed before submitting');
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 640 && o[2] === 180),
+    'tapped the reels chip on the results page',
+  );
+});
+
+// The default profile grid shows POSTS, whose thumbnails carry no view count.
+// Reach only exists on the Reels grid, so the tab switch is not optional.
+test('opens the reels tab and scrolls the grid for more reels', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 50000, targets: { reelsTab: { x: 400, y: 500 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 1 }, { views: 2 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 3 }, { views: 4 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 3 }, { views: 4 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views) });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 400 && o[2] === 500),
+    'tapped the profile reels tab',
+  );
+  assert.ok(driver.ops.some((o) => o[0] === 'swipe'), 'scrolled the reels grid');
+  assert.deepStrictEqual(out[0].reels.map((r) => r.views), [1, 2, 3, 4]);
+  assert.strictEqual(out[0].evidence.reelsRead, 4);
+});
+
+test('scrolling stops as soon as the grid yields nothing new', async () => {
+  const driver = driverWithSearch();
+  const same = { screen: 'reels_tab', reels: [{ views: 1 }], targets: { back: BACK } };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 10, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    same, same, same, same, same, same, same, same,
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  assert.strictEqual(
+    driver.ops.filter((o) => o[0] === 'swipe').length, 1,
+    'one scroll, then stop — the grid was exhausted',
+  );
+});
+
+// Without clip bytes reelJudge falls straight through to the bio-text tier, so
+// the creative-style judgement the pipeline is built on never happens.
+test('records a reel and attaches the clip for the Gemini judge', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { 'reelCell:0': { x: 150, y: 700 }, back: BACK } },
+    { screen: 'reels_feed', targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0, clipSeconds: 9 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead(views),
+    deps: { getClip: async (id) => ({ dataBase64: 'AAAA', mimeType: 'video/mp4', id }) },
+  });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  assert.ok(driver.ops.some((o) => o[0] === 'recordClip' && o[1] === 9), 'recorded at the configured length');
+  assert.ok(driver.ops.some((o) => o[0] === 'tap' && o[1] === 150 && o[2] === 700), 'opened the first reel');
+  assert.strictEqual(out[0].clip.dataBase64, 'AAAA');
+  assert.strictEqual(out[0].evidence.clipCaptured, true);
+});
+
+test('a failed recording still yields the creator', async () => {
+  const driver = driverWithSearch();
+  driver.recordClip = async () => { throw new Error('recorder unavailable'); };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { 'reelCell:0': { x: 1, y: 1 }, back: BACK } },
+    { screen: 'reels_feed', targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views) });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 1, 'the candidate survives a recording failure');
+  assert.strictEqual(out[0].clip, undefined);
+  assert.strictEqual(out[0].evidence.clipCaptured, false);
+});

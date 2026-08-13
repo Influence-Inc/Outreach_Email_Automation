@@ -187,6 +187,23 @@ class SourcingAccessibilityService : AccessibilityService() {
         return pasteOver(target, text)
     }
 
+    /**
+     * Press the keyboard's Search key on the focused input.
+     *
+     * Typing alone only ever gets Instagram's as-you-type ACCOUNT suggestions,
+     * which match handles against the raw string — that is why keyword scouting
+     * kept surfacing profiles whose *name* contained the keyword rather than
+     * creators posting about it. Committing the query is what loads the real
+     * results page with its Reels tab.
+     */
+    fun submitSearch(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: firstEditable(root)
+            ?: return false
+        return target.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+    }
+
     private fun moveCaretToEnd(target: AccessibilityNodeInfo, length: Int) {
         val selection = Bundle().apply {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, length)

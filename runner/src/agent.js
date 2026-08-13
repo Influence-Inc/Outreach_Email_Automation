@@ -29,6 +29,7 @@ async function executeCommand(driver, cmd, ctx = {}) {
     case 'tap': await driver.tap(a.x, a.y); return null;
     case 'swipe': await driver.swipe(a); return null;
     case 'type': await driver.typeText(a.text); return null;
+    case 'submitSearch': await driver.submitSearch(); return null;
     case 'home': await driver.home(); return null;
     case 'keepAwake': if (driver.keepAwake) await driver.keepAwake(); return null;
     case 'wake': if (driver.wake) await driver.wake(); return null;
