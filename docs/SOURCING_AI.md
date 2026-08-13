@@ -28,9 +28,15 @@ docs for current rates.
 
 | Var | Default | Meaning |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | *(unset)* | Enables the multimodal judge. Unset ⇒ falls back to Claude/keywords. |
-| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Judge model. |
+| `GEMINI_API_KEY` | *(unset)* | Enables the multimodal judge. Unset ⇒ falls back to Claude/keywords. **Paste the raw value — no surrounding quotes, no leading space.** |
+| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Judge model. Quotes/whitespace are stripped, but a wrong name ⇒ `404 NotFound`. |
 | `GEMINI_MEDIA_RESOLUTION` | `low` | `low` (cheapest) / `medium` / `high`. |
+
+> **Verify the key/model without the phone:** hit `GET /api/sourcing/gemini/health`
+> (admin-authed) — it does a tiny text-only call and returns the real
+> `{ ok, status, error, model }`. `ok:true` ⇒ Gemini is reachable; a `404` ⇒ the
+> model name is wrong/misquoted; a `403/400` ⇒ the key is. This is the fastest way
+> to tell a Gemini misconfig from a phone/navigation problem.
 | `SOURCING_REMOTE_CONTROL` | off | `on` enables backend‑driven scouting + the reel pipeline (agent mode). |
 | `SOURCING_AI_SEARCH_TERMS` | on when `GEMINI_API_KEY` is set | `off` disables AI search‑term expansion (see *Search terms* below). |
 | `SOURCING_ENGAGEMENT` | off | `on` allows like/save. **Off = watch‑only (near‑zero ban risk).** |

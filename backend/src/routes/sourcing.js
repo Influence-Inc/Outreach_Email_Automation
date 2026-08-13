@@ -25,6 +25,7 @@ const hostCommands = require('../services/hostCommands');
 const sourcingSession = require('../services/sourcingSession');
 const clipStore = require('../services/clipStore');
 const humanize = require('../services/humanize');
+const geminiClient = require('../services/geminiClient');
 const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
@@ -50,6 +51,19 @@ function nextRunStatus(currentStatus, done) {
   if (currentStatus === 'queued') return { status: 'running' };
   return {};
 }
+
+// GET /api/sourcing/gemini/health — admin diagnostic. Does the configured
+// GEMINI_API_KEY + GEMINI_MODEL actually reach a live model? Returns the real
+// HTTP status + error body (e.g. a 404 for a mistyped/quoted model name) so a
+// misconfigured env is obvious from the dashboard — no phone or reel clip needed.
+// Admin-only via the top-level siteAuth gate (no requireHostOrSlack).
+router.get('/gemini/health', async (_req, res, next) => {
+  try {
+    res.json(await geminiClient.ping());
+  } catch (err) {
+    next(err);
+  }
+});
 
 // --- Paired hosts (per-runner token pairing) -------------------------------
 // Mint/list/revoke are admin-only — they sit behind the top-level siteAuth gate
