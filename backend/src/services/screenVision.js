@@ -366,20 +366,28 @@ function extractReelResults(elements) {
 // "reels", so require both, and prefer an element whose resource-id looks like a
 // tab when several qualify.
 //
-// Explore is deliberately NOT accepted here. Explore is a general-interest
-// surface, not the keyword's results, and sourcing creators from it produces
-// candidates that have nothing to do with what was searched for.
-const TOP_STRIP_LABELS = ['reels', 'reels tab'];
-
-function findSearchReelsTab(elements, height) {
+// A chip in the results page's top strip, matched by exact label so a reel
+// card's own description cannot stand in for the tab.
+function findTopStripChip(elements, height, labels) {
   const topBand = Number.isFinite(height) && height > 0 ? height * 0.35 : Infinity;
   const candidates = elements.filter((e) => {
     if (!e.bounds || e.bounds.y > topBand) return false;
-    return TOP_STRIP_LABELS.includes(labelOf(e));
+    return labels.includes(labelOf(e));
   });
   if (!candidates.length) return null;
-  const tabbish = candidates.find((e) => /tab|chip|serp|clips/i.test(ridLocal(e.rid)));
+  const tabbish = candidates.find((e) => /tab|chip|serp|clips|explore/i.test(ridLocal(e.rid)));
   return tabbish || candidates[0];
+}
+
+function findSearchReelsTab(elements, height) {
+  return findTopStripChip(elements, height, ['reels', 'reels tab']);
+}
+
+// Explore, as a SEARCH-page chip. This is a legitimate surface for finding
+// particular profiles for a query — it is only wrong as the entry point for
+// reels-feed mode, which must land on the account's own warmed feed instead.
+function findExploreTab(elements, height) {
+  return findTopStripChip(elements, height, ['explore', 'explore tab']);
 }
 
 // The REELS button in Instagram's BOTTOM navigation bar — the app's own reel
@@ -541,12 +549,19 @@ function readScreen(input = {}) {
     const c = el && center(el.bounds);
     if (c) targets.searchReelsTab = c;
   }
-  // The bottom-nav Reels button, so a run can drop into Instagram's own reel
-  // feed rather than routing through search or Explore.
+  // The bottom-nav Reels button, so reels-feed mode can drop into Instagram's
+  // own warmed feed rather than routing through search or Explore.
   {
     const el = findReelsNavTab(elements, input.height);
     const c = el && center(el.bounds);
     if (c) targets.reelsNavTab = c;
+  }
+  // Explore as a search-page chip — the fallback surface for finding profiles
+  // for a query when the results page has no Reels chip.
+  {
+    const el = findExploreTab(elements, input.height);
+    const c = el && center(el.bounds);
+    if (c) targets.exploreTab = c;
   }
 
   const reading = { screen, targets };

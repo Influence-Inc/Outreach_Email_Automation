@@ -446,3 +446,59 @@ test('scrolling out of the feed ends feed discovery cleanly', async () => {
   assert.strictEqual(out.length, 0);
   assert.ok(driver.ops.length > 0, 'ran without throwing');
 });
+
+// ── cost of a run ───────────────────────────────────────────────────────────
+
+// Every screen read used to fetch the window size alongside the UI tree, so each
+// navigation step cost two round-trips to the phone instead of one. There are
+// dozens of steps per creator, and the screen does not resize mid-run.
+test('the device size is fetched once, not on every screen read', async () => {
+  const { readView } = require('./sourcingNavigator');
+  let sizeCalls = 0;
+  let dumpCalls = 0;
+  const driver = {
+    dumpUi: async () => { dumpCalls += 1; return []; },
+    getWindowSize: async () => { sizeCalls += 1; return { width: 1080, height: 2400 }; },
+  };
+
+  await readView(driver);
+  await readView(driver);
+  await readView(driver);
+
+  assert.strictEqual(dumpCalls, 3, 'the UI tree is re-read every time, as it must be');
+  assert.strictEqual(sizeCalls, 1, 'the screen size is asked for once per driver');
+});
+
+test('a driver that cannot report its size still reads screens', async () => {
+  const { readView } = require('./sourcingNavigator');
+  const driver = {
+    dumpUi: async () => [],
+    getWindowSize: async () => { throw new Error('unsupported'); },
+  };
+  const view = await readView(driver);
+  assert.ok(view, 'degrades instead of throwing');
+});
+
+// Reels mode records and judges the feed reel before opening the profile; a
+// second recording there costs another ~12s on the phone and a second Gemini
+// call for a verdict already in hand.
+test('analyseProfile can skip recording when the caller already judged a clip', async () => {
+  const { analyseProfile } = require('./sourcingNavigator');
+  const driver = driverWithSearch();
+  const views = [
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { 'reelCell:0': { x: 1, y: 1 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+  ];
+  const profile = await analyseProfile({
+    driver,
+    pacingMs: 0,
+    read: scriptedRead(views),
+    screen: { width: 1080, height: 2400 },
+    recordClip: false,
+  });
+
+  assert.ok(!driver.ops.some((o) => o[0] === 'recordClip'), 'no second recording');
+  assert.deepStrictEqual(profile.reels.map((r) => r.views), [7], 'reach still collected');
+  assert.strictEqual(profile.evidence.clipCaptured, false);
+});

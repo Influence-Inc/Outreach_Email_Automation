@@ -156,6 +156,10 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
           fallbackUsername: view.author,
           source: 'reels-feed',
           screens: ['reels_feed', 'profile', 'reels_tab'],
+          // The feed reel was already recorded and judged above; a second
+          // recording here would cost another ~12s on the phone and a second
+          // Gemini call for the same verdict.
+          recordClip: false,
         });
         if (profile) {
           candidate.username = profile.username || candidate.username;

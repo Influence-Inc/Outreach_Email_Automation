@@ -32,18 +32,34 @@ async function humanTap(driver, point, jitterPx, pacingMs) {
   await sleep(jitteredDelay(pacingMs));
 }
 
-// Capture the current screen: dump the UI tree + device size, interpret it.
-async function readView(driver) {
-  const elements = await driver.dumpUi();
-  let width = null;
-  let height = null;
+// Device pixel size, asked for once per driver.
+//
+// Every screen read used to fetch this alongside the UI tree, which meant two
+// round-trips to the phone for every single navigation step — and there are
+// dozens per creator. The screen does not resize mid-run (the phone sits on a
+// shelf in one orientation), so one call is enough and the rest of the run reads
+// it for free.
+const SIZE_CACHE = new WeakMap();
+
+async function windowSizeOf(driver) {
+  const cached = SIZE_CACHE.get(driver);
+  if (cached) return cached;
+  let size = { width: null, height: null };
   try {
     const s = driver.getWindowSize ? await driver.getWindowSize() : null;
-    if (s) { width = s.width; height = s.height; }
+    if (s) size = { width: s.width, height: s.height };
   } catch (_) {
     /* size is best-effort */
   }
-  return readScreen({ elements, width, height });
+  SIZE_CACHE.set(driver, size);
+  return size;
+}
+
+// Capture the current screen: dump the UI tree + device size, interpret it.
+async function readView(driver) {
+  // Issued together so the first read pays one round-trip's latency, not two.
+  const [elements, size] = await Promise.all([driver.dumpUi(), windowSizeOf(driver)]);
+  return readScreen({ elements, width: size.width, height: size.height });
 }
 
 // One search term per search, always a single word — see services/searchTerms.js
@@ -76,15 +92,12 @@ const MAX_REEL_SCROLLS = 6;
 // without producing a candidate; the run's own target count stops it first.
 const MAX_FEED_SCROLLS = 60;
 
-// Real device pixels, for scroll geometry. Falls back to a common phone size so
-// a driver without getWindowSize still scrolls sensibly.
+// Real device pixels, for scroll geometry. Shares the per-driver cache with
+// readView, so this costs nothing after the first screen read. Falls back to a
+// common phone size for a driver that cannot report one.
 async function deviceSize(driver) {
-  try {
-    const s = driver.getWindowSize ? await driver.getWindowSize() : null;
-    if (s && s.width && s.height) return { width: s.width, height: s.height };
-  } catch (_) {
-    /* best effort */
-  }
+  const s = await windowSizeOf(driver);
+  if (s && s.width && s.height) return { width: s.width, height: s.height };
   return { width: 1080, height: 2400 };
 }
 
@@ -128,10 +141,12 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     }
 
     // Then move to that page's REELS chip — the keyword's actual content.
+    // Explore is the fallback when a build's results page has no Reels chip:
+    // still the query's surface, unlike the bottom-nav Explore feed.
     view = await read(driver);
-    const reelsChip = view.targets && view.targets.searchReelsTab;
-    if (reelsChip) {
-      await humanTap(driver, reelsChip, jitterPx, pacingMs);
+    const chip = view.targets && (view.targets.searchReelsTab || view.targets.exploreTab);
+    if (chip) {
+      await humanTap(driver, chip, jitterPx, pacingMs);
       view = await read(driver);
     }
 
@@ -295,7 +310,7 @@ async function analyseProfile({
   driver, pacingMs, jitterPx = 0, read = readView, screen,
   clipSeconds = 12, getClip = async () => null,
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
-  reelsWindow = REELS_PER_PROFILE,
+  reelsWindow = REELS_PER_PROFILE, recordClip = true,
 }) {
   const header = await read(driver);
 
@@ -309,9 +324,14 @@ async function analyseProfile({
   }
 
   // Record one reel BEFORE scrolling, while the most recent is still on screen.
-  const clip = await captureReelClip({
-    driver, view, pacingMs, jitterPx, read, clipSeconds, getClip,
-  });
+  //
+  // Skipped when the caller already has a judged clip for this creator — reels
+  // mode records and judges the feed reel before it ever opens the profile, and
+  // recording a second one would spend another ~12s on the phone plus a second
+  // Gemini call to answer a question already answered.
+  const clip = recordClip
+    ? await captureReelClip({ driver, view, pacingMs, jitterPx, read, clipSeconds, getClip })
+    : null;
 
   // Then scroll the grid for the rest of the reach data.
   const reels = await collectReels({
