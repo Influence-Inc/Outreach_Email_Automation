@@ -41,12 +41,21 @@ test('classifyReelVideo posts the clip inline (low res) and parses the JSON verd
 
   assert.deepStrictEqual(out, { niche_score: 0.9, genre: 'fitness' });
   const call = fetchImpl.calls[0];
-  assert.match(call.url, /models\/gemini-2\.5-flash-lite:generateContent\?key=k/);
+  assert.match(call.url, /models\/gemini-flash-lite-latest:generateContent\?key=k/);
   const body = JSON.parse(call.opts.body);
   assert.strictEqual(body.contents[0].parts[0].inlineData.data, 'AAAA');
   assert.strictEqual(body.contents[0].parts[0].inlineData.mimeType, 'video/mp4');
   assert.strictEqual(body.generationConfig.mediaResolution, 'MEDIA_RESOLUTION_LOW');
   assert.strictEqual(body.generationConfig.responseMimeType, 'application/json');
+});
+
+test('model() defaults to the rolling flash-lite alias, not a pinned generation', () => {
+  clearEnv();
+  // A pinned generation string (e.g. "gemini-2.5-flash-lite") can 404 later when
+  // Google retires it for "new" keys, even with zero code changes. The default
+  // must be the "-latest" alias so that never happens silently.
+  assert.strictEqual(gc.model(), 'gemini-flash-lite-latest');
+  assert.strictEqual(gc.DEFAULT_MODEL, 'gemini-flash-lite-latest');
 });
 
 test('honors GEMINI_MODEL + GEMINI_MEDIA_RESOLUTION overrides', async () => {
