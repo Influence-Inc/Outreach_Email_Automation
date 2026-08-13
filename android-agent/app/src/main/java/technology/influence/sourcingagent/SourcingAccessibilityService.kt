@@ -4,7 +4,9 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
+import android.provider.Settings
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.os.Bundle
@@ -55,7 +57,43 @@ class SourcingAccessibilityService : AccessibilityService() {
         var instance: SourcingAccessibilityService? = null
             private set
 
+        /** Attached and ready to execute device commands right now. */
         fun isRunning(): Boolean = instance != null
+
+        /**
+         * Enabled by the user in Settings — the authoritative answer.
+         *
+         * [instance] is only populated once the system has bound the service,
+         * and it is cleared whenever the app's process is recycled. Gating the
+         * "Start agent" button on it meant an operator who had already granted
+         * accessibility was told to grant it again, because the binding had not
+         * happened yet (or the process had restarted since). The system setting
+         * does not have that gap.
+         */
+        fun isEnabledInSettings(context: Context): Boolean {
+            val expected = ComponentName(context, SourcingAccessibilityService::class.java)
+            val enabled = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            ).orEmpty()
+            return enabled.split(':').any { entry ->
+                ComponentName.unflattenFromString(entry) == expected
+            }
+        }
+
+        /** Granted in Settings, whether or not the binding has landed yet. */
+        fun isReadyOrEnabled(context: Context): Boolean =
+            isRunning() || isEnabledInSettings(context)
+
+        /** Block briefly for the system to bind the service after it is enabled. */
+        fun awaitInstance(timeoutMs: Long): SourcingAccessibilityService? {
+            val deadline = SystemClock.elapsedRealtime() + timeoutMs
+            while (SystemClock.elapsedRealtime() < deadline) {
+                instance?.let { return it }
+                Thread.sleep(200)
+            }
+            return instance
+        }
     }
 
     private val screenshotExecutor = Executors.newSingleThreadExecutor()

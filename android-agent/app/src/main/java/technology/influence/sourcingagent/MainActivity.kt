@@ -29,8 +29,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefs: Prefs
 
-    private var projectionResultCode: Int = 0
-    private var projectionData: Intent? = null
+    companion object {
+        /**
+         * Kept at process scope rather than on the activity.
+         *
+         * Tapping "Enable accessibility service" leaves for Settings, and coming
+         * back can recreate MainActivity — which threw away an activity-scoped
+         * grant. The screen then reported "not granted" for a permission the
+         * operator had just given, and asked for it again.
+         */
+        @Volatile
+        private var projectionResultCode: Int = 0
+
+        @Volatile
+        private var projectionData: Intent? = null
+    }
 
     /** Last "Test screen read" verdict, shown under the status block. */
     private var diagnostic: String? = null
@@ -92,7 +105,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startDiagnostic() {
         save()
-        if (!SourcingAccessibilityService.isRunning()) {
+        if (!SourcingAccessibilityService.isReadyOrEnabled(this)) {
             toast("Enable the accessibility service first (step 1)")
             return
         }
@@ -157,7 +170,10 @@ class MainActivity : AppCompatActivity() {
             toast("Still needed: ${gaps.joinToString(", ")}")
             return
         }
-        if (!SourcingAccessibilityService.isRunning()) {
+        // Checks the system setting, not just the live binding: the binding can
+        // lag behind the grant, and that gap is what told operators to enable a
+        // service they had already enabled.
+        if (!SourcingAccessibilityService.isReadyOrEnabled(this)) {
             toast("Enable the accessibility service first (step 1)")
             return
         }
@@ -212,7 +228,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun render() {
-        val a11y = if (SourcingAccessibilityService.isRunning()) "on" else "OFF — tap step 1"
+        val a11y = when {
+            SourcingAccessibilityService.isRunning() -> "on"
+            SourcingAccessibilityService.isEnabledInSettings(this) -> "enabled, binding…"
+            else -> "OFF — tap step 1"
+        }
         val capture = if (projectionData != null) "granted" else "not granted (reels only)"
         binding.toggleAgent.text = if (AgentService.isRunning) "3. Stop agent" else "3. Start agent"
         binding.status.text = buildString {

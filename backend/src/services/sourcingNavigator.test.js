@@ -296,3 +296,63 @@ test('a failed recording still yields the creator', async () => {
   assert.strictEqual(out[0].clip, undefined);
   assert.strictEqual(out[0].evidence.clipCaptured, false);
 });
+
+// ── back navigation ─────────────────────────────────────────────────────────
+
+// Counting back presses is what walked the agent out of Instagram: a capture
+// that bails early pushes fewer screens than a fixed "go back twice" assumes,
+// so the extra presses kept going past the results page and out of the app.
+test('a bailed-out capture does not press back past the results page', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    // reels grid with one card
+    { screen: 'search_results', reelResults: [{ index: 0, author: 'Coach' }], targets: { 'reelResult:0': { x: 9, y: 9 }, back: BACK } },
+    { screen: 'search_results', targets: { 'reelResult:0': { x: 9, y: 9 }, back: BACK } },
+    // the reel opens but the author target never resolves -> captureViaReel bails
+    { screen: 'reels_feed', targets: { back: BACK } },
+    // still on the feed: exactly one back press should return us to the SERP
+    { screen: 'reels_feed', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'nothing captured — the author never resolved');
+  const backTaps = driver.ops.filter((o) => o[0] === 'tap' && o[1] === BACK.x && o[2] === BACK.y).length;
+  assert.strictEqual(backTaps, 1, 'one back press, not a blind two');
+});
+
+test('already on the results page means no back press at all', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', reelResults: [{ index: 0, author: 'C' }], targets: { 'reelResult:0': { x: 9, y: 9 }, back: BACK } },
+    { screen: 'search_results', targets: {} },      // reelResult target gone -> bail
+    { screen: 'search_results', targets: { back: BACK } }, // backTo sees SERP: no press
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  const backTaps = driver.ops.filter((o) => o[0] === 'tap' && o[1] === BACK.x && o[2] === BACK.y).length;
+  assert.strictEqual(backTaps, 0, 'no back press when already where we want to be');
+});
+
+// Backing out too far used to leave every later tap landing on the launcher.
+test('an unreadable screen relaunches Instagram instead of tapping blindly', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'unknown', targets: {} },   // end-of-term check: not in IG any more
+    { screen: 'search', targets: {} },    // after the relaunch
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  const opens = driver.ops.filter((o) => o[0] === 'openApp').length;
+  assert.strictEqual(opens, 2, 'launched once at the start, relaunched once on recovery');
+});

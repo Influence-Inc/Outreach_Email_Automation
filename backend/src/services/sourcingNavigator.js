@@ -59,6 +59,9 @@ async function tapTarget({ driver, view, name, pacingMs, jitterPx = 0 }) {
   await humanTap(driver, { x: t.x, y: t.y }, jitterPx, pacingMs);
 }
 
+// Screens a keyword loop can continue from — where the next result is reachable.
+const SERP_SCREENS = ['search_results', 'search'];
+
 // How many reels to read off a creator's grid before scoring them. One screen of
 // the grid shows about six, so this needs a scroll or two.
 const REELS_PER_PROFILE = 12;
@@ -141,8 +144,9 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         yield profile;
         emitted += 1;
       }
-      await goBack({ driver, pacingMs, jitterPx, read }); // profile -> reels_feed
-      await goBack({ driver, pacingMs, jitterPx, read }); // reels_feed -> SERP
+      // However deep this creator took us (reel player -> profile -> feed), come
+      // back to the results page — and no further.
+      await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 4 });
     }
 
     // Fallback: an "Accounts" list of @handle rows, on builds (or with the
@@ -159,11 +163,14 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
           yield profile;
           emitted += 1;
         }
-        await goBack({ driver, pacingMs, jitterPx, read });
+        await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 4 });
       }
     }
 
-    await goBack({ driver, pacingMs, jitterPx, read });
+    // Next keyword starts by tapping the search tab, which is reachable from any
+    // in-app screen — so rather than pressing back again (the press that used to
+    // exit Instagram), just make sure we are still inside the app.
+    await ensureInInstagram({ driver, read, pacingMs, jitterPx });
   }
 }
 
@@ -291,7 +298,13 @@ async function captureReelClip({
   } catch (_) {
     /* recording is enrichment, never a reason to drop the candidate */
   }
-  await goBack({ driver, pacingMs, jitterPx, read }); // reel player -> reels grid
+  // Back to the grid — but only as far as the grid, so a recording that never
+  // opened the player does not press back out of the profile.
+  await backTo({
+    driver, read, pacingMs, jitterPx,
+    wanted: ['reels_tab', 'profile'],
+    maxHops: 2,
+  });
   return clip;
 }
 
@@ -314,9 +327,10 @@ async function openAndCaptureProfile({
   return { ...profile, username: handle };
 }
 
-async function goBack({ driver, pacingMs, jitterPx = 0, read = readView }) {
-  const view = await read(driver);
-  const t = view.targets && view.targets.back;
+// One back press, using the on-screen affordance when the reader found one and
+// the system back gesture otherwise.
+async function pressBack({ driver, view, pacingMs, jitterPx = 0 }) {
+  const t = view && view.targets && view.targets.back;
   if (t) {
     await humanTap(driver, { x: t.x, y: t.y }, jitterPx, pacingMs);
   } else {
@@ -324,6 +338,47 @@ async function goBack({ driver, pacingMs, jitterPx = 0, read = readView }) {
     await driver.swipe({ x1: 5, y1: 400, x2: 200, y2: 400, durationMs: 250 });
     await sleep(jitteredDelay(pacingMs));
   }
+}
+
+async function goBack({ driver, pacingMs, jitterPx = 0, read = readView }) {
+  await pressBack({ driver, view: await read(driver), pacingMs, jitterPx });
+}
+
+/**
+ * Back out until the current screen is one of `wanted`.
+ *
+ * Counting back presses was what walked the agent out of Instagram entirely. A
+ * capture that bails early — a reel card whose author never resolved, a profile
+ * link that moved — pushes fewer screens than the caller assumed, so a fixed
+ * "go back twice" kept pressing past the results page and out of the app.
+ * Reading between hops makes the number of presses follow what is actually on
+ * screen, and costs nothing when we are already where we want to be.
+ */
+async function backTo({ driver, read = readView, pacingMs, jitterPx = 0, wanted, maxHops = 4 }) {
+  let view = await read(driver);
+  for (let hop = 0; hop < maxHops; hop += 1) {
+    if (wanted.includes(view.screen)) return view;
+    // eslint-disable-next-line no-await-in-loop
+    await pressBack({ driver, view, pacingMs, jitterPx });
+    // eslint-disable-next-line no-await-in-loop
+    view = await read(driver);
+  }
+  return view;
+}
+
+/**
+ * Recover if we are no longer anywhere readable inside Instagram.
+ *
+ * Backing out too far, or IG dropping to the launcher, used to leave every
+ * subsequent tap landing on whatever happened to be under the coordinates.
+ * Relaunching is always safe: openApp on an already-foreground IG is a no-op.
+ */
+async function ensureInInstagram({ driver, read = readView, pacingMs, jitterPx = 0 }) {
+  const view = await read(driver);
+  if (view && view.screen && view.screen !== 'unknown') return view;
+  await driver.openApp(IG_ANDROID_PACKAGE);
+  await sleep(jitteredDelay(pacingMs));
+  return read(driver);
 }
 
 module.exports = { scout, readView, pickSearchTerms, IG_ANDROID_PACKAGE };

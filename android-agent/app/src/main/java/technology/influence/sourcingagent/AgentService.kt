@@ -119,6 +119,14 @@ class AgentService : Service() {
             clipProvider = { clipRecorder },
         )
 
+        // Starting immediately after enabling accessibility is the normal case,
+        // and the system takes a moment to bind the service. Wait for it rather
+        // than claiming a run we cannot execute a single command against.
+        if (SourcingAccessibilityService.instance == null) {
+            setStatus("waiting for the accessibility service to attach…")
+            SourcingAccessibilityService.awaitInstance(10_000L)
+        }
+
         // The phone must stay awake for the whole session or the first screen
         // lock ends the run — same reason the Node runner shells out to
         // `svc power stayon true` before it starts scouting.
