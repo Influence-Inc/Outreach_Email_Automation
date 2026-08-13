@@ -130,7 +130,16 @@ async function runSession({ hostId, run, deps }) {
       },
     });
   } else {
-    gen = scoutFn({ driver, config: { pacingMs, tapJitterPx }, opts });
+    // getClip lets the navigator attach a recorded reel's bytes to each
+    // candidate; reelJudge then scores creative style + niche from the actual
+    // video and audio instead of falling back to the bio text.
+    const clipStore = require('./clipStore');
+    gen = scoutFn({
+      driver,
+      config: { pacingMs, tapJitterPx, clipSeconds: config.clipSeconds },
+      opts,
+      deps: { getClip: deps.getClip || clipStore.take },
+    });
   }
 
   try {

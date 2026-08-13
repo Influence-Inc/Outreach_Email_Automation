@@ -68,6 +68,13 @@ class CommandExecutor(
                 null
             }
 
+            "submitSearch" -> {
+                require(service().submitSearch()) {
+                    "could not press Search — no focused text field to submit"
+                }
+                null
+            }
+
             "home" -> {
                 require(service().goHome()) { "HOME action was refused" }
                 null

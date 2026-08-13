@@ -151,6 +151,17 @@ const SIGNALS = {
     ],
     labels: ['reels'],
   },
+  // The REELS chip on the search results page — a different control from the
+  // profile's Reels sub-tab above, and the one that turns a keyword query into
+  // content results. Without tapping it IG answers a keyword with ACCOUNTS whose
+  // handle matched the string, which is not what the keyword was asking for.
+  searchReelsTab: {
+    rids: [
+      'serp_tab_reels', 'search_tab_reels', 'serp_journey_header_tab_reels',
+      'tab_bar_reels', 'clips_tab',
+    ],
+    labels: ['reels'],
+  },
   // Full-screen reel player engagement buttons. 'like' matches both the Like and
   // Unlike states (same button); already-liked is detected separately so we never
   // un-like a reel.
@@ -244,6 +255,32 @@ function extractProfile(elements) {
     }
   }
   return out;
+}
+
+// Tappable reel cells on a profile's Reels grid, in grid order.
+//
+// Separate from extractReels (which reads the view counts): to hand a reel's
+// VIDEO to the Gemini judge the navigator has to open one, and that needs a
+// coordinate. Cells are matched on the clip/reel hint in their resource-id or
+// content-desc, then ordered top-to-bottom, left-to-right so `reelCell:0` is
+// the creator's most recent reel.
+function extractReelCells(elements) {
+  const CELL_HINT = /clips_grid|reel_item|clip_thumbnail|media_thumbnail|grid_card_layout_container/i;
+  const cells = [];
+  for (const e of elements) {
+    if (!isClickable(e)) continue;
+    const hint = `${ridLocal(e.rid)} ${norm(e.desc)}`;
+    if (!CELL_HINT.test(ridLocal(e.rid)) && !/^reel\b/i.test(String(e.desc || '').trim())) continue;
+    if (!CELL_HINT.test(hint) && !/^reel\b/i.test(String(e.desc || '').trim())) continue;
+    const c = center(e.bounds);
+    if (!c) continue;
+    cells.push({ y: e.bounds.y, x: e.bounds.x, point: c });
+  }
+  cells.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+  const targets = {};
+  cells.forEach((cell, i) => { targets[`reelCell:${i}`] = cell.point; });
+  return { count: cells.length, targets };
 }
 
 // Reels tab: each reel thumbnail carries a view-count overlay. Collect the
@@ -439,6 +476,7 @@ function readScreen(input = {}) {
   add('searchBox', SIGNALS.searchBox);
   add('back', SIGNALS.back);
   add('reelsTab', SIGNALS.reelsTab);
+  if (screen === 'search_results') add('searchReelsTab', SIGNALS.searchReelsTab);
 
   const reading = { screen, targets };
 
@@ -466,8 +504,18 @@ function readScreen(input = {}) {
     // free (Rule 2/4/5 don't require a separate reels_tab visit in that case).
     const reels = extractReels(elements);
     if (reels.length) reading.reels = reels;
+    const cells = extractReelCells(elements);
+    if (cells.count) {
+      reading.reelCells = cells.count;
+      Object.assign(targets, cells.targets);
+    }
   } else if (screen === 'reels_tab') {
     reading.reels = extractReels(elements);
+    const cells = extractReelCells(elements);
+    if (cells.count) {
+      reading.reelCells = cells.count;
+      Object.assign(targets, cells.targets);
+    }
   } else if (screen === 'reels_feed') {
     const feed = extractFeed(elements);
     reading.author = feed.author;

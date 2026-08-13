@@ -9,8 +9,8 @@
 // The agent (runner in RUNNER_MODE=agent) maps each op back to its local
 // AndroidDriver method — the shapes here MUST match what the agent executes:
 //   openApp {pkg}   tap {x,y}   swipe {x1,y1,x2,y2,durationMs}   type {text}
-//   home {}   dumpUi {} -> elements[]   getWindowSize {} -> {width,height}
-//   keepAwake {}   wake {}
+//   submitSearch {}   home {}   dumpUi {} -> elements[]
+//   getWindowSize {} -> {width,height}   keepAwake {}   wake {}
 
 const commands = require('./hostCommands');
 
@@ -26,6 +26,10 @@ function makeRemoteDriver({ hostId, channel = commands, timeoutMs } = {}) {
     tap: (x, y) => call('tap', { x, y }),
     swipe: (opts) => call('swipe', opts || {}),
     typeText: (text) => call('type', { text }),
+    // Commit the typed query — the keyboard's Search key. Without this IG only
+    // ever shows the as-you-type ACCOUNT suggestions (matching handles against
+    // the string), never the keyword's actual content results.
+    submitSearch: () => call('submitSearch', {}),
     home: () => call('home', {}),
     dumpUi: () => call('dumpUi', {}),
     getWindowSize: () => call('getWindowSize', {}),
