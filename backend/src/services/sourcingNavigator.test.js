@@ -356,3 +356,93 @@ test('an unreadable screen relaunches Instagram instead of tapping blindly', asy
   const opens = driver.ops.filter((o) => o[0] === 'openApp').length;
   assert.strictEqual(opens, 2, 'launched once at the start, relaunched once on recovery');
 });
+
+// ── feed-scroll discovery ───────────────────────────────────────────────────
+
+// When the Reels/Explore chip lands on a full-screen player there are no cards
+// to tap by index — creators are found by scrolling reel to reel.
+test('scrolls a reels feed, opening each creator and returning to the feed', async () => {
+  const driver = driverWithSearch();
+  const feedReel = (author) => ({
+    screen: 'reels_feed', author, targets: { authorProfile: { x: 300, y: 1500 }, back: BACK },
+  });
+  const profileOf = (followers) => [
+    { screen: 'profile', followers, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: followers }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: followers }], targets: { back: BACK } },
+    { screen: 'reels_feed', author: 'x', targets: { back: BACK } }, // backTo lands here
+  ];
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 600, y: 150 }, back: BACK } },
+    feedReel('Alpha Coach'),        // after tapping the chip
+    feedReel('Alpha Coach'),        // feed read inside the scroll loop
+    ...profileOf(1000),
+    feedReel('Beta Lifts'),
+    ...profileOf(2000),
+    { screen: 'unknown', targets: {} },
+  ];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 2 }, read: scriptedRead(views),
+  });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 2, 'sourced two creators from the feed');
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 300 && o[2] === 1500),
+    'opened the creator from the reel',
+  );
+  // A big vertical swipe is the move to the next reel.
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'swipe' && o[1].y1 > o[1].y2 && o[1].y1 >= 1900),
+    'swiped up to the next reel',
+  );
+  assert.strictEqual(out[0].evidence.source, 'backend-navigator:feed-scroll');
+});
+
+// A feed re-surfaces popular accounts; analysing one twice would spend a slot
+// against N on a creator already sourced.
+test('the same creator is not analysed twice while scrolling', async () => {
+  const driver = driverWithSearch();
+  const feedReel = { screen: 'reels_feed', author: 'Same Person', targets: { authorProfile: { x: 3, y: 4 }, back: BACK } };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    feedReel,
+    feedReel,
+    { screen: 'profile', followers: 10, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 1 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 1 }], targets: { back: BACK } },
+    feedReel,   // backTo lands on the feed
+    feedReel,   // next loop: same author -> skipped
+    feedReel,
+    { screen: 'unknown', targets: {} },
+  ];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 5 }, read: scriptedRead(views),
+  });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 1, 'the repeated creator was skipped');
+});
+
+test('scrolling out of the feed ends feed discovery cleanly', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    { screen: 'reels_feed', author: 'A', targets: { back: BACK } }, // no authorProfile -> skip
+    { screen: 'profile', targets: { back: BACK } },                 // no longer a feed -> stop
+    { screen: 'search', targets: {} },
+  ];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 3 }, read: scriptedRead(views),
+  });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0);
+  assert.ok(driver.ops.length > 0, 'ran without throwing');
+});

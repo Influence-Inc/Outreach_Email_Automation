@@ -70,6 +70,11 @@ const REELS_PER_PROFILE = 12;
 // earlier, this only caps a creator with a very long back catalogue.
 const MAX_REEL_SCROLLS = 6;
 
+// Safety bound on scrolling a reels FEED for creators. Generous, because the
+// feed repeats accounts and dead reels (no author target) burn iterations
+// without producing a candidate; the run's own target count stops it first.
+const MAX_FEED_SCROLLS = 60;
+
 // Real device pixels, for scroll geometry. Falls back to a common phone size so
 // a driver without getWindowSize still scrolls sensibly.
 async function deviceSize(driver) {
@@ -95,6 +100,9 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const screen = await deviceSize(driver);
   const terms = pickSearchTerms(opts);
   let emitted = 0;
+  // Creators already analysed, across every keyword — a feed surfaces the same
+  // popular accounts repeatedly, and re-opening one burns a slot against N.
+  const seenCreators = new Set();
 
   for (const term of terms) {
     if (emitted >= max) return;
@@ -125,15 +133,28 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       view = await read(driver);
     }
 
-    // REELS FIRST. Current IG (2024+) answers a keyword with a "For you" reels
-    // grid, and that is the surface worth scouting: a reel proves the creator is
-    // actively posting the content we searched for, where an Accounts row only
-    // proves the handle matched the string. Tap a card → the reels_feed player
-    // exposes the real @handle + an authorProfile tap target → open the profile
-    // → read header + reels. Go back TWICE to return to the SERP
-    // (profile -> reels_feed -> SERP).
-    // For each reel the keyword surfaced: open it, hop to its creator, analyse
-    // the creator, then come back and do the next one — until Nth creator.
+    // The chip can land on either of two surfaces, so handle both.
+    //
+    // SURFACE A — a full-screen scrollable feed. There are no cards to tap by
+    // index; creators are found by scrolling reel to reel, opening each one's
+    // profile, and coming back to carry on scrolling.
+    if (view.screen === 'reels_feed') {
+      for await (const profile of scoutReelFeed({
+        driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip,
+        remaining: max - emitted, seen: seenCreators,
+      })) {
+        yield profile;
+        emitted += 1;
+        if (emitted >= max) return;
+      }
+      await ensureInInstagram({ driver, read, pacingMs, jitterPx });
+      continue;
+    }
+
+    // SURFACE B — a "For you" reels GRID. A reel proves the creator is actively
+    // posting the content we searched for, where an Accounts row only proves the
+    // handle matched the string. Tap a card → the reels_feed player exposes the
+    // real @handle + an authorProfile target → open the profile → analyse.
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
       if (emitted >= max) return;
@@ -171,6 +192,67 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     // in-app screen — so rather than pressing back again (the press that used to
     // exit Instagram), just make sure we are still inside the app.
     await ensureInInstagram({ driver, read, pacingMs, jitterPx });
+  }
+}
+
+/**
+ * Scroll a reels feed, opening each distinct creator's profile for analysis.
+ *
+ * This is what the results page's Reels / Explore chip lands on when Instagram
+ * answers a keyword with a full-screen player rather than a grid of cards.
+ * There is nothing to tap by index, so the loop is: read the reel on screen →
+ * open its creator → analyse → back to the feed → swipe to the next reel, until
+ * the Nth creator is sourced.
+ *
+ * `seen` is shared across keywords: a feed re-surfaces popular accounts, and
+ * analysing one twice would spend a slot against N for a creator already added.
+ */
+async function* scoutReelFeed({
+  driver, read = readView, pacingMs, jitterPx = 0, screen,
+  clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
+}) {
+  const size = screen || { width: 1080, height: 2400 };
+  let produced = 0;
+
+  for (let i = 0; i < MAX_FEED_SCROLLS && produced < remaining; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const feed = await read(driver);
+    if (feed.screen !== 'reels_feed') return; // scrolled out of the feed
+
+    const author = feed.author ? String(feed.author).toLowerCase() : null;
+    const link = feed.targets && feed.targets.authorProfile;
+
+    if (link && !(author && seen.has(author))) {
+      if (author) seen.add(author);
+      // eslint-disable-next-line no-await-in-loop
+      await humanTap(driver, link, jitterPx, pacingMs);
+      // eslint-disable-next-line no-await-in-loop
+      const profile = await analyseProfile({
+        driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip,
+        fallbackUsername: feed.author || null,
+        source: 'backend-navigator:feed-scroll',
+        screens: ['reels_feed', 'profile', 'reels_tab'],
+      });
+      if (profile) {
+        yield profile;
+        produced += 1;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 4 });
+    }
+
+    // Swipe up to the next reel (jittered endpoints so the gesture isn't identical).
+    const jx = jitterTap({ x: Math.round(size.width / 2), y: 0 }, jitterPx).x;
+    // eslint-disable-next-line no-await-in-loop
+    await driver.swipe({
+      x1: jx,
+      y1: Math.round(size.height * 0.8),
+      x2: jx,
+      y2: Math.round(size.height * 0.2),
+      durationMs: 300,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(jitteredDelay(pacingMs));
   }
 }
 
