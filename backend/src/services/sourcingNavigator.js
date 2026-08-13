@@ -62,8 +62,9 @@ async function tapTarget({ driver, view, name, pacingMs, jitterPx = 0 }) {
 // Screens a keyword loop can continue from — where the next result is reachable.
 const SERP_SCREENS = ['search_results', 'search'];
 
-// How many reels to read off a creator's grid before scoring them. One screen of
-// the grid shows about six, so this needs a scroll or two.
+// Default number of reels to read off a creator's grid. Overridden per run by
+// `reelsWindow` — the dashboard's "Recent reels to check" — because that is the
+// same window the scoring rules measure against.
 const REELS_PER_PROFILE = 12;
 
 // Safety bound on the scroll loop — a grid that stops yielding new reels exits
@@ -92,6 +93,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const jitterPx = config.tapJitterPx || 0;
   const max = opts.max || Infinity;
   const clipSeconds = config.clipSeconds || 12;
+  const reelsWindow = config.reelsWindow || REELS_PER_PROFILE;
   const getClip = deps.getClip || (async () => null);
 
   await driver.openApp(IG_ANDROID_PACKAGE);
@@ -140,7 +142,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     // profile, and coming back to carry on scrolling.
     if (view.screen === 'reels_feed') {
       for await (const profile of scoutReelFeed({
-        driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip,
+        driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow,
         remaining: max - emitted, seen: seenCreators,
       })) {
         yield profile;
@@ -160,6 +162,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       if (emitted >= max) return;
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
+        reelsWindow,
       });
       if (profile) {
         yield profile;
@@ -178,7 +181,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       for (const handle of results) {
         if (emitted >= max) return;
         const profile = await openAndCaptureProfile({
-          driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
+          driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
         });
         if (profile) {
           yield profile;
@@ -210,6 +213,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
 async function* scoutReelFeed({
   driver, read = readView, pacingMs, jitterPx = 0, screen,
   clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
+  reelsWindow = REELS_PER_PROFILE,
 }) {
   const size = screen || { width: 1080, height: 2400 };
   let produced = 0;
@@ -228,7 +232,7 @@ async function* scoutReelFeed({
       await humanTap(driver, link, jitterPx, pacingMs);
       // eslint-disable-next-line no-await-in-loop
       const profile = await analyseProfile({
-        driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip,
+        driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip, reelsWindow,
         fallbackUsername: feed.author || null,
         source: 'backend-navigator:feed-scroll',
         screens: ['reels_feed', 'profile', 'reels_tab'],
@@ -262,7 +266,7 @@ async function* scoutReelFeed({
 // then just moves on to the next reel card.
 async function captureViaReel({
   driver, reelIndex, pacingMs, jitterPx = 0, read = readView,
-  screen, clipSeconds = 12, getClip,
+  screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
 }) {
   const serp = await read(driver);
   const card = serp.targets && serp.targets[`reelResult:${reelIndex}`];
@@ -274,7 +278,7 @@ async function captureViaReel({
   await humanTap(driver, feed.targets.authorProfile, jitterPx, pacingMs);
 
   return analyseProfile({
-    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
+    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
     fallbackUsername: feed.author,
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
@@ -291,6 +295,7 @@ async function analyseProfile({
   driver, pacingMs, jitterPx = 0, read = readView, screen,
   clipSeconds = 12, getClip = async () => null,
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
+  reelsWindow = REELS_PER_PROFILE,
 }) {
   const header = await read(driver);
 
@@ -309,7 +314,9 @@ async function analyseProfile({
   });
 
   // Then scroll the grid for the rest of the reach data.
-  const reels = await collectReels({ driver, read, view, pacingMs, jitterPx, screen });
+  const reels = await collectReels({
+    driver, read, view, pacingMs, jitterPx, screen, want: reelsWindow,
+  });
 
   return {
     username: header.username || fallbackUsername,
@@ -333,8 +340,9 @@ async function analyseProfile({
 // Read reels off the grid, scrolling until we have REELS_PER_PROFILE or the
 // grid stops producing new ones. De-duped on views+caption because a scroll
 // overlaps the previous screen.
-async function collectReels({ driver, read, view, pacingMs, jitterPx = 0, screen }) {
+async function collectReels({ driver, read, view, pacingMs, jitterPx = 0, screen, want = REELS_PER_PROFILE }) {
   const size = screen || { width: 1080, height: 2400 };
+  const target = Math.max(1, Number(want) || REELS_PER_PROFILE);
   const seen = new Map();
   const absorb = (v) => {
     for (const r of Array.isArray(v && v.reels) ? v.reels : []) {
@@ -344,7 +352,7 @@ async function collectReels({ driver, read, view, pacingMs, jitterPx = 0, screen
   };
   absorb(view);
 
-  for (let i = 0; i < MAX_REEL_SCROLLS && seen.size < REELS_PER_PROFILE; i += 1) {
+  for (let i = 0; i < MAX_REEL_SCROLLS && seen.size < target; i += 1) {
     const before = seen.size;
     await driver.swipe({
       x1: Math.round(size.width / 2),
@@ -358,7 +366,7 @@ async function collectReels({ driver, read, view, pacingMs, jitterPx = 0, screen
     absorb(await read(driver));
     if (seen.size === before) break; // grid exhausted — stop scrolling an empty page
   }
-  return Array.from(seen.values()).slice(0, REELS_PER_PROFILE);
+  return Array.from(seen.values()).slice(0, target);
 }
 
 // Open the creator's most recent reel, record it (video + audio), and come back.
@@ -392,7 +400,7 @@ async function captureReelClip({
 
 async function openAndCaptureProfile({
   driver, handle, pacingMs, jitterPx = 0, read = readView,
-  screen, clipSeconds = 12, getClip,
+  screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
 }) {
   // Open the profile from the results list.
   const results = await read(driver);
@@ -401,7 +409,7 @@ async function openAndCaptureProfile({
   await humanTap(driver, { x: link.x, y: link.y }, jitterPx, pacingMs);
 
   const profile = await analyseProfile({
-    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
+    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
     fallbackUsername: handle,
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
@@ -463,4 +471,14 @@ async function ensureInInstagram({ driver, read = readView, pacingMs, jitterPx =
   return read(driver);
 }
 
-module.exports = { scout, readView, pickSearchTerms, IG_ANDROID_PACKAGE };
+module.exports = {
+  scout,
+  readView,
+  pickSearchTerms,
+  IG_ANDROID_PACKAGE,
+  // Shared with the reels-feed navigator so both discovery modes analyse a
+  // creator the same way (Reels tab -> scroll the grid -> record one reel).
+  analyseProfile,
+  backTo,
+  REELS_PER_PROFILE,
+};

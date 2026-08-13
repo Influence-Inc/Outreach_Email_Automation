@@ -366,10 +366,10 @@ function extractReelResults(elements) {
 // "reels", so require both, and prefer an element whose resource-id looks like a
 // tab when several qualify.
 //
-// "Explore" is accepted as a second choice: some builds label the same
-// scroll-a-feed-of-matching-reels surface that way, and either one gets the
-// scout to a feed it can scroll for creators.
-const TOP_STRIP_LABELS = ['reels', 'reels tab', 'explore', 'explore tab'];
+// Explore is deliberately NOT accepted here. Explore is a general-interest
+// surface, not the keyword's results, and sourcing creators from it produces
+// candidates that have nothing to do with what was searched for.
+const TOP_STRIP_LABELS = ['reels', 'reels tab'];
 
 function findSearchReelsTab(elements, height) {
   const topBand = Number.isFinite(height) && height > 0 ? height * 0.35 : Infinity;
@@ -378,17 +378,28 @@ function findSearchReelsTab(elements, height) {
     return TOP_STRIP_LABELS.includes(labelOf(e));
   });
   if (!candidates.length) return null;
+  const tabbish = candidates.find((e) => /tab|chip|serp|clips/i.test(ridLocal(e.rid)));
+  return tabbish || candidates[0];
+}
 
-  // Prefer Reels over Explore, and a tab-shaped resource-id over a bare label.
-  const byPreference = [...candidates].sort((a, b) => {
-    const rank = (e) => {
-      const isReels = labelOf(e).startsWith('reels') ? 0 : 1;
-      const isTabbish = /tab|chip|serp|clips/i.test(ridLocal(e.rid)) ? 0 : 1;
-      return isReels * 2 + isTabbish;
-    };
-    return rank(a) - rank(b);
-  });
-  return byPreference[0];
+// The REELS button in Instagram's BOTTOM navigation bar — the app's own reel
+// feed.
+//
+// Three different controls in this app answer to the label "Reels": this one,
+// the chip on a search results page, and the sub-tab on a profile. They are
+// told apart by where they sit, so the band matters: the bottom nav lives in
+// the last ~12% of the screen height, well below either of the others.
+function findReelsNavTab(elements, height) {
+  const rid = findByRid(elements, ['tab_icon_clips', 'clips_tab', 'tab_clips', 'reels_tab_icon']);
+  if (rid) return rid;
+  if (!Number.isFinite(height) || height <= 0) return null;
+
+  const navBand = height * 0.88;
+  return elements.find((e) => {
+    if (!e.bounds || e.bounds.y < navBand) return false;
+    const label = labelOf(e);
+    return label === 'reels' || label === 'reels tab';
+  }) || null;
 }
 
 // Search results: the ordered list of @handles, plus a tap target per handle.
@@ -529,6 +540,13 @@ function readScreen(input = {}) {
       || findSearchReelsTab(elements, input.height);
     const c = el && center(el.bounds);
     if (c) targets.searchReelsTab = c;
+  }
+  // The bottom-nav Reels button, so a run can drop into Instagram's own reel
+  // feed rather than routing through search or Explore.
+  {
+    const el = findReelsNavTab(elements, input.height);
+    const c = el && center(el.bounds);
+    if (c) targets.reelsNavTab = c;
   }
 
   const reading = { screen, targets };

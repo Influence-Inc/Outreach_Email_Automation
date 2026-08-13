@@ -25,10 +25,8 @@ function scriptedRead(views) {
 test('scrolls the feed, records + judges each reel, engages strong matches only', async () => {
   const driver = fakeDriver();
   const views = [
-    // enterReelsFeed: search tab, search box, results
-    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
-    { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
-    { screen: 'search_results', results: ['tag'], targets: { 'result:tag': { x: 2, y: 2 } } },
+    // enterReelsFeed: one read, then tap the bottom-nav Reels button
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
     // reel 1 (strong match) then reel 2 (weak), then off the feed
     { screen: 'reels_feed', author: 'mia', caption: 'gym', alreadyLiked: false, alreadySaved: false, targets: { like: { x: 9, y: 9 }, save: { x: 9, y: 10 } } },
     { screen: 'reels_feed', author: 'joe', caption: 'travel', alreadyLiked: false, alreadySaved: false, targets: { like: { x: 9, y: 9 } } },
@@ -59,15 +57,12 @@ test('scrolls the feed, records + judges each reel, engages strong matches only'
   assert.ok(driver.ops.some((o) => o[0] === 'swipe'));
 });
 
-test('enters the reel feed by tapping a reel card when the SERP is a reel grid (current IG)', async () => {
+// Reels mode means Instagram's OWN reel feed. Routing through search (or worse,
+// Explore) sources creators from a different surface entirely.
+test('enters via the bottom-nav Reels button, never through search', async () => {
   const driver = fakeDriver();
-  // No @handle result rows — only a reel grid (reelResults + reelResult:0 target),
-  // exactly what current IG returns for a keyword search.
   const views = [
-    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
-    { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
-    { screen: 'search_results', reelResults: [{ index: 0, author: 'Mia' }], targets: { 'reelResult:0': { x: 181, y: 320 } } },
-    // after tapping the card we're in the full-screen reel player:
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 }, searchTab: { x: 300, y: 2300 } } },
     { screen: 'reels_feed', author: 'mia', caption: 'gym', targets: { like: { x: 9, y: 9 } } },
     { screen: 'home', targets: {} }, // ends the loop
   ];
@@ -80,18 +75,23 @@ test('enters the reel feed by tapping a reel card when the SERP is a reel grid (
   for await (const c of scoutReels({ driver, config: { pacingMs: 0 }, opts: { keywords: ['homegym'], max: 1 }, read: scriptedRead(views), deps })) {
     out.push(c);
   }
+
   assert.strictEqual(out.length, 1);
-  assert.strictEqual(out[0].username, 'mia');
-  // tapped the reel card to enter the feed
-  assert.ok(driver.ops.some((o) => o[0] === 'tap' && o[1] === 181 && o[2] === 320), 'tapped reelResult:0');
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 540 && o[2] === 2300),
+    'tapped the bottom-nav Reels button',
+  );
+  assert.ok(!driver.ops.some((o) => o[0] === 'type'), 'never typed a search query');
+  assert.ok(
+    !driver.ops.some((o) => o[0] === 'tap' && o[1] === 300 && o[2] === 2300),
+    'never tapped the search tab',
+  );
 });
 
 test('stops immediately on an action_blocked screen (backoff)', async () => {
   const driver = fakeDriver();
   const views = [
-    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
-    { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
-    { screen: 'search_results', results: [], targets: {} },
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
     { screen: 'action_blocked', targets: {} },
   ];
   const deps = {
@@ -109,9 +109,7 @@ test('stops immediately on an action_blocked screen (backoff)', async () => {
 test('does not engage when the policy is disabled (watch-only)', async () => {
   const driver = fakeDriver();
   const views = [
-    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
-    { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
-    { screen: 'search_results', results: ['t'], targets: { 'result:t': { x: 2, y: 2 } } },
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
     { screen: 'reels_feed', author: 'mia', caption: 'gym', targets: { like: { x: 9, y: 9 } } },
   ];
   const deps = {
@@ -125,4 +123,74 @@ test('does not engage when the policy is disabled (watch-only)', async () => {
   }
   assert.strictEqual(out.length, 1);
   assert.ok(!driver.ops.some((o) => o[0] === 'tap' && o[1] === 9 && o[2] === 9), 'no like tap when disabled');
+});
+
+// A reel in the feed carries no view count, so judging alone could never answer
+// "does this creator clear the floor?" — the reach rules had nothing to measure.
+test('opens the creator and scrolls their reels grid for reach', async () => {
+  const driver = fakeDriver();
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    // the reel, with a tap target for its author
+    { screen: 'reels_feed', author: 'mia', caption: 'gym', targets: { authorProfile: { x: 200, y: 1800 }, like: { x: 9, y: 9 } } },
+    // analyseProfile: header -> reels tab -> grid -> scrolled grid
+    { screen: 'profile', followers: 84000, fullName: 'Mia', bio: 'coach', targets: { reelsTab: { x: 400, y: 500 }, back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 30000 }, { views: 41000 }], targets: { back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 52000 }], targets: { back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 52000 }], targets: { back: { x: 3, y: 3 } } },
+    // backTo the feed
+    { screen: 'reels_feed', author: 'mia', targets: { back: { x: 3, y: 3 } } },
+    { screen: 'home', targets: {} }, // ends the loop
+  ];
+  const deps = {
+    judge: async () => ({ score: 0.9, reason: 'on-brand' }),
+    getClip: async () => ({ buf: Buffer.from('X'), mediaType: 'video/mp4' }),
+    engagement: { policy: { enabled: false }, decide: () => ({ like: false, save: false, share: false }) },
+  };
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0, reelsWindow: 12 }, opts: { keywords: ['x'], max: 1 },
+    read: scriptedRead(views), deps,
+  })) {
+    out.push(c);
+  }
+
+  assert.strictEqual(out.length, 1);
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 200 && o[2] === 1800),
+    'opened the creator from the reel',
+  );
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 400 && o[2] === 500),
+    'switched to the profile Reels tab, where view counts live',
+  );
+  // Reach the scoring rules can actually measure, collected across a scroll.
+  assert.deepStrictEqual(out[0].reels.map((r) => r.views), [30000, 41000, 52000]);
+  assert.strictEqual(out[0].followers, 84000);
+  assert.strictEqual(out[0].username, 'mia');
+  // and the AI verdict is still reused downstream
+  assert.ok(out[0]._nicheVerdict);
+});
+
+test('a creator with no author target still yields the judged reel', async () => {
+  const driver = fakeDriver();
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    { screen: 'reels_feed', author: 'mia', caption: 'gym', targets: { like: { x: 9, y: 9 } } },
+    { screen: 'home', targets: {} },
+  ];
+  const deps = {
+    judge: async () => ({ score: 0.8 }),
+    getClip: async () => null,
+    engagement: { policy: { enabled: false }, decide: () => ({ like: false, save: false, share: false }) },
+  };
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['x'], max: 1 }, read: scriptedRead(views), deps,
+  })) {
+    out.push(c);
+  }
+
+  assert.strictEqual(out.length, 1, 'profile analysis is enrichment, not a gate');
+  assert.strictEqual(out[0].username, 'mia');
 });

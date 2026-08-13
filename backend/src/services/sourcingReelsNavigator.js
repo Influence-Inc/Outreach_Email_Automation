@@ -14,7 +14,9 @@
 // (strong-match only, low probability, per-session caps). An 'action_blocked'
 // screen stops the run immediately.
 
-const { readView, pickSearchTerms, IG_ANDROID_PACKAGE } = require('./sourcingNavigator');
+const {
+  readView, IG_ANDROID_PACKAGE, analyseProfile, backTo, REELS_PER_PROFILE,
+} = require('./sourcingNavigator');
 const engagementPolicy = require('./engagementPolicy');
 const { jitteredDelay, jitterTap } = require('./humanize');
 
@@ -30,30 +32,25 @@ async function softTap({ driver, view, name, pacingMs }) {
   return true;
 }
 
-// Search a term and drop into content (best-effort). The main loop only proceeds
-// once it actually sees the full-screen reel player.
-async function enterReelsFeed({ driver, read, term, pacingMs }) {
-  if (!term) return;
-  let view = await read(driver);
-  await softTap({ driver, view, name: 'searchTab', pacingMs });
-  view = await read(driver);
-  await softTap({ driver, view, name: 'searchBox', pacingMs });
-  await driver.typeText(term);
-  await sleep(jitteredDelay(pacingMs));
-  view = await read(driver);
-  // Prefer an @handle result row (older IG / Accounts chip). On current IG the
-  // keyword SERP is the "For you" REEL GRID — tap the first reel card to drop
-  // straight into the full-screen reel player, which is what the loop scrolls.
-  const first = (view.results || [])[0];
-  if (first && view.targets && view.targets[`result:${first}`]) {
-    const t = view.targets[`result:${first}`];
-    await driver.tap(t.x, t.y);
-    await sleep(jitteredDelay(pacingMs));
-  } else if (view.reelResults && view.reelResults.length && view.targets && view.targets['reelResult:0']) {
-    const t = view.targets['reelResult:0'];
-    await driver.tap(t.x, t.y);
-    await sleep(jitteredDelay(pacingMs));
-  }
+/**
+ * Drop into Instagram's OWN reel feed — the Reels button in the bottom nav.
+ *
+ * This used to route through search: tap the search tab, type the keyword, then
+ * tap the first result. That is a different surface. It lands on the search
+ * results page (or, worse, Explore), and sourcing creators from there is not
+ * what this mode is for — the feed under the Reels label is, and its algorithmic
+ * ranking is the thing the engagement warm-up is meant to steer.
+ *
+ * Best-effort, as before: the main loop only proceeds once it actually sees the
+ * full-screen reel player, so a missed tap costs a run rather than corrupting one.
+ */
+async function enterReelsFeed({ driver, read, pacingMs }) {
+  const view = await read(driver);
+  if (await softTap({ driver, view, name: 'reelsNavTab', pacingMs })) return;
+
+  // Older builds put the reel feed behind the same bottom-bar slot the reader
+  // reports as reelsTab when nothing more specific matched.
+  await softTap({ driver, view, name: 'reelsTab', pacingMs });
 }
 
 async function* scoutReels({ driver, config = {}, opts = {}, read = readView, deps = {} }) {
@@ -61,6 +58,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
   const jitterPx = config.tapJitterPx || 0;
   const max = opts.max || Infinity;
   const clipSeconds = config.clipSeconds || 12;
+  const reelsWindow = config.reelsWindow || REELS_PER_PROFILE;
   const judge = deps.judge || (async () => null);
   const getClip = deps.getClip || (async () => null);
   const engagement = deps.engagement || {
@@ -73,7 +71,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
 
   await driver.openApp(IG_ANDROID_PACKAGE);
   await sleep(jitteredDelay(pacingMs));
-  await enterReelsFeed({ driver, read, term: pickSearchTerms(opts)[0], pacingMs });
+  await enterReelsFeed({ driver, read, pacingMs });
 
   let size = { width: 1080, height: 2400 };
   try {
@@ -132,6 +130,46 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       await driver.tap(p.x, p.y);
       counters.saves += 1;
       await sleep(jitteredDelay(pacingMs));
+    }
+
+    // Open the creator and read their Reels grid.
+    //
+    // A reel in the feed shows no view count, so judging alone could never
+    // answer "does this creator clear the floor?" — the reach rules had nothing
+    // to measure and every reels-mode candidate went to review on the AI verdict
+    // by itself. Visiting the profile and scrolling `reelsWindow` reels gives
+    // those rules the numbers they need, then we come back to the feed.
+    if (view.targets && view.targets.authorProfile) {
+      const p = jitterTap(view.targets.authorProfile, jitterPx);
+      await driver.tap(p.x, p.y);
+      await sleep(jitteredDelay(pacingMs));
+      try {
+        const profile = await analyseProfile({
+          driver,
+          pacingMs,
+          jitterPx,
+          read,
+          screen: size,
+          clipSeconds,
+          getClip,
+          reelsWindow,
+          fallbackUsername: view.author,
+          source: 'reels-feed',
+          screens: ['reels_feed', 'profile', 'reels_tab'],
+        });
+        if (profile) {
+          candidate.username = profile.username || candidate.username;
+          candidate.full_name = profile.full_name;
+          candidate.followers = profile.followers;
+          candidate.bio = profile.bio;
+          if (Array.isArray(profile.reels) && profile.reels.length) candidate.reels = profile.reels;
+          candidate.evidence = { ...candidate.evidence, ...profile.evidence, source: 'reels-feed' };
+        }
+      } catch (err) {
+        warn('[reels] profile analysis failed:', err.message);
+      }
+      // Back to the feed we were scrolling, however deep the profile went.
+      await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 4 });
     }
 
     yield candidate;
