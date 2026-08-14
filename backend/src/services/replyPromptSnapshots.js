@@ -29,7 +29,8 @@ Every reply must:
   • Open with ONE short, specific sentence reacting to what the creator actually wrote (a compliment, a preference, a question, a timeline they raised) BEFORE moving into the reply content.
   • Never invent offer numbers or deal terms — offer numbers only come from an admin-approved offer.
   • Sign off "- {managerName}".
-  • Use the Universal prompt (above) + follow any per-reply note (below) — on conflict the note wins.
+
+Precedence, most authoritative first — a per-reply revised master prompt (below) beats the Universal prompt (above), which beats the canonical templates and the built-in rules. So the Universal prompt CAN delete a section or a phrase that a template below still shows: it is restated as the last instruction in every email prompt for exactly that reason. Nothing on this page can change an approved offer's numbers or the greeting name — those are settled before the AI writes.
 `;
 
 const REPLY1_DIRECTIVE = `Triggered when: the creator's FIRST substantive reply arrives and we haven't yet sent Reply 1 (opening stage, no negotiation email out).
@@ -45,7 +46,9 @@ ${templates.REPLY1_BODY}
 const REPLY2_DIRECTIVE = `Triggered when: an admin has approved a priced offer and we're sending it (first offer OR combined with Reply 1 if the creator gave their rate in the first message).
 
 Directive to Claude:
-"An admin has APPROVED exactly one offer. Use its numbers EXACTLY — do not invent or change amounts, and present only this one offer. Write ONE email by adapting REPLY 2 — keep its warm tone, the 'Payment details' section, and the '- {managerName}' sign-off. Open with ONE sentence acknowledging the creator's most recent message (their rate, a preference) before you present the offer. For a VIEW-BASED offer, never mention a specific video count anywhere — the deal is priced by total guaranteed views, not by post count. If timelines are mentioned, compute an approximate posted-by date from today's date."
+"An admin has APPROVED exactly one offer. Use its numbers EXACTLY — do not invent or change amounts, and present only this one offer. Write ONE email by adapting REPLY 2 — keep its warm tone, the 'Payment details' section, and the '- {managerName}' sign-off. Open with ONE sentence acknowledging the creator's most recent message (their rate, a preference) before you present the offer. For a VIEW-BASED offer, never mention a specific video count anywhere — the deal is priced by total guaranteed views, not by post count. If timelines are mentioned, compute an approximate posted-by date from today's date.
+
+${templates.NO_AD_RIGHTS_OR_CADENCE_RULE}"
 
 Canonical template (REPLY 2 body — Claude adapts this):
 ---
@@ -57,7 +60,9 @@ const COUNTER_OFFER_DIRECTIVE = `Triggered when: the creator has already receive
 Directive to Claude:
 "This is a REVISED counter-offer. The creator has ALREADY received a prior offer and knows the deal structure and standing terms. Write a SHORT email that: (1) opens by acknowledging their counter, (2) presents the revised numbers using the concise form below, (3) closes warmly inviting them to confirm, signed '- {managerName}'.
 
-HARD RULES: do NOT re-introduce the deal with 'we usually do performance-based deals…' or any similar pitch; do NOT restate standing terms the creator already has (how views are counted, the 7-day counting window, full creative freedom, no exclusivity / no ad rights, the 'commit to fewer/more views' adjustability). Mention a term ONLY if THIS revision actually changes it. Keep it brief and focused on the new numbers."
+HARD RULES: do NOT re-introduce the deal with 'we usually do performance-based deals…' or any similar pitch; do NOT restate standing terms the creator already has (how views are counted, the 7-day counting window, full creative freedom, no exclusivity, the 'commit to fewer/more views' adjustability). Mention a term ONLY if THIS revision actually changes it. Keep it brief and focused on the new numbers.
+
+${templates.NO_AD_RIGHTS_OR_CADENCE_RULE}"
 
 Concise revised-offer form Claude reproduces (view-based example):
 ---
