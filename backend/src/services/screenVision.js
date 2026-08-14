@@ -183,7 +183,11 @@ const SIGNALS = {
   // player. Enables the reels-first search flow (search → tap a reel → open the
   // author profile) that current IG surfaces by default for keyword queries.
   authorProfile: {
-    rids: ['clips_author_info_component', 'clips_author_username', 'clips_author_profile_pic'],
+    rids: [
+      'clips_author_info_component', 'clips_author_username', 'clips_author_profile_pic',
+      'reel_feed_username', 'clips_username', 'feed_username', 'author_avatar',
+      'profile_picture', 'avatar_image',
+    ],
     labels: [],
   },
 };
@@ -437,6 +441,7 @@ function extractResults(elements) {
 
 // Full-screen reel player: the reel's author handle, caption, and whether it's
 // already liked/saved (so engagement never toggles the wrong way).
+// eslint-disable-next-line max-statements
 function extractFeed(elements) {
   // Priority match: try the specific author-username rid FIRST so a container
   // like `clips_author_info_component` (empty text, matches broader 'author')
@@ -445,6 +450,9 @@ function extractFeed(elements) {
     findByRidPriority(elements, ['clips_author_username', 'reel_feed_username', 'clips_username', 'feed_username']) ||
     elements.find((e) => isClickable(e) && looksLikeHandle(e.text));
   const author = authorEl && looksLikeHandle(authorEl.text) ? norm(authorEl.text).replace(/^@/, '') : null;
+  // Where to tap to reach that creator, when no dedicated author-profile
+  // affordance is present in the tree.
+  const authorPoint = author && authorEl ? center(authorEl.bounds) : null;
 
   // Caption: current IG's caption text lives in a nested content-desc on an
   // anonymous ViewGroup INSIDE clips_caption_component, not on the .text of the
@@ -469,7 +477,7 @@ function extractFeed(elements) {
   const alreadyLiked = elements.some((e) => labelOf(e) === 'unlike');
   const alreadySaved = elements.some((e) => labelOf(e) === 'remove' || ridLocal(e.rid).includes('saved'));
 
-  return { author, caption, alreadyLiked, alreadySaved };
+  return { author, caption, alreadyLiked, alreadySaved, authorPoint };
 }
 
 // ── screen classification ───────────────────────────────────────────────────
@@ -612,6 +620,11 @@ function readScreen(input = {}) {
     add('save', SIGNALS.save);
     add('share', SIGNALS.share);
     add('authorProfile', SIGNALS.authorProfile);
+    // Fallback: if no dedicated author affordance matched but we did read a
+    // handle, the element carrying it is itself the way into the profile. A
+    // missing target here meant the run judged the reel and then never visited
+    // the creator at all.
+    if (!targets.authorProfile && feed.authorPoint) targets.authorProfile = feed.authorPoint;
   }
 
   // A reels grid can outlive a screen the classifier could not name — tapping

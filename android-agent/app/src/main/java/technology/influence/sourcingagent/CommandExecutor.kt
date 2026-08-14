@@ -75,6 +75,11 @@ class CommandExecutor(
                 null
             }
 
+            "back" -> {
+                require(service().goBackGlobal()) { "BACK action was refused" }
+                null
+            }
+
             "home" -> {
                 require(service().goHome()) { "HOME action was refused" }
                 null

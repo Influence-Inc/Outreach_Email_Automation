@@ -53,6 +53,23 @@ async function enterReelsFeed({ driver, read, pacingMs }) {
   await softTap({ driver, view, name: 'reelsTab', pacingMs });
 }
 
+// How many consecutive reels may be unreadable before we accept the feed is not
+// giving us anything and stop.
+const MAX_UNREADABLE_REELS = 8;
+
+// Swipe up to the next reel (jittered endpoints so the gesture isn't identical).
+async function scrollToNextReel({ driver, size, jitterPx, pacingMs }) {
+  const jx = jitterTap({ x: Math.round(size.width / 2), y: 0 }, jitterPx).x;
+  await driver.swipe({
+    x1: jx,
+    y1: Math.round(size.height * 0.8),
+    x2: jx,
+    y2: Math.round(size.height * 0.2),
+    durationMs: 300,
+  });
+  await sleep(jitteredDelay(pacingMs));
+}
+
 async function* scoutReels({ driver, config = {}, opts = {}, read = readView, deps = {} }) {
   const pacingMs = config.pacingMs ?? 1500;
   const jitterPx = config.tapJitterPx || 0;
@@ -79,10 +96,24 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
   } catch (_) { /* keep default */ }
 
   let emitted = 0;
-  while (emitted < max) {
+  // A reel whose author the reader could not name is skipped, not fatal. Ending
+  // the whole run on the first unreadable reel is why a feed run used to stop
+  // after a single scroll: one missing @handle looked identical to "the feed is
+  // over". Only leaving the feed entirely, or a long unreadable stretch, stops it.
+  let unreadable = 0;
+  while (emitted < max && unreadable <= MAX_UNREADABLE_REELS) {
     const view = await read(driver);
     if (view.screen === 'action_blocked') { warn('[reels] action blocked — stopping'); break; }
-    if (view.screen !== 'reels_feed' || !view.author) break;
+    if (view.screen !== 'reels_feed') break;
+
+    if (!view.author) {
+      unreadable += 1;
+      warn(`[reels] reel ${unreadable} has no readable author — scrolling on`);
+      // eslint-disable-next-line no-await-in-loop
+      await scrollToNextReel({ driver, size, jitterPx, pacingMs });
+      continue;
+    }
+    unreadable = 0;
 
     const candidate = {
       username: view.author,
@@ -179,14 +210,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
     yield candidate;
     emitted += 1;
 
-    // Swipe up to the next reel (jittered endpoints so the gesture isn't identical).
-    const jx = jitterTap({ x: Math.round(size.width / 2), y: 0 }, jitterPx).x;
-    await driver.swipe({
-      x1: jx, y1: Math.round(size.height * 0.8),
-      x2: jx, y2: Math.round(size.height * 0.2),
-      durationMs: 300,
-    });
-    await sleep(jitteredDelay(pacingMs));
+    await scrollToNextReel({ driver, size, jitterPx, pacingMs });
   }
 }
 

@@ -243,6 +243,12 @@ class AndroidDriver extends DeviceDriver {
     await this._adb(['shell', 'input', 'text', escapeAdbText(text)]);
   }
 
+  // A real Back press. Safer than the left-edge swipe gesture, which Instagram's
+  // horizontally-paged screens read as "next tab".
+  async back() {
+    await this._adb(['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
+  }
+
   async home() {
     await this._adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME']);
   }

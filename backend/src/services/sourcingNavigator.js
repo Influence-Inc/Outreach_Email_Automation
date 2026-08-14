@@ -78,6 +78,9 @@ async function tapTarget({ driver, view, name, pacingMs, jitterPx = 0 }) {
 // Screens a keyword loop can continue from — where the next result is reachable.
 const SERP_SCREENS = ['search_results', 'search'];
 
+// How many times to page the results tab strip looking for the Reels chip.
+const MAX_TAB_STRIP_SCROLLS = 3;
+
 // Default number of reels to read off a creator's grid. Overridden per run by
 // `reelsWindow` — the dashboard's "Recent reels to check" — because that is the
 // same window the scoring rules measure against.
@@ -91,6 +94,67 @@ const MAX_REEL_SCROLLS = 6;
 // feed repeats accounts and dead reels (no author target) burn iterations
 // without producing a candidate; the run's own target count stops it first.
 const MAX_FEED_SCROLLS = 60;
+
+/**
+ * Get onto the results page's REELS chip, scrolling the tab strip to find it.
+ *
+ * Instagram's results tabs (Top | Accounts | Audio | Tags | Places | Reels) are a
+ * horizontally scrollable strip, and Reels often starts off-screen — so "the
+ * chip isn't in the tree" does not mean "this build has no Reels tab". Paging
+ * the strip deliberately is the fix; the scout was previously reaching Accounts
+ * and Audio only by accident, via a back gesture it mistook for navigation.
+ *
+ * Returns the view to carry on with, whether or not a chip was found.
+ */
+async function openResultsReelsChip({ driver, view, read, pacingMs, jitterPx = 0, screen }) {
+  const size = screen || { width: 1080, height: 2400 };
+  const chipOf = (v) => v && v.targets && (v.targets.searchReelsTab || v.targets.exploreTab);
+  const hasContent = (v) => !!v && (
+    (Array.isArray(v.reelResults) && v.reelResults.length > 0)
+    || (Array.isArray(v.results) && v.results.length > 0)
+  );
+
+  const chip = chipOf(view);
+  if (chip) {
+    await humanTap(driver, chip, jitterPx, pacingMs);
+    return read(driver);
+  }
+
+  // No chip, but the page already has something to scout — take it rather than
+  // spending swipes hunting for a tab we do not need.
+  if (hasContent(view)) return view;
+
+  // Nothing usable at all. Reels may simply be off-screen: the tabs
+  // (Top | Accounts | Audio | Tags | Places | Reels) are a horizontally
+  // scrollable strip. Page it deliberately, inside the strip's own y-band so the
+  // swipe cannot be mistaken for a page gesture.
+  let current = view;
+  for (let i = 0; i < MAX_TAB_STRIP_SCROLLS; i += 1) {
+    const y = Math.round(size.height * 0.14);
+    // eslint-disable-next-line no-await-in-loop
+    await driver.swipe({
+      x1: Math.round(size.width * 0.8),
+      y1: y,
+      x2: Math.round(size.width * 0.2),
+      y2: y,
+      durationMs: 260,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(jitteredDelay(pacingMs));
+    // eslint-disable-next-line no-await-in-loop
+    current = await read(driver);
+
+    const found = chipOf(current);
+    if (found) {
+      // eslint-disable-next-line no-await-in-loop
+      await humanTap(driver, found, jitterPx, pacingMs);
+      // eslint-disable-next-line no-await-in-loop
+      return read(driver);
+    }
+    if (hasContent(current)) return current;
+  }
+  return current;
+}
 
 // Real device pixels, for scroll geometry. Shares the per-driver cache with
 // readView, so this costs nothing after the first screen read. Falls back to a
@@ -144,11 +208,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     // Explore is the fallback when a build's results page has no Reels chip:
     // still the query's surface, unlike the bottom-nav Explore feed.
     view = await read(driver);
-    const chip = view.targets && (view.targets.searchReelsTab || view.targets.exploreTab);
-    if (chip) {
-      await humanTap(driver, chip, jitterPx, pacingMs);
-      view = await read(driver);
-    }
+    view = await openResultsReelsChip({ driver, view, read, pacingMs, jitterPx, screen });
 
     // The chip can land on either of two surfaces, so handle both.
     //
@@ -404,7 +464,20 @@ async function captureReelClip({
   try {
     const rec = await driver.recordClip(clipSeconds);
     const clipId = rec && (rec.clipId || rec);
-    clip = clipId ? await getClip(clipId) : null;
+    const stored = clipId ? await getClip(clipId) : null;
+    // clipStore hands back { buf, mediaType }; reelJudge reads
+    // { dataBase64, mimeType }. Attaching the store's record verbatim meant
+    // classifyWithGemini saw no dataBase64, returned null, and every candidate
+    // from this flow quietly fell through to the bio-text tier — the video was
+    // recorded and uploaded, and then never judged.
+    if (stored && stored.buf) {
+      clip = {
+        dataBase64: stored.buf.toString('base64'),
+        mimeType: stored.mediaType || 'video/mp4',
+      };
+    } else if (stored && stored.dataBase64) {
+      clip = stored;
+    }
   } catch (_) {
     /* recording is enrichment, never a reason to drop the candidate */
   }
@@ -437,17 +510,29 @@ async function openAndCaptureProfile({
   return { ...profile, username: handle };
 }
 
-// One back press, using the on-screen affordance when the reader found one and
-// the system back gesture otherwise.
+/**
+ * One back press.
+ *
+ * Order matters. The left-edge swipe used to be the fallback whenever the reader
+ * found no on-screen Back affordance — but that swipe IS the system back
+ * *gesture*, and Instagram's search results are horizontally paged, so it landed
+ * as "next tab" and walked the scout through Accounts and Audio instead of going
+ * back. A real BACK keypress is unambiguous, so it is preferred over the gesture
+ * everywhere; the gesture survives only for a driver too old to have the op.
+ */
 async function pressBack({ driver, view, pacingMs, jitterPx = 0 }) {
   const t = view && view.targets && view.targets.back;
   if (t) {
     await humanTap(driver, { x: t.x, y: t.y }, jitterPx, pacingMs);
-  } else {
-    // fallback: swipe from the left edge (Android's system back gesture)
-    await driver.swipe({ x1: 5, y1: 400, x2: 200, y2: 400, durationMs: 250 });
-    await sleep(jitteredDelay(pacingMs));
+    return;
   }
+  if (driver.back) {
+    await driver.back();
+    await sleep(jitteredDelay(pacingMs));
+    return;
+  }
+  await driver.swipe({ x1: 5, y1: 400, x2: 200, y2: 400, durationMs: 250 });
+  await sleep(jitteredDelay(pacingMs));
 }
 
 async function goBack({ driver, pacingMs, jitterPx = 0, read = readView }) {

@@ -9,7 +9,7 @@
 // The agent (runner in RUNNER_MODE=agent) maps each op back to its local
 // AndroidDriver method — the shapes here MUST match what the agent executes:
 //   openApp {pkg}   tap {x,y}   swipe {x1,y1,x2,y2,durationMs}   type {text}
-//   submitSearch {}   home {}   dumpUi {} -> elements[]
+//   submitSearch {}   back {}   home {}   dumpUi {} -> elements[]
 //   getWindowSize {} -> {width,height}   keepAwake {}   wake {}
 
 const commands = require('./hostCommands');
@@ -30,6 +30,11 @@ function makeRemoteDriver({ hostId, channel = commands, timeoutMs } = {}) {
     // ever shows the as-you-type ACCOUNT suggestions (matching handles against
     // the string), never the keyword's actual content results.
     submitSearch: () => call('submitSearch', {}),
+    // A real BACK press. The old fallback — a swipe in from the left edge —
+    // is indistinguishable from a horizontal page swipe on Instagram's search
+    // results, where it moved between the Top/Accounts/Audio tabs instead of
+    // going back.
+    back: () => call('back', {}),
     home: () => call('home', {}),
     dumpUi: () => call('dumpUi', {}),
     getWindowSize: () => call('getWindowSize', {}),

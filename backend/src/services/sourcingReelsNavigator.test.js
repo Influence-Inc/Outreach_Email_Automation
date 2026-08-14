@@ -194,3 +194,61 @@ test('a creator with no author target still yields the judged reel', async () =>
   assert.strictEqual(out.length, 1, 'profile analysis is enrichment, not a gate');
   assert.strictEqual(out[0].username, 'mia');
 });
+
+// One reel whose author the reader could not name used to look identical to
+// "the feed is over" — so a feed run ended after a single scroll.
+test('an unreadable reel is skipped, not treated as the end of the feed', async () => {
+  const driver = fakeDriver();
+  const readable = {
+    screen: 'reels_feed', author: 'mia', caption: 'gym',
+    targets: { authorProfile: { x: 200, y: 1800 }, like: { x: 9, y: 9 } },
+  };
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    { screen: 'reels_feed', targets: {} },            // no author -> skip + scroll
+    { screen: 'reels_feed', targets: {} },            // still nothing -> skip + scroll
+    readable,                                          // now readable
+    { screen: 'profile', followers: 5000, targets: { reelsTab: { x: 4, y: 5 }, back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 60000 }], targets: { back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 60000 }], targets: { back: { x: 3, y: 3 } } },
+    { screen: 'reels_feed', author: 'mia', targets: { back: { x: 3, y: 3 } } },
+    { screen: 'home', targets: {} },
+  ];
+  const deps = {
+    judge: async () => ({ score: 0.9 }),
+    getClip: async () => ({ buf: Buffer.from('X'), mediaType: 'video/mp4' }),
+    engagement: { policy: { enabled: false }, decide: () => ({ like: false, save: false, share: false }) },
+  };
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['x'], max: 1 }, read: scriptedRead(views), deps,
+  })) {
+    out.push(c);
+  }
+
+  assert.strictEqual(out.length, 1, 'kept scrolling past the unreadable reels and found a creator');
+  assert.ok(
+    driver.ops.filter((o) => o[0] === 'swipe').length >= 2,
+    'scrolled past each unreadable reel rather than stopping',
+  );
+});
+
+test('an endless run of unreadable reels eventually stops', async () => {
+  const driver = fakeDriver();
+  const blank = { screen: 'reels_feed', targets: {} };
+  const views = [{ screen: 'home', targets: { reelsNavTab: { x: 1, y: 1 } } }, ...Array(40).fill(blank)];
+  const deps = {
+    judge: async () => null,
+    getClip: async () => null,
+    engagement: { policy: { enabled: false }, decide: () => ({ like: false, save: false, share: false }) },
+  };
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['x'], max: 5 }, read: scriptedRead(views), deps,
+  })) {
+    out.push(c);
+  }
+
+  assert.strictEqual(out.length, 0);
+  assert.ok(driver.ops.filter((o) => o[0] === 'swipe').length < 20, 'bounded, not infinite');
+});
