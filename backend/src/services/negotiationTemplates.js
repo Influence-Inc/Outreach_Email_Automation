@@ -20,6 +20,26 @@ const REFERENCE_ACCOUNT_LIST = [
 
 const igLink = (a) => `[@${a.handle}](https://instagram.com/${a.handle}) (${a.followers})`;
 
+// ── Offer-email content rule ──────────────────────────────────────────────
+// A priced OFFER email never talks about ad / usage rights, and never states a
+// posting cadence. Rights are settled in the contract (see contracts.js
+// usageRightsFor) — promising "no ad rights required" in the offer pre-empts
+// that decision — and a cadence commits the creator to a posting rhythm the
+// offer doesn't actually price. Timelines in an offer carry a posted-by DATE
+// and nothing more.
+//
+// Two layers enforce this, and BOTH are required: the deterministic builders
+// below (offerEmail / describeOffer / revisedOfferEmail — also the no-API-key
+// and Claude-failure fallback) simply don't emit the copy, and this rule is
+// handed to Claude in the offer prompt (see negotiation.js draftOfferEmail) so
+// the adapted email doesn't reintroduce it.
+const NO_AD_RIGHTS_OR_CADENCE_RULE =
+  'HARD RULE — an offer email never mentions ad rights or a posting cadence. ' +
+  'Do NOT mention paid ad rights, usage rights, whitelisting, content ownership, or a "Usage Rights" section, ' +
+  'and do NOT include any such line even if it appears in a canonical template shown to you. ' +
+  'Do NOT state a posting cadence, pace, rhythm, or frequency (no "1-2 videos per week", "a steady pace of…", ' +
+  '"weekly", "twice a week"). Timelines may carry an approximate posted-by calendar DATE and nothing more.';
+
 // Markdown-linked reference list (the canonical form used in emails + shown to
 // Claude, so Claude reproduces the clickable links when it adapts a template).
 const REFERENCE_ACCOUNTS = REFERENCE_ACCOUNT_LIST.map(igLink).join(', ');
@@ -104,9 +124,22 @@ function stripReferences(body) {
 
 // Remove the "Usage Rights" block from a filled REPLY 1 body. It states no ad
 // rights are required — only true on a "no_rights" campaign; misleading on a
-// "free_only" or "required" campaign, where it must not be sent at all.
+// "free_only" or "required" campaign, where it must not be sent at all. Offer
+// emails drop it unconditionally (see NO_AD_RIGHTS_OR_CADENCE_RULE).
 function stripUsageRights(body) {
   return body.replace(/\*\*Usage Rights\*\*\n[^\n]*\n\n/, '');
+}
+
+// Offer emails never state a posting cadence — see NO_AD_RIGHTS_OR_CADENCE_RULE.
+// REPLY 1's "**Timelines**" line pairs the cadence with an approximate posted-by
+// date ("a steady pace of around 1-2 videos per week, with all videos ideally
+// posted by <date>"); this swaps it for a line that keeps only the date. Runs on
+// the UNFILLED template so {deadline} is substituted by the normal fill() pass.
+const TIMELINES_NO_CADENCE =
+  "We're flexible on timelines, but we'd love all videos ideally posted by {deadline}.";
+
+function stripCadence(template) {
+  return template.replace(/(\*\*Timelines\*\*\n)[^\n]*\n/, () => `**Timelines**\n${TIMELINES_NO_CADENCE}\n`);
 }
 
 // Remove the "Deliverables & Rates" block from a filled REPLY 1 body. Used in
@@ -178,7 +211,7 @@ We usually do performance-based deals with all our creators. We'd love to propos
 - Considering your recent performance, I'd anticipate you can easily cross the {view_target} view goal with {video_count} posts.
 - Full creative freedom, so you can create engaging content around {brandName} without it feeling like an ad!
 - You can commit to fewer views if you'd like, or higher views with payment adjusted accordingly.
-- No ad rights or exclusivity required.
+- No exclusivity required.
 
 **Payment details**
 We do direct bank transfers. Payment will be initiated within 7 working days of completing and posting all the agreed deliverables!
@@ -274,7 +307,7 @@ function describeOffer(offer, brandName, viewRange = null) {
       `- Views counted for 7 days from each post's publish date.\n` +
       `- Full creative freedom, so you can create engaging content around ${brandName} without it feeling like an ad!\n` +
       `- You can commit to fewer views if you'd like, or higher views with payment adjusted accordingly.\n` +
-      `- No ad rights or exclusivity required.`
+      `- No exclusivity required.`
     );
   }
   // video_bonus: a flat video package + a bonus that unlocks past a view target.
@@ -292,7 +325,7 @@ function describeOffer(offer, brandName, viewRange = null) {
       `- Views can come from a single video or multiple posts — combined total views will be counted.\n` +
       `- Views counted for 7 days from each post's publish date.\n` +
       `- Full creative freedom, so you can create engaging content around ${brandName} without it feeling like an ad!\n` +
-      `- No ad rights or exclusivity required.`
+      `- No exclusivity required.`
     );
   }
   // video_based / flat
@@ -304,7 +337,7 @@ function describeOffer(offer, brandName, viewRange = null) {
     `- ${n} video package — $${fmtMoney(per)} per video.\n` +
     `- Full creative freedom, so you can create engaging content around ${brandName} without it feeling like an ad!\n` +
     `- We're keen to turn this into a longer-term retainer if the first videos go well.\n` +
-    `- No ad rights or exclusivity required.`
+    `- No exclusivity required.`
   );
 }
 
@@ -396,16 +429,19 @@ function offerEmail(offer, vars, { combine = false, viewRange = null } = {}) {
   const isViewBased = offer && offer.offer_type === 'view_based';
   const videos = !isViewBased ? Number(offer.num_videos || 2) : 2;
   v.deadline = approxDeadline(videos, v.cadence);
-  // Combine mode reuses REPLY 1's details but drops two blocks: the references
-  // (an offer email is not the place to introduce a portfolio unprompted) and
-  // the "Deliverables & Rates" pitch (its rate-dependent, vague deliverables
+  // Combine mode reuses REPLY 1's details but drops four blocks: the references
+  // (an offer email is not the place to introduce a portfolio unprompted), the
+  // "Deliverables & Rates" pitch (its rate-dependent, vague deliverables
   // conflict with the concrete approved offer that follows — the offer is the
-  // single source of deliverables and rates in the combined email). For a
-  // view-based approved offer, use the view-based REPLY 1 variant so no
-  // "N-video package" language leaks into the combined lead.
-  const reply1Body = isViewBased ? REPLY1_BODY_VIEW_BASED : REPLY1_BODY;
+  // single source of deliverables and rates in the combined email), the "Usage
+  // Rights" section, and REPLY 1's cadence (both per
+  // NO_AD_RIGHTS_OR_CADENCE_RULE — this is an offer email). For a view-based
+  // approved offer, use the view-based REPLY 1 variant so no "N-video package"
+  // language leaks into the combined lead; that variant already states no
+  // cadence and carries no Usage Rights section.
+  const reply1Body = isViewBased ? REPLY1_BODY_VIEW_BASED : stripCadence(REPLY1_BODY);
   const lead = combine
-    ? stripDeliverables(stripReferences(fill(reply1Body, v))).replace(
+    ? stripDeliverables(stripReferences(stripUsageRights(fill(reply1Body, v)))).replace(
         /\n\nIf everything sounds good[\s\S]*$/,
         '\n',
       )
@@ -518,7 +554,9 @@ module.exports = {
   declineDelay,
   stripReferences,
   stripUsageRights,
+  stripCadence,
   stripDeliverables,
+  NO_AD_RIGHTS_OR_CADENCE_RULE,
   // Raw template strings (canonical content fed to Claude).
   REPLY1_SUBJECT,
   REPLY1_BODY,

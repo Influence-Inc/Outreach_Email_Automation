@@ -323,6 +323,9 @@ const FORMATTING_RULE =
   'Wrap EVERY section header / sub-topic label in **bold** (e.g. **Content Style**, **Deliverables & Rates**, **Platforms**, **Timelines**, **View-Based Offer**, **Flat Package**, **Payment details**, **Past content references**), and use [label](https://example.com) for any hyperlink (reference Instagram handles are already written as such links — keep them as links). Match the format spec in the team guidelines above when it prescribes what to bold or link; do not over-format. Everything else stays plain text with line breaks — no other markdown (no headings syntax, no italics, keep the existing "-" bullets as-is).';
 
 // Renders the team's universal Guidelines as a prompt block (or '' when unset).
+// This is the CONTEXT copy, placed early so the guidelines are in view while the
+// model reads the campaign facts. It is not the authoritative one — see
+// guidelinesOverrideBlock, which every email-writing prompt must also emit.
 function guidelinesBlock(ctx) {
   const g = (ctx.guidelines || '').trim();
   if (!g) return '';
@@ -330,6 +333,39 @@ function guidelinesBlock(ctx) {
     '',
     'Team guidelines — follow these in every message, they override the templates on any conflict:',
     g,
+    '',
+  ].join('\n');
+}
+
+// The SAME guidelines again, restated as the last instruction before the output
+// format — the thing an email-writing prompt reads immediately before it writes.
+//
+// Why twice: an admin edits the Guidelines page and the sent email doesn't
+// change, because between the early guidelines block and the actual writing sit
+// a canonical template pasted verbatim, "adapt this template, keep its content",
+// and a stack of HARD RULEs. A single soft "they override the templates" line
+// several thousand tokens upstream loses that argument, so a guideline like
+// "stop mentioning ad rights" reads as advice and the template's wording wins.
+// Restating the guidelines last, with explicit permission to delete sections and
+// wording that appear in the templates above, is what makes an edit on the
+// Guidelines page actually show up in the creator's inbox.
+//
+// Precedence, most authoritative first: a per-reply TEAM-REVISED MASTER PROMPT
+// (the most specific thing the team wrote, see singleReplyOverrideBlock) > these
+// universal guidelines > the canonical templates and built-in rules. Three
+// things no team text may override, because they are correctness and not style:
+// the approved offer's numbers, the pre-resolved greeting name, and the
+// strict-JSON response shape.
+function guidelinesOverrideBlock(ctx) {
+  const g = (ctx.guidelines || '').trim();
+  if (!g) return '';
+  return [
+    '',
+    'TEAM GUIDELINES — the team sets these on the Guidelines page, and they OUTRANK the canonical templates, the example emails, and the built-in rules above, including any labelled HARD RULE. Where a guideline conflicts with anything above, FOLLOW THE GUIDELINE: if it says to drop a section, a bullet, or a term, drop it even though a template above contains it; if it changes wording or tone, use the guideline\'s wording. Before you answer, re-read what you are about to write against these and fix it.',
+    '"""',
+    g,
+    '"""',
+    'Only a TEAM-REVISED MASTER PROMPT block above (if one was given for this email) outranks these guidelines — it is the more specific instruction from the same team. And nothing here may change the approved offer\'s numbers, the greeting name already resolved for you, or the strict-JSON response shape requested below.',
     '',
   ].join('\n');
 }
@@ -541,6 +577,9 @@ async function handleCreatorReply(creator, replyText, ctx) {
     v.isDelegate
       ? `- The creator's first name is "${v.firstName}". You are writing to ${v.salutation}, who represents them, so talk about ${v.firstName} in the third person and address ${v.salutation} as "you".`
       : `- "${v.salutation}" is the creator you are writing to — address them as "you" throughout, never in the third person.`,
+    // Last word before the model classifies + writes: the team's Guidelines
+    // outrank every template and rule above. See guidelinesOverrideBlock.
+    guidelinesOverrideBlock(ctx),
   ].join('\n');
 
   // Everything DETERMINISTIC about the reply reads the new message only. The
@@ -841,6 +880,10 @@ async function draftAcknowledgmentLine(creator, ctx, { situation }) {
       ? `This line is going to ${v.salutation}, who writes on ${v.firstName}'s behalf — address ${v.salutation} as "you" and refer to the creator as ${v.firstName}.`
       : 'This line is going to the creator themselves — address them as "you" and never in the third person; do not name them at all.',
     'Write ONE short, warm, specific sentence (max ~30 words) that acknowledges what the creator said in the message below — react to their enthusiasm, thank them for confirming, or note a preference/constraint/question they raised. Do NOT answer any question, quote or imply any price/number, promise anything, or introduce new terms. Plain text only: no greeting, no sign-off, no markdown, no quotes. If there is nothing meaningful to acknowledge, reply with an empty string.',
+    // This sentence is creator-facing copy, so the team's Guidelines apply here
+    // too — without this the Guidelines page could not reach the one line we
+    // personalize the otherwise-fixed contract email with.
+    guidelinesOverrideBlock(ctx),
   ]
     .filter(Boolean)
     .join('\n');
@@ -904,9 +947,13 @@ async function draftOfferEmail(
           combine ? ' and the REPLY 1 collaboration details' : ''
         }: "${templates.viewBasedOpener(viewRange)}"`
       : '',
-    `Today's date is ${todayStr()}. Desired posting cadence: "${v.cadence}". If you mention timelines, give an approximate posted-by date computed from today for this ${
+    // The cadence is DATE MATH INPUT ONLY here. An offer email never states a
+    // posting rhythm (see templates.NO_AD_RIGHTS_OR_CADENCE_RULE) — it may carry
+    // a posted-by date, which is computed from the cadence behind the scenes.
+    `Today's date is ${todayStr()}. For your own date arithmetic ONLY, assume a working pace of "${v.cadence}" — this pace is internal, never write it or any paraphrase of it in the email. If you mention timelines, give ONLY an approximate posted-by calendar date computed from today for this ${
       isViewBased ? 'view-based' : `${offer.num_videos}-video`
-    } deal at that cadence; never print the cadence text where a date belongs.`,
+    } deal.`,
+    templates.NO_AD_RIGHTS_OR_CADENCE_RULE,
     '',
     // Open the offer by reacting to what the creator actually wrote (their rate,
     // a preference, a question) rather than a generic lead — but the deal terms
@@ -926,7 +973,7 @@ async function draftOfferEmail(
     revised
       ? [
           'This is a REVISED counter-offer. The creator has ALREADY received a prior offer from us and knows the deal structure and standing terms. Write a SHORT email that: (1) opens by acknowledging their counter (per the acknowledgment rule above), (2) presents the revised numbers using the concise form below, (3) closes warmly inviting them to confirm, signed "- ' + v.managerName + '".',
-          'HARD RULES: do NOT re-introduce the deal with "we usually do performance-based deals..." or any similar pitch; do NOT restate standing terms the creator already has (how views are counted, the 7-day counting window, full creative freedom, no exclusivity / no ad rights, the "commit to fewer/more views" adjustability). Mention a term ONLY if THIS revision actually changes it. Keep it brief and focused on the new numbers.',
+          'HARD RULES: do NOT re-introduce the deal with "we usually do performance-based deals..." or any similar pitch; do NOT restate standing terms the creator already has (how views are counted, the 7-day counting window, full creative freedom, no exclusivity, the "commit to fewer/more views" adjustability). Mention a term ONLY if THIS revision actually changes it. Keep it brief and focused on the new numbers.',
           '--- REVISED OFFER (concise — reproduce these numbers exactly) ---',
           templates.describeOfferConcise(offer),
         ].join('\n')
@@ -939,8 +986,14 @@ async function draftOfferEmail(
                 '',
                 'This is the FIRST reply (the creator gave their rate immediately), so FIRST cover the collaboration details by adapting REPLY 1, THEN present the approved offer in the same email:',
                 '--- REPLY 1 ---',
-                templates.REPLY1_BODY,
-                `Use brand "${v.brandName}" and the cadence "${v.cadence}" for timelines. Do NOT include the "Past content references" section — an offer email should not introduce references unprompted. Do NOT include the "Deliverables & Rates" section from REPLY 1 either — its vague, rate-dependent pitch ("a 2 or more video package deal") conflicts with the concrete approved offer you present below, which is the single source of deliverables and rates in this combined email.`,
+                // Handed over already stripped of its "Usage Rights" section and
+                // its cadence line: this REPLY 1 is being folded into an OFFER
+                // email, and copy the model never sees is copy it cannot leak.
+                // (References and Deliverables & Rates are still shown and
+                // dropped by instruction — those are situational, whereas rights
+                // and cadence are never right in an offer email.)
+                templates.stripCadence(templates.stripUsageRights(templates.REPLY1_BODY)),
+                `Use brand "${v.brandName}". In Timelines give ONLY an approximate posted-by date — no posting pace. REPLY 1's "Usage Rights" section has been removed above on purpose: an offer email never discusses ad or usage rights (they are settled later, in the contract), so do not write one back in. Do NOT include the "Past content references" section — an offer email should not introduce references unprompted. Do NOT include the "Deliverables & Rates" section from REPLY 1 either — its vague, rate-dependent pitch ("a 2 or more video package deal") conflicts with the concrete approved offer you present below, which is the single source of deliverables and rates in this combined email.`,
               ].join('\n')
             : '',
         ].join('\n'),
@@ -958,6 +1011,9 @@ async function draftOfferEmail(
       : '',
     '',
     `- ${FORMATTING_RULE}`,
+    // Last word before the output format: the team's Guidelines outrank every
+    // template and rule above. See guidelinesOverrideBlock.
+    guidelinesOverrideBlock(ctx),
     '',
     'Respond with STRICT JSON ONLY (no markdown fences): {"subject": string, "body": string}. The body carries the small markdown subset described above (bold headers, links); no other markdown.',
   ]
@@ -966,6 +1022,15 @@ async function draftOfferEmail(
 
   const out = parseJsonLoose(await callClaudeText(system, 'Write the offer email now.', 1500));
   if (out && out.body) return { subject: out.subject || fallback.subject, body: out.body };
+  // Claude is unavailable / returned unparseable JSON, so the email is the
+  // deterministic template. That copy is fixed, so the team's Guidelines cannot
+  // shape it — say so, or an admin editing the Guidelines page sees no change
+  // and no reason why.
+  if ((ctx.guidelines || '').trim()) {
+    console.warn(
+      `[negotiation] offer email for creator ${creator.id} fell back to the fixed template — team Guidelines were NOT applied (Claude unavailable or returned unparseable JSON)`,
+    );
+  }
   return fallback;
 }
 
@@ -1064,6 +1129,9 @@ async function draftReplyEmail(creator, ctx, { instructions = '' } = {}) {
     '- NEVER invent specific offer numbers, rates, discounts, or deal terms. If the instructions state a number, use exactly that; otherwise do not quote one. Do not promise anything beyond the standard terms above unless the instructions say so.',
     `- Sign off "- ${v.managerName}".`,
     `- ${FORMATTING_RULE}`,
+    // Last word before the output format: the team's Guidelines outrank every
+    // template and rule above. See guidelinesOverrideBlock.
+    guidelinesOverrideBlock(ctx),
     '',
     'Respond with STRICT JSON ONLY (no markdown fences): {"subject": string, "body": string}. The body carries the small markdown subset described above (bold headers, links); no other markdown.',
   ]
@@ -1716,7 +1784,14 @@ async function sendContractOnAcceptance(creator, ctx, result) {
     // Personalize the (otherwise fixed) contract email with one short line that
     // acknowledges the creator's acceptance message — the contract link and all
     // terms stay exactly as the template. Empty on any failure -> plain template.
-    const ackLine = await draftAcknowledgmentLine(creator, ctx, {
+    // The acknowledgment line is creator-facing copy, so it has to carry the
+    // team's Guidelines. Two of this function's callers (ensureContractSent and
+    // approveContract) build a bare ctxFor(creator) with no guidelines on it, so
+    // top the ctx up here rather than at each call site.
+    const ackCtx = (ctx.guidelines || '').trim()
+      ? ctx
+      : { ...ctx, guidelines: await getGuidelines() };
+    const ackLine = await draftAcknowledgmentLine(creator, ackCtx, {
       situation: 'The creator has just accepted the offer; you are sending them the contract to review and sign.',
     });
     const email = templates.contractEmail({ ...v, url, ackLine });

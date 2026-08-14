@@ -16,6 +16,7 @@ const {
 } = require('../services/settings');
 const { getReplyPromptSnapshots } = require('../services/replyPromptSnapshots');
 const { rewriteMasterPrompt } = require('../services/replyPromptRewrite');
+const { getClient } = require('../services/claudeClient');
 
 const router = express.Router();
 
@@ -28,6 +29,11 @@ router.get('/', async (_req, res, next) => {
   try {
     const snapshots = getReplyPromptSnapshots();
     res.json({
+      // Everything on this page steers Claude. With no ANTHROPIC_API_KEY (or no
+      // SDK installed) every negotiation email falls back to its fixed template,
+      // so nothing saved here can change what goes out — the UI warns instead of
+      // letting an admin edit guidelines that provably have no effect.
+      ai_configured: !!getClient(),
       guidelines: await getGuidelines(),
       brief_boilerplate: await getBriefBoilerplate(),
       ai_replies_enabled: await getAiRepliesEnabled(),

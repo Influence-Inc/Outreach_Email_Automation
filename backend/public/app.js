@@ -4283,6 +4283,18 @@ async function refreshSettings() {
   try {
     const s = await api('/api/settings');
     el('guidelines-text').value = s.guidelines || '';
+    // With no Claude configured every negotiation email is its fixed template,
+    // so nothing on this page can change what creators receive. Say so, rather
+    // than letting an admin edit guidelines that provably have no effect.
+    const aiWarning = el('guidelines-ai-warning');
+    if (aiWarning) {
+      const missing = s.ai_configured === false;
+      aiWarning.hidden = !missing;
+      aiWarning.style.color = missing ? 'var(--warn)' : '';
+      aiWarning.textContent = missing
+        ? 'Claude is not configured on this server (ANTHROPIC_API_KEY is unset), so every email currently goes out as its fixed template — guidelines saved here will not change what creators receive until that is set.'
+        : '';
+    }
     const bb = el('brief-boilerplate-text');
     if (bb) bb.value = s.brief_boilerplate || '';
     el('ai-replies-toggle').checked = s.ai_replies_enabled !== false;
