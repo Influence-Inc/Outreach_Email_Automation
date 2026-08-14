@@ -236,3 +236,133 @@ test('real IG full-screen reel -> reels_feed with author, caption, engagement ta
   // NEW: the like_count / comment_count / save_count texts must NOT leak into reels.
   assert.strictEqual(r.reels, undefined);
 });
+
+// ── telling the three "Reels" controls apart ────────────────────────────────
+//
+// Instagram labels three separate controls "Reels". Picking whichever matched
+// first is what kept landing the scout on the wrong screen, so label alone must
+// never decide: the label, where it sits, and which screen we are on all have
+// to agree.
+
+const H = 2400;
+const W = 1080;
+
+function el(over = {}) {
+  return {
+    rid: '', cls: 'android.widget.Button', text: '', desc: '',
+    clickable: true, selected: false, bounds: { x: 0, y: 0, w: 100, h: 60 },
+    ...over,
+  };
+}
+
+// The row of five icons at the very bottom of the screen.
+function bottomNav() {
+  return [
+    el({ desc: 'Home', bounds: { x: 40, y: 2260, w: 100, h: 100 } }),
+    el({ desc: 'Search', bounds: { x: 250, y: 2260, w: 100, h: 100 } }),
+    el({ desc: 'Reels', rid: 'com.instagram.android:id/tab_icon_clips', bounds: { x: 460, y: 2260, w: 100, h: 100 } }),
+    el({ desc: 'Shop', bounds: { x: 670, y: 2260, w: 100, h: 100 } }),
+    el({ desc: 'Profile', bounds: { x: 880, y: 2260, w: 100, h: 100 } }),
+  ];
+}
+
+test('the bottom-nav Reels button is found by where it sits, not its id', () => {
+  const r = sv.readScreen({ elements: bottomNav(), width: W, height: H });
+  assert.ok(r.targets.reelsNavTab, 'found the bottom-nav Reels');
+  assert.ok(r.targets.reelsNavTab.y > H * 0.88, 'and it is in the nav band');
+});
+
+// A profile's sub-tabs carry ids like clips_tab too — matching that id anywhere
+// on screen would pick the wrong control.
+test('a profile Reels sub-tab is never mistaken for the bottom-nav button', () => {
+  const elements = [
+    el({ rid: 'com.instagram.android:id/action_bar_title', text: 'mia.codes', clickable: false, bounds: { x: 300, y: 90, w: 400, h: 60 } }),
+    el({ rid: 'com.instagram.android:id/profile_header_container', clickable: false, bounds: { x: 0, y: 160, w: W, h: 500 } }),
+    el({ desc: '84,000 followers', clickable: false, bounds: { x: 100, y: 400, w: 300, h: 60 } }),
+    // mid-screen tab row, above the post grid
+    el({ desc: 'Grid', rid: 'com.instagram.android:id/profile_tab_icon_view', bounds: { x: 200, y: 900, w: 120, h: 90 } }),
+    el({ desc: 'Reels', rid: 'com.instagram.android:id/profile_tab_icon_view', bounds: { x: 480, y: 900, w: 120, h: 90 } }),
+  ];
+  const r = sv.readScreen({ elements, width: W, height: H });
+
+  assert.ok(r.targets.reelsTab, 'the profile sub-tab resolved');
+  assert.ok(r.targets.reelsTab.y < H * 0.85, 'mid-screen, not the nav bar');
+  assert.strictEqual(r.targets.reelsNavTab, undefined, 'no bottom-nav button on this screen');
+});
+
+test('the profile Reels sub-tab does not resolve when we are not on a profile', () => {
+  // Same mid-screen "Reels" label, but the screen is a reel player.
+  const elements = [
+    el({ rid: 'com.instagram.android:id/clips_author_username', text: 'mia.codes', bounds: { x: 60, y: 1800, w: 300, h: 60 } }),
+    el({ desc: 'Like', rid: 'com.instagram.android:id/like_button', bounds: { x: 980, y: 1500, w: 80, h: 80 } }),
+    el({ desc: 'Share', rid: 'com.instagram.android:id/direct_share_button', bounds: { x: 980, y: 1700, w: 80, h: 80 } }),
+    el({ desc: 'Reels', bounds: { x: 480, y: 900, w: 120, h: 90 } }),
+  ];
+  const r = sv.readScreen({ elements, width: W, height: H });
+
+  assert.strictEqual(r.screen, 'reels_feed');
+  assert.strictEqual(r.targets.reelsTab, undefined, 'a stray "Reels" label is not a profile tab');
+});
+
+// The search filter row: Reels sits beside Accounts / Audio / Tags / Places.
+function searchResults(extraRow = []) {
+  return [
+    el({ rid: 'com.instagram.android:id/action_bar_search_edit_text', text: 'iphone photos', clickable: false, bounds: { x: 100, y: 100, w: 800, h: 80 } }),
+    el({ text: 'Top', bounds: { x: 40, y: 260, w: 120, h: 80 } }),
+    el({ text: 'Accounts', bounds: { x: 200, y: 260, w: 160, h: 80 } }),
+    el({ text: 'Audio', bounds: { x: 400, y: 260, w: 120, h: 80 } }),
+    el({ text: 'Reels', rid: 'com.instagram.android:id/serp_tab_reels', bounds: { x: 560, y: 260, w: 120, h: 80 } }),
+    el({ text: 'Tags', bounds: { x: 720, y: 260, w: 120, h: 80 } }),
+    ...extraRow,
+    el({ text: 'mia.codes', clickable: true, bounds: { x: 60, y: 500, w: 400, h: 90 } }),
+  ];
+}
+
+test('the search results Reels filter resolves on a results page', () => {
+  const r = sv.readScreen({ elements: searchResults(), width: W, height: H });
+
+  assert.strictEqual(r.screen, 'search_results');
+  assert.ok(r.targets.searchReelsTab, 'found the results filter');
+  assert.ok(r.targets.searchReelsTab.y < H * 0.35, 'in the top strip');
+});
+
+// Explore is a general-interest surface — creators from it have nothing to do
+// with the keyword, so a row offering Explore is the wrong row.
+test('a filter row containing Explore is rejected as the wrong row', () => {
+  const elements = [
+    el({ rid: 'com.instagram.android:id/action_bar_search_edit_text', text: 'iphone photos', clickable: false, bounds: { x: 100, y: 100, w: 800, h: 80 } }),
+    el({ text: 'Explore', bounds: { x: 40, y: 260, w: 160, h: 80 } }),
+    el({ text: 'Reels', bounds: { x: 240, y: 260, w: 120, h: 80 } }),
+    el({ text: 'mia.codes', clickable: true, bounds: { x: 60, y: 500, w: 400, h: 90 } }),
+  ];
+  const r = sv.readScreen({ elements, width: W, height: H });
+
+  assert.strictEqual(r.targets.searchReelsTab, undefined, 'an Explore row is never the source');
+});
+
+test('Explore is never exposed as a target at all', () => {
+  const r = sv.readScreen({ elements: searchResults(), width: W, height: H });
+  assert.strictEqual(r.targets.exploreTab, undefined);
+});
+
+test('the search filter does not resolve away from a results page', () => {
+  // The bottom nav alone: a "Reels" label exists, but no results page.
+  const r = sv.readScreen({ elements: bottomNav(), width: W, height: H });
+  assert.strictEqual(r.targets.searchReelsTab, undefined);
+});
+
+// All three labels present at once — the case that used to pick whichever came
+// first in the tree.
+test('with all three on screen each resolves to its own control', () => {
+  const elements = [...searchResults(), ...bottomNav()];
+  const r = sv.readScreen({ elements, width: W, height: H });
+
+  assert.ok(r.targets.searchReelsTab, 'results filter');
+  assert.ok(r.targets.reelsNavTab, 'bottom nav');
+  assert.notStrictEqual(
+    r.targets.searchReelsTab.y, r.targets.reelsNavTab.y,
+    'they are different controls, not the same element twice',
+  );
+  assert.ok(r.targets.searchReelsTab.y < H * 0.35);
+  assert.ok(r.targets.reelsNavTab.y > H * 0.88);
+});

@@ -108,7 +108,9 @@ const MAX_FEED_SCROLLS = 60;
  */
 async function openResultsReelsChip({ driver, view, read, pacingMs, jitterPx = 0, screen }) {
   const size = screen || { width: 1080, height: 2400 };
-  const chipOf = (v) => v && v.targets && (v.targets.searchReelsTab || v.targets.exploreTab);
+  // Reels only. Explore is a general-interest surface, so creators sourced from
+  // it have nothing to do with the keyword — it is never a fallback.
+  const chipOf = (v) => v && v.targets && v.targets.searchReelsTab;
   const hasContent = (v) => !!v && (
     (Array.isArray(v.reelResults) && v.reelResults.length > 0)
     || (Array.isArray(v.results) && v.results.length > 0)
@@ -204,9 +206,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       await sleep(jitteredDelay(pacingMs));
     }
 
-    // Then move to that page's REELS chip — the keyword's actual content.
-    // Explore is the fallback when a build's results page has no Reels chip:
-    // still the query's surface, unlike the bottom-nav Explore feed.
+    // Then move to that page's REELS filter — the keyword's actual content.
     view = await read(driver);
     view = await openResultsReelsChip({ driver, view, read, pacingMs, jitterPx, screen });
 
