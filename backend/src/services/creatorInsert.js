@@ -10,7 +10,11 @@ const db = require('../db');
 // Dedup against creators we're already contacting is the CALLER's responsibility
 // (the sourcing orchestrator runs duplicateGuard.findDuplicateCreator first), so
 // this stays a plain upsert.
-async function insertPendingCreator({ campaignId, username, fullName = null, firstName = null }) {
+// `sourcedVia` / `note` carry the scout's provenance — which mode and keyword
+// found this creator — and are simply absent on the manual add path.
+async function insertPendingCreator({
+  campaignId, username, fullName = null, firstName = null, sourcedVia = null, note = null,
+}) {
   const handle = String(username || '')
     .replace(/^@/, '')
     .trim();
@@ -18,15 +22,24 @@ async function insertPendingCreator({ campaignId, username, fullName = null, fir
   const url = `https://www.instagram.com/${handle}/`;
   return db.one(
     `INSERT INTO creators
-       (campaign_id, instagram_url, instagram_username, first_name, full_name, status, notes)
-     VALUES ($1, $2, $3, $4, $5, 'pending_extraction', 'Sourced via Instagram scouting')
+       (campaign_id, instagram_url, instagram_username, first_name, full_name, status, notes, sourced_via)
+     VALUES ($1, $2, $3, $4, $5, 'pending_extraction', $6, $7)
      ON CONFLICT (campaign_id, instagram_url) DO UPDATE SET
        instagram_username = COALESCE(EXCLUDED.instagram_username, creators.instagram_username),
        first_name = COALESCE(EXCLUDED.first_name, creators.first_name),
        full_name = COALESCE(EXCLUDED.full_name, creators.full_name),
+       sourced_via = COALESCE(EXCLUDED.sourced_via, creators.sourced_via),
        updated_at = NOW()
      RETURNING *`,
-    [campaignId, url, handle, firstName, fullName],
+    [
+      campaignId,
+      url,
+      handle,
+      firstName,
+      fullName,
+      note || 'Sourced via Instagram scouting',
+      sourcedVia ? JSON.stringify(sourcedVia) : null,
+    ],
   );
 }
 

@@ -447,3 +447,53 @@ test('the feed is re-entered once per batch, not once per creator', async () => 
   assert.strictEqual(out.length, 2);
   assert.strictEqual(navTaps, 2, 'entered once at the start, re-entered once after the batch');
 });
+
+// ── surviving a long run (§9) ───────────────────────────────────────────────
+
+// An ad is a brand buying placement. Recording and judging one spends a clip
+// and a Gemini call to discover the account behind it is a competitor.
+test('a sponsored reel is skipped before anything is recorded', async () => {
+  const driver = fakeDriver();
+  driver.recordClip = async (seconds) => {
+    driver.ops.push(['recordClip', seconds]);
+    return { clipId: `clip_${seconds}` };
+  };
+  const views = [
+    { screen: 'reels_feed', targets: { reelsNavTab: { x: 5, y: 9 } } },
+    { screen: 'reels_feed', author: 'somebrand', sponsored: true, targets: {} },
+    { screen: 'reels_feed', author: 'realcoach', caption: 'gym', targets: {} },
+    { screen: 'profile', followers: 9000, targets: {} },
+    { screen: 'reels_tab', reels: [{ views: 5000 }], targets: {} },
+    { screen: 'reels_tab', reels: [{ views: 5000 }], targets: {} },
+    { screen: 'unknown', targets: {} },
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0 }, opts: { max: 1 }, read: scriptedRead(views),
+    deps: { getClip: async () => ({ dataBase64: 'AA', mediaType: 'video/mp4' }) },
+  })) out.push(c);
+
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 1, 'only the real creator');
+  assert.deepStrictEqual(out.map((c) => c.username), ['realcoach']);
+});
+
+// targetCount bounds how many creators a run ADDS, not how many it looks at.
+test('the profile cap stops a run that keeps finding nothing', async () => {
+  const driver = fakeDriver();
+  const reel = (author) => ({ screen: 'reels_feed', author, caption: 'x', targets: {} });
+  const views = [
+    { screen: 'reels_feed', targets: { reelsNavTab: { x: 5, y: 9 } } },
+    reel('a'), reel('b'), reel('c'), reel('d'), reel('e'),
+    ...Array(20).fill({ screen: 'unknown', targets: {} }),
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver,
+    config: { pacingMs: 0, maxProfiles: 2 },
+    opts: { max: 50 },
+    read: scriptedRead(views),
+    deps: { getClip: async () => null },
+  })) out.push(c);
+
+  assert.ok(out.length <= 2, `stopped at the cap, got ${out.length}`);
+});

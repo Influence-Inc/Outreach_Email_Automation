@@ -161,6 +161,7 @@ function driverWithSearch() {
     tap: async (x, y) => ops.push(['tap', x, y]),
     typeText: async (t) => ops.push(['type', t]),
     submitSearch: async () => ops.push(['submitSearch']),
+    back: async () => ops.push(['back']),
     swipe: async (o) => ops.push(['swipe', o]),
     getWindowSize: async () => ({ width: 1080, height: 2400 }),
     dumpUi: async () => [],
@@ -254,9 +255,11 @@ test('records a reel and attaches the clip for the Gemini judge', async () => {
     { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
     { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
     { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { 'reelCell:0': { x: 150, y: 700 }, back: BACK } },
+    // The grid, with the reel's own tap point — what the reader now supplies.
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 150, y: 700 } }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 150, y: 700 } }], targets: { back: BACK } },
     { screen: 'reels_feed', targets: { back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 150, y: 700 } }], targets: { back: BACK } },
     { screen: 'search_results', targets: { back: BACK } },
   ];
   const gen = scout({
@@ -283,9 +286,10 @@ test('a failed recording still yields the creator', async () => {
     { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
     { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
     { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { 'reelCell:0': { x: 1, y: 1 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
     { screen: 'reels_feed', targets: { back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
     { screen: 'search_results', targets: { back: BACK } },
   ];
   const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views) });
@@ -579,9 +583,10 @@ test('a recorded clip is attached in the shape the judge reads', async () => {
     { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
     { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
     { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { 'reelCell:0': { x: 1, y: 1 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
     { screen: 'reels_feed', targets: { back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
     { screen: 'search_results', targets: { back: BACK } },
   ];
   const gen = scout({
@@ -597,4 +602,304 @@ test('a recorded clip is attached in the shape the judge reads', async () => {
 
   assert.strictEqual(out[0].clip.dataBase64, Buffer.from('MP4').toString('base64'));
   assert.strictEqual(out[0].clip.mimeType, 'video/mp4');
+});
+
+// ── which reels get watched (§5) ─────────────────────────────────────────────
+
+const { pickClipTargets } = require('./sourcingNavigator');
+
+// One clip tells you what a creator's best day looks like and nothing about the
+// other days. Two best plus one typical is what makes the gap visible.
+test('picks the two best reels and one typical one', () => {
+  const reels = [
+    { views: 100 }, { views: 90000 }, { views: 5000 },
+    { views: 80000 }, { views: 4000 }, { views: 6000 },
+  ];
+  const picked = pickClipTargets(reels, 3).map((r) => r.views);
+
+  assert.deepStrictEqual(picked.slice(0, 2), [90000, 80000], 'the two best');
+  assert.ok(picked[2] < 80000, 'and one that is not a top performer');
+  assert.strictEqual(new Set(picked).size, 3, 'three distinct reels');
+});
+
+// Sampling only top performers would watch exactly the reels that mislead.
+test('the typical pick is not just the third-best reel', () => {
+  const reels = [
+    { views: 100000 }, { views: 99000 }, { views: 98000 },
+    { views: 500 }, { views: 600 }, { views: 700 },
+  ];
+  const picked = pickClipTargets(reels, 3).map((r) => r.views);
+  assert.deepStrictEqual(picked.slice(0, 2), [100000, 99000]);
+  assert.ok(picked[2] < 98000, 'reached past the cluster at the top');
+});
+
+test('fewer reels than clips wanted takes them all', () => {
+  assert.strictEqual(pickClipTargets([{ views: 10 }, { views: 20 }], 3).length, 2);
+  assert.deepStrictEqual(pickClipTargets([], 3), []);
+  assert.deepStrictEqual(pickClipTargets([{ caption: 'no views' }], 3), []);
+});
+
+// Recording all three costs three stretches on the phone, so a run can ask for
+// fewer without touching anything else.
+test('the number of clips is configurable', () => {
+  const reels = [{ views: 1 }, { views: 2 }, { views: 3 }, { views: 4 }];
+  assert.strictEqual(pickClipTargets(reels, 1).length, 1);
+  assert.strictEqual(pickClipTargets(reels, 2).length, 2);
+  assert.strictEqual(pickClipTargets(reels, 0).length, 0);
+});
+
+// The whole point of reading the window before recording: which reels are worth
+// watching is a question about the window as a whole.
+test('records the best and typical reels, not merely the first one', async () => {
+  const driver = driverWithSearch();
+  let clipNo = 0;
+  driver.recordClip = async (s) => { clipNo += 1; driver.ops.push(['recordClip', s]); return { clipId: `c${clipNo}` }; };
+
+  const top = { views: 90000, point: { x: 100, y: 300 } };
+  const mid = { views: 5000, point: { x: 300, y: 300 } };
+  const low = { views: 1000, point: { x: 500, y: 300 } };
+  const gridTop = { screen: 'reels_tab', reels: [top, mid], targets: { back: BACK } };
+  const gridLow = { screen: 'reels_tab', reels: [low], targets: { back: BACK } };
+
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    gridTop,                                        // collectReels: first screen
+    gridLow,                                        // collectReels: after one scroll
+    gridLow,                                        // collectReels: nothing new -> stop
+    // capture pass, starting from the bottom of the grid
+    { screen: 'reels_feed', targets: { back: BACK } }, gridLow,  // recorded `low`
+    gridTop,                                        // scrolled back up
+    { screen: 'reels_feed', targets: { back: BACK } }, gridTop,  // recorded `top`
+    { screen: 'reels_feed', targets: { back: BACK } }, gridTop,  // recorded `mid`
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+
+  const out = [];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0, clipSeconds: 5 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead(views),
+    deps: { getClip: async (id) => ({ dataBase64: id, mimeType: 'video/mp4' }) },
+  });
+  for await (const c of gen) out.push(c);
+
+  const taps = driver.ops.filter((o) => o[0] === 'tap').map((o) => `${o[1]},${o[2]}`);
+  assert.ok(taps.includes('100,300'), 'opened the best reel');
+  assert.ok(taps.includes('500,300'), 'and the typical one');
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 3);
+
+  assert.strictEqual(out[0].clips.length, 3);
+  assert.deepStrictEqual(out[0].clips.map((c) => c.views), [90000, 5000, 1000], 'best first');
+  assert.strictEqual(out[0].clip, out[0].clips[0], 'the single clip field is the best one');
+  assert.strictEqual(out[0].evidence.clipsCaptured, 3);
+});
+
+// A screen coordinate stops meaning anything the moment the grid scrolls, so it
+// must never reach the database.
+test('tap points do not survive onto the candidate', async () => {
+  const driver = driverWithSearch();
+  const grid = {
+    screen: 'reels_tab',
+    reels: [{ views: 7, point: { x: 1, y: 1 } }],
+    targets: { back: BACK },
+  };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    grid, grid,
+    { screen: 'reels_feed', targets: { back: BACK } }, grid,
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead(views),
+    deps: { getClip: async () => ({ dataBase64: 'AA', mimeType: 'video/mp4' }) },
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.deepStrictEqual(out[0].reels, [{ views: 7 }]);
+});
+
+// A build whose grid gives no tap points cannot be made to give them by
+// swiping at it.
+test('a grid with no tap points is not scrolled hunting for one', async () => {
+  const driver = driverWithSearch();
+  const grid = { screen: 'reels_tab', reels: [{ views: 7 }, { views: 8 }], targets: { back: BACK } };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    grid, grid,
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0);
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'swipe').length, 1, 'only the collection scroll');
+  assert.deepStrictEqual(out[0].reels.map((r) => r.views), [7, 8], 'the reach window survives');
+});
+
+// ── surviving a long run (§9) ───────────────────────────────────────────────
+
+const FEED_TARGETS = { authorProfile: { x: 900, y: 1200 }, back: BACK };
+
+// A sheet swallows every tap after it appears, so a run that does not clear one
+// spends the rest of its life tapping at a dialog it cannot see.
+test('a sheet on the way in is dismissed before the search starts', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    {
+      screen: 'search',
+      dialog: { label: 'not now', point: { x: 540, y: 1900 } },
+      targets: { searchTab: { x: 1, y: 1 } },
+    },
+    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
+    { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 540 && o[2] === 1900),
+    'tapped the dismiss control',
+  );
+});
+
+// An ad is a brand buying placement — opening the account behind it sources a
+// competitor.
+test('a sponsored reel in the feed is skipped without opening the account', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    { screen: 'reels_feed', author: 'somebrand', sponsored: true, targets: FEED_TARGETS },
+    { screen: 'reels_feed', author: 'somebrand', sponsored: true, targets: FEED_TARGETS },
+    { screen: 'search', targets: {} },
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'nothing sourced from an ad');
+  assert.ok(
+    !driver.ops.some((o) => o[0] === 'tap' && o[1] === 900 && o[2] === 1200),
+    'never tapped through to the advertiser',
+  );
+});
+
+// A tap that lands during a re-layout does nothing, and the analysis that
+// followed used to read the screen we were still on as the creator's profile.
+test('a profile hop that did not land is retried rather than analysed', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } }, // tap did nothing
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  const opens = driver.ops.filter((o) => o[0] === 'tap' && o[1] === 5 && o[2] === 5);
+  assert.strictEqual(opens.length, 2, 'the hop was repeated');
+  assert.strictEqual(out.length, 1, 'and the creator was captured on the retry');
+});
+
+test('a profile that never opens is dropped rather than mis-read', async () => {
+  const driver = driverWithSearch();
+  const serp = { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    serp, serp, serp, serp,   // every attempt lands nowhere
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'nothing was invented from the wrong screen');
+});
+
+// targetCount bounds how many creators a run ADDS. Without a cap, a run whose
+// keywords match nothing looks at profiles until something else stops it.
+test('a run stops opening profiles once the cap is spent', async () => {
+  const driver = driverWithSearch();
+  const feed = (author) => ({ screen: 'reels_feed', author, targets: FEED_TARGETS });
+  const profileHop = (author) => [
+    feed(author),
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_feed', targets: FEED_TARGETS },
+  ];
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    feed('one'), // after tapping the chip; the scroll loop reads again below
+    ...profileHop('one'),
+    ...profileHop('two'),
+    ...profileHop('three'),
+    { screen: 'search', targets: {} },
+  ];
+  const out = [];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0, maxProfiles: 2 },
+    opts: { keywords: ['coach'], max: 10 },
+    read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 2, 'stopped at the cap, not at the target of 10');
+});
+
+// A frozen player and a healthy scroll are both `screen: 'reels_feed'`.
+test('a frozen feed is recovered rather than scrolled at forever', async () => {
+  const driver = driverWithSearch();
+  let t = 0;
+  const frozen = { screen: 'reels_feed', author: null, caption: 'stuck', targets: {} };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    frozen, frozen, frozen, frozen, frozen,
+    { screen: 'search', targets: {} },
+  ];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0, stallMs: 90_000 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead(views),
+    // A clock that jumps a minute per look: the feed has shown the same reel
+    // for well over the stall window.
+    deps: { now: () => { t += 60_000; return t; } },
+  });
+  for await (const _c of gen) { /* drain */ }
+
+  assert.ok(driver.ops.some((o) => o[0] === 'back'), 'tried to get unstuck');
 });

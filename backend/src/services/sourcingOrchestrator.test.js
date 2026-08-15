@@ -7,7 +7,9 @@
 // scouting rules, dedupes, and "adds" the passers via injected in-memory stores.
 const test = require('node:test');
 const assert = require('node:assert');
-const { runWithSource, arraySource, processCandidate, reviewDecision } = require('./sourcingOrchestrator');
+const {
+  runWithSource, arraySource, processCandidate, reviewDecision, sourceNote,
+} = require('./sourcingOrchestrator');
 
 // In-memory implementation of the injected side effects.
 function memStore(seedCreators = []) {
@@ -32,8 +34,8 @@ function memStore(seedCreators = []) {
     async findDuplicate({ username }) {
       return creators.find((c) => c.username.toLowerCase() === username.toLowerCase()) || null;
     },
-    async insertCreator({ campaignId, username, fullName }) {
-      const row = { id: creators.length + 1, campaignId, username, fullName };
+    async insertCreator({ campaignId, username, fullName, sourcedVia }) {
+      const row = { id: creators.length + 1, campaignId, username, fullName, sourcedVia };
       creators.push(row);
       return row;
     },
@@ -245,4 +247,205 @@ test('a reels-mode candidate with NO reach still goes to review', async () => {
 
   assert.strictEqual(res.decision, 'review', 'unverified reach still needs a human');
   assert.strictEqual(creators.length, 0);
+});
+
+// ── the model does not get the final say (§7) ───────────────────────────────
+
+function judged({ clip = {}, creatorAnalysis = null } = {}) {
+  return {
+    nicheClassify: async () => ({
+      score: 0.95,
+      reason: 'model loved it',
+      source: 'gemini-video',
+      clip: { creativity: 8, hook_strength: 8, is_original_creator: true, brand_safety: 'safe', ...clip },
+    }),
+    creatorAnalysis,
+  };
+}
+
+// A repost page the model scored highly must still be dropped: is_original_creator
+// alone kills most of the junk.
+test('a repost page is rejected however well the model scored it', async () => {
+  const { deps, creators, candidates } = memStore();
+  const custom = { ...deps, nicheClassify: judged({ clip: { is_original_creator: false } }).nicheClassify };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  const res = await processCandidate(
+    { id: 1 },
+    cfg,
+    { username: 'repostking', bio: 'best clips', reels: fitReels(), creatorAnalysis: { fit_score: 95, consistency_of_niche: 9 } },
+    custom,
+  );
+
+  assert.notStrictEqual(res.decision, 'added', 'not added despite a 0.95 niche score');
+  assert.strictEqual(creators.length, 0);
+  assert.match(candidates[0].evidence.creatorScore.rejectReason, /original creator/);
+});
+
+test('an unsafe brand context is rejected', async () => {
+  const { deps, creators } = memStore();
+  const custom = { ...deps, nicheClassify: judged({ clip: { brand_safety: 'unsafe' } }).nicheClassify };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  const res = await processCandidate(
+    { id: 1 }, cfg,
+    { username: 'edgy', bio: 'fitness', reels: fitReels(), creatorAnalysis: { fit_score: 90, consistency_of_niche: 9 } },
+    custom,
+  );
+
+  assert.notStrictEqual(res.decision, 'added');
+  assert.strictEqual(creators.length, 0);
+});
+
+// The gate's reasoning is persisted so a decision can be explained later.
+test('the gate records its components on the candidate', async () => {
+  const { deps, candidates } = memStore();
+  const custom = { ...deps, nicheClassify: judged().nicheClassify };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  await processCandidate(
+    { id: 1 }, cfg,
+    { username: 'good', bio: 'fitness', reels: fitReels(), creatorAnalysis: { fit_score: 88, consistency_of_niche: 9 } },
+    custom,
+  );
+
+  const score = candidates[0].evidence.creatorScore;
+  assert.strictEqual(typeof score.score, 'number');
+  assert.ok(score.components.fit > 0.8);
+  assert.ok(score.stats.typical > 0);
+});
+
+// Nothing changes for a run with no AI analysis at all — the deterministic
+// scouting rules still decide on their own.
+test('with no analysis present the existing rules are untouched', async () => {
+  const { deps, creators, candidates } = memStore();
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  const res = await processCandidate(
+    { id: 1 }, cfg, { username: 'plain', bio: 'home fitness', reels: fitReels() }, deps,
+  );
+
+  assert.strictEqual(res.decision, 'added');
+  assert.strictEqual(creators.length, 1);
+  assert.ok(
+    !candidates[0].evidence || !candidates[0].evidence.creatorScore,
+    'no gate ran',
+  );
+});
+
+// ── provenance on the added creator (§7) ────────────────────────────────────
+
+// Which keyword and which mode produced a creator is the only way to tell,
+// later, which of them is worth running again.
+test('an added creator is tagged with the keyword and mode that found them', async () => {
+  const { deps, creators } = memStore();
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  await processCandidate(
+    { id: 42 }, cfg,
+    { username: 'kim', bio: 'home fitness', reels: fitReels(), sourceTerm: 'kettlebell', discovery: 'search' },
+    deps,
+  );
+
+  const tag = creators[0].sourcedVia;
+  assert.strictEqual(tag.mode, 'search');
+  assert.strictEqual(tag.keyword, 'kettlebell');
+  assert.strictEqual(tag.runId, 42);
+  assert.ok(typeof tag.nicheScore === 'number');
+  assert.ok(Date.parse(tag.sourcedAt) > 0);
+});
+
+// The warmed feed follows no keyword, so the mode itself is the provenance.
+test('a reels-feed creator is tagged with the mode and no keyword', async () => {
+  const { deps, creators } = memStore();
+  const cfg = {
+    discovery: 'reels', niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5,
+  };
+
+  await processCandidate(
+    { id: 7 }, cfg, { username: 'sam', bio: 'home fitness', reels: fitReels(), discovery: 'reels' }, deps,
+  );
+
+  assert.strictEqual(creators[0].sourcedVia.mode, 'reels');
+  assert.strictEqual(creators[0].sourcedVia.keyword, null);
+});
+
+// The genre the model named is worth keeping — it is what a keyword was
+// actually standing in for.
+test('the genre from the analysis rides along on the tag', async () => {
+  const { deps, creators } = memStore();
+  const custom = {
+    ...deps,
+    nicheClassify: async () => ({ score: 0.9, reason: 'ok', evidence: { genre: 'home workouts' } }),
+  };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  await processCandidate({ id: 1 }, cfg, { username: 'lee', reels: fitReels() }, custom);
+  assert.strictEqual(creators[0].sourcedVia.genre, 'home workouts');
+});
+
+test('the note reads as a sentence for whichever mode found them', () => {
+  assert.strictEqual(
+    sourceNote({ mode: 'search', keyword: 'kettlebell', genre: 'home workouts' }),
+    'Sourced from Instagram search for "kettlebell" — home workouts',
+  );
+  assert.strictEqual(
+    sourceNote({ mode: 'reels', keyword: null, genre: null }),
+    'Sourced from the reels feed',
+  );
+});
+
+// ── three clips reach the gate (§5) ─────────────────────────────────────────
+
+// The whole point of watching three reels: one repost among three is tolerated,
+// two out of three is a repost page. That distinction is only available to a
+// gate that sees every clip.
+test('all three clip analyses reach the deterministic gate', async () => {
+  const { deps, creators, candidates } = memStore();
+  const custom = {
+    ...deps,
+    nicheClassify: async () => ({
+      score: 0.9,
+      reason: 'on brand',
+      source: 'gemini-video',
+      evidence: {
+        genre: 'home fitness',
+        clipAnalyses: [
+          { creativity: 9, hook_strength: 8, is_original_creator: false },
+          { creativity: 8, hook_strength: 8, is_original_creator: false },
+          { creativity: 8, hook_strength: 7, is_original_creator: true },
+        ],
+        creator: { fit_score: 92, consistency_of_niche: 9 },
+      },
+    }),
+  };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  const res = await processCandidate({ id: 1 }, cfg, { username: 'reposts', reels: fitReels() }, custom);
+
+  assert.notStrictEqual(res.decision, 'added', 'two of three clips were reposts');
+  assert.strictEqual(creators.length, 0);
+  assert.match(candidates[0].evidence.creatorScore.rejectReason, /original creator/);
+});
+
+// The creator-level fit_score comes back on the classifier's evidence now that
+// reelJudge runs that pass itself.
+test('the creator analysis is taken from the classifier, not only the candidate', async () => {
+  const { deps, candidates } = memStore();
+  const custom = {
+    ...deps,
+    nicheClassify: async () => ({
+      score: 0.9,
+      reason: 'on brand',
+      evidence: {
+        clipAnalyses: [{ creativity: 9, hook_strength: 9, is_original_creator: true }],
+        creator: { fit_score: 95, consistency_of_niche: 10 },
+      },
+    }),
+  };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  await processCandidate({ id: 1 }, cfg, { username: 'good', reels: fitReels() }, custom);
+
+  assert.ok(candidates[0].evidence.creatorScore.components.fit > 0.9);
 });

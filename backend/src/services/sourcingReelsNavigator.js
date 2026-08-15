@@ -34,6 +34,9 @@ const {
 const engagementPolicy = require('./engagementPolicy');
 const { jitteredDelay, jitterTap } = require('./humanize');
 const { createAnalysisQueue } = require('./analysisQueue');
+const {
+  clearDialogs, arriveAt, createStallGuard, recoverFromStall, createProfileCap,
+} = require('./sourcingResilience');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -102,13 +105,27 @@ async function scrollToNextReel({ driver, size, jitterPx, pacingMs }) {
 async function collectBatch({
   driver, read, size, pacingMs, jitterPx, clipSeconds, batchSize,
   handled, queue, judge, getClip, engagement, counters, rng, config, warn,
+  stall = null, cap = null,
 }) {
   const batch = [];
   let unreadable = 0;
 
   while (batch.length < batchSize && unreadable <= MAX_UNREADABLE_REELS) {
     // eslint-disable-next-line no-await-in-loop
-    const view = await read(driver);
+    let view = await read(driver);
+
+    // The feed has stopped moving — a frozen player, or a swipe that did
+    // nothing. Recover before deciding we have run out of reels.
+    if (stall && stall.check(view)) {
+      // eslint-disable-next-line no-await-in-loop
+      view = await recoverFromStall({
+        driver, read, pacingMs, jitterPx, guard: stall, log: warn, pkg: IG_ANDROID_PACKAGE,
+      });
+    } else if (view.dialog) {
+      // eslint-disable-next-line no-await-in-loop
+      view = (await clearDialogs({ driver, read, view, pacingMs, jitterPx, log: warn })).view;
+    }
+
     if (view.screen === 'action_blocked') {
       warn('[reels] action blocked — stopping');
       return { batch, blocked: true };
@@ -123,6 +140,20 @@ async function collectBatch({
     }
     unreadable = 0;
 
+    // A sponsored reel is an ad. Recording and judging one spends a clip and a
+    // Gemini call to discover that a brand bought a placement, and the account
+    // behind it is a competitor rather than a creator to source. Skipped before
+    // anything is recorded, and NOT marked handled — a real creator whose reel
+    // was mislabelled deserves another chance when they come round again.
+    if (view.sponsored) {
+      // eslint-disable-next-line no-await-in-loop
+      await scrollToNextReel({ driver, size, jitterPx, pacingMs });
+      continue;
+    }
+
+    // The run has looked at enough creators, whatever it managed to add.
+    if (cap && cap.spent()) return { batch, blocked: false };
+
     // Already handled — the cheapest possible outcome, one swipe. On a warmed
     // feed the same creators come round constantly, which is where most of the
     // wasted time was going.
@@ -133,6 +164,7 @@ async function collectBatch({
       continue;
     }
     handled.add(key);
+    if (cap && !cap.take()) return { batch, blocked: false };
 
     // Recording is a device action, so it is awaited. Judging the recording is
     // not, so it is not.
@@ -225,9 +257,19 @@ async function handleCreator({
 
   if (driver.openProfile) {
     try {
-      await driver.openProfile(entry.username);
-      await sleep(jitteredDelay(pacingMs));
-      const profile = await analyseProfile({
+      // A deep link can land on a login wall, an interstitial, or simply not
+      // resolve. Verify we are looking at the creator's profile before reading
+      // anything off the screen as though we were.
+      const arrived = await arriveAt({
+        driver, read, pacingMs, jitterPx, log: warn, what: `@${entry.username}`,
+        wanted: ['profile', 'reels_tab'],
+        act: () => driver.openProfile(entry.username),
+      });
+      // Not there. Keep the creator on what the feed reel already told us
+      // rather than reading some other screen as their profile — and fall
+      // through, so the queued analysis is still collected below.
+      const profile = !arrived.ok ? null : await analyseProfile({
+        view: arrived.view,
         driver,
         pacingMs,
         jitterPx,
@@ -285,6 +327,11 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
   const counters = engagementPolicy.newCounters();
   const queue = deps.analysisQueue || createAnalysisQueue({ logger: deps.logger || console });
 
+  // See services/sourcingResilience.js — the same guards the search navigator
+  // uses, so both discovery modes survive the same interruptions.
+  const stall = createStallGuard({ timeoutMs: config.stallMs, now: deps.now });
+  const cap = createProfileCap({ max: config.maxProfiles, log: warn });
+
   // Creators already handled, for the life of the run. Checked the moment a
   // handle is read off a reel — before recording, before opening anything.
   const handled = new Set();
@@ -305,6 +352,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       driver, read, size, pacingMs, jitterPx, clipSeconds,
       batchSize: Math.min(batchSize, max - emitted),
       handled, queue, judge, getClip, engagement, counters, rng, config, warn,
+      stall, cap,
     });
     if (!batch.length) break;
 
@@ -315,11 +363,13 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       const candidate = await handleCreator({
         driver, read, entry, queue, size, pacingMs, jitterPx, reelsWindow, warn,
       });
-      yield candidate;
+      // No keyword here — this mode takes whoever the warmed feed serves, so the
+      // mode itself IS the provenance worth recording.
+      yield { ...candidate, discovery: 'reels' };
       emitted += 1;
     }
 
-    if (blocked || emitted >= max) break;
+    if (blocked || emitted >= max || cap.spent()) break;
 
     // 3. RETURN — once per batch, not once per creator. Anything already
     // handled is skipped in a single swipe, so landing slightly off costs

@@ -654,3 +654,10 @@ CREATE INDEX IF NOT EXISTS idx_sourced_candidates_run ON sourced_candidates(run_
 CREATE INDEX IF NOT EXISTS idx_sourced_candidates_decision ON sourced_candidates(decision);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sourced_candidates_campaign_username
   ON sourced_candidates(campaign_id, LOWER(username));
+
+-- Provenance for creators the scout added: which mode found them (reels feed vs
+-- keyword search), which keyword and genre it was following, and the scores that
+-- passed them. Without it a campaign's creator list gives no way to tell which
+-- keyword — or which mode — is worth running again.
+-- { mode, keyword, genre, nicheScore, creatorScore, runId, sourcedAt }
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS sourced_via JSONB;

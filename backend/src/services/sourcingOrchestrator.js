@@ -12,6 +12,7 @@
 // creatorDb and the shared creator-insert helper.
 
 const { nicheMatch, decide, decideReel } = require('./sourcingFilters');
+const { scoreCreator } = require('./creatorScore');
 
 const REVIEW_BAND_DEFAULT = 0.15;
 
@@ -26,6 +27,35 @@ function reviewDecision(verdict, config = {}) {
   const threshold = config.nicheThreshold != null ? config.nicheThreshold : 0.5;
   const band = config.reviewBand != null ? config.reviewBand : REVIEW_BAND_DEFAULT;
   return score < threshold + band ? 'review' : 'add';
+}
+
+// Provenance for a creator we actually added: which mode found them, and which
+// keyword or genre it was following at the time.
+//
+// Two modes surface creators very differently — the warmed reels feed serves
+// whoever Instagram thinks we like, while search follows a keyword we chose —
+// and without this stamp a campaign's creator list gives no way to tell which
+// keyword (or which mode) is worth running again.
+function sourceTag(run, config, candidate, { niche, gate } = {}) {
+  const evidence = (niche && niche.evidence) || {};
+  const tag = {
+    mode: candidate.discovery || config.discovery || 'search',
+    keyword: candidate.sourceTerm || null,
+    genre: evidence.genre || (evidence.clip && evidence.clip.niche) || null,
+    nicheScore: typeof niche?.nicheScore === 'number' ? niche.nicheScore : null,
+    creatorScore: gate ? gate.score : null,
+    runId: run && run.id != null ? run.id : null,
+    sourcedAt: new Date().toISOString(),
+  };
+  return tag;
+}
+
+/** One human-readable line for the creators.notes column. */
+function sourceNote(tag) {
+  const where = tag.mode === 'reels' ? 'the reels feed' : 'Instagram search';
+  const what = tag.keyword ? ` for "${tag.keyword}"` : '';
+  const genre = tag.genre ? ` — ${tag.genre}` : '';
+  return `Sourced from ${where}${what}${genre}`;
 }
 
 // Evaluate ONE captured candidate; if it clears the rules and isn't a duplicate,
@@ -61,6 +91,49 @@ async function processCandidate(run, config, candidate, deps) {
     && candidate.reels.some((r) => r && Number.isFinite(Number(r.views)));
   const reachUnverified = reelsMode && !hasReach;
   const verdict = reachUnverified ? decideReel(candidate, config) : decide(candidate, config);
+
+  // The model's fit_score is an INPUT, never the decision. When the analyses are
+  // present, a deterministic gate combines it with reach steadiness, the
+  // follower band, and the creativity/hook of the actual reels — so the same
+  // numbers always produce the same answer and the bar is tunable from config
+  // without touching a prompt. See services/creatorScore.js.
+  // nicheMatch normalises the classifier's reply, carrying the richer per-clip
+  // analysis through under `evidence` — the classifier's own top-level `clip`
+  // does not survive that hop.
+  const judged = (niche && niche.evidence) || {};
+  const clipAnalyses = [
+    ...(judged.clipAnalyses || (judged.clip ? [judged.clip] : [])),
+    ...(candidate.clipAnalyses || []),
+  ].filter(Boolean);
+  const creatorAnalysis = judged.creator || candidate.creatorAnalysis || null;
+  const gate = (creatorAnalysis || clipAnalyses.length)
+    ? scoreCreator({
+      creator: creatorAnalysis || {},
+      clips: clipAnalyses,
+      reels: candidate.reels || [],
+      followers: candidate.followers,
+    }, config)
+    : null;
+
+  if (gate) {
+    candidate.evidence = {
+      ...(candidate.evidence || {}),
+      creatorScore: {
+        pass: gate.pass,
+        score: gate.score,
+        rejectReason: gate.rejectReason,
+        components: gate.components,
+        stats: gate.stats,
+      },
+    };
+    // A hard reject from the gate stands regardless of what the niche rules made
+    // of the same creator — a repost page or an unsafe brand context is not a
+    // borderline call.
+    if (!gate.pass) {
+      verdict.pass = false;
+      verdict.reasons = [...(verdict.reasons || []), gate.rejectReason].filter(Boolean);
+    }
+  }
 
   // Persist the candidate + its evaluation. persistCandidate returns the row, or
   // null when this handle was already scouted for the campaign (unique index).
@@ -122,6 +195,7 @@ async function processCandidate(run, config, candidate, deps) {
     username,
     fullName: candidate.full_name || candidate.fullName || null,
     firstName: candidate.first_name || candidate.firstName || null,
+    sourcedVia: sourceTag(run, config, candidate, { niche, gate }),
   });
   await deps.updateCandidate(row.id, { decision: 'added', creator_id: creator.id });
   return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id };
@@ -184,4 +258,6 @@ function arraySource(list) {
   };
 }
 
-module.exports = { processCandidate, runWithSource, arraySource, reviewDecision };
+module.exports = {
+  processCandidate, runWithSource, arraySource, reviewDecision, sourceTag, sourceNote,
+};

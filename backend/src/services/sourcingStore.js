@@ -10,6 +10,7 @@ const db = require('../db');
 const { findDuplicateCreator } = require('./duplicateGuard');
 const creatorDb = require('./creatorDb');
 const { insertPendingCreator } = require('./creatorInsert');
+const { sourceNote } = require('./sourcingOrchestrator');
 const reelJudge = require('./reelJudge');
 
 // Created as 'queued', matching services/sourcingSweep.js's autoEnqueueRuns —
@@ -167,8 +168,15 @@ function makeDeps(run, { nicheClassify = reelJudge.makeClassifier() } = {}) {
       return Array.isArray(res) && res[0] && res[0].category === 'used';
     },
 
-    insertCreator: ({ campaignId, username, fullName, firstName }) =>
-      insertPendingCreator({ campaignId, username, fullName, firstName }),
+    insertCreator: ({ campaignId, username, fullName, firstName, sourcedVia }) =>
+      insertPendingCreator({
+        campaignId,
+        username,
+        fullName,
+        firstName,
+        sourcedVia,
+        note: sourcedVia ? sourceNote(sourcedVia) : null,
+      }),
 
     updateRun: (patch) => updateRun(run.id, patch),
   };

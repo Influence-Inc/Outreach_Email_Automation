@@ -18,6 +18,9 @@
 const { readScreen } = require('./screenVision');
 const { jitteredDelay, jitterTap } = require('./humanize');
 const { normalizeTerms } = require('./searchTerms');
+const {
+  clearDialogs, arriveAt, createStallGuard, recoverFromStall, createProfileCap,
+} = require('./sourcingResilience');
 
 const IG_ANDROID_PACKAGE = 'com.instagram.android';
 
@@ -85,6 +88,12 @@ const MAX_TAB_STRIP_SCROLLS = 3;
 // `reelsWindow` — the dashboard's "Recent reels to check" — because that is the
 // same window the scoring rules measure against.
 const REELS_PER_PROFILE = 12;
+
+// How many reels to actually WATCH per creator. One clip tells you what a
+// creator's best day looks like and nothing about the other days; three is the
+// smallest sample that distinguishes a consistent creator from a lucky one, and
+// each costs a recording plus a Gemini call, so it does not grow past that.
+const CLIPS_PER_PROFILE = 3;
 
 // Safety bound on the scroll loop — a grid that stops yielding new reels exits
 // earlier, this only caps a creator with a very long back catalogue.
@@ -173,7 +182,15 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const max = opts.max || Infinity;
   const clipSeconds = config.clipSeconds || 12;
   const reelsWindow = config.reelsWindow || REELS_PER_PROFILE;
+  const clipsWanted = config.clipsPerProfile != null ? config.clipsPerProfile : CLIPS_PER_PROFILE;
   const getClip = deps.getClip || (async () => null);
+  const log = deps.log || (() => {});
+
+  // A long run against a real app gets interrupted, stuck, and occasionally lost.
+  // See services/sourcingResilience.js — these are shared with the reels-feed
+  // navigator so both modes survive the same things.
+  const stall = createStallGuard({ timeoutMs: config.stallMs, now: deps.now });
+  const cap = createProfileCap({ max: config.maxProfiles, log });
 
   await driver.openApp(IG_ANDROID_PACKAGE);
   await sleep(jitteredDelay(pacingMs));
@@ -188,7 +205,22 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   for (const term of terms) {
     if (emitted >= max) return;
 
+    // Stamp every creator with the keyword that surfaced them, so a passing
+    // creator carries which search found them all the way into the creators
+    // table — that is what makes one keyword's yield comparable to another's.
+    const tag = (p) => (p ? { ...p, sourceTerm: term, discovery: 'search' } : p);
+
     let view = await read(driver);
+    // Instagram interrupts a session with sheets — "Turn on notifications", an
+    // update nag — and every tap after one appears lands on the sheet instead of
+    // the app. Checked off the read we were doing anyway, so a clean screen
+    // costs nothing.
+    if (view.dialog) view = (await clearDialogs({ driver, read, view, pacingMs, jitterPx, log })).view;
+    if (stall.check(view)) {
+      view = await recoverFromStall({
+        driver, read, pacingMs, jitterPx, guard: stall, log, pkg: IG_ANDROID_PACKAGE,
+      });
+    }
     await tapTarget({ driver, view, name: 'searchTab', pacingMs, jitterPx });
 
     view = await read(driver);
@@ -217,10 +249,10 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     // profile, and coming back to carry on scrolling.
     if (view.screen === 'reels_feed') {
       for await (const profile of scoutReelFeed({
-        driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow,
-        remaining: max - emitted, seen: seenCreators,
+        driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
+        remaining: max - emitted, seen: seenCreators, stall, cap, log,
       })) {
-        yield profile;
+        yield tag(profile);
         emitted += 1;
         if (emitted >= max) return;
       }
@@ -235,12 +267,13 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
       if (emitted >= max) return;
+      if (!cap.take()) return; // the run has looked at enough profiles
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
-        reelsWindow,
+        reelsWindow, clipsWanted, log,
       });
       if (profile) {
-        yield profile;
+        yield tag(profile);
         emitted += 1;
       }
       // However deep this creator took us (reel player -> profile -> feed), come
@@ -255,11 +288,13 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       const results = Array.isArray(view.results) ? view.results : [];
       for (const handle of results) {
         if (emitted >= max) return;
+        if (!cap.take()) return;
         const profile = await openAndCaptureProfile({
           driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
+          clipsWanted, log,
         });
         if (profile) {
-          yield profile;
+          yield tag(profile);
           emitted += 1;
         }
         await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 4 });
@@ -288,37 +323,72 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
 async function* scoutReelFeed({
   driver, read = readView, pacingMs, jitterPx = 0, screen,
   clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
-  reelsWindow = REELS_PER_PROFILE,
+  reelsWindow = REELS_PER_PROFILE, clipsWanted = CLIPS_PER_PROFILE,
+  stall = null, cap = null, log = () => {},
 }) {
   const size = screen || { width: 1080, height: 2400 };
   let produced = 0;
 
   for (let i = 0; i < MAX_FEED_SCROLLS && produced < remaining; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const feed = await read(driver);
+    let feed = await read(driver);
+
+    // Frozen player, unresolved spinner, a tap that opened nothing — the screen
+    // has stopped changing, so get back somewhere workable and carry on.
+    if (stall && stall.check(feed)) {
+      // eslint-disable-next-line no-await-in-loop
+      feed = await recoverFromStall({
+        driver, read, pacingMs, jitterPx, guard: stall, log, pkg: IG_ANDROID_PACKAGE,
+      });
+    } else if (feed.dialog) {
+      // eslint-disable-next-line no-await-in-loop
+      feed = (await clearDialogs({ driver, read, view: feed, pacingMs, jitterPx, log })).view;
+    }
+
     if (feed.screen !== 'reels_feed') return; // scrolled out of the feed
 
     const author = feed.author ? String(feed.author).toLowerCase() : null;
     const link = feed.targets && feed.targets.authorProfile;
 
-    if (link && !(author && seen.has(author))) {
+    // An ad, not a creator. The account behind a sponsored reel is a brand
+    // buying placement — opening it spends a profile visit to source a
+    // competitor.
+    const skip = feed.sponsored || (cap && cap.spent());
+    if (feed.sponsored) log(`[sourcing] skipping a sponsored reel${author ? ` by @${author}` : ''}`);
+
+    if (!skip && link && !(author && seen.has(author))) {
       if (author) seen.add(author);
-      // eslint-disable-next-line no-await-in-loop
-      await humanTap(driver, link, jitterPx, pacingMs);
-      // eslint-disable-next-line no-await-in-loop
-      const profile = await analyseProfile({
-        driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip, reelsWindow,
-        fallbackUsername: feed.author || null,
-        source: 'backend-navigator:feed-scroll',
-        screens: ['reels_feed', 'profile', 'reels_tab'],
-      });
-      if (profile) {
-        yield profile;
-        produced += 1;
+      if (!cap || cap.take()) {
+        // Verify we actually reached the profile. A tap that lands during a
+        // re-layout silently does nothing, and the analysis that followed used
+        // to read the reel player as though it were a profile header.
+        // eslint-disable-next-line no-await-in-loop
+        const arrived = await arriveAt({
+          driver, read, pacingMs, jitterPx, log, what: 'creator profile',
+          wanted: ['profile', 'reels_tab'],
+          act: () => humanTap(driver, link, jitterPx, pacingMs),
+        });
+
+        if (arrived.ok) {
+          // eslint-disable-next-line no-await-in-loop
+          const profile = await analyseProfile({
+            driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip, reelsWindow, clipsWanted,
+            fallbackUsername: feed.author || null,
+            source: 'backend-navigator:feed-scroll',
+            screens: ['reels_feed', 'profile', 'reels_tab'],
+            view: arrived.view,
+          });
+          if (profile) {
+            yield profile;
+            produced += 1;
+          }
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 4 });
       }
-      // eslint-disable-next-line no-await-in-loop
-      await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 4 });
     }
+
+    if (cap && cap.spent()) return;
 
     // Swipe up to the next reel (jittered endpoints so the gesture isn't identical).
     const jx = jitterTap({ x: Math.round(size.width / 2), y: 0 }, jitterPx).x;
@@ -342,6 +412,7 @@ async function* scoutReelFeed({
 async function captureViaReel({
   driver, reelIndex, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {},
 }) {
   const serp = await read(driver);
   const card = serp.targets && serp.targets[`reelResult:${reelIndex}`];
@@ -350,13 +421,26 @@ async function captureViaReel({
 
   const feed = await read(driver);
   if (!feed.author || !feed.targets || !feed.targets.authorProfile) return null;
-  await humanTap(driver, feed.targets.authorProfile, jitterPx, pacingMs);
+  // A brand's ad tells us nothing about a creator, and the account behind it is
+  // not one we want in the campaign.
+  if (feed.sponsored) {
+    log('[sourcing] skipping a sponsored reel card');
+    return null;
+  }
+
+  const arrived = await arriveAt({
+    driver, read, pacingMs, jitterPx, log, what: `@${feed.author}`,
+    wanted: ['profile', 'reels_tab'],
+    act: () => humanTap(driver, feed.targets.authorProfile, jitterPx, pacingMs),
+  });
+  if (!arrived.ok) return null;
 
   return analyseProfile({
-    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
+    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
     fallbackUsername: feed.author,
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
+    view: arrived.view,
   });
 }
 
@@ -370,9 +454,12 @@ async function analyseProfile({
   driver, pacingMs, jitterPx = 0, read = readView, screen,
   clipSeconds = 12, getClip = async () => null,
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
-  reelsWindow = REELS_PER_PROFILE, recordClip = true,
+  reelsWindow = REELS_PER_PROFILE, recordClip = true, clipsWanted = CLIPS_PER_PROFILE,
+  view: arrivedOn = null,
 }) {
-  const header = await read(driver);
+  // The caller that verified we reached this profile already read the screen;
+  // reading it again is a round-trip to the phone for a picture we have.
+  const header = arrivedOn || await read(driver);
 
   // Switch to Reels unless we are already there (IG sometimes opens a profile
   // on the Reels sub-tab, in which case reel overlays are already present).
@@ -383,38 +470,83 @@ async function analyseProfile({
     view = await read(driver);
   }
 
-  // Record one reel BEFORE scrolling, while the most recent is still on screen.
-  //
-  // Skipped when the caller already has a judged clip for this creator — reels
-  // mode records and judges the feed reel before it ever opens the profile, and
-  // recording a second one would spend another ~12s on the phone plus a second
-  // Gemini call to answer a question already answered.
-  const clip = recordClip
-    ? await captureReelClip({ driver, view, pacingMs, jitterPx, read, clipSeconds, getClip })
-    : null;
-
-  // Then scroll the grid for the rest of the reach data.
-  const reels = await collectReels({
+  // Read the whole reach window FIRST. Which reels are worth watching is a
+  // question about the window as a whole — the best performer and the typical
+  // one are only knowable once every view count is in — so recording has to come
+  // after the scroll, not before it.
+  const { reels, view: gridView } = await collectReels({
     driver, read, view, pacingMs, jitterPx, screen, want: reelsWindow,
   });
+
+  // Then walk back UP the grid recording the chosen reels. Skipped entirely when
+  // the caller already has a judged clip: reels mode records and judges the feed
+  // reel before it ever opens the profile, and re-recording would spend another
+  // stretch on the phone plus more Gemini calls to answer a settled question.
+  const clips = recordClip
+    ? await captureReelClips({
+      driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip,
+      reels, want: clipsWanted, view: gridView,
+    })
+    : [];
 
   return {
     username: header.username || fallbackUsername,
     full_name: header.fullName || null,
     followers: header.followers ?? null,
     bio: header.bio || null,
-    reels,
+    // `point` is a screen coordinate that stops meaning anything the moment we
+    // scroll, so it never leaves this function.
+    reels: reels.map(({ point, ...r }) => r), // eslint-disable-line no-unused-vars
     // The judge scores creative style and niche from the actual video + audio;
-    // reelJudge picks this up automatically when present (services/reelJudge.js).
-    clip: clip || undefined,
+    // reelJudge picks these up automatically when present (services/reelJudge.js).
+    // `clip` stays the single best one, because everything downstream that
+    // predates multi-clip capture reads that field.
+    clip: clips[0] || undefined,
+    clips: clips.length ? clips : undefined,
     evidence: {
       capturedAt: new Date().toISOString(),
       screens,
       reelsRead: reels.length,
-      clipCaptured: !!clip,
+      clipCaptured: !!clips.length,
+      clipsCaptured: clips.length,
       source,
     },
   };
+}
+
+/**
+ * Which reels are worth watching: the two best performers plus one typical one.
+ *
+ * The best reels show what the creator can do; the typical one shows what they
+ * usually do, and the gap between them is the whole "consistently performs vs
+ * got one lucky hit" question. Picking only top performers would sample exactly
+ * the reels that mislead.
+ */
+function pickClipTargets(reels, want = CLIPS_PER_PROFILE) {
+  const withViews = (reels || []).filter((r) => r && Number.isFinite(Number(r.views)));
+  if (!withViews.length || want < 1) return [];
+  if (withViews.length <= want) return withViews.slice();
+
+  const byViews = [...withViews].sort((a, b) => b.views - a.views);
+  // Only room for top performers when fewer than two clips are wanted — there is
+  // no gap to show with a single sample.
+  if (want < 2) return byViews.slice(0, want);
+
+  const best = byViews.slice(0, want - 1);
+
+  // The median reel, by position in what is LEFT — not the reel closest to the
+  // median VALUE, which on a skewed distribution is often another top performer.
+  const chosen = new Set(best);
+  const rest = byViews.filter((r) => !chosen.has(r));
+  const typical = rest[Math.floor(rest.length / 2)];
+  return typical ? [...best, typical] : best;
+}
+
+// Identity of a reel across screens. Deliberately NOT the tap point: the same
+// reel sits at a different coordinate after every scroll, which is exactly why
+// a reel has to be recognised by what it says rather than where it is.
+function reelKey(r) {
+  return `${r && r.views}|${(r && r.caption) || ''}`;
 }
 
 // Read reels off the grid, scrolling until we have REELS_PER_PROFILE or the
@@ -424,9 +556,11 @@ async function collectReels({ driver, read, view, pacingMs, jitterPx = 0, screen
   const size = screen || { width: 1080, height: 2400 };
   const target = Math.max(1, Number(want) || REELS_PER_PROFILE);
   const seen = new Map();
+  let last = view;
   const absorb = (v) => {
+    last = v;
     for (const r of Array.isArray(v && v.reels) ? v.reels : []) {
-      const key = `${r.views}|${r.caption || ''}`;
+      const key = reelKey(r);
       if (!seen.has(key)) seen.set(key, r);
     }
   };
@@ -446,20 +580,20 @@ async function collectReels({ driver, read, view, pacingMs, jitterPx = 0, screen
     absorb(await read(driver));
     if (seen.size === before) break; // grid exhausted — stop scrolling an empty page
   }
-  return Array.from(seen.values()).slice(0, target);
+  // `view` is the grid as it stands now, handed on so the recording pass does
+  // not pay for a screen read it already has.
+  return { reels: Array.from(seen.values()).slice(0, target), view: last };
 }
 
-// Open the creator's most recent reel, record it (video + audio), and come back.
-// Best-effort throughout: a host without recordClip, a grid with no tappable
-// cell, or a failed recording must cost the reach data we already have.
-async function captureReelClip({
-  driver, view, pacingMs, jitterPx = 0, read = readView, clipSeconds = 12, getClip,
+// Record ONE reel already on screen at `point` (video + audio), and come back to
+// the grid. Best-effort throughout: a host without recordClip or a failed
+// recording must never cost the reach data we already have.
+async function recordAt({
+  driver, point, pacingMs, jitterPx = 0, read = readView, clipSeconds = 12, getClip,
 }) {
-  if (!driver.recordClip) return null;
-  const cell = view && view.targets && view.targets['reelCell:0'];
-  if (!cell) return null;
+  if (!driver.recordClip || !point) return { clip: null, view: null };
 
-  await humanTap(driver, cell, jitterPx, pacingMs);
+  await humanTap(driver, point, jitterPx, pacingMs);
   let clip = null;
   try {
     const rec = await driver.recordClip(clipSeconds);
@@ -482,30 +616,119 @@ async function captureReelClip({
     /* recording is enrichment, never a reason to drop the candidate */
   }
   // Back to the grid — but only as far as the grid, so a recording that never
-  // opened the player does not press back out of the profile.
-  await backTo({
+  // opened the player does not press back out of the profile. The view it lands
+  // on is handed back: it is the grid re-rendered, which is what the next reel
+  // has to be located on.
+  const view = await backTo({
     driver, read, pacingMs, jitterPx,
     wanted: ['reels_tab', 'profile'],
     maxHops: 2,
   });
-  return clip;
+  return { clip, view };
+}
+
+/**
+ * Record the two best reels and one typical one.
+ *
+ * `collectReels` has just walked DOWN the grid, so this walks back UP it: a
+ * reel's tap point stops meaning anything the moment the grid scrolls, so each
+ * one is re-found by its view count on the screen it is currently on rather than
+ * by a coordinate remembered from earlier. Reels already on screen when we
+ * arrive are recorded before any scrolling happens.
+ *
+ * Every step is best-effort. Two clips, or one, or none still leaves the reach
+ * window — which is the data the scoring rules actually gate on.
+ */
+async function captureReelClips({
+  driver, read = readView, pacingMs, jitterPx = 0, screen, view: startView = null,
+  clipSeconds = 12, getClip, reels = [], want = CLIPS_PER_PROFILE,
+}) {
+  if (!driver.recordClip) return [];
+  const wanted = new Map(pickClipTargets(reels, want).map((r) => [reelKey(r), r]));
+  if (!wanted.size) return [];
+
+  const size = screen || { width: 1080, height: 2400 };
+  const clips = [];
+  let view = startView || await read(driver);
+
+  // A reader that gives no tap points on a populated grid will not start giving
+  // them out after a swipe, so scrolling to hunt for one is pure waste.
+  const hasPoints = (v) => (Array.isArray(v && v.reels) ? v.reels : []).some((r) => r && r.point);
+  if (!hasPoints(view)) return [];
+
+  let lastSeen = '';
+  for (let i = 0; i <= MAX_REEL_SCROLLS && wanted.size; i += 1) {
+    // Record whatever we are looking for that is on screen right now. The grid
+    // re-renders after each recording, so the view comes from coming BACK to the
+    // grid rather than from a snapshot taken before we left it.
+    for (let guard = 0; guard < want && wanted.size; guard += 1) {
+      const onScreen = (Array.isArray(view.reels) ? view.reels : [])
+        .find((r) => r && r.point && wanted.has(reelKey(r)));
+      if (!onScreen) break;
+
+      wanted.delete(reelKey(onScreen)); // consumed whether or not it records
+      // eslint-disable-next-line no-await-in-loop
+      const rec = await recordAt({
+        driver, point: onScreen.point, pacingMs, jitterPx, read, clipSeconds, getClip,
+      });
+      if (rec.clip) clips.push({ ...rec.clip, views: onScreen.views });
+      if (rec.view) view = rec.view;
+    }
+    if (!wanted.size) break;
+
+    // Scroll back up towards the top of the grid, the reverse of the swipe
+    // collectReels used to get here.
+    // eslint-disable-next-line no-await-in-loop
+    await driver.swipe({
+      x1: Math.round(size.width / 2),
+      y1: Math.round(size.height * 0.28),
+      x2: Math.round(size.width / 2),
+      y2: Math.round(size.height * 0.72),
+      durationMs: 320,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(jitteredDelay(pacingMs));
+    // eslint-disable-next-line no-await-in-loop
+    view = await read(driver);
+
+    // Already at the top: the grid did not move, so another swipe will not
+    // surface anything we have not already looked at.
+    const fingerprint = (Array.isArray(view.reels) ? view.reels : []).map(reelKey).join(',');
+    if (fingerprint === lastSeen) break;
+    lastSeen = fingerprint;
+  }
+
+  // Best first, so `clip` (what everything predating multi-clip capture reads)
+  // is the creator at their strongest.
+  return clips.sort((a, b) => (b.views || 0) - (a.views || 0));
 }
 
 async function openAndCaptureProfile({
   driver, handle, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {},
 }) {
   // Open the profile from the results list.
   const results = await read(driver);
   const link = results.targets && results.targets[`result:${handle}`];
   if (!link) return null;
-  await humanTap(driver, { x: link.x, y: link.y }, jitterPx, pacingMs);
+
+  // Verify we arrived. A tap that lands on a sheet, or during a re-layout, does
+  // nothing — and the analysis that followed used to read whatever screen we
+  // were still on as though it were this creator's profile.
+  const arrived = await arriveAt({
+    driver, read, pacingMs, jitterPx, log, what: `@${handle}`,
+    wanted: ['profile', 'reels_tab'],
+    act: () => humanTap(driver, { x: link.x, y: link.y }, jitterPx, pacingMs),
+  });
+  if (!arrived.ok) return null;
 
   const profile = await analyseProfile({
-    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
+    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
     fallbackUsername: handle,
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
+    view: arrived.view,
   });
   return { ...profile, username: handle };
 }
@@ -582,8 +805,11 @@ module.exports = {
   pickSearchTerms,
   IG_ANDROID_PACKAGE,
   // Shared with the reels-feed navigator so both discovery modes analyse a
-  // creator the same way (Reels tab -> scroll the grid -> record one reel).
+  // creator the same way (Reels tab -> scroll the grid -> record the reels
+  // worth watching).
   analyseProfile,
   backTo,
+  pickClipTargets,
   REELS_PER_PROFILE,
+  CLIPS_PER_PROFILE,
 };
