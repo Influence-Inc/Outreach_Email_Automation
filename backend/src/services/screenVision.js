@@ -541,7 +541,76 @@ function extractFeed(elements) {
   const alreadyLiked = elements.some((e) => labelOf(e) === 'unlike');
   const alreadySaved = elements.some((e) => labelOf(e) === 'remove' || ridLocal(e.rid).includes('saved'));
 
-  return { author, caption, alreadyLiked, alreadySaved, authorPoint };
+  return { author, caption, alreadyLiked, alreadySaved, authorPoint, sponsored: isSponsored(elements) };
+}
+
+// An ad, not a creator. The account behind a "Sponsored" reel is a brand buying
+// placement — sourcing it wastes a profile visit and, worse, puts a competitor
+// in the campaign. "Paid partnership" is the other side of that: a real creator,
+// but the reel is someone else's campaign, so it says nothing about how they
+// perform organically.
+//
+// Matched on a whole label, never a substring: a caption reading "not sponsored"
+// or "sponsored by my mum" is a creator talking, not IG's ad chrome.
+const SPONSORED_LABELS = [
+  'sponsored', 'paid partnership', 'paid partnership with', 'suggested for you ad', 'ad',
+];
+
+function isSponsored(elements) {
+  return elements.some((e) => {
+    const rid = ridLocal(e.rid);
+    if (/sponsored|paid_partnership|ad_label|promoted/i.test(rid)) return true;
+    const text = norm(e.text);
+    const desc = norm(e.desc);
+    return SPONSORED_LABELS.includes(text) || SPONSORED_LABELS.includes(desc);
+  });
+}
+
+// ── interruptions ───────────────────────────────────────────────────────────
+
+// Instagram interrupts a session with modal sheets — "Turn on notifications",
+// "Save your login info", an update nag, an occasional error. Every one of them
+// swallows the next tap, and a run that does not clear them spends the rest of
+// its life tapping at a dialog it cannot see.
+//
+// Matching is on the DISMISS control, not on the dialog's title: the titles
+// change constantly across IG releases and locales, while "Not now" / "Cancel" /
+// "Close" are stable, and a screen offering one is by definition interruptible.
+const DISMISS_LABELS = [
+  'not now', 'not right now', 'no thanks', 'no, thanks', 'maybe later', 'later',
+  'skip', 'cancel', 'close', 'dismiss', 'ok', 'okay', 'got it', 'continue',
+];
+
+// Controls that look dismissive but are not: agreeing to something, or the one
+// button on an error sheet that repeats the thing that just failed.
+const NEVER_TAP = ['allow', 'turn on', 'save', 'update', 'log in', 'switch accounts', 'try again'];
+
+const DIALOG_RIDS = /dialog|bottom_sheet|megaphone|nux|interstitial|upsell|prompt_container/i;
+
+/**
+ * A modal sheet sitting over the app, and where to tap to make it go away.
+ *
+ * Returns null when the screen is not interrupted, so a caller can treat "no
+ * dialog" and "dialog cleared" identically.
+ */
+function detectDialog(elements) {
+  const clickable = elements.filter((e) => isClickable(e) && center(e.bounds));
+  const dismiss = clickable.find((e) => {
+    const label = labelOf(e);
+    if (!label || NEVER_TAP.includes(label)) return false;
+    return DISMISS_LABELS.includes(label);
+  });
+  if (!dismiss) return null;
+
+  // A dismiss-shaped control is not enough on its own — "Close" appears in plenty
+  // of ordinary chrome. Require the screen to actually look like a sheet: either
+  // a dialog-ish container, or a second dismiss-shaped control (the two-button
+  // layout every IG sheet uses).
+  const sheetLike = elements.some((e) => DIALOG_RIDS.test(ridLocal(e.rid)))
+    || clickable.filter((e) => DISMISS_LABELS.includes(labelOf(e)) || NEVER_TAP.includes(labelOf(e))).length >= 2;
+  if (!sheetLike) return null;
+
+  return { label: labelOf(dismiss), point: center(dismiss.bounds) };
 }
 
 // ── screen classification ───────────────────────────────────────────────────
@@ -635,6 +704,15 @@ function readScreen(input = {}) {
 
   const reading = { screen, targets };
 
+  // A modal sheet swallows the next tap wherever it appears, so this is read on
+  // EVERY screen rather than being a screen of its own — the navigator clears it
+  // and carries on with whatever it was doing.
+  const dialog = detectDialog(elements);
+  if (dialog) {
+    reading.dialog = dialog;
+    targets.dismissDialog = dialog.point;
+  }
+
   if (screen === 'search_results') {
     const { results, targets: rt } = extractResults(elements);
     reading.results = results;
@@ -677,6 +755,7 @@ function readScreen(input = {}) {
     reading.caption = feed.caption;
     reading.alreadyLiked = feed.alreadyLiked;
     reading.alreadySaved = feed.alreadySaved;
+    reading.sponsored = feed.sponsored;
     add('like', SIGNALS.like);
     add('save', SIGNALS.save);
     add('share', SIGNALS.share);
@@ -716,6 +795,7 @@ module.exports = {
   center,
   looksLikeHandle,
   looksLikeCount,
+  detectDialog,
   SIGNALS,
   ACTION_BLOCK_RE,
 };

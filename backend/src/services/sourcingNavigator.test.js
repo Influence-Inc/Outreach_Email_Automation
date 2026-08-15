@@ -161,6 +161,7 @@ function driverWithSearch() {
     tap: async (x, y) => ops.push(['tap', x, y]),
     typeText: async (t) => ops.push(['type', t]),
     submitSearch: async () => ops.push(['submitSearch']),
+    back: async () => ops.push(['back']),
     swipe: async (o) => ops.push(['swipe', o]),
     getWindowSize: async () => ({ width: 1080, height: 2400 }),
     dumpUi: async () => [],
@@ -748,4 +749,157 @@ test('a grid with no tap points is not scrolled hunting for one', async () => {
   assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0);
   assert.strictEqual(driver.ops.filter((o) => o[0] === 'swipe').length, 1, 'only the collection scroll');
   assert.deepStrictEqual(out[0].reels.map((r) => r.views), [7, 8], 'the reach window survives');
+});
+
+// ── surviving a long run (§9) ───────────────────────────────────────────────
+
+const FEED_TARGETS = { authorProfile: { x: 900, y: 1200 }, back: BACK };
+
+// A sheet swallows every tap after it appears, so a run that does not clear one
+// spends the rest of its life tapping at a dialog it cannot see.
+test('a sheet on the way in is dismissed before the search starts', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    {
+      screen: 'search',
+      dialog: { label: 'not now', point: { x: 540, y: 1900 } },
+      targets: { searchTab: { x: 1, y: 1 } },
+    },
+    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
+    { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 540 && o[2] === 1900),
+    'tapped the dismiss control',
+  );
+});
+
+// An ad is a brand buying placement — opening the account behind it sources a
+// competitor.
+test('a sponsored reel in the feed is skipped without opening the account', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    { screen: 'reels_feed', author: 'somebrand', sponsored: true, targets: FEED_TARGETS },
+    { screen: 'reels_feed', author: 'somebrand', sponsored: true, targets: FEED_TARGETS },
+    { screen: 'search', targets: {} },
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'nothing sourced from an ad');
+  assert.ok(
+    !driver.ops.some((o) => o[0] === 'tap' && o[1] === 900 && o[2] === 1200),
+    'never tapped through to the advertiser',
+  );
+});
+
+// A tap that lands during a re-layout does nothing, and the analysis that
+// followed used to read the screen we were still on as the creator's profile.
+test('a profile hop that did not land is retried rather than analysed', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } }, // tap did nothing
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  const opens = driver.ops.filter((o) => o[0] === 'tap' && o[1] === 5 && o[2] === 5);
+  assert.strictEqual(opens.length, 2, 'the hop was repeated');
+  assert.strictEqual(out.length, 1, 'and the creator was captured on the retry');
+});
+
+test('a profile that never opens is dropped rather than mis-read', async () => {
+  const driver = driverWithSearch();
+  const serp = { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    serp, serp, serp, serp,   // every attempt lands nowhere
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'nothing was invented from the wrong screen');
+});
+
+// targetCount bounds how many creators a run ADDS. Without a cap, a run whose
+// keywords match nothing looks at profiles until something else stops it.
+test('a run stops opening profiles once the cap is spent', async () => {
+  const driver = driverWithSearch();
+  const feed = (author) => ({ screen: 'reels_feed', author, targets: FEED_TARGETS });
+  const profileHop = (author) => [
+    feed(author),
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_feed', targets: FEED_TARGETS },
+  ];
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    feed('one'), // after tapping the chip; the scroll loop reads again below
+    ...profileHop('one'),
+    ...profileHop('two'),
+    ...profileHop('three'),
+    { screen: 'search', targets: {} },
+  ];
+  const out = [];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0, maxProfiles: 2 },
+    opts: { keywords: ['coach'], max: 10 },
+    read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 2, 'stopped at the cap, not at the target of 10');
+});
+
+// A frozen player and a healthy scroll are both `screen: 'reels_feed'`.
+test('a frozen feed is recovered rather than scrolled at forever', async () => {
+  const driver = driverWithSearch();
+  let t = 0;
+  const frozen = { screen: 'reels_feed', author: null, caption: 'stuck', targets: {} };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    frozen, frozen, frozen, frozen, frozen,
+    { screen: 'search', targets: {} },
+  ];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0, stallMs: 90_000 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead(views),
+    // A clock that jumps a minute per look: the feed has shown the same reel
+    // for well over the stall window.
+    deps: { now: () => { t += 60_000; return t; } },
+  });
+  for await (const _c of gen) { /* drain */ }
+
+  assert.ok(driver.ops.some((o) => o[0] === 'back'), 'tried to get unstuck');
 });

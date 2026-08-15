@@ -366,3 +366,112 @@ test('with all three on screen each resolves to its own control', () => {
   assert.ok(r.targets.searchReelsTab.y < H * 0.35);
   assert.ok(r.targets.reelsNavTab.y > H * 0.88);
 });
+
+// ── interruptions and ads (§9) ──────────────────────────────────────────────
+
+const node = (over = {}) => ({ rid: '', text: '', desc: '', clickable: false, bounds: { x: 0, y: 0, w: 100, h: 50 }, ...over });
+
+// A sheet swallows the next tap wherever it appears, so it is read on every
+// screen rather than being a screen of its own.
+test('a modal sheet is reported with somewhere to tap', () => {
+  const r = sv.readScreen({
+    elements: [
+      node({ rid: 'com.instagram.android:id/dialog_container' }),
+      node({ text: 'Turn on notifications' }),
+      node({ text: 'Turn on', clickable: true, bounds: { x: 100, y: 1700, w: 400, h: 100 } }),
+      node({ text: 'Not now', clickable: true, bounds: { x: 100, y: 1850, w: 400, h: 100 } }),
+    ],
+    width: 1080,
+    height: 2400,
+  });
+
+  assert.strictEqual(r.dialog.label, 'not now');
+  assert.deepStrictEqual(r.targets.dismissDialog, { x: 300, y: 1900 });
+});
+
+// "Turn on", "Allow" and "Save" agree to the thing the sheet is asking for.
+test('the agreeing button is never the one offered', () => {
+  const r = sv.readScreen({
+    elements: [
+      node({ rid: 'bottom_sheet_container' }),
+      node({ desc: 'Allow', clickable: true, bounds: { x: 0, y: 1700, w: 200, h: 80 } }),
+      node({ desc: 'Not now', clickable: true, bounds: { x: 0, y: 1800, w: 200, h: 80 } }),
+    ],
+    width: 1080,
+    height: 2400,
+  });
+  assert.strictEqual(r.dialog.label, 'not now');
+});
+
+// "Try again" on an error sheet just repeats whatever failed.
+test('a retry button is not treated as a way out', () => {
+  const r = sv.readScreen({
+    elements: [
+      node({ rid: 'dialog_container' }),
+      node({ text: 'Something went wrong' }),
+      node({ text: 'Try again', clickable: true, bounds: { x: 0, y: 1700, w: 200, h: 80 } }),
+    ],
+    width: 1080,
+    height: 2400,
+  });
+  assert.ok(!r.dialog, 'no dismiss control, so nothing to report');
+});
+
+// "Close" appears in plenty of ordinary chrome — a lone one is not a sheet.
+test('an ordinary close button is not mistaken for a sheet', () => {
+  const r = sv.readScreen({
+    elements: [
+      node({ rid: 'search_edit_text', clickable: true }),
+      node({ desc: 'Close', clickable: true, bounds: { x: 0, y: 100, w: 80, h: 80 } }),
+    ],
+    width: 1080,
+    height: 2400,
+  });
+  assert.ok(!r.dialog);
+});
+
+// An ad, not a creator: opening the account behind it sources a competitor.
+test('a sponsored reel is flagged on the feed reading', () => {
+  const r = sv.readScreen({
+    elements: [
+      node({ rid: 'clips_author_username', text: 'somebrand', clickable: true }),
+      node({ rid: 'like_button', desc: 'Like', clickable: true }),
+      node({ rid: 'direct_share_button', desc: 'Share', clickable: true }),
+      node({ text: 'Sponsored' }),
+    ],
+    width: 1080,
+    height: 2400,
+  });
+
+  assert.strictEqual(r.screen, 'reels_feed');
+  assert.strictEqual(r.sponsored, true);
+});
+
+test('a paid partnership is flagged too', () => {
+  const r = sv.readScreen({
+    elements: [
+      node({ rid: 'clips_author_username', text: 'realcreator', clickable: true }),
+      node({ rid: 'like_button', desc: 'Like', clickable: true }),
+      node({ rid: 'direct_share_button', desc: 'Share', clickable: true }),
+      node({ rid: 'paid_partnership_label', text: 'Paid partnership' }),
+    ],
+    width: 1080,
+    height: 2400,
+  });
+  assert.strictEqual(r.sponsored, true);
+});
+
+// A creator saying "not sponsored" in their caption is a creator talking.
+test('the word sponsored inside a caption is not an ad label', () => {
+  const r = sv.readScreen({
+    elements: [
+      node({ rid: 'clips_author_username', text: 'honestreviews', clickable: true }),
+      node({ rid: 'like_button', desc: 'Like', clickable: true }),
+      node({ rid: 'direct_share_button', desc: 'Share', clickable: true }),
+      node({ rid: 'clips_caption', text: 'this is not sponsored, I bought it myself' }),
+    ],
+    width: 1080,
+    height: 2400,
+  });
+  assert.strictEqual(r.sponsored, false);
+});

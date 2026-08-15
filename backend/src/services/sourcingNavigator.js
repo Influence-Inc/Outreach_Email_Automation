@@ -18,6 +18,9 @@
 const { readScreen } = require('./screenVision');
 const { jitteredDelay, jitterTap } = require('./humanize');
 const { normalizeTerms } = require('./searchTerms');
+const {
+  clearDialogs, arriveAt, createStallGuard, recoverFromStall, createProfileCap,
+} = require('./sourcingResilience');
 
 const IG_ANDROID_PACKAGE = 'com.instagram.android';
 
@@ -181,6 +184,13 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const reelsWindow = config.reelsWindow || REELS_PER_PROFILE;
   const clipsWanted = config.clipsPerProfile != null ? config.clipsPerProfile : CLIPS_PER_PROFILE;
   const getClip = deps.getClip || (async () => null);
+  const log = deps.log || (() => {});
+
+  // A long run against a real app gets interrupted, stuck, and occasionally lost.
+  // See services/sourcingResilience.js — these are shared with the reels-feed
+  // navigator so both modes survive the same things.
+  const stall = createStallGuard({ timeoutMs: config.stallMs, now: deps.now });
+  const cap = createProfileCap({ max: config.maxProfiles, log });
 
   await driver.openApp(IG_ANDROID_PACKAGE);
   await sleep(jitteredDelay(pacingMs));
@@ -201,6 +211,16 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     const tag = (p) => (p ? { ...p, sourceTerm: term, discovery: 'search' } : p);
 
     let view = await read(driver);
+    // Instagram interrupts a session with sheets — "Turn on notifications", an
+    // update nag — and every tap after one appears lands on the sheet instead of
+    // the app. Checked off the read we were doing anyway, so a clean screen
+    // costs nothing.
+    if (view.dialog) view = (await clearDialogs({ driver, read, view, pacingMs, jitterPx, log })).view;
+    if (stall.check(view)) {
+      view = await recoverFromStall({
+        driver, read, pacingMs, jitterPx, guard: stall, log, pkg: IG_ANDROID_PACKAGE,
+      });
+    }
     await tapTarget({ driver, view, name: 'searchTab', pacingMs, jitterPx });
 
     view = await read(driver);
@@ -230,7 +250,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     if (view.screen === 'reels_feed') {
       for await (const profile of scoutReelFeed({
         driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
-        remaining: max - emitted, seen: seenCreators,
+        remaining: max - emitted, seen: seenCreators, stall, cap, log,
       })) {
         yield tag(profile);
         emitted += 1;
@@ -247,9 +267,10 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
       if (emitted >= max) return;
+      if (!cap.take()) return; // the run has looked at enough profiles
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
-        reelsWindow, clipsWanted,
+        reelsWindow, clipsWanted, log,
       });
       if (profile) {
         yield tag(profile);
@@ -267,9 +288,10 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       const results = Array.isArray(view.results) ? view.results : [];
       for (const handle of results) {
         if (emitted >= max) return;
+        if (!cap.take()) return;
         const profile = await openAndCaptureProfile({
           driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
-          clipsWanted,
+          clipsWanted, log,
         });
         if (profile) {
           yield tag(profile);
@@ -302,36 +324,71 @@ async function* scoutReelFeed({
   driver, read = readView, pacingMs, jitterPx = 0, screen,
   clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
   reelsWindow = REELS_PER_PROFILE, clipsWanted = CLIPS_PER_PROFILE,
+  stall = null, cap = null, log = () => {},
 }) {
   const size = screen || { width: 1080, height: 2400 };
   let produced = 0;
 
   for (let i = 0; i < MAX_FEED_SCROLLS && produced < remaining; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const feed = await read(driver);
+    let feed = await read(driver);
+
+    // Frozen player, unresolved spinner, a tap that opened nothing — the screen
+    // has stopped changing, so get back somewhere workable and carry on.
+    if (stall && stall.check(feed)) {
+      // eslint-disable-next-line no-await-in-loop
+      feed = await recoverFromStall({
+        driver, read, pacingMs, jitterPx, guard: stall, log, pkg: IG_ANDROID_PACKAGE,
+      });
+    } else if (feed.dialog) {
+      // eslint-disable-next-line no-await-in-loop
+      feed = (await clearDialogs({ driver, read, view: feed, pacingMs, jitterPx, log })).view;
+    }
+
     if (feed.screen !== 'reels_feed') return; // scrolled out of the feed
 
     const author = feed.author ? String(feed.author).toLowerCase() : null;
     const link = feed.targets && feed.targets.authorProfile;
 
-    if (link && !(author && seen.has(author))) {
+    // An ad, not a creator. The account behind a sponsored reel is a brand
+    // buying placement — opening it spends a profile visit to source a
+    // competitor.
+    const skip = feed.sponsored || (cap && cap.spent());
+    if (feed.sponsored) log(`[sourcing] skipping a sponsored reel${author ? ` by @${author}` : ''}`);
+
+    if (!skip && link && !(author && seen.has(author))) {
       if (author) seen.add(author);
-      // eslint-disable-next-line no-await-in-loop
-      await humanTap(driver, link, jitterPx, pacingMs);
-      // eslint-disable-next-line no-await-in-loop
-      const profile = await analyseProfile({
-        driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip, reelsWindow, clipsWanted,
-        fallbackUsername: feed.author || null,
-        source: 'backend-navigator:feed-scroll',
-        screens: ['reels_feed', 'profile', 'reels_tab'],
-      });
-      if (profile) {
-        yield profile;
-        produced += 1;
+      if (!cap || cap.take()) {
+        // Verify we actually reached the profile. A tap that lands during a
+        // re-layout silently does nothing, and the analysis that followed used
+        // to read the reel player as though it were a profile header.
+        // eslint-disable-next-line no-await-in-loop
+        const arrived = await arriveAt({
+          driver, read, pacingMs, jitterPx, log, what: 'creator profile',
+          wanted: ['profile', 'reels_tab'],
+          act: () => humanTap(driver, link, jitterPx, pacingMs),
+        });
+
+        if (arrived.ok) {
+          // eslint-disable-next-line no-await-in-loop
+          const profile = await analyseProfile({
+            driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip, reelsWindow, clipsWanted,
+            fallbackUsername: feed.author || null,
+            source: 'backend-navigator:feed-scroll',
+            screens: ['reels_feed', 'profile', 'reels_tab'],
+            view: arrived.view,
+          });
+          if (profile) {
+            yield profile;
+            produced += 1;
+          }
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 4 });
       }
-      // eslint-disable-next-line no-await-in-loop
-      await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 4 });
     }
+
+    if (cap && cap.spent()) return;
 
     // Swipe up to the next reel (jittered endpoints so the gesture isn't identical).
     const jx = jitterTap({ x: Math.round(size.width / 2), y: 0 }, jitterPx).x;
@@ -355,7 +412,7 @@ async function* scoutReelFeed({
 async function captureViaReel({
   driver, reelIndex, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
-  clipsWanted = CLIPS_PER_PROFILE,
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {},
 }) {
   const serp = await read(driver);
   const card = serp.targets && serp.targets[`reelResult:${reelIndex}`];
@@ -364,13 +421,26 @@ async function captureViaReel({
 
   const feed = await read(driver);
   if (!feed.author || !feed.targets || !feed.targets.authorProfile) return null;
-  await humanTap(driver, feed.targets.authorProfile, jitterPx, pacingMs);
+  // A brand's ad tells us nothing about a creator, and the account behind it is
+  // not one we want in the campaign.
+  if (feed.sponsored) {
+    log('[sourcing] skipping a sponsored reel card');
+    return null;
+  }
+
+  const arrived = await arriveAt({
+    driver, read, pacingMs, jitterPx, log, what: `@${feed.author}`,
+    wanted: ['profile', 'reels_tab'],
+    act: () => humanTap(driver, feed.targets.authorProfile, jitterPx, pacingMs),
+  });
+  if (!arrived.ok) return null;
 
   return analyseProfile({
     driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
     fallbackUsername: feed.author,
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
+    view: arrived.view,
   });
 }
 
@@ -385,8 +455,11 @@ async function analyseProfile({
   clipSeconds = 12, getClip = async () => null,
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
   reelsWindow = REELS_PER_PROFILE, recordClip = true, clipsWanted = CLIPS_PER_PROFILE,
+  view: arrivedOn = null,
 }) {
-  const header = await read(driver);
+  // The caller that verified we reached this profile already read the screen;
+  // reading it again is a round-trip to the phone for a picture we have.
+  const header = arrivedOn || await read(driver);
 
   // Switch to Reels unless we are already there (IG sometimes opens a profile
   // on the Reels sub-tab, in which case reel overlays are already present).
@@ -633,19 +706,29 @@ async function captureReelClips({
 async function openAndCaptureProfile({
   driver, handle, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
-  clipsWanted = CLIPS_PER_PROFILE,
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {},
 }) {
   // Open the profile from the results list.
   const results = await read(driver);
   const link = results.targets && results.targets[`result:${handle}`];
   if (!link) return null;
-  await humanTap(driver, { x: link.x, y: link.y }, jitterPx, pacingMs);
+
+  // Verify we arrived. A tap that lands on a sheet, or during a re-layout, does
+  // nothing — and the analysis that followed used to read whatever screen we
+  // were still on as though it were this creator's profile.
+  const arrived = await arriveAt({
+    driver, read, pacingMs, jitterPx, log, what: `@${handle}`,
+    wanted: ['profile', 'reels_tab'],
+    act: () => humanTap(driver, { x: link.x, y: link.y }, jitterPx, pacingMs),
+  });
+  if (!arrived.ok) return null;
 
   const profile = await analyseProfile({
     driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
     fallbackUsername: handle,
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
+    view: arrived.view,
   });
   return { ...profile, username: handle };
 }

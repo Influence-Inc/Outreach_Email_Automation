@@ -68,6 +68,7 @@ function readForm() {
     targetCount: numOrUndef('targetCount'),
     reelsWindow: numOrUndef('reelsWindow'),
     clipsPerProfile: numOrUndef('clipsPerProfile'),
+    maxProfiles: numOrUndef('maxProfiles'),
     discovery: el('discovery').value,
     reviewBorderline: el('reviewBorderline').checked,
   };
@@ -83,6 +84,7 @@ function fillForm(cfg) {
   el('targetCount').value = cfg.targetCount ?? '';
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
   el('clipsPerProfile').value = cfg.clipsPerProfile ?? 3;
+  el('maxProfiles').value = cfg.maxProfiles ?? '';
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
   el('reviewBorderline').checked = !!cfg.reviewBorderline;
 }
