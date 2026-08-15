@@ -14,7 +14,8 @@
 // is returned as `evidence` so the orchestrator can persist WHY a creator matched.
 
 const geminiClientDefault = require('./geminiClient');
-const { defaultClassify, clamp01 } = require('./sourcingFilters');
+const { defaultClassify, clamp01, round3 } = require('./sourcingFilters');
+const { reelStats } = require('./creatorScore');
 
 // ── the two analysis shapes ─────────────────────────────────────────────────
 //
@@ -221,6 +222,72 @@ async function classifyWithGemini(candidate, config, deps = {}) {
   };
 }
 
+/**
+ * Judge every clip the navigator recorded, then judge the CREATOR from them.
+ *
+ * A single reel answers "was this one reel on-brand". Three answer "is this
+ * creator on-brand", which is the actual question — and the per-creator pass
+ * (`buildCreatorPrompt`) is what turns three clip analyses plus the reach window
+ * into one `fit_score` and `consistency_of_niche`, the two numbers the
+ * deterministic gate weighs most heavily.
+ *
+ * Falls back to the single-clip path when only one clip exists, so nothing about
+ * a one-clip capture changes.
+ */
+async function judgeClips(candidate, config, deps = {}) {
+  const gemini = deps.gemini || geminiClientDefault;
+  const clips = (candidate.clips || []).filter((c) => c && c.dataBase64);
+  if (clips.length < 2) return classifyWithGemini(candidate, config, deps);
+  if (!gemini.available || !gemini.available()) return null;
+
+  // In parallel: three independent calls with nothing to say to each other, and
+  // a creator is not worth three round-trips of waiting.
+  const verdicts = (await Promise.all(
+    clips.map((clip) => classifyWithGemini({ ...candidate, clip }, config, deps)),
+  )).filter(Boolean);
+  if (!verdicts.length) return null;
+
+  const clipAnalyses = verdicts.map((v) => v.clip).filter(Boolean);
+  const score = verdicts.reduce((sum, v) => sum + v.score, 0) / verdicts.length;
+  // The strongest single clip, for the fields that describe one reel rather than
+  // a body of work.
+  const best = verdicts.reduce((a, b) => (b.score > a.score ? b : a));
+
+  // Per-creator pass. Best-effort: without it the gate still has the clip
+  // analyses and the reach window, it just has no fit_score to weigh.
+  let creator = null;
+  try {
+    const raw = await gemini.classifyReelVideo({
+      promptText: buildCreatorPrompt(
+        { candidate, clips: clipAnalyses, stats: reelStats(candidate.reels || []) },
+        config,
+      ),
+    });
+    creator = parseCreatorAnalysis(raw);
+  } catch (_) {
+    /* the creator-level pass is enrichment, never a reason to drop a candidate */
+  }
+
+  return {
+    score: clamp01(score),
+    reason: (creator && creator.reject_reason) || best.reason,
+    source: 'gemini-video',
+    clip: best.clip,
+    clips: clipAnalyses,
+    creatorAnalysis: creator,
+    evidence: {
+      ...best.evidence,
+      // How consistent the clips were with each other — a creator whose reels
+      // score 0.9 / 0.2 / 0.85 is a different proposition from one at a steady
+      // 0.65, and the mean alone hides that.
+      clipScores: verdicts.map((v) => round3(v.score)),
+      clip: best.clip,
+      clipAnalyses,
+      creator,
+    },
+  };
+}
+
 // The composite classifier the orchestrator injects as `nicheClassify`.
 // deps.gemini / deps.claudeClassify are injectable for tests.
 function makeClassifier(deps = {}) {
@@ -229,7 +296,7 @@ function makeClassifier(deps = {}) {
     // Reuse a verdict already computed upstream (e.g. the reels-feed navigator
     // judged the clip to decide engagement) so we never pay for Gemini twice.
     if (candidate && candidate._nicheVerdict) return candidate._nicheVerdict;
-    const g = await classifyWithGemini(candidate, config, deps);
+    const g = await judgeClips(candidate, config, deps);
     if (g) return g;
     return claudeClassify(candidate, config);
   };
@@ -239,6 +306,7 @@ module.exports = {
   buildPrompt,
   buildCreatorPrompt,
   classifyWithGemini,
+  judgeClips,
   makeClassifier,
   parseClipAnalysis,
   parseCreatorAnalysis,

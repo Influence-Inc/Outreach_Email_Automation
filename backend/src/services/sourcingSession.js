@@ -146,6 +146,7 @@ async function runSession({ hostId, run, deps }) {
         tapJitterPx,
         clipSeconds: config.clipSeconds,
         reelsWindow: config.reelsWindow,
+        clipsPerProfile: config.clipsPerProfile,
       },
       opts,
       deps: { getClip: deps.getClip || clipStore.take },

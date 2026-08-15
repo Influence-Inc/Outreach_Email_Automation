@@ -100,11 +100,12 @@ async function processCandidate(run, config, candidate, deps) {
   // nicheMatch normalises the classifier's reply, carrying the richer per-clip
   // analysis through under `evidence` — the classifier's own top-level `clip`
   // does not survive that hop.
+  const judged = (niche && niche.evidence) || {};
   const clipAnalyses = [
-    niche && niche.evidence && niche.evidence.clip,
+    ...(judged.clipAnalyses || (judged.clip ? [judged.clip] : [])),
     ...(candidate.clipAnalyses || []),
   ].filter(Boolean);
-  const creatorAnalysis = candidate.creatorAnalysis || null;
+  const creatorAnalysis = judged.creator || candidate.creatorAnalysis || null;
   const gate = (creatorAnalysis || clipAnalyses.length)
     ? scoreCreator({
       creator: creatorAnalysis || {},
