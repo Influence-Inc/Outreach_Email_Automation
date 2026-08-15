@@ -125,6 +125,8 @@ async function runSession({ hostId, run, deps }) {
         clipSeconds: config.clipSeconds,
         reelsWindow: config.reelsWindow,
         tapJitterPx,
+        stallMs: config.stallMs,
+        maxProfiles: config.maxProfiles,
       },
       opts,
       deps: {
@@ -147,6 +149,8 @@ async function runSession({ hostId, run, deps }) {
         clipSeconds: config.clipSeconds,
         reelsWindow: config.reelsWindow,
         clipsPerProfile: config.clipsPerProfile,
+        stallMs: config.stallMs,
+        maxProfiles: config.maxProfiles,
       },
       opts,
       deps: { getClip: deps.getClip || clipStore.take },
