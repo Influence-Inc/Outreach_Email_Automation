@@ -9,7 +9,8 @@
 // The agent (runner in RUNNER_MODE=agent) maps each op back to its local
 // AndroidDriver method — the shapes here MUST match what the agent executes:
 //   openApp {pkg}   tap {x,y}   swipe {x1,y1,x2,y2,durationMs}   type {text}
-//   submitSearch {}   back {}   home {}   dumpUi {} -> elements[]
+//   submitSearch {}   back {}   openProfile {username}   home {}
+//   dumpUi {} -> elements[]
 //   getWindowSize {} -> {width,height}   keepAwake {}   wake {}
 
 const commands = require('./hostCommands');
@@ -35,6 +36,11 @@ function makeRemoteDriver({ hostId, channel = commands, timeoutMs } = {}) {
     // results, where it moved between the Top/Accounts/Audio tabs instead of
     // going back.
     back: () => call('back', {}),
+    // Open a creator's profile directly by handle, instead of tapping through
+    // from a reel and then having to find our way back to the feed. Getting back
+    // into the feed is the least reliable thing the scout does, so a batch does
+    // it once rather than once per creator.
+    openProfile: (username) => call('openProfile', { username }, { timeoutMs: timeoutMs || 45_000 }),
     home: () => call('home', {}),
     dumpUi: () => call('dumpUi', {}),
     getWindowSize: () => call('getWindowSize', {}),

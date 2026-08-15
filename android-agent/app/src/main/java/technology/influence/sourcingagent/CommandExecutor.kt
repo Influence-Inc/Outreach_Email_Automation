@@ -3,6 +3,7 @@ package technology.influence.sourcingagent
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.PowerManager
 import android.util.Base64
 import org.json.JSONObject
@@ -75,6 +76,13 @@ class CommandExecutor(
                 null
             }
 
+            "openProfile" -> {
+                val username = a.optString("username", "").removePrefix("@").trim()
+                require(username.isNotEmpty()) { "openProfile needs a username" }
+                openProfile(username)
+                null
+            }
+
             "back" -> {
                 require(service().goBackGlobal()) { "BACK action was refused" }
                 null
@@ -134,6 +142,21 @@ class CommandExecutor(
                 "accessibility service is not enabled — turn on \"Sourcing Agent\" under " +
                     "Settings → Accessibility → Installed apps"
             )
+
+    /**
+     * Open a creator's profile straight from their handle.
+     *
+     * Instagram's own deep link, aimed explicitly at the IG package so the
+     * browser never picks it up. This is what lets a batch visit twelve profiles
+     * without going back to the feed between each one — finding a place in the
+     * feed again is the least reliable thing the scout does.
+     */
+    private fun openProfile(username: String) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.instagram.com/$username/"))
+            .setPackage(IG_PACKAGE)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }
 
     /**
      * Launch by package without knowing the activity class, the equivalent of
