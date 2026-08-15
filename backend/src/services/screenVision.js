@@ -290,6 +290,11 @@ function extractReelCells(elements) {
 // Reels tab: each reel thumbnail carries a view-count overlay. Collect the
 // count-shaped text/desc nodes and parse them; gate on reels.length happens in
 // the scoring rules, so returning only cleanly-read counts is correct.
+//
+// Each reading carries `point` — the centre of the overlay, which sits ON its
+// own thumbnail, so tapping there opens THAT reel. It is what lets the navigator
+// go back and record a specific reel (the best performer, the typical one)
+// rather than only whichever one happens to be first in the grid.
 function extractReels(elements) {
   const reels = [];
   // Only look at elements whose rid or desc hints at "reel/clip/video" — this
@@ -301,6 +306,10 @@ function extractReels(elements) {
   // likes" from the like_count desc no longer sneaks in).
   const VIEWS_RE =
     /view\s*count[^\d]{0,3}(\d[\d,]*(?:\.\d+)?\s*[kmb]?)\b|(\d[\d,]*(?:\.\d+)?\s*[kmb]?)\s+views?\b/i;
+  const reading = (views, e) => {
+    const point = center(e.bounds);
+    return point ? { views, point } : { views };
+  };
   for (const e of elements) {
     const desc = String(e.desc || '');
     if (!REEL_HINT.test(ridLocal(e.rid) + ' ' + desc)) continue;
@@ -308,12 +317,12 @@ function extractReels(elements) {
     const m = desc.match(VIEWS_RE);
     if (m) {
       const v = parseCount(m[1] || m[2]);
-      if (Number.isFinite(v)) { reels.push({ views: v }); continue; }
+      if (Number.isFinite(v)) { reels.push(reading(v, e)); continue; }
     }
     // 2) bare count in the text of a reel/clip overlay (preview_clip_play_count).
     if (looksLikeCount(e.text)) {
       const v = parseCount(e.text);
-      if (Number.isFinite(v)) reels.push({ views: v });
+      if (Number.isFinite(v)) reels.push(reading(v, e));
     }
   }
   // Dedupe: on current IG a reel's view count often appears twice — once inside

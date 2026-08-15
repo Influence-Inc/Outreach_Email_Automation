@@ -394,3 +394,58 @@ test('the note reads as a sentence for whichever mode found them', () => {
     'Sourced from the reels feed',
   );
 });
+
+// ── three clips reach the gate (§5) ─────────────────────────────────────────
+
+// The whole point of watching three reels: one repost among three is tolerated,
+// two out of three is a repost page. That distinction is only available to a
+// gate that sees every clip.
+test('all three clip analyses reach the deterministic gate', async () => {
+  const { deps, creators, candidates } = memStore();
+  const custom = {
+    ...deps,
+    nicheClassify: async () => ({
+      score: 0.9,
+      reason: 'on brand',
+      source: 'gemini-video',
+      evidence: {
+        genre: 'home fitness',
+        clipAnalyses: [
+          { creativity: 9, hook_strength: 8, is_original_creator: false },
+          { creativity: 8, hook_strength: 8, is_original_creator: false },
+          { creativity: 8, hook_strength: 7, is_original_creator: true },
+        ],
+        creator: { fit_score: 92, consistency_of_niche: 9 },
+      },
+    }),
+  };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  const res = await processCandidate({ id: 1 }, cfg, { username: 'reposts', reels: fitReels() }, custom);
+
+  assert.notStrictEqual(res.decision, 'added', 'two of three clips were reposts');
+  assert.strictEqual(creators.length, 0);
+  assert.match(candidates[0].evidence.creatorScore.rejectReason, /original creator/);
+});
+
+// The creator-level fit_score comes back on the classifier's evidence now that
+// reelJudge runs that pass itself.
+test('the creator analysis is taken from the classifier, not only the candidate', async () => {
+  const { deps, candidates } = memStore();
+  const custom = {
+    ...deps,
+    nicheClassify: async () => ({
+      score: 0.9,
+      reason: 'on brand',
+      evidence: {
+        clipAnalyses: [{ creativity: 9, hook_strength: 9, is_original_creator: true }],
+        creator: { fit_score: 95, consistency_of_niche: 10 },
+      },
+    }),
+  };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  await processCandidate({ id: 1 }, cfg, { username: 'good', reels: fitReels() }, custom);
+
+  assert.ok(candidates[0].evidence.creatorScore.components.fit > 0.9);
+});
