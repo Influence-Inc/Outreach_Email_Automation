@@ -152,6 +152,16 @@ class SourcingAccessibilityService : AccessibilityService() {
     fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
 
     /**
+     * A real Back press.
+     *
+     * The navigator used to fall back to a swipe in from the left edge, which is
+     * the system back *gesture* — but Instagram's search results are
+     * horizontally paged, so that swipe moved between the Top / Accounts / Audio
+     * tabs instead of going back. This is unambiguous.
+     */
+    fun goBackGlobal(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
+
+    /**
      * Dispatch a gesture and wait for the system to finish playing it back.
      *
      * Blocking matters: the backend navigator issues a tap and immediately dumps

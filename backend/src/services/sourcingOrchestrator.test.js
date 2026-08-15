@@ -194,3 +194,55 @@ test('processCandidate records a floor rejection', async () => {
   assert.strictEqual(res.decision, 'rejected');
   assert.match(candidates[0].reject_reason, /below floor/);
 });
+
+// ── reels mode: decide once reach is known ──────────────────────────────────
+
+// Reels-mode candidates used to be parked in review unconditionally, because a
+// reel off the feed carries no view counts. The feed navigator now opens the
+// creator and reads their Reels grid, so that reach exists and the candidate
+// can be decided like any other.
+test('a reels-mode candidate WITH reach is decided, not parked in review', async () => {
+  const { deps, creators } = memStore();
+  const cfg = {
+    discovery: 'reels',
+    niche: 'home fitness',
+    keywords: ['fitness'],
+    floor: 25000,
+    ceiling: 100000000,
+    risk: 'high',
+    targetCount: 5,
+  };
+
+  const res = await processCandidate(
+    { id: 1 },
+    cfg,
+    { username: 'mia', bio: 'home fitness coach', reels: fitReels() },
+    deps,
+  );
+
+  assert.notStrictEqual(res.decision, 'review', 'reach was measured, so a decision is possible');
+  assert.strictEqual(res.decision, 'added');
+  assert.strictEqual(creators.length, 1, 'the creator was actually added');
+});
+
+test('a reels-mode candidate with NO reach still goes to review', async () => {
+  const { deps, creators } = memStore();
+  const cfg = {
+    discovery: 'reels',
+    niche: 'home fitness',
+    keywords: ['fitness'],
+    floor: 25000,
+    targetCount: 5,
+  };
+
+  // Straight off the feed: a caption, but no view counts anywhere.
+  const res = await processCandidate(
+    { id: 1 },
+    cfg,
+    { username: 'joe', bio: 'home fitness', reels: [{ caption: 'home fitness' }] },
+    deps,
+  );
+
+  assert.strictEqual(res.decision, 'review', 'unverified reach still needs a human');
+  assert.strictEqual(creators.length, 0);
+});

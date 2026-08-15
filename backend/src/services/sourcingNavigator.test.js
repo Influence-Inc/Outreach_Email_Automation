@@ -502,3 +502,99 @@ test('analyseProfile can skip recording when the caller already judged a clip', 
   assert.deepStrictEqual(profile.reels.map((r) => r.views), [7], 'reach still collected');
   assert.strictEqual(profile.evidence.clipCaptured, false);
 });
+
+// ── back navigation must not page the tabs ──────────────────────────────────
+
+// Instagram's search results are horizontally paged. The old fallback swiped in
+// from the left edge — the system back GESTURE — which landed as "next tab" and
+// walked the scout through Accounts and Audio instead of going back.
+test('back uses a real key press, never an edge swipe, when the driver has one', async () => {
+  const driver = driverWithSearch();
+  const backs = [];
+  driver.back = async () => { backs.push(true); };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', reelResults: [{ index: 0, author: 'C' }], targets: { 'reelResult:0': { x: 9, y: 9 } } },
+    { screen: 'search_results', targets: { 'reelResult:0': { x: 9, y: 9 } } },
+    { screen: 'reels_feed', targets: {} },   // no back target, no author -> bail
+    { screen: 'reels_feed', targets: {} },   // backTo: press back
+    { screen: 'search_results', targets: {} },
+    { screen: 'search_results', targets: {} },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  assert.ok(backs.length >= 1, 'pressed BACK');
+  const edgeSwipes = driver.ops.filter(
+    (o) => o[0] === 'swipe' && o[1].x1 < 50 && o[1].x2 > o[1].x1 && o[1].y1 === o[1].y2,
+  );
+  assert.strictEqual(edgeSwipes.length, 0, 'no left-edge gesture that IG would read as a tab swipe');
+});
+
+// The tabs are a horizontally scrollable strip and Reels often starts
+// off-screen, so "no chip in the tree" does not mean "this build has no Reels".
+test('pages the results tab strip to reveal an off-screen Reels chip', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', targets: {} },                                  // no chip, nothing usable
+    { screen: 'search_results', targets: { searchReelsTab: { x: 700, y: 300 } } }, // after paging
+    { screen: 'search_results', targets: {} },
+    { screen: 'search_results', targets: {} },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  const strip = driver.ops.filter((o) => o[0] === 'swipe' && o[1].y1 === o[1].y2 && o[1].x1 > o[1].x2);
+  assert.ok(strip.length >= 1, 'paged the strip horizontally');
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 700 && o[2] === 300),
+    'tapped the chip once it came into view',
+  );
+});
+
+test('a results page that already has content is not paged looking for tabs', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: {} },   // openAndCaptureProfile: link gone -> bail
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  const strip = driver.ops.filter((o) => o[0] === 'swipe' && o[1].y1 === o[1].y2);
+  assert.strictEqual(strip.length, 0, 'accounts were already there — no swipes spent hunting tabs');
+});
+
+// clipStore hands back { buf, mediaType }; reelJudge reads { dataBase64,
+// mimeType }. Attaching the store record verbatim meant the video was recorded,
+// uploaded, and then silently never judged.
+test('a recorded clip is attached in the shape the judge reads', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { 'reelCell:0': { x: 1, y: 1 }, back: BACK } },
+    { screen: 'reels_feed', targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead(views),
+    // exactly what clipStore.take returns
+    deps: { getClip: async () => ({ buf: Buffer.from('MP4'), mediaType: 'video/mp4', hostId: 3 }) },
+  });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out[0].clip.dataBase64, Buffer.from('MP4').toString('base64'));
+  assert.strictEqual(out[0].clip.mimeType, 'video/mp4');
+});

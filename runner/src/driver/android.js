@@ -243,6 +243,23 @@ class AndroidDriver extends DeviceDriver {
     await this._adb(['shell', 'input', 'text', escapeAdbText(text)]);
   }
 
+  // A real Back press. Safer than the left-edge swipe gesture, which Instagram's
+  // horizontally-paged screens read as "next tab".
+  async back() {
+    await this._adb(['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
+  }
+
+  // Open a profile straight from its handle via Instagram's own deep link,
+  // rather than navigating there through the UI.
+  async openProfile(username) {
+    const handle = String(username || '').replace(/^@/, '').trim();
+    if (!handle) throw new Error('openProfile needs a username');
+    await this._adb([
+      'shell', 'am', 'start', '-a', 'android.intent.action.VIEW',
+      '-d', `https://www.instagram.com/${handle}/`, IG_ANDROID_PACKAGE,
+    ]);
+  }
+
   async home() {
     await this._adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME']);
   }

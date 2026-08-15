@@ -47,11 +47,20 @@ async function processCandidate(run, config, candidate, deps) {
     candidate.evidence = { ...(candidate.evidence || {}), niche: niche.evidence };
   }
 
-  // Reels-mode candidates (single reel off the feed, judged by Gemini) have no
-  // multi-reel view window, so they use a niche-only verdict; everything else
-  // uses the full deterministic rules.
+  // Reels mode used to mean "no reach data": a single reel off the feed carries
+  // no view counts, so it got a niche-only verdict and was always parked in the
+  // review queue for a human to confirm reach by hand.
+  //
+  // The feed navigator now opens each creator and reads their Reels grid, so
+  // when that reach IS present the full deterministic rules apply and the
+  // candidate can be decided like any other. Falling back to the niche-only
+  // path only when the grid gave us nothing keeps the old behaviour for the
+  // cases it was written for.
   const reelsMode = String(config.discovery || '').toLowerCase() === 'reels';
-  const verdict = reelsMode ? decideReel(candidate, config) : decide(candidate, config);
+  const hasReach = Array.isArray(candidate.reels)
+    && candidate.reels.some((r) => r && Number.isFinite(Number(r.views)));
+  const reachUnverified = reelsMode && !hasReach;
+  const verdict = reachUnverified ? decideReel(candidate, config) : decide(candidate, config);
 
   // Persist the candidate + its evaluation. persistCandidate returns the row, or
   // null when this handle was already scouted for the campaign (unique index).
@@ -98,9 +107,11 @@ async function processCandidate(run, config, candidate, deps) {
     }
   }
 
-  // Trust dial: reels-mode passers always go to review (no reach verified on the
-  // feed — a human confirms). Profiles-mode uses the borderline dial.
-  const disposition = reelsMode ? 'review' : reviewDecision(verdict, config);
+  // Trust dial: a passer whose reach we never measured still goes to review for
+  // a human to confirm. Once the creator's Reels grid has been read, the
+  // borderline dial decides, same as profiles mode — otherwise every reels-mode
+  // creator sat in review forever with no decision made.
+  const disposition = reachUnverified ? 'review' : reviewDecision(verdict, config);
   if (disposition === 'review') {
     await deps.updateCandidate(row.id, { decision: 'review' });
     return { decision: 'review', added: false, candidateId: row.id };

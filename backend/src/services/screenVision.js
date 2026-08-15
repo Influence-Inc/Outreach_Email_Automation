@@ -183,7 +183,11 @@ const SIGNALS = {
   // player. Enables the reels-first search flow (search → tap a reel → open the
   // author profile) that current IG surfaces by default for keyword queries.
   authorProfile: {
-    rids: ['clips_author_info_component', 'clips_author_username', 'clips_author_profile_pic'],
+    rids: [
+      'clips_author_info_component', 'clips_author_username', 'clips_author_profile_pic',
+      'reel_feed_username', 'clips_username', 'feed_username', 'author_avatar',
+      'profile_picture', 'avatar_image',
+    ],
     labels: [],
   },
 };
@@ -366,48 +370,103 @@ function extractReelResults(elements) {
 // "reels", so require both, and prefer an element whose resource-id looks like a
 // tab when several qualify.
 //
-// A chip in the results page's top strip, matched by exact label so a reel
-// card's own description cannot stand in for the tab.
-function findTopStripChip(elements, height, labels) {
-  const topBand = Number.isFinite(height) && height > 0 ? height * 0.35 : Infinity;
-  const candidates = elements.filter((e) => {
-    if (!e.bounds || e.bounds.y > topBand) return false;
-    return labels.includes(labelOf(e));
-  });
-  if (!candidates.length) return null;
-  const tabbish = candidates.find((e) => /tab|chip|serp|clips|explore/i.test(ridLocal(e.rid)));
-  return tabbish || candidates[0];
-}
-
-function findSearchReelsTab(elements, height) {
-  return findTopStripChip(elements, height, ['reels', 'reels tab']);
-}
-
-// Explore, as a SEARCH-page chip. This is a legitimate surface for finding
-// particular profiles for a query — it is only wrong as the entry point for
-// reels-feed mode, which must land on the account's own warmed feed instead.
-function findExploreTab(elements, height) {
-  return findTopStripChip(elements, height, ['explore', 'explore tab']);
-}
-
-// The REELS button in Instagram's BOTTOM navigation bar — the app's own reel
-// feed.
+// ── the three "Reels" controls ──────────────────────────────────────────────
 //
-// Three different controls in this app answer to the label "Reels": this one,
-// the chip on a search results page, and the sub-tab on a profile. They are
-// told apart by where they sit, so the band matters: the bottom nav lives in
-// the last ~12% of the screen height, well below either of the others.
-function findReelsNavTab(elements, height) {
-  const rid = findByRid(elements, ['tab_icon_clips', 'clips_tab', 'tab_clips', 'reels_tab_icon']);
-  if (rid) return rid;
-  if (!Number.isFinite(height) || height <= 0) return null;
+// Instagram labels THREE different controls "Reels", and picking whichever one
+// matched first is what kept landing the scout on the wrong screen:
+//
+//   bottom nav      — the row of five icons in the bottom ~12% of the screen.
+//                     Reachable from almost anywhere; this is the account's own
+//                     warmed feed.
+//   search filter   — only on a search results page, in the top strip beside
+//                     Accounts / Audio / Tags / Places. If that row also holds
+//                     "Explore" it is the wrong row: Explore is a
+//                     general-interest surface, never a source of creators.
+//   profile sub-tab — only on somebody's profile, mid-screen, directly above
+//                     their post grid.
+//
+// So a label alone never decides. The label, where it sits, and which screen we
+// are actually on all have to agree, and a caller that cannot tell gets null
+// rather than a guess.
 
+const REELS_LABELS = ['reels', 'reels tab'];
+const EXPLORE_LABELS = ['explore', 'explore tab'];
+
+function isReelsLabelled(e) {
+  return REELS_LABELS.includes(labelOf(e));
+}
+
+/** Vertical mid-point of an element, for grouping a row of tabs. */
+function midY(e) {
+  return e && e.bounds ? e.bounds.y + (e.bounds.h || 0) / 2 : null;
+}
+
+/** Elements sharing a horizontal row with `el` (within half a row's height). */
+function sameRow(elements, el) {
+  const y = midY(el);
+  if (y == null) return [];
+  const tolerance = Math.max(24, (el.bounds.h || 0) * 0.75);
+  return elements.filter((e) => {
+    const ey = midY(e);
+    return ey != null && Math.abs(ey - y) <= tolerance;
+  });
+}
+
+/**
+ * The Reels button in the BOTTOM NAVIGATION bar.
+ *
+ * Position gates this, not the resource-id: ids like `clips_tab` also appear on
+ * a profile's sub-tabs, so an id match outside the nav band is the wrong button.
+ */
+function findReelsNavTab(elements, height) {
+  if (!Number.isFinite(height) || height <= 0) return null;
   const navBand = height * 0.88;
-  return elements.find((e) => {
-    if (!e.bounds || e.bounds.y < navBand) return false;
-    const label = labelOf(e);
-    return label === 'reels' || label === 'reels tab';
-  }) || null;
+  const inBand = elements.filter((e) => e.bounds && e.bounds.y >= navBand);
+  if (!inBand.length) return null;
+
+  const byRid = inBand.find((e) =>
+    /tab_icon_clips|clips_tab|tab_clips|reels_tab_icon/.test(ridLocal(e.rid)));
+  return byRid || inBand.find(isReelsLabelled) || null;
+}
+
+/**
+ * The Reels FILTER on a search results page.
+ *
+ * Requires the results screen, the top strip, and a row that does not also
+ * offer Explore.
+ */
+function findSearchReelsTab(elements, height, screen) {
+  if (screen !== 'search_results') return null;
+  const topBand = Number.isFinite(height) && height > 0 ? height * 0.35 : Infinity;
+
+  const candidates = elements.filter((e) => e.bounds && e.bounds.y <= topBand && isReelsLabelled(e));
+  for (const candidate of candidates) {
+    const row = sameRow(elements, candidate);
+    if (row.some((e) => EXPLORE_LABELS.includes(labelOf(e)))) continue; // Explore row — not ours
+    const tabbish = row.find((e) => isReelsLabelled(e) && /tab|chip|serp|clips/i.test(ridLocal(e.rid)));
+    return tabbish || candidate;
+  }
+  return null;
+}
+
+/**
+ * The Reels sub-tab on a PROFILE — mid-screen, above the post grid.
+ *
+ * This is the one that reveals view counts, so it must not be confused with
+ * either of the others; a profile is the only screen it exists on.
+ */
+function findProfileReelsTab(elements, height, screen) {
+  if (screen !== 'profile' && screen !== 'reels_tab') return null;
+  if (!Number.isFinite(height) || height <= 0) {
+    return resolveTarget(elements, SIGNALS.reelsTab);
+  }
+  const top = height * 0.15;
+  const bottom = height * 0.85;
+  const inBand = elements.filter((e) => e.bounds && e.bounds.y >= top && e.bounds.y <= bottom);
+  if (!inBand.length) return null;
+
+  const byRid = inBand.find((e) => SIGNALS.reelsTab.rids.some((n) => ridLocal(e.rid).includes(n)));
+  return byRid || inBand.find(isReelsLabelled) || null;
 }
 
 // Search results: the ordered list of @handles, plus a tap target per handle.
@@ -437,6 +496,7 @@ function extractResults(elements) {
 
 // Full-screen reel player: the reel's author handle, caption, and whether it's
 // already liked/saved (so engagement never toggles the wrong way).
+// eslint-disable-next-line max-statements
 function extractFeed(elements) {
   // Priority match: try the specific author-username rid FIRST so a container
   // like `clips_author_info_component` (empty text, matches broader 'author')
@@ -445,6 +505,9 @@ function extractFeed(elements) {
     findByRidPriority(elements, ['clips_author_username', 'reel_feed_username', 'clips_username', 'feed_username']) ||
     elements.find((e) => isClickable(e) && looksLikeHandle(e.text));
   const author = authorEl && looksLikeHandle(authorEl.text) ? norm(authorEl.text).replace(/^@/, '') : null;
+  // Where to tap to reach that creator, when no dedicated author-profile
+  // affordance is present in the tree.
+  const authorPoint = author && authorEl ? center(authorEl.bounds) : null;
 
   // Caption: current IG's caption text lives in a nested content-desc on an
   // anonymous ViewGroup INSIDE clips_caption_component, not on the .text of the
@@ -469,7 +532,7 @@ function extractFeed(elements) {
   const alreadyLiked = elements.some((e) => labelOf(e) === 'unlike');
   const alreadySaved = elements.some((e) => labelOf(e) === 'remove' || ridLocal(e.rid).includes('saved'));
 
-  return { author, caption, alreadyLiked, alreadySaved };
+  return { author, caption, alreadyLiked, alreadySaved, authorPoint };
 }
 
 // ── screen classification ───────────────────────────────────────────────────
@@ -538,30 +601,27 @@ function readScreen(input = {}) {
   add('searchTab', SIGNALS.searchTab);
   add('searchBox', SIGNALS.searchBox);
   add('back', SIGNALS.back);
-  add('reelsTab', SIGNALS.reelsTab);
+  // Each "Reels" control is resolved only on a screen it can exist on, and only
+  // in the band it lives in — see the matchers above for why a label alone is
+  // never enough.
+  {
+    const el = findProfileReelsTab(elements, input.height, screen);
+    const c = el && center(el.bounds);
+    if (c) targets.reelsTab = c;
+  }
   // Resolved on every screen rather than only when classification says
   // "search_results": tapping the chip changes the page enough that the
   // classifier may call it something else, and the navigator only consults this
   // target immediately after a search anyway.
   {
-    const el = findByRid(elements, SIGNALS.searchReelsTab.rids)
-      || findSearchReelsTab(elements, input.height);
+    const el = findSearchReelsTab(elements, input.height, screen);
     const c = el && center(el.bounds);
     if (c) targets.searchReelsTab = c;
   }
-  // The bottom-nav Reels button, so reels-feed mode can drop into Instagram's
-  // own warmed feed rather than routing through search or Explore.
   {
     const el = findReelsNavTab(elements, input.height);
     const c = el && center(el.bounds);
     if (c) targets.reelsNavTab = c;
-  }
-  // Explore as a search-page chip — the fallback surface for finding profiles
-  // for a query when the results page has no Reels chip.
-  {
-    const el = findExploreTab(elements, input.height);
-    const c = el && center(el.bounds);
-    if (c) targets.exploreTab = c;
   }
 
   const reading = { screen, targets };
@@ -612,6 +672,11 @@ function readScreen(input = {}) {
     add('save', SIGNALS.save);
     add('share', SIGNALS.share);
     add('authorProfile', SIGNALS.authorProfile);
+    // Fallback: if no dedicated author affordance matched but we did read a
+    // handle, the element carrying it is itself the way into the profile. A
+    // missing target here meant the run judged the reel and then never visited
+    // the creator at all.
+    if (!targets.authorProfile && feed.authorPoint) targets.authorProfile = feed.authorPoint;
   }
 
   // A reels grid can outlive a screen the classifier could not name — tapping
