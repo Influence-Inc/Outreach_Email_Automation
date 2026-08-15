@@ -249,13 +249,19 @@ async function nicheMatch(candidate, config, deps = {}) {
   try {
     const ai = await classify(candidate, config);
     if (ai && typeof ai.score === 'number') {
+      // Rich provenance from a video/multimodal classifier (genre, audience
+      // match, spoken topic, …) so the orchestrator can persist WHY it matched.
+      // A classifier that reports its per-clip analysis at the top level keeps
+      // it: `clip` is what the deterministic gate reads, so dropping it here
+      // would silently disarm the gate rather than fail loudly.
+      const evidence = ai.clip && !(ai.evidence && ai.evidence.clip)
+        ? { ...(ai.evidence || {}), clip: ai.clip }
+        : (ai.evidence || null);
       return {
         nicheScore: clamp01(ai.score),
         nicheReason: ai.reason || 'ai',
         source: ai.source || 'ai',
-        // Rich provenance from a video/multimodal classifier (genre, audience
-        // match, spoken topic, …) so the orchestrator can persist WHY it matched.
-        evidence: ai.evidence || null,
+        evidence,
       };
     }
   } catch (_) {

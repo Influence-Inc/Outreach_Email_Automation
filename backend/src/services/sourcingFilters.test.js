@@ -105,6 +105,28 @@ test('nicheMatch uses an injected AI classifier, else falls back to keywords', a
   assert.ok(fallback.nicheScore > 0);
 });
 
+// The per-clip analysis is what the deterministic gate reads. Dropping it here
+// would not fail anything loudly — it would just quietly stop rejecting repost
+// pages — so it survives whichever way a classifier reports it.
+test('nicheMatch keeps a per-clip analysis reported at the top level', async () => {
+  const cand = { bio: 'fitness coach', reels: reelsOf([1], 'gym day') };
+  const clip = { creativity: 8, is_original_creator: false };
+
+  const topLevel = await F.nicheMatch(cand, {}, {
+    classify: async () => ({ score: 0.9, clip }),
+  });
+  assert.deepStrictEqual(topLevel.evidence.clip, clip);
+
+  const both = await F.nicheMatch(cand, {}, {
+    classify: async () => ({ score: 0.9, clip, evidence: { genre: 'fitness', clip } }),
+  });
+  assert.strictEqual(both.evidence.genre, 'fitness');
+  assert.deepStrictEqual(both.evidence.clip, clip);
+
+  const neither = await F.nicheMatch(cand, {}, { classify: async () => ({ score: 0.9 }) });
+  assert.strictEqual(neither.evidence, null);
+});
+
 test('decideReel gates on niche score only (no view window)', () => {
   // A reel captured off the feed: caption only, no views. decide() would reject
   // it for "0 reels", but decideReel passes it on niche score alone.
