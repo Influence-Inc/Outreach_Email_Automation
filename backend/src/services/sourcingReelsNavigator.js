@@ -315,7 +315,9 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       const candidate = await handleCreator({
         driver, read, entry, queue, size, pacingMs, jitterPx, reelsWindow, warn,
       });
-      yield candidate;
+      // No keyword here — this mode takes whoever the warmed feed serves, so the
+      // mode itself IS the provenance worth recording.
+      yield { ...candidate, discovery: 'reels' };
       emitted += 1;
     }
 

@@ -188,6 +188,11 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   for (const term of terms) {
     if (emitted >= max) return;
 
+    // Stamp every creator with the keyword that surfaced them, so a passing
+    // creator carries which search found them all the way into the creators
+    // table — that is what makes one keyword's yield comparable to another's.
+    const tag = (p) => (p ? { ...p, sourceTerm: term, discovery: 'search' } : p);
+
     let view = await read(driver);
     await tapTarget({ driver, view, name: 'searchTab', pacingMs, jitterPx });
 
@@ -220,7 +225,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow,
         remaining: max - emitted, seen: seenCreators,
       })) {
-        yield profile;
+        yield tag(profile);
         emitted += 1;
         if (emitted >= max) return;
       }
@@ -240,7 +245,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         reelsWindow,
       });
       if (profile) {
-        yield profile;
+        yield tag(profile);
         emitted += 1;
       }
       // However deep this creator took us (reel player -> profile -> feed), come
@@ -259,7 +264,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
           driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
         });
         if (profile) {
-          yield profile;
+          yield tag(profile);
           emitted += 1;
         }
         await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 4 });
