@@ -512,3 +512,64 @@ test('the search results content tab matches "For you"', () => {
   const found = sv.resolveTarget(strip, sv.SIGNALS.searchReelsTab);
   assert.strictEqual(found.desc, 'For you');
 });
+
+// ── the search-results content tab (the Audio-drift fix) ────────────────────
+
+const serpNode = (over = {}) => node({ bounds: { x: 0, y: 200, w: 200, h: 80 }, ...over });
+
+// IG remembers the last-used tab, so the reader must report which tab is active
+// AND expose the For you tab so the navigator can switch back.
+test('the reader reports the active search tab and the For you tab', () => {
+  const strip = [
+    node({ rid: 'serp_journey_header_container', bounds: { x: 0, y: 100, w: 1080, h: 60 } }),
+    serpNode({ desc: 'For you', clickable: true, bounds: { x: 40, y: 200, w: 160, h: 70 } }),
+    serpNode({ desc: 'Accounts', clickable: true, bounds: { x: 220, y: 200, w: 160, h: 70 } }),
+    serpNode({ desc: 'Audio', selected: true, clickable: true, bounds: { x: 400, y: 200, w: 160, h: 70 } }),
+    serpNode({ desc: 'Tags', clickable: true, bounds: { x: 580, y: 200, w: 160, h: 70 } }),
+  ];
+  const r = sv.readScreen({ elements: strip, width: 1080, height: 2400 });
+
+  assert.strictEqual(r.screen, 'search_results');
+  assert.strictEqual(r.activeTab, 'audio', 'the Audio tab is the selected one');
+  assert.deepStrictEqual(r.targets.forYouTab, { x: 120, y: 235 }, 'and For you is tappable');
+});
+
+test('a search sitting on For you reports it as active', () => {
+  const strip = [
+    node({ rid: 'serp_journey_header_container', bounds: { x: 0, y: 100, w: 1080, h: 60 } }),
+    serpNode({ desc: 'For you', selected: true, clickable: true, bounds: { x: 40, y: 200, w: 160, h: 70 } }),
+    serpNode({ desc: 'Audio', clickable: true, bounds: { x: 400, y: 200, w: 160, h: 70 } }),
+  ];
+  const r = sv.readScreen({ elements: strip, width: 1080, height: 2400 });
+  assert.strictEqual(r.activeTab, 'for you');
+});
+
+// The tab is only a tab in the strip at the top of the page — a stray "For you"
+// label lower down (a section header) is not it.
+test('the For you tab is only matched in the top strip', () => {
+  const el = sv.findForYouTab(
+    [node({ desc: 'For you', bounds: { x: 40, y: 1800, w: 160, h: 70 } })],
+    2400,
+    'search_results',
+  );
+  assert.strictEqual(el, null);
+});
+
+test('the For you tab matches by resource-id too', () => {
+  const el = sv.findForYouTab(
+    [node({ rid: 'com.instagram.android:id/serp_tab_for_you', bounds: { x: 40, y: 200, w: 160, h: 70 } })],
+    2400,
+    'search_results',
+  );
+  assert.ok(el, 'found by rid');
+});
+
+// Older builds called it "Top" — still the reel-content tab.
+test('the older "Top" label is treated as For you', () => {
+  const el = sv.findForYouTab(
+    [node({ desc: 'Top', bounds: { x: 40, y: 200, w: 160, h: 70 } })],
+    2400,
+    'search_results',
+  );
+  assert.ok(el);
+});

@@ -115,43 +115,54 @@ const MAX_REEL_SCROLLS = 6;
 // without producing a candidate; the run's own target count stops it first.
 const MAX_FEED_SCROLLS = 60;
 
+// The results strip is `For you | Accounts | Audio | Tags`. Only the first is
+// reel content; the rest are songs, hashtags and handle-string matches.
+const FOR_YOU_TABS = ['for you', 'top'];
+
 /**
- * Get onto the results page's CONTENT tab — "For you".
+ * Force the results page onto its "For you" content tab.
  *
- * Current Instagram's results strip is `For you | Accounts | Audio | Tags`, and
- * "For you" is both the reel-content tab and the one already selected when the
- * page loads. So the common path here costs nothing: the reader finds content
- * already on screen and we take it.
+ * Instagram REMEMBERS the last-used search tab, so a fresh keyword search
+ * regularly opens on Audio (a page of songs) rather than For you. "For you is the
+ * default" was wrong — landing on Audio is normal, and it must be corrected every
+ * time, not accepted because the page happens to have rows on it.
  *
- * This used to page the strip SIDEWAYS hunting for a "Reels" tab that current IG
- * does not have, which is exactly how the scout ended up on Accounts and then
- * Audio — sourcing a creator from an Audio result is meaningless, and every swipe
- * spent getting there was wasted. Nothing scrolls the strip any more: if the tab
- * is not in the tree, the page's own content is what we work with.
- *
- * Returns the view to carry on with.
+ * The tab is the leftmost chip on the strip and effectively always on screen, so
+ * the switch is a single tap. Returns { view, onForYou } — the caller must NOT
+ * scout results when onForYou is false, or it sources songs and hashtags.
  */
 async function openResultsReelsChip({ driver, view, read, pacingMs, jitterPx = 0, log = () => {} }) {
-  const chipOf = (v) => v && v.targets && v.targets.searchReelsTab;
-  const hasContent = (v) => !!v && (
-    (Array.isArray(v.reelResults) && v.reelResults.length > 0)
-    || (Array.isArray(v.results) && v.results.length > 0)
-  );
+  const forYouTab = (v) => v && v.targets && v.targets.forYouTab;
+  const onForYou = (v) => v && FOR_YOU_TABS.includes(v.activeTab);
 
-  // Already showing results — "For you" is the default tab, so this is the
-  // normal case and it needs no tap at all.
-  if (hasContent(view)) return view;
+  // Already on For you (the reader could read the selected tab and it is ours).
+  if (onForYou(view)) return { view, onForYou: true };
 
-  const chip = chipOf(view);
-  if (chip) {
-    await humanTap(driver, chip, jitterPx, pacingMs);
-    return read(driver);
+  // Not on For you — or the reader could not tell. Tap the tab and re-read. A
+  // redundant tap on an already-selected For you tab is a harmless no-op, so
+  // "could not tell" is treated the same as "on the wrong tab": switch anyway.
+  const tab = forYouTab(view);
+  if (tab) {
+    log(`[sourcing] results landed on "${view.activeTab || 'an unknown tab'}" — switching to For you`);
+    await humanTap(driver, tab, jitterPx, pacingMs);
+    const after = await read(driver);
+    // Trust the switch even if the reader still cannot name the active tab: what
+    // matters is that we tapped For you and did not stay on Audio. But if it CAN
+    // name it and it is still not ours, say so and refuse to scout it.
+    if (after.activeTab && !FOR_YOU_TABS.includes(after.activeTab)) {
+      log(`[sourcing] still on "${after.activeTab}" after switching — not scouting it`);
+      return { view: after, onForYou: false };
+    }
+    return { view: after, onForYou: true };
   }
 
-  // No content and no tab to tap. Sitting still beats wandering into Accounts or
-  // Audio; the caller treats an empty page as "this keyword gave nothing".
-  log('[sourcing] no content tab and no results on the page — moving on');
-  return view;
+  // No tab to tap. If the reader knows we are on a non-For-you tab, do not scout
+  // it; otherwise assume For you (a full-screen reels player has no strip at all).
+  if (view && view.activeTab && !FOR_YOU_TABS.includes(view.activeTab)) {
+    log(`[sourcing] on "${view.activeTab}" with no For you tab in reach — skipping this keyword`);
+    return { view, onForYou: false };
+  }
+  return { view, onForYou: true };
 }
 
 // Real device pixels, for scroll geometry. Shares the per-driver cache with
@@ -280,9 +291,17 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       await sleep(jitteredDelay(pacingMs));
     }
 
-    // Then move to that page's REELS filter — the keyword's actual content.
+    // Force the results onto the "For you" content tab. IG remembers the
+    // last-used tab, so a fresh search can open on Audio (songs) — sourcing from
+    // there is meaningless, so if we cannot get onto For you we skip the keyword
+    // rather than scout the wrong tab.
     view = await read(driver);
-    view = await openResultsReelsChip({ driver, view, read, pacingMs, jitterPx, log });
+    const onFor = await openResultsReelsChip({ driver, view, read, pacingMs, jitterPx, log });
+    view = onFor.view;
+    if (!onFor.onForYou) {
+      await ensureInInstagram({ driver, read, pacingMs, jitterPx });
+      continue;
+    }
 
     // The chip can land on either of two surfaces, so handle both.
     //
