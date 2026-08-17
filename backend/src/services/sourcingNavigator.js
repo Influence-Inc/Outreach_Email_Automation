@@ -192,19 +192,48 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
 
   // One pass over the keywords used to be the whole run, so a run whose target
   // was 6 reported "done" after finding 1 — it had simply run out of keywords,
-  // never out of creators or out of its profile budget. Keep going: each pass
-  // re-runs the keywords and goes DEEPER into their results (already-seen
-  // creators are skipped, so a pass naturally reaches new ones).
+  // never out of creators or out of its profile budget.
   //
-  // Three things end a run: the target is met, the profile cap is spent, or a
-  // whole pass produced nothing new — that last one is what makes this terminate
-  // when the keywords really are exhausted, rather than looping forever.
+  // Keywords now repeat, and each visit goes DEEPER into that keyword's results
+  // than the last one did. "Nothing new at this depth" is not the same as "this
+  // keyword is finished": the top of a results page is the same creators every
+  // time, so a barren visit usually just means we have already worked that depth
+  // — scrolling further is exactly what finds different creators and reels.
+  //
+  // A keyword is only retired once its results will not scroll any further AND
+  // that deepest look produced nobody new. The run ends when the target is met,
+  // the profile cap is spent, or every keyword has been retired.
+  const depthOf = new Map(terms.map((t) => [t, 0]));
+  const exhausted = new Set();
+  // Consecutive times a keyword could not even be typed. A transient missing
+  // control must not retire a keyword, but a permanent one must not spin the
+  // pass loop forever either — which is exactly what an unbounded skip did.
+  const failuresOf = new Map(terms.map((t) => [t, 0]));
+  const MAX_TERM_FAILURES = 3;
+
+  const skipTerm = (term, why) => {
+    const n = (failuresOf.get(term) || 0) + 1;
+    failuresOf.set(term, n);
+    if (n >= MAX_TERM_FAILURES) {
+      exhausted.add(term);
+      log(`[sourcing] "${term}": ${why} ${n}x — retiring it`);
+    } else {
+      log(`[sourcing] "${term}": ${why} — skipping this visit`);
+    }
+  };
+
   for (let pass = 0; ; pass += 1) {
     if (emitted >= max || cap.spent()) return;
-    const emittedAtPassStart = emitted;
+    if (exhausted.size >= terms.length) {
+      log(`[sourcing] every keyword is scrolled out — ${emitted} sourced`);
+      return;
+    }
 
   for (const term of terms) {
     if (emitted >= max || cap.spent()) break;
+    if (exhausted.has(term)) continue;
+    const emittedAtTermStart = emitted;
+    const depth = depthOf.get(term) || 0;
 
     // Stamp every creator with the keyword that surfaced them, so a passing
     // creator carries which search found them all the way into the creators
@@ -226,17 +255,18 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     // Get back into a known place and move to the next keyword instead — the
     // pass-progress guard below ends the run if nothing works anywhere.
     if (!await tapTargetSoft({ driver, view, name: 'searchTab', pacingMs, jitterPx })) {
-      log(`[sourcing] no search tab on screen — skipping "${term}"`);
+      skipTerm(term, 'no search tab on screen');
       await ensureInInstagram({ driver, read, pacingMs, jitterPx });
       continue;
     }
 
     view = await read(driver);
     if (!await tapTargetSoft({ driver, view, name: 'searchBox', pacingMs, jitterPx })) {
-      log(`[sourcing] no search box on screen — skipping "${term}"`);
+      skipTerm(term, 'no search box on screen');
       await ensureInInstagram({ driver, read, pacingMs, jitterPx });
       continue;
     }
+    failuresOf.set(term, 0); // the search started, so earlier misses were transient
     await driver.typeText(term);
     await sleep(jitteredDelay(pacingMs));
 
@@ -277,15 +307,15 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     // handle matched the string. Tap a card → the reels_feed player exposes the
     // real @handle + an authorProfile target → open the profile → analyse.
     //
-    // On a repeat pass, scroll past what the last pass already worked through —
-    // the top of a results page is the same every time, so without this a second
-    // pass would re-tap the same cards and find nothing new.
-    //
-    // Strictly additive: a scroll that lands somewhere with no content must not
-    // cost us the page we already had.
-    if (pass > 0) {
-      const deeper = await scrollResults({ driver, read, pacingMs, screen, screens: pass });
-      if (hasResults(deeper)) view = deeper;
+    // Go as deep into this keyword's results as we have already worked, so this
+    // visit starts where the last one stopped rather than re-tapping the same
+    // cards. Strictly additive: a scroll landing somewhere with no content must
+    // not cost us the page we already had.
+    let atEnd = false;
+    if (depth > 0) {
+      const deeper = await scrollResults({ driver, read, pacingMs, screen, screens: depth });
+      atEnd = deeper.atEnd;
+      if (hasResults(deeper.view)) view = deeper.view;
     }
 
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
@@ -333,19 +363,25 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       }
     }
 
+    // Next time this keyword comes round, start one screen deeper.
+    depthOf.set(term, depth + 1);
+
+    // Retire the keyword only when BOTH are true: its results would not scroll
+    // any further, and that deepest look found nobody new. Either alone is not
+    // enough — a barren depth with more page below it just means scroll on.
+    if (atEnd && emitted === emittedAtTermStart) {
+      exhausted.add(term);
+      log(`[sourcing] "${term}" is scrolled out and gave nobody new — retiring it`);
+    }
+
     // Next keyword starts by tapping the search tab, which is reachable from any
     // in-app screen — so rather than pressing back again (the press that used to
     // exit Instagram), just make sure we are still inside the app.
     await ensureInInstagram({ driver, read, pacingMs, jitterPx });
   }
 
-    // A whole pass over every keyword produced nobody new. The keywords are
-    // genuinely exhausted, so stop — this is what keeps the outer loop finite.
-    if (emitted === emittedAtPassStart) {
-      log(`[sourcing] pass ${pass + 1} found no new creators — keywords exhausted at ${emitted}`);
-      return;
-    }
-    log(`[sourcing] pass ${pass + 1} done: ${emitted} sourced, ${cap.opened()} profiles opened`);
+    log(`[sourcing] pass ${pass + 1}: ${emitted} sourced, ${cap.opened()} profiles opened, `
+      + `${terms.length - exhausted.size}/${terms.length} keywords still live`);
   }
 }
 
@@ -358,13 +394,27 @@ function hasResults(v) {
 }
 
 /**
- * Scroll a results page down by whole screens, to reach cards a previous pass
- * has already worked through.
+ * Scroll a results page down by whole screens, to reach cards an earlier visit
+ * already worked through.
+ *
+ * `atEnd` reports that the page stopped moving — the same content came back
+ * after a swipe, so there is nothing below this. That is what tells the caller a
+ * keyword is genuinely finished rather than merely barren at this depth, and it
+ * stops the run scrolling at the bottom of a short results page forever.
+ *
+ * @returns {Promise<{view:(object|null), atEnd:boolean}>}
  */
 async function scrollResults({ driver, read, pacingMs, screen, screens = 1 }) {
   const size = screen || { width: 1080, height: 2400 };
+  const fingerprint = (v) => [
+    (v && v.results) ? v.results.join(',') : '',
+    (v && v.reelResults) ? v.reelResults.map((r) => r && r.label).join(',') : '',
+  ].join('|');
+
   let view = null;
+  let atEnd = false;
   for (let i = 0; i < screens; i += 1) {
+    const before = fingerprint(view);
     // eslint-disable-next-line no-await-in-loop
     await driver.swipe({
       x1: Math.round(size.width / 2),
@@ -377,8 +427,15 @@ async function scrollResults({ driver, read, pacingMs, screen, screens = 1 }) {
     await sleep(jitteredDelay(pacingMs));
     // eslint-disable-next-line no-await-in-loop
     view = await read(driver);
+
+    // Only meaningful from the second swipe on, when there is a previous
+    // reading to compare against.
+    if (i > 0 && fingerprint(view) === before) {
+      atEnd = true;
+      break;
+    }
   }
-  return view;
+  return { view, atEnd };
 }
 
 /**

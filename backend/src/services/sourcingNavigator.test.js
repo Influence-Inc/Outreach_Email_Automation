@@ -357,8 +357,16 @@ test('an unreadable screen relaunches Instagram instead of tapping blindly', asy
   const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
   for await (const _c of gen) { /* drain */ }
 
+  // Launched once at the start, then relaunched whenever a read came back
+  // unreadable. The exact count depends on how many visits the keyword gets
+  // before it is retired; what matters is that recovery happened and that no tap
+  // was fired at a screen offering no targets.
   const opens = driver.ops.filter((o) => o[0] === 'openApp').length;
-  assert.strictEqual(opens, 2, 'launched once at the start, relaunched once on recovery');
+  assert.ok(opens >= 2, `relaunched on recovery (openApp x${opens})`);
+  assert.strictEqual(
+    driver.ops.filter((o) => o[0] === 'tap' && (o[1] === 0 || o[2] === 0)).length, 0,
+    'never tapped a coordinate it did not read',
+  );
 });
 
 // ── feed-scroll discovery ───────────────────────────────────────────────────
@@ -1003,4 +1011,97 @@ test('a missing search control skips that keyword instead of killing the run', a
 
   assert.strictEqual(out.length, 1, 'the second keyword still ran');
   assert.strictEqual(out[0].username, 'coach');
+});
+
+// ── running out of keywords means scroll deeper, not stop ────────────────────
+
+// "Nothing new at this depth" is not "this keyword is finished". The top of a
+// results page is the same creators every time, so a barren visit usually just
+// means we already worked that depth — scrolling further is what finds different
+// creators.
+test('a keyword that gave nobody new is scrolled deeper rather than retired', async () => {
+  const driver = driverWithSearch();
+  // Every look shows the SAME creator, already analysed on the first visit — so
+  // every later visit is barren. But the page keeps moving (a new filler handle
+  // each read), so the keyword must stay live and keep going deeper.
+  // Every read offers the search controls AND a results list, so any pass can
+  // proceed. The listed handle differs every read, so the page always "moves" and
+  // `atEnd` is never reached — the keyword can only be retired for being barren,
+  // which is precisely what must NOT happen. No `result:*` target, so each hop
+  // bails and no creator is ever sourced.
+  let n = 0;
+  const read = async () => {
+    n += 1;
+    return {
+      screen: 'search_results',
+      results: [`filler${n}`],
+      targets: { searchTab: { x: 1, y: 1 }, searchBox: { x: 1, y: 1 }, back: BACK },
+    };
+  };
+
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0, maxProfiles: 4 }, opts: { keywords: ['coach'], max: 6 }, read,
+  });
+  for await (const c of gen) out.push(c);
+
+  // The run did not stop at the first barren visit: it searched again and went
+  // deeper each time, until the profile budget — not a barren pass — stopped it.
+  const searches = driver.ops.filter((o) => o[0] === 'submitSearch').length;
+  assert.ok(searches >= 2, `kept re-running the keyword (${searches} searches)`);
+  const scrolls = driver.ops.filter((o) => o[0] === 'swipe' && o[1].y1 > o[1].y2).length;
+  assert.ok(scrolls >= 1, 'scrolled deeper into the results rather than giving up');
+});
+
+// The other half of the rule: a page that will not scroll any further AND gave
+// nobody new is genuinely finished, so the keyword retires and the run ends.
+test('a keyword is retired once its results stop scrolling', async () => {
+  const driver = driverWithSearch();
+  const same = { screen: 'search_results', results: ['alpha'], targets: { back: BACK } };
+  const views = [
+    ...OPEN_SEARCH, same,
+    { screen: 'search_results', targets: {} },   // the hop bails, nobody sourced
+    ...Array(60).fill(same),                     // every deeper look is identical
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 6 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0);
+  const searches = driver.ops.filter((o) => o[0] === 'submitSearch').length;
+  assert.ok(searches <= 4, `retired the keyword promptly, ran ${searches} searches`);
+});
+
+// A keyword whose results fit on ONE screen must still retire — the at-end check
+// compares against the page being scrolled away from, not only against a
+// previous scroll, or a short results page loops forever.
+test('a single-screen results page still retires', async () => {
+  const driver = driverWithSearch();
+  const one = { screen: 'search_results', results: [], targets: { back: BACK } };
+  const views = [...OPEN_SEARCH, ...Array(60).fill(one)];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 6 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'terminated instead of spinning');
+});
+
+// A control permanently missing must not spin the pass loop forever — the skip
+// path used to bypass the retirement bookkeeping entirely.
+test('a keyword that can never be typed is retired, not retried forever', async () => {
+  const driver = driverWithSearch();
+  const views = Array(80).fill({ screen: 'unknown', targets: {} });
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 6 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0);
+  const opens = driver.ops.filter((o) => o[0] === 'openApp').length;
+  assert.ok(opens <= 6, `bounded recovery attempts, saw ${opens} launches`);
 });
