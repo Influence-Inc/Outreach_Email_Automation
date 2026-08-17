@@ -74,3 +74,18 @@ test("buildConfig accepts the 'all' risk level", () => {
   assert.strictEqual(buildConfig({}, { risk: 'all' }).risk, 'all');
   assert.strictEqual(buildConfig({}, { risk: 'nonsense' }).risk, 'medium');
 });
+
+test('buildConfig carries the quality dials', () => {
+  const cfg = buildConfig({}, {
+    floorTolerance: '2', creatorPassThreshold: '0.8', minCreativity: '6',
+  });
+  assert.strictEqual(cfg.floorTolerance, 2);
+  assert.strictEqual(cfg.creatorPassThreshold, 0.8);
+  assert.strictEqual(cfg.minCreativity, 6);
+
+  // 0 is a real choice for both gates — an absolute floor, and no craft gate —
+  // so it must survive rather than being coerced away as falsy.
+  const off = buildConfig({}, { floorTolerance: 0, minCreativity: 0 });
+  assert.strictEqual(off.floorTolerance, 0);
+  assert.strictEqual(off.minCreativity, 0);
+});

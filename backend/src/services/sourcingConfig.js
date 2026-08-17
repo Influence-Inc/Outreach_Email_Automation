@@ -34,6 +34,11 @@ function buildConfig(defaults = {}, override = {}) {
     // Optional allow-list of genres the reel judge should treat as on-brand.
     genres: toKeywordList(merged.genres),
     floor: num(merged.floor),
+    // How many of the recent reels may sit BELOW the floor. Real creators have
+    // quiet posts, and demanding that all twelve clear the floor rejects good
+    // creators for a couple of off days — a stricter test than "min views"
+    // sounds like.
+    floorTolerance: num(merged.floorTolerance),
     ceiling: num(merged.ceiling),
     risk: RISKS.includes(merged.risk) ? merged.risk : 'medium',
     targetCount: num(merged.targetCount) || 0,
@@ -55,6 +60,13 @@ function buildConfig(defaults = {}, override = {}) {
     maxProfiles: num(merged.maxProfiles),
     // How long an unchanging screen counts as stuck rather than slow.
     stallMs: num(merged.stallMs),
+    // The deterministic gate's bar (services/creatorScore.js). Raising this is
+    // the single most direct quality dial: at 0.6 a creator with strong fit but
+    // mediocre craft still clears, because creativity and hook are only a
+    // quarter of the weighting between them.
+    creatorPassThreshold: num(merged.creatorPassThreshold),
+    // A hard floor on craft, checked outside the weighted blend. 0 disables it.
+    minCreativity: num(merged.minCreativity),
   };
 }
 

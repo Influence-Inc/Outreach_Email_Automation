@@ -193,3 +193,84 @@ test('components are reported so a decision can be explained', () => {
   assert.ok(r.components.creativity > 0.8);
   assert.ok(r.stats.typical > 0);
 });
+
+// ── the craft floor ─────────────────────────────────────────────────────────
+
+// Creativity + hook are only 25% of the weighting between them, so a creator the
+// model loves on FIT clears the bar on fit + consistency + steadiness alone. That
+// is the "right keywords, low-quality content" case a weighted average cannot
+// express, and a floor can.
+test('poor craft is rejected however strong the fit', () => {
+  const r = scoreCreator(strong({
+    creator: { fit_score: 100, consistency_of_niche: 10 },
+    clips: [
+      { creativity: 3, hook_strength: 4, is_original_creator: true },
+      { creativity: 4, hook_strength: 4, is_original_creator: true },
+    ],
+  }), {});
+  assert.strictEqual(r.pass, false);
+  assert.match(r.rejectReason, /creativity 3\.5 below 5/);
+});
+
+test('the craft floor is a floor, not a rounding of the blend', () => {
+  // Mean creativity 5 exactly — at the floor, so it survives and is judged on
+  // the weighted score like anything else.
+  const at = scoreCreator(strong({
+    clips: [{ creativity: 5, hook_strength: 8, is_original_creator: true }],
+  }), {});
+  assert.ok(!/creativity/.test(String(at.rejectReason)), 'exactly at the floor is not rejected by it');
+});
+
+test('the craft floor is tunable, and 0 disables it', () => {
+  const weak = strong({
+    creator: { fit_score: 100, consistency_of_niche: 10 },
+    clips: [{ creativity: 2, hook_strength: 9, is_original_creator: true }],
+  });
+  assert.match(scoreCreator(weak, {}).rejectReason, /creativity/, 'rejected by default');
+  assert.ok(!/creativity/.test(String(scoreCreator(weak, { minCreativity: 0 }).rejectReason)));
+  assert.match(scoreCreator(weak, { minCreativity: 9 }).rejectReason, /below 9/);
+});
+
+// Same principle as the originality flag: silence is not an accusation.
+test('a creator whose clips were never scored is not failed on craft', () => {
+  const r = scoreCreator(strong({ clips: [{ hook_strength: 8, is_original_creator: true }] }), {});
+  assert.ok(!/creativity/.test(String(r.rejectReason)));
+});
+
+// Craft moved from 25% to 40% of the weighting. It still cannot be made
+// MANDATORY by weighting — see the floor tests above — but weak craft must at
+// least cost a creator real score rather than being a tiebreaker.
+test('weak craft costs materially more score than it used to', () => {
+  const mediocre = {
+    creator: { fit_score: 90, consistency_of_niche: 9 },
+    clips: [{ creativity: 5, hook_strength: 5, is_original_creator: true }],
+    reels: [{ views: 50000 }, { views: 51000 }, { views: 49000 }],
+  };
+  const excellent = {
+    ...mediocre,
+    clips: [{ creativity: 10, hook_strength: 10, is_original_creator: true }],
+  };
+
+  const gap = scoreCreator(strong(excellent), {}).score - scoreCreator(strong(mediocre), {}).score;
+  // 40% of the weighting spread over half the craft range.
+  assert.ok(gap > 0.19, `craft moves the score by ${gap}`);
+});
+
+// Steadiness is nearly free to max out, which is why it was over-weighted: any
+// creator with a consistent audience scores ~0.98 on it.
+test('a steady audience alone no longer carries a weak creator as far', () => {
+  const steadyButUninspired = strong({
+    creator: { fit_score: 70, consistency_of_niche: 7 },
+    clips: [{ creativity: 5, hook_strength: 5, is_original_creator: true }],
+    reels: [{ views: 50000 }, { views: 50100 }, { views: 49900 }],
+  });
+  assert.ok(scoreCreator(steadyButUninspired, {}).score < DEFAULT_PASS_THRESHOLD);
+});
+
+test('the raised default bar is the one in force', () => {
+  assert.strictEqual(DEFAULT_PASS_THRESHOLD, 0.72);
+  // And it is still a dial, not a law.
+  const borderline = strong({ creator: { fit_score: 70, consistency_of_niche: 7 } });
+  assert.strictEqual(scoreCreator(borderline, { creatorPassThreshold: 0.95 }).pass, false);
+  assert.strictEqual(scoreCreator(borderline, { creatorPassThreshold: 0.5 }).pass, true);
+});

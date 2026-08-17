@@ -63,12 +63,15 @@ function readForm() {
     niche: el('niche').value.trim(),
     keywords: el('keywords').value.trim(),
     floor: numOrUndef('floor'),
+    floorTolerance: numOrUndef('floorTolerance'),
     ceiling: numOrUndef('ceiling'),
     risk: el('risk').value,
     targetCount: numOrUndef('targetCount'),
     reelsWindow: numOrUndef('reelsWindow'),
     clipsPerProfile: numOrUndef('clipsPerProfile'),
     maxProfiles: numOrUndef('maxProfiles'),
+    creatorPassThreshold: numOrUndef('creatorPassThreshold'),
+    minCreativity: numOrUndef('minCreativity'),
     discovery: el('discovery').value,
     reviewBorderline: el('reviewBorderline').checked,
   };
@@ -79,12 +82,15 @@ function fillForm(cfg) {
   el('niche').value = cfg.niche || '';
   el('keywords').value = Array.isArray(cfg.keywords) ? cfg.keywords.join(', ') : (cfg.keywords || '');
   el('floor').value = cfg.floor ?? '';
+  el('floorTolerance').value = cfg.floorTolerance ?? 2;
   el('ceiling').value = cfg.ceiling ?? '';
   el('risk').value = ['low', 'medium', 'high', 'all'].includes(cfg.risk) ? cfg.risk : 'medium';
   el('targetCount').value = cfg.targetCount ?? '';
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
   el('clipsPerProfile').value = cfg.clipsPerProfile ?? 3;
   el('maxProfiles').value = cfg.maxProfiles ?? '';
+  el('creatorPassThreshold').value = cfg.creatorPassThreshold ?? 0.72;
+  el('minCreativity').value = cfg.minCreativity ?? 5;
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
   el('reviewBorderline').checked = !!cfg.reviewBorderline;
 }
@@ -314,9 +320,40 @@ async function loadHosts() {
         <td><span class="pill ${h.status === 'active' ? 'added' : 'rejected'}">${h.status}</span></td>
         <td>${session}</td>
         <td>${seenFreshness(h.last_seen_at)}</td>
-        <td>${h.status === 'active' ? `<button data-host="${h.id}" class="ghost small revoke-host">Revoke</button>` : ''}</td>`;
+        <td>${h.status === 'active' ? `<button data-host="${h.id}" class="ghost small warm-host">Warm feed</button> <button data-host="${h.id}" class="ghost small revoke-host">Revoke</button>` : ''}</td>`;
       tb.appendChild(tr);
     }
+    // A warm-up pass likes reels from creators that already passed the gate, to
+    // steer this account's reels feed. Separate from a scouting run on purpose.
+    tb.querySelectorAll('.warm-host').forEach((b) => {
+      b.addEventListener('click', async () => {
+        const campaign = campaignId();
+        if (!confirm(
+          'Run a feed warm-up pass on this phone?\n\n'
+          + 'It will LIKE up to 12 reels, only from creators already added by a '
+          + 'scouting run. Automated liking carries real account risk — keep these '
+          + 'passes short and occasional.',
+        )) return;
+        b.disabled = true;
+        b.textContent = 'Warming…';
+        try {
+          const r = await api(`/api/sourcing/hosts/${b.dataset.host}/warmup`, {
+            method: 'POST',
+            body: JSON.stringify({ campaignId: campaign || null }),
+          });
+          setStatus(
+            `Warm-up done: liked ${r.liked} of ${r.seen} reels seen`
+            + `${r.blocked ? ' — stopped early, Instagram flagged the activity' : ''}`,
+            r.blocked ? 'err' : 'ok',
+          );
+        } catch (err) {
+          setStatus(err.message, 'err');
+        } finally {
+          b.disabled = false;
+          b.textContent = 'Warm feed';
+        }
+      });
+    });
     tb.querySelectorAll('.revoke-host').forEach((b) => {
       b.addEventListener('click', async () => {
         if (!confirm('Revoke this host token? The runner using it will stop being able to authenticate.')) return;
