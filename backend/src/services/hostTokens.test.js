@@ -56,7 +56,7 @@ test('valid per-host token authorizes and stamps last_seen_at', async () => {
   const dbi = {
     async one(sql, params) {
       assert.match(sql, /sourcing_hosts/);
-      assert.match(sql, /status = 'active'/);
+      assert.match(sql, /status <> 'revoked'/);
       assert.strictEqual(params[0], hashToken(token));
       return { id: 42 };
     },
@@ -90,13 +90,35 @@ test('missing token → 401', async () => {
   assert.strictEqual(res.state.status, 401);
 });
 
-test('a revoked host (WHERE status = active filters it out) → 401', async () => {
-  // The SQL filters on status='active', so a revoked row returns no result — the
+test('a revoked host (WHERE status <> revoked filters it out) → 401', async () => {
+  // The SQL excludes status='revoked', so a revoked row returns no result — the
   // middleware treats that the same as an unknown token.
   const dbi = { one: async () => null, query: async () => {} };
   const mw = makeMiddleware({ db: dbi, isAuthed: () => false });
   const { res } = await runMw(mw, fakeReq({ 'x-api-token': generateToken() }));
   assert.strictEqual(res.state.status, 401);
+});
+
+// The bug this guards: reapStaleHosts flips a quiet host to 'stale' after 24h,
+// and the ONLY way it ever saw 'active' again used to be an admin minting a
+// fresh token — the phone's own reconnect was silently rejected because the
+// lookup filtered on status='active'. A stale row is not revoked; it just
+// has not checked in, and checking in IS the proof it should count again.
+test('a stale (not revoked) host authorizes and is revived to active', async () => {
+  const token = generateToken();
+  const stampCalls = [];
+  const dbi = {
+    async one() { return { id: 7 }; }, // status <> 'revoked' matches a stale row too
+    async query(sql, params) { stampCalls.push({ sql, params }); },
+  };
+  const mw = makeMiddleware({ db: dbi, isAuthed: () => false });
+  const { nextCalled } = await runMw(mw, fakeReq({ 'x-api-token': token }));
+  assert.strictEqual(nextCalled, true);
+
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(stampCalls.length, 1);
+  assert.match(stampCalls[0].sql, /status = 'active'/, 'the stale row is revived, not just re-stamped');
+  assert.deepStrictEqual(stampCalls[0].params, [7]);
 });
 
 // --- pre-gate middleware -------------------------------------------------
@@ -108,7 +130,10 @@ test('a revoked host (WHERE status = active filters it out) → 401', async () =
 test('preGate stamps a valid token and lets the request continue', async () => {
   const token = generateToken();
   const dbi = {
-    async one() { return { id: 5 }; },
+    async one(sql) {
+      assert.match(sql, /status <> 'revoked'/);
+      return { id: 5 };
+    },
     async query() {},
   };
   const mw = makePreGate({ db: dbi });
@@ -118,6 +143,24 @@ test('preGate stamps a valid token and lets the request continue', async () => {
   assert.strictEqual(nextErr, undefined);
   assert.strictEqual(req.__sourcingHostAuthed, true);
   assert.strictEqual(req.sourcingHostId, 5);
+});
+
+// Same self-healing as the main middleware: this is the path actually mounted
+// in front of every /api/sourcing/* call, so a phone whose host went stale
+// overnight has to be revived HERE, on its very first request back.
+test('preGate revives a stale host on check-in, same as the main middleware', async () => {
+  const stampCalls = [];
+  const dbi = {
+    async one() { return { id: 9 }; },
+    async query(sql, params) { stampCalls.push({ sql, params }); },
+  };
+  const mw = makePreGate({ db: dbi });
+  await runMw(mw, fakeReq({ 'x-api-token': generateToken() }));
+
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(stampCalls.length, 1);
+  assert.match(stampCalls[0].sql, /status = 'active'/);
+  assert.deepStrictEqual(stampCalls[0].params, [9]);
 });
 
 test('preGate never rejects — no token or unknown token just passes through', async () => {

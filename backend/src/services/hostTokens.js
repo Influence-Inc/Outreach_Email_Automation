@@ -12,7 +12,11 @@
 //   requireHostOrSlack(...)  — express middleware: allow if the request already
 //                              carries a valid Slack session or global machine
 //                              token (siteAuth.isAuthed passed), OR if the
-//                              x-api-token maps to an active row in sourcing_hosts.
+//                              x-api-token maps to a non-revoked row in
+//                              sourcing_hosts. A 'stale' row (no check-in for
+//                              24h — see sourcingSweep.reapStaleHosts) is
+//                              revived to 'active' by the very check-in that
+//                              authenticates it; only 'revoked' is a hard lock.
 //
 // The middleware is additive — it never rejects a request siteAuth already
 // approved. This keeps siteAuth.js (a security-sensitive file) untouched.
@@ -54,13 +58,18 @@ function makeMiddleware({ db: dbi = db, isAuthed = siteAuth.isAuthed } = {}) {
 
     try {
       const row = await dbi.one(
-        `SELECT id FROM sourcing_hosts WHERE token_hash = $1 AND status = 'active'`,
+        `SELECT id FROM sourcing_hosts WHERE token_hash = $1 AND status <> 'revoked'`,
         [hashToken(token)],
       );
       if (!row) return res.status(401).json({ error: 'Unauthorized' });
-      // Best-effort last_seen_at stamp — never blocks the request.
-      dbi.query(`UPDATE sourcing_hosts SET last_seen_at = NOW() WHERE id = $1`, [row.id])
-        .catch(() => {});
+      // Best-effort last_seen_at stamp — never blocks the request. Also revives
+      // a 'stale' row: the sweeper marks a host stale after 24h of silence, and
+      // this check-in is proof it is not — a host should never need a fresh
+      // token minted just because nobody opened the app for a day.
+      dbi.query(
+        `UPDATE sourcing_hosts SET last_seen_at = NOW(), status = 'active' WHERE id = $1`,
+        [row.id],
+      ).catch(() => {});
       req.sourcingHostId = row.id;
       return next();
     } catch (err) {
@@ -80,14 +89,16 @@ function makePreGate({ db: dbi = db } = {}) {
     if (!token) return next();
     try {
       const row = await dbi.one(
-        `SELECT id FROM sourcing_hosts WHERE token_hash = $1 AND status = 'active'`,
+        `SELECT id FROM sourcing_hosts WHERE token_hash = $1 AND status <> 'revoked'`,
         [hashToken(token)],
       );
       if (row) {
         req.sourcingHostId = row.id;
         req.__sourcingHostAuthed = true;
-        dbi.query(`UPDATE sourcing_hosts SET last_seen_at = NOW() WHERE id = $1`, [row.id])
-          .catch(() => {});
+        dbi.query(
+          `UPDATE sourcing_hosts SET last_seen_at = NOW(), status = 'active' WHERE id = $1`,
+          [row.id],
+        ).catch(() => {});
       }
     } catch (_) { /* swallow — the main gate still gets to decide */ }
     return next();
