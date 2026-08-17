@@ -424,8 +424,22 @@ function extractReelResults(elements) {
 const REELS_LABELS = ['reels', 'reels tab'];
 const EXPLORE_LABELS = ['explore', 'explore tab'];
 
+// The reel-content tab on a search results page. Current IG calls it "For you"
+// (older builds called it "Top"); either is the tab that answers a keyword with
+// REELS rather than accounts, audio or hashtags.
+const FOR_YOU_LABELS = ['for you', 'for you tab', 'top'];
+
+// Every tab on the search results strip, so we can tell WHICH one is selected —
+// IG remembers the last-used tab, so a fresh search can land on Audio.
+const SERP_TAB_LABELS = ['for you', 'top', 'accounts', 'audio', 'tags', 'places', 'reels'];
+
 function isReelsLabelled(e) {
   return REELS_LABELS.includes(labelOf(e));
+}
+
+function serpTabLabelOf(e) {
+  const l = labelOf(e);
+  return SERP_TAB_LABELS.includes(l) ? l : null;
 }
 
 /** Vertical mid-point of an element, for grouping a row of tabs. */
@@ -479,6 +493,40 @@ function findSearchReelsTab(elements, height, screen) {
     return tabbish || candidate;
   }
   return null;
+}
+
+/**
+ * The "For you" content tab on a search results page.
+ *
+ * This is the tab a keyword search must land on — it answers with reels, where
+ * Accounts answers with handles that merely contain the string and Audio answers
+ * with songs. IG remembers the last-used tab, so a fresh search regularly opens
+ * on Audio; the navigator uses this target to switch back.
+ */
+function findForYouTab(elements, height, screen) {
+  if (screen !== 'search_results') return null;
+  const topBand = Number.isFinite(height) && height > 0 ? height * 0.35 : Infinity;
+  const inBand = (e) => e.bounds && e.bounds.y <= topBand;
+
+  const byRid = elements.find((e) => inBand(e)
+    && /serp_tab_for_you|serp_journey_header_tab_for_you|tab_for_you|serp_tab_top/.test(ridLocal(e.rid)));
+  if (byRid) return byRid;
+  return elements.find((e) => inBand(e) && FOR_YOU_LABELS.includes(labelOf(e))) || null;
+}
+
+/**
+ * Which search-results tab is currently selected, lowercased — or null when it
+ * can't be told. `selected` is set on the active tab in the strip.
+ */
+function activeSerpTab(elements, height, screen) {
+  if (screen !== 'search_results') return null;
+  const topBand = Number.isFinite(height) && height > 0 ? height * 0.35 : Infinity;
+  const sel = elements.find((e) => {
+    if (!e.bounds || e.bounds.y > topBand) return false;
+    if (!(e.selected === true || e.selected === 'true')) return false;
+    return serpTabLabelOf(e) != null;
+  });
+  return sel ? serpTabLabelOf(sel) : null;
 }
 
 /**
@@ -720,6 +768,13 @@ function readScreen(input = {}) {
     if (c) targets.searchReelsTab = c;
   }
   {
+    // The "For you" content tab, plus which tab is actually selected — so the
+    // navigator can switch back when a keyword search lands on Audio/Accounts.
+    const el = findForYouTab(elements, input.height, screen);
+    const c = el && center(el.bounds);
+    if (c) targets.forYouTab = c;
+  }
+  {
     const el = findReelsNavTab(elements, input.height);
     const c = el && center(el.bounds);
     if (c) targets.reelsNavTab = c;
@@ -737,6 +792,9 @@ function readScreen(input = {}) {
   }
 
   if (screen === 'search_results') {
+    // Which tab the results are on. 'for you'/'top' is the one we want; anything
+    // else means IG opened on a remembered tab and the navigator must switch.
+    reading.activeTab = activeSerpTab(elements, input.height, screen);
     const { results, targets: rt } = extractResults(elements);
     reading.results = results;
     Object.assign(targets, rt);
@@ -819,6 +877,8 @@ module.exports = {
   looksLikeHandle,
   looksLikeCount,
   detectDialog,
+  findForYouTab,
+  activeSerpTab,
   SIGNALS,
   ACTION_BLOCK_RE,
 };

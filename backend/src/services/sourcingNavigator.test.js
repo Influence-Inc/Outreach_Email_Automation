@@ -180,12 +180,13 @@ const BACK = { x: 3, y: 3 };
 // Typing alone leaves IG on its as-you-type ACCOUNT suggestions, which match the
 // raw string against handles — the reason keyword scouting surfaced profiles
 // whose NAME contained the keyword instead of creators posting about it.
-test('commits the query and moves to the search page reels chip', async () => {
+test('commits the query and switches a search that landed on Audio to For you', async () => {
   const driver = driverWithSearch();
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: { searchReelsTab: { x: 640, y: 180 }, back: BACK } },
-    { screen: 'search_results', targets: { back: BACK } },
+    // IG remembered the last-used tab and opened on Audio.
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 640, y: 180 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
     { screen: 'search_results', targets: { back: BACK } },
   ];
   const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['homegym'] }, read: scriptedRead(views) });
@@ -196,7 +197,7 @@ test('commits the query and moves to the search page reels chip', async () => {
   assert.ok(order.indexOf('type') < order.indexOf('submitSearch'), 'typed before submitting');
   assert.ok(
     driver.ops.some((o) => o[0] === 'tap' && o[1] === 640 && o[2] === 180),
-    'tapped the reels chip on the results page',
+    'switched to the For you tab',
   );
 });
 
@@ -386,7 +387,7 @@ test('scrolls a reels feed, opening each creator and returning to the feed', asy
   ];
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: { searchReelsTab: { x: 600, y: 150 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 600, y: 150 }, back: BACK } },
     feedReel('Alpha Coach'),        // after tapping the chip
     feedReel('Alpha Coach'),        // feed read inside the scroll loop
     ...profileOf(1000),
@@ -420,7 +421,7 @@ test('the same creator is not analysed twice while scrolling', async () => {
   const feedReel = { screen: 'reels_feed', author: 'Same Person', targets: { authorProfile: { x: 3, y: 4 }, back: BACK } };
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 6, y: 1 }, back: BACK } },
     feedReel,
     feedReel,
     { screen: 'profile', followers: 10, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
@@ -444,7 +445,7 @@ test('scrolling out of the feed ends feed discovery cleanly', async () => {
   const driver = driverWithSearch();
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 6, y: 1 }, back: BACK } },
     { screen: 'reels_feed', author: 'A', targets: { back: BACK } }, // no authorProfile -> skip
     { screen: 'profile', targets: { back: BACK } },                 // no longer a feed -> stop
     { screen: 'search', targets: {} },
@@ -557,13 +558,97 @@ test('never pages the results tab strip sideways', async () => {
   assert.strictEqual(sideways.length, 0, 'no horizontal swipes — Audio is never a source');
 });
 
+// IG remembers the last-used search tab, so a fresh keyword search regularly
+// OPENS on Audio (a page of songs). "For you is the default" was wrong; landing
+// on Audio must be corrected every time, not accepted.
+test('a search that lands on Audio switches to For you before scouting', async () => {
+  const driver = driverWithSearch();
+  const hop = [
+    { screen: 'search_results', activeTab: 'for you', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const views = [
+    ...OPEN_SEARCH,
+    // Opened on Audio, with the For you tab on the strip to switch to.
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 90, y: 300 }, back: BACK } },
+    ...hop,
+    ...Array(20).fill({ screen: 'search_results', targets: { back: BACK } }),
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 90 && o[2] === 300),
+    'tapped For you to leave Audio',
+  );
+  assert.strictEqual(out.length, 1, 'and then scouted the For you results');
+  assert.strictEqual(out[0].username, 'coach');
+});
+
+// If the switch cannot be made — Audio selected, no For you tab in reach — the
+// keyword is skipped rather than scouting songs as if they were creators.
+test('an Audio page with no way back to For you is not scouted', async () => {
+  const driver = driverWithSearch();
+  const audio = {
+    screen: 'search_results',
+    activeTab: 'audio',
+    // Audio rows the reader parses as handle-shaped — exactly the trap.
+    results: ['some_song', 'another_track'],
+    targets: { 'result:some_song': { x: 5, y: 5 }, back: BACK },
+  };
+  const views = [...OPEN_SEARCH, audio, ...Array(20).fill(audio)];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 3 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'nothing sourced from the Audio tab');
+  // Never opened an "audio result" as a profile.
+  assert.ok(
+    !driver.ops.some((o) => o[0] === 'tap' && o[1] === 5 && o[2] === 5),
+    'never tapped an Audio row',
+  );
+});
+
+// A full-screen reels player has no tab strip at all, so an absent activeTab must
+// still be treated as scoutable — otherwise the feed-scroll surface breaks.
+test('a page with no tab strip is still scouted', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'reels_feed', author: 'runner', targets: { authorProfile: { x: 9, y: 9 }, back: BACK } },
+    { screen: 'reels_feed', author: 'runner', targets: { authorProfile: { x: 9, y: 9 }, back: BACK } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_feed', targets: { back: BACK } },
+    ...Array(20).fill({ screen: 'unknown', targets: {} }),
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 1, 'the reels feed was scouted despite no activeTab');
+});
+
 // "For you" IS the content tab on current IG, and it is the default — so when the
 // reader does surface it, that is the one to tap.
 test('taps the For you content tab when the page has nothing yet', async () => {
   const driver = driverWithSearch();
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: { searchReelsTab: { x: 120, y: 300 } } },
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 120, y: 300 } } },
     { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
     { screen: 'search_results', targets: {} },   // openAndCaptureProfile: link gone -> bail
     { screen: 'search_results', targets: { back: BACK } },
@@ -806,7 +891,7 @@ test('a sponsored reel in the feed is skipped without opening the account', asyn
   const driver = driverWithSearch();
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 6, y: 1 }, back: BACK } },
     { screen: 'reels_feed', author: 'somebrand', sponsored: true, targets: FEED_TARGETS },
     { screen: 'reels_feed', author: 'somebrand', sponsored: true, targets: FEED_TARGETS },
     { screen: 'search', targets: {} },
@@ -881,7 +966,7 @@ test('a run stops opening profiles once the cap is spent', async () => {
   ];
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 6, y: 1 }, back: BACK } },
     feed('one'), // after tapping the chip; the scroll loop reads again below
     ...profileHop('one'),
     ...profileHop('two'),
@@ -907,7 +992,7 @@ test('a frozen feed is recovered rather than scrolled at forever', async () => {
   const frozen = { screen: 'reels_feed', author: null, caption: 'stuck', targets: {} };
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: { searchReelsTab: { x: 6, y: 1 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 6, y: 1 }, back: BACK } },
     frozen, frozen, frozen, frozen, frozen,
     { screen: 'search', targets: {} },
   ];
