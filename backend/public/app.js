@@ -1858,6 +1858,11 @@ function renderStatusCell(r, cell) {
     cell.appendChild(makeInterveneButton(r, { label: 'Approve deal' }));
   } else if (r.needs_human) {
     cell.appendChild(makeInterveneButton(r, { label: 'Reply hand-off' }));
+  } else if (isManualContractSendPending(r)) {
+    // Offer's out, human has been managing the thread manually — the AI won't
+    // move this deal to ACCEPTED on its own. Fallback so the user can finalise
+    // it without hunting for a hidden action.
+    cell.appendChild(makeInterveneButton(r, { label: 'Send contract' }));
   } else if (isBriefActionable(r)) {
     cell.appendChild(makeInterveneButton(r, { label: 'Brief hand-off' }));
   }
@@ -2085,14 +2090,17 @@ function openInterventionModal(r) {
   const handle = r.instagram_username ? `@${r.instagram_username}` : r.full_name || 'Creator';
   const offer = isOfferActionable(r);
   const contract = isContractApprovalPending(r);
-  const brief = !offer && !contract && !r.needs_human && isBriefActionable(r);
+  const manualSend = !offer && !contract && !r.needs_human && isManualContractSendPending(r);
+  const brief = !offer && !contract && !manualSend && !r.needs_human && isBriefActionable(r);
   m.kicker.textContent = offer
     ? 'Configure offer'
     : contract
       ? 'Approve deal'
-      : brief
-        ? 'Content brief'
-        : 'Reply hand-off';
+      : manualSend
+        ? 'Send contract'
+        : brief
+          ? 'Content brief'
+          : 'Reply hand-off';
   m.subject.textContent = r.first_name ? `${handle} · ${r.first_name}` : handle;
   m.subject.hidden = false;
   m.meta.textContent = r.email || 'no email';
@@ -2119,6 +2127,8 @@ function openInterventionModal(r) {
       if (msg) m.bodyEl.appendChild(msg);
       m.bodyEl.appendChild(buildReplyBlock(r));
     }
+  } else if (manualSend) {
+    m.bodyEl.appendChild(buildManualContractSendBlock(r));
   } else if (brief) {
     m.bodyEl.appendChild(buildBriefBlock(r));
   } else {
@@ -4448,6 +4458,38 @@ function isContractApprovalPending(r) {
   );
 }
 
+// The offer is out (AWAITING_DECISION) and the human has taken over the
+// conversation — the most recent outbound in the timeline is a delegate reply.
+// A mid-decision reply that mixes acceptance with a question ("yes, but how
+// about the deadline?") is classified as a hand-off, not an acceptance, so the
+// deal never moves to ACCEPTED on its own — after the human answers, the row
+// would otherwise sit with no actionable button. Surface a "Send contract"
+// escape hatch here so the human can push the deal through once they've
+// concluded it. Routed through POST /:id/contract, which records the approval
+// and generates + emails the signing link regardless of stage.
+function isManualContractSendPending(r) {
+  if (r.negotiation_status !== 'AWAITING_DECISION') return false;
+  if (r.contract_approved) return false;
+  if (r.contract && r.contract.status) return false;
+  const log = Array.isArray(r.rate_log) ? r.rate_log : [];
+  for (let i = log.length - 1; i >= 0; i--) {
+    const e = log[i];
+    if (!e) continue;
+    if (e.type === 'sent_delegate_reply') return true;
+    // Any other outbound (auto-reply, follow-up, manual reply, offer send) means
+    // the human hasn't specifically taken over yet — keep the row silent so
+    // AWAITING_DECISION rows waiting on the creator don't sprout a stray button.
+    if (
+      e.type === 'sent_negotiation' ||
+      e.type === 'sent_followup' ||
+      e.type === 'sent_manual_reply' ||
+      e.type === 'rate_offer_sent' ||
+      e.type === 'sent_outreach'
+    ) return false;
+  }
+  return false;
+}
+
 // Needs a human right now: an AI hand-off, an offer awaiting approval, or an
 // accepted deal awaiting the brand POC's contract approval. Drives the top-of-
 // table sort, the row highlight, and the banner count. A flag the admin has
@@ -4462,7 +4504,13 @@ function isBriefActionable(r) {
 
 function isDelegateActionable(r) {
   if (isFlagDismissed(r)) return false;
-  return !!r.needs_human || isOfferActionable(r) || isContractApprovalPending(r) || isBriefActionable(r);
+  return (
+    !!r.needs_human ||
+    isOfferActionable(r) ||
+    isContractApprovalPending(r) ||
+    isManualContractSendPending(r) ||
+    isBriefActionable(r)
+  );
 }
 
 // The "Approve & send contract" block on a pending-approval intervention pop-up.
@@ -4496,6 +4544,50 @@ function buildContractApprovalBlock(r) {
     } catch (err) {
       statusEl.textContent = `Failed: ${err.message}`;
       approveBtn.disabled = false;
+    }
+  };
+  return block;
+}
+
+// Escape-hatch counterpart to buildContractApprovalBlock, for a deal that never
+// formally reached ACCEPTED (a mixed-intent reply that the AI routed to a
+// hand-off, then the human answered) — approveContract would 409 here, so this
+// hits POST /:id/contract instead, which records the approval and generates +
+// emails the contract regardless of stage.
+function buildManualContractSendBlock(r) {
+  const log = Array.isArray(r.rate_log) ? r.rate_log : [];
+  let offerAmount = null;
+  for (let i = log.length - 1; i >= 0; i--) {
+    const e = log[i];
+    if (e && e.type === 'rate_offer_sent' && e.amount != null) { offerAmount = Number(e.amount); break; }
+  }
+  if (offerAmount == null && r.quoted_rate != null) offerAmount = Number(r.quoted_rate);
+  const rateStr = offerAmount != null ? ` at $${fmtNum(offerAmount)}` : '';
+  const block = document.createElement('div');
+  block.className = 'delegate-approval-block';
+  block.innerHTML = `
+    <div class="delegate-question">The offer is out${rateStr} and you've been handling this thread. If the deal is done, send the contract now — it's generated and emailed for signing.</div>
+    <div class="delegate-reply-foot">
+      <span class="delegate-status hint"></span>
+      <button class="btn-primary delegate-send-contract" type="button">Send contract</button>
+    </div>`;
+  const statusEl = block.querySelector('.delegate-status');
+  const sendBtn = block.querySelector('.delegate-send-contract');
+  sendBtn.onclick = async () => {
+    const ok = await confirmDialog({
+      title: `Send the contract${rateStr}?`,
+      message: 'The contract will be generated and emailed to the creator for signing.',
+      confirmLabel: 'Send contract',
+    });
+    if (!ok) return;
+    sendBtn.disabled = true;
+    statusEl.textContent = 'Generating & sending contract…';
+    try {
+      await api(`/api/creators/${r.id}/contract`, { method: 'POST' });
+      await refreshAfterIntervention();
+    } catch (err) {
+      statusEl.textContent = `Failed: ${err.message}`;
+      sendBtn.disabled = false;
     }
   };
   return block;

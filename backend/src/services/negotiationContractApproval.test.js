@@ -140,3 +140,27 @@ test('ensureContractSent refuses a creator without the recorded approval', async
     restore();
   }
 });
+
+// The manual escape hatch (POST /:id/contract, wired to the dashboard's "Send
+// contract" fallback button) records an approval and calls ensureContractSent
+// regardless of negotiation stage — the flow used when a mixed-intent reply
+// lands the deal at AWAITING_DECISION + hand-off, the human answers, and the
+// AI never advances it to ACCEPTED. approveContract itself would 409 here;
+// this path must not.
+test('ensureContractSent sends the contract at AWAITING_DECISION once the manual approval is recorded', async () => {
+  const prevDryRun = process.env.DRY_RUN;
+  process.env.DRY_RUN = '1';
+  const writes = install({
+    ...baseCreator,
+    negotiation_status: 'AWAITING_DECISION',
+    contract_approved: true, // the route records this before calling ensureContractSent
+  });
+  try {
+    const res = await negotiation.ensureContractSent(42);
+    assert.deepStrictEqual(res, { ok: true });
+    assert.ok(findEvent(writes, 'contract_sent'), 'the contract goes out on the manual send');
+  } finally {
+    process.env.DRY_RUN = prevDryRun;
+    restore();
+  }
+});
