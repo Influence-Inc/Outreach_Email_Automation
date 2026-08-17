@@ -165,6 +165,11 @@ function classifyRisk(views, opts = {}) {
 // shape (a rock-steady creator is never rejected for being "too safe").
 function matchesRisk(computed, desired) {
   if (!desired) return true;
+  // 'all' takes every shape — low, medium and high alike. Ordered tolerance
+  // already means 'high' accepts everything below it, but saying "any shape is
+  // fine" and "I will tolerate up to viral" are different intents, and only one
+  // of them survives a future change to how the shapes are ranked.
+  if (String(desired).toLowerCase() === 'all') return true;
   const c = RISK_RANK[computed];
   const d = RISK_RANK[desired];
   if (c == null || d == null) return true;

@@ -78,11 +78,22 @@ async function tapTarget({ driver, view, name, pacingMs, jitterPx = 0 }) {
   await humanTap(driver, { x: t.x, y: t.y }, jitterPx, pacingMs);
 }
 
+/**
+ * Tap a named target if it is there, and say whether it was.
+ *
+ * The throwing version killed an entire run when one control was momentarily
+ * missing — a keyword we cannot start is a keyword to skip, not a reason to
+ * abandon every keyword after it.
+ */
+async function tapTargetSoft({ driver, view, name, pacingMs, jitterPx = 0 }) {
+  const t = view.targets && view.targets[name];
+  if (!t) return false;
+  await humanTap(driver, { x: t.x, y: t.y }, jitterPx, pacingMs);
+  return true;
+}
+
 // Screens a keyword loop can continue from — where the next result is reachable.
 const SERP_SCREENS = ['search_results', 'search'];
-
-// How many times to page the results tab strip looking for the Reels chip.
-const MAX_TAB_STRIP_SCROLLS = 3;
 
 // Default number of reels to read off a creator's grid. Overridden per run by
 // `reelsWindow` — the dashboard's "Recent reels to check" — because that is the
@@ -105,25 +116,31 @@ const MAX_REEL_SCROLLS = 6;
 const MAX_FEED_SCROLLS = 60;
 
 /**
- * Get onto the results page's REELS chip, scrolling the tab strip to find it.
+ * Get onto the results page's CONTENT tab — "For you".
  *
- * Instagram's results tabs (Top | Accounts | Audio | Tags | Places | Reels) are a
- * horizontally scrollable strip, and Reels often starts off-screen — so "the
- * chip isn't in the tree" does not mean "this build has no Reels tab". Paging
- * the strip deliberately is the fix; the scout was previously reaching Accounts
- * and Audio only by accident, via a back gesture it mistook for navigation.
+ * Current Instagram's results strip is `For you | Accounts | Audio | Tags`, and
+ * "For you" is both the reel-content tab and the one already selected when the
+ * page loads. So the common path here costs nothing: the reader finds content
+ * already on screen and we take it.
  *
- * Returns the view to carry on with, whether or not a chip was found.
+ * This used to page the strip SIDEWAYS hunting for a "Reels" tab that current IG
+ * does not have, which is exactly how the scout ended up on Accounts and then
+ * Audio — sourcing a creator from an Audio result is meaningless, and every swipe
+ * spent getting there was wasted. Nothing scrolls the strip any more: if the tab
+ * is not in the tree, the page's own content is what we work with.
+ *
+ * Returns the view to carry on with.
  */
-async function openResultsReelsChip({ driver, view, read, pacingMs, jitterPx = 0, screen }) {
-  const size = screen || { width: 1080, height: 2400 };
-  // Reels only. Explore is a general-interest surface, so creators sourced from
-  // it have nothing to do with the keyword — it is never a fallback.
+async function openResultsReelsChip({ driver, view, read, pacingMs, jitterPx = 0, log = () => {} }) {
   const chipOf = (v) => v && v.targets && v.targets.searchReelsTab;
   const hasContent = (v) => !!v && (
     (Array.isArray(v.reelResults) && v.reelResults.length > 0)
     || (Array.isArray(v.results) && v.results.length > 0)
   );
+
+  // Already showing results — "For you" is the default tab, so this is the
+  // normal case and it needs no tap at all.
+  if (hasContent(view)) return view;
 
   const chip = chipOf(view);
   if (chip) {
@@ -131,40 +148,10 @@ async function openResultsReelsChip({ driver, view, read, pacingMs, jitterPx = 0
     return read(driver);
   }
 
-  // No chip, but the page already has something to scout — take it rather than
-  // spending swipes hunting for a tab we do not need.
-  if (hasContent(view)) return view;
-
-  // Nothing usable at all. Reels may simply be off-screen: the tabs
-  // (Top | Accounts | Audio | Tags | Places | Reels) are a horizontally
-  // scrollable strip. Page it deliberately, inside the strip's own y-band so the
-  // swipe cannot be mistaken for a page gesture.
-  let current = view;
-  for (let i = 0; i < MAX_TAB_STRIP_SCROLLS; i += 1) {
-    const y = Math.round(size.height * 0.14);
-    // eslint-disable-next-line no-await-in-loop
-    await driver.swipe({
-      x1: Math.round(size.width * 0.8),
-      y1: y,
-      x2: Math.round(size.width * 0.2),
-      y2: y,
-      durationMs: 260,
-    });
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(jitteredDelay(pacingMs));
-    // eslint-disable-next-line no-await-in-loop
-    current = await read(driver);
-
-    const found = chipOf(current);
-    if (found) {
-      // eslint-disable-next-line no-await-in-loop
-      await humanTap(driver, found, jitterPx, pacingMs);
-      // eslint-disable-next-line no-await-in-loop
-      return read(driver);
-    }
-    if (hasContent(current)) return current;
-  }
-  return current;
+  // No content and no tab to tap. Sitting still beats wandering into Accounts or
+  // Audio; the caller treats an empty page as "this keyword gave nothing".
+  log('[sourcing] no content tab and no results on the page — moving on');
+  return view;
 }
 
 // Real device pixels, for scroll geometry. Shares the per-driver cache with
@@ -198,12 +185,55 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const screen = await deviceSize(driver);
   const terms = pickSearchTerms(opts);
   let emitted = 0;
-  // Creators already analysed, across every keyword — a feed surfaces the same
-  // popular accounts repeatedly, and re-opening one burns a slot against N.
+  // Creators already analysed, across every keyword AND every pass — a results
+  // page re-surfaces the same popular accounts, and re-opening one burns a slot
+  // against N.
   const seenCreators = new Set();
 
+  // One pass over the keywords used to be the whole run, so a run whose target
+  // was 6 reported "done" after finding 1 — it had simply run out of keywords,
+  // never out of creators or out of its profile budget.
+  //
+  // Keywords now repeat, and each visit goes DEEPER into that keyword's results
+  // than the last one did. "Nothing new at this depth" is not the same as "this
+  // keyword is finished": the top of a results page is the same creators every
+  // time, so a barren visit usually just means we have already worked that depth
+  // — scrolling further is exactly what finds different creators and reels.
+  //
+  // A keyword is only retired once its results will not scroll any further AND
+  // that deepest look produced nobody new. The run ends when the target is met,
+  // the profile cap is spent, or every keyword has been retired.
+  const depthOf = new Map(terms.map((t) => [t, 0]));
+  const exhausted = new Set();
+  // Consecutive times a keyword could not even be typed. A transient missing
+  // control must not retire a keyword, but a permanent one must not spin the
+  // pass loop forever either — which is exactly what an unbounded skip did.
+  const failuresOf = new Map(terms.map((t) => [t, 0]));
+  const MAX_TERM_FAILURES = 3;
+
+  const skipTerm = (term, why) => {
+    const n = (failuresOf.get(term) || 0) + 1;
+    failuresOf.set(term, n);
+    if (n >= MAX_TERM_FAILURES) {
+      exhausted.add(term);
+      log(`[sourcing] "${term}": ${why} ${n}x — retiring it`);
+    } else {
+      log(`[sourcing] "${term}": ${why} — skipping this visit`);
+    }
+  };
+
+  for (let pass = 0; ; pass += 1) {
+    if (emitted >= max || cap.spent()) return;
+    if (exhausted.size >= terms.length) {
+      log(`[sourcing] every keyword is scrolled out — ${emitted} sourced`);
+      return;
+    }
+
   for (const term of terms) {
-    if (emitted >= max) return;
+    if (emitted >= max || cap.spent()) break;
+    if (exhausted.has(term)) continue;
+    const emittedAtTermStart = emitted;
+    const depth = depthOf.get(term) || 0;
 
     // Stamp every creator with the keyword that surfaced them, so a passing
     // creator carries which search found them all the way into the creators
@@ -221,10 +251,22 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         driver, read, pacingMs, jitterPx, guard: stall, log, pkg: IG_ANDROID_PACKAGE,
       });
     }
-    await tapTarget({ driver, view, name: 'searchTab', pacingMs, jitterPx });
+    // A missing control here used to throw and take the whole run down with it.
+    // Get back into a known place and move to the next keyword instead — the
+    // pass-progress guard below ends the run if nothing works anywhere.
+    if (!await tapTargetSoft({ driver, view, name: 'searchTab', pacingMs, jitterPx })) {
+      skipTerm(term, 'no search tab on screen');
+      await ensureInInstagram({ driver, read, pacingMs, jitterPx });
+      continue;
+    }
 
     view = await read(driver);
-    await tapTarget({ driver, view, name: 'searchBox', pacingMs, jitterPx });
+    if (!await tapTargetSoft({ driver, view, name: 'searchBox', pacingMs, jitterPx })) {
+      skipTerm(term, 'no search box on screen');
+      await ensureInInstagram({ driver, read, pacingMs, jitterPx });
+      continue;
+    }
+    failuresOf.set(term, 0); // the search started, so earlier misses were transient
     await driver.typeText(term);
     await sleep(jitteredDelay(pacingMs));
 
@@ -240,7 +282,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
 
     // Then move to that page's REELS filter — the keyword's actual content.
     view = await read(driver);
-    view = await openResultsReelsChip({ driver, view, read, pacingMs, jitterPx, screen });
+    view = await openResultsReelsChip({ driver, view, read, pacingMs, jitterPx, log });
 
     // The chip can land on either of two surfaces, so handle both.
     //
@@ -264,6 +306,18 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     // posting the content we searched for, where an Accounts row only proves the
     // handle matched the string. Tap a card → the reels_feed player exposes the
     // real @handle + an authorProfile target → open the profile → analyse.
+    //
+    // Go as deep into this keyword's results as we have already worked, so this
+    // visit starts where the last one stopped rather than re-tapping the same
+    // cards. Strictly additive: a scroll landing somewhere with no content must
+    // not cost us the page we already had.
+    let atEnd = false;
+    if (depth > 0) {
+      const deeper = await scrollResults({ driver, read, pacingMs, screen, screens: depth });
+      atEnd = deeper.atEnd;
+      if (hasResults(deeper.view)) view = deeper.view;
+    }
+
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
       if (emitted >= max) return;
@@ -272,7 +326,11 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
         reelsWindow, clipsWanted, log,
       });
-      if (profile) {
+      // A grid card gives no handle until the reel is open, so the duplicate
+      // check has to happen here rather than before the hop.
+      const handle = profile && profile.username && String(profile.username).toLowerCase();
+      if (profile && handle && !seenCreators.has(handle)) {
+        seenCreators.add(handle);
         yield tag(profile);
         emitted += 1;
       }
@@ -288,7 +346,11 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       const results = Array.isArray(view.results) ? view.results : [];
       for (const handle of results) {
         if (emitted >= max) return;
+        // Here the handle is known before we move, so a creator already analysed
+        // costs nothing at all to skip.
+        if (seenCreators.has(String(handle).toLowerCase())) continue;
         if (!cap.take()) return;
+        seenCreators.add(String(handle).toLowerCase());
         const profile = await openAndCaptureProfile({
           driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
           clipsWanted, log,
@@ -301,11 +363,79 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       }
     }
 
+    // Next time this keyword comes round, start one screen deeper.
+    depthOf.set(term, depth + 1);
+
+    // Retire the keyword only when BOTH are true: its results would not scroll
+    // any further, and that deepest look found nobody new. Either alone is not
+    // enough — a barren depth with more page below it just means scroll on.
+    if (atEnd && emitted === emittedAtTermStart) {
+      exhausted.add(term);
+      log(`[sourcing] "${term}" is scrolled out and gave nobody new — retiring it`);
+    }
+
     // Next keyword starts by tapping the search tab, which is reachable from any
     // in-app screen — so rather than pressing back again (the press that used to
     // exit Instagram), just make sure we are still inside the app.
     await ensureInInstagram({ driver, read, pacingMs, jitterPx });
   }
+
+    log(`[sourcing] pass ${pass + 1}: ${emitted} sourced, ${cap.opened()} profiles opened, `
+      + `${terms.length - exhausted.size}/${terms.length} keywords still live`);
+  }
+}
+
+/** Does this reading carry anything a scout can work with? */
+function hasResults(v) {
+  return !!v && (
+    (Array.isArray(v.reelResults) && v.reelResults.length > 0)
+    || (Array.isArray(v.results) && v.results.length > 0)
+  );
+}
+
+/**
+ * Scroll a results page down by whole screens, to reach cards an earlier visit
+ * already worked through.
+ *
+ * `atEnd` reports that the page stopped moving — the same content came back
+ * after a swipe, so there is nothing below this. That is what tells the caller a
+ * keyword is genuinely finished rather than merely barren at this depth, and it
+ * stops the run scrolling at the bottom of a short results page forever.
+ *
+ * @returns {Promise<{view:(object|null), atEnd:boolean}>}
+ */
+async function scrollResults({ driver, read, pacingMs, screen, screens = 1 }) {
+  const size = screen || { width: 1080, height: 2400 };
+  const fingerprint = (v) => [
+    (v && v.results) ? v.results.join(',') : '',
+    (v && v.reelResults) ? v.reelResults.map((r) => r && r.label).join(',') : '',
+  ].join('|');
+
+  let view = null;
+  let atEnd = false;
+  for (let i = 0; i < screens; i += 1) {
+    const before = fingerprint(view);
+    // eslint-disable-next-line no-await-in-loop
+    await driver.swipe({
+      x1: Math.round(size.width / 2),
+      y1: Math.round(size.height * 0.8),
+      x2: Math.round(size.width / 2),
+      y2: Math.round(size.height * 0.2),
+      durationMs: 320,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(jitteredDelay(pacingMs));
+    // eslint-disable-next-line no-await-in-loop
+    view = await read(driver);
+
+    // Only meaningful from the second swipe on, when there is a previous
+    // reading to compare against.
+    if (i > 0 && fingerprint(view) === before) {
+      atEnd = true;
+      break;
+    }
+  }
+  return { view, atEnd };
 }
 
 /**

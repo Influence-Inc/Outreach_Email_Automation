@@ -80,7 +80,7 @@ function fillForm(cfg) {
   el('keywords').value = Array.isArray(cfg.keywords) ? cfg.keywords.join(', ') : (cfg.keywords || '');
   el('floor').value = cfg.floor ?? '';
   el('ceiling').value = cfg.ceiling ?? '';
-  el('risk').value = ['low', 'medium', 'high'].includes(cfg.risk) ? cfg.risk : 'medium';
+  el('risk').value = ['low', 'medium', 'high', 'all'].includes(cfg.risk) ? cfg.risk : 'medium';
   el('targetCount').value = cfg.targetCount ?? '';
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
   el('clipsPerProfile').value = cfg.clipsPerProfile ?? 3;

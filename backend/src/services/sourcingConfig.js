@@ -5,7 +5,9 @@
 // numbers, splits comma/newline keyword strings, defaults risk to 'medium' and
 // the reels window to 12.
 
-const RISKS = ['low', 'medium', 'high'];
+// 'all' takes every shape rather than raising a tolerance ceiling — see
+// sourcingFilters.matchesRisk.
+const RISKS = ['low', 'medium', 'high', 'all'];
 
 function toKeywordList(v) {
   if (Array.isArray(v)) return v.map((s) => String(s).trim()).filter(Boolean);
@@ -45,6 +47,14 @@ function buildConfig(defaults = {}, override = {}) {
     // 'reels' = explore/scroll reel-feed flow (watch+hear); else search→profile.
     discovery: merged.discovery === 'reels' ? 'reels' : '',
     clipSeconds: num(merged.clipSeconds),
+    // How many of the creator's reels to actually WATCH (record + judge). This
+    // config is a whitelist, so a knob missing here is silently dropped no matter
+    // what the dashboard sends — which is exactly what happened to these three.
+    clipsPerProfile: num(merged.clipsPerProfile),
+    // Ceiling on profiles opened per run, independent of targetCount.
+    maxProfiles: num(merged.maxProfiles),
+    // How long an unchanging screen counts as stuck rather than slow.
+    stallMs: num(merged.stallMs),
   };
 }
 

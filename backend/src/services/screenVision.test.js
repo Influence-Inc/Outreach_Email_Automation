@@ -475,3 +475,40 @@ test('the word sponsored inside a caption is not an ad label', () => {
   });
   assert.strictEqual(r.sponsored, false);
 });
+
+// ── the profile's three tabs share one rid ───────────────────────────────────
+
+// Real IG gives Grid | Reels | Tagged the SAME `profile_tab_icon_view` rid, so
+// matching that rid returned whichever came first in the tree — the POSTS grid.
+// Post thumbnails carry no view count, which is how live runs reported
+// "only 0 reels (need 6)" for creators whose Reels grid was full.
+test('the profile Reels tab is found by desc, not by the shared rid', () => {
+  const tabs = [
+    node({ rid: 'com.instagram.android:id/profile_tab_icon_view', desc: 'Grid', clickable: true, bounds: { x: 100, y: 900, w: 100, h: 100 } }),
+    node({ rid: 'com.instagram.android:id/profile_tab_icon_view', desc: 'Reels', clickable: true, bounds: { x: 400, y: 900, w: 100, h: 100 } }),
+    node({ rid: 'com.instagram.android:id/profile_tab_icon_view', desc: 'Tagged', clickable: true, bounds: { x: 700, y: 900, w: 100, h: 100 } }),
+  ];
+  const found = sv.resolveTarget(tabs, sv.SIGNALS.reelsTab);
+  assert.strictEqual(found.desc, 'Reels', 'the middle tab, not the first one in the tree');
+});
+
+// A substring match on 'reels' would also hit these.
+test('a longer desc containing "reels" is not the Reels tab', () => {
+  const found = sv.resolveTarget(
+    [node({ rid: 'profile_tab_icon_view', desc: 'Reels and clips you shared', clickable: true })],
+    sv.SIGNALS.reelsTab,
+  );
+  assert.strictEqual(found, null);
+});
+
+// Current IG's results strip is `For you | Accounts | Audio | Tags` — no Reels
+// tab exists, so "For you" is the content tab to aim at.
+test('the search results content tab matches "For you"', () => {
+  const strip = [
+    node({ desc: 'For you', clickable: true, bounds: { x: 100, y: 300, w: 100, h: 60 } }),
+    node({ desc: 'Accounts', clickable: true, bounds: { x: 300, y: 300, w: 100, h: 60 } }),
+    node({ desc: 'Audio', clickable: true, bounds: { x: 500, y: 300, w: 100, h: 60 } }),
+  ];
+  const found = sv.resolveTarget(strip, sv.SIGNALS.searchReelsTab);
+  assert.strictEqual(found.desc, 'For you');
+});

@@ -200,3 +200,20 @@ test('decide rejects when too few reels to judge', () => {
   assert.strictEqual(out.pass, false);
   assert.match(out.rejectReason, /only 3 reels/);
 });
+
+// ── the 'all' risk appetite ─────────────────────────────────────────────────
+
+// Ordered tolerance already means 'high' accepts everything under it, but "any
+// shape is fine" and "I tolerate up to viral" are different intents — and only
+// one of them survives a change to how the shapes rank.
+test("risk 'all' accepts every shape", () => {
+  for (const shape of ['low', 'medium', 'high']) {
+    assert.strictEqual(F.matchesRisk(shape, 'all'), true, `${shape} passes under all`);
+  }
+});
+
+test("risk 'all' is case-insensitive and still gates the other levels", () => {
+  assert.strictEqual(F.matchesRisk('high', 'ALL'), true);
+  assert.strictEqual(F.matchesRisk('high', 'low'), false, 'low is still strict');
+  assert.strictEqual(F.matchesRisk('low', 'low'), true);
+});
