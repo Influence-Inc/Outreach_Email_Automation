@@ -4458,34 +4458,30 @@ function isContractApprovalPending(r) {
   );
 }
 
-// The offer is out (AWAITING_DECISION) and the human has taken over the
-// conversation — the most recent outbound in the timeline is a delegate reply.
-// A mid-decision reply that mixes acceptance with a question ("yes, but how
-// about the deadline?") is classified as a hand-off, not an acceptance, so the
-// deal never moves to ACCEPTED on its own — after the human answers, the row
-// would otherwise sit with no actionable button. Surface a "Send contract"
-// escape hatch here so the human can push the deal through once they've
-// concluded it. Routed through POST /:id/contract, which records the approval
-// and generates + emails the signing link regardless of stage.
+// The offer is out (AWAITING_DECISION) and the conversation has kept going
+// after it — the creator has replied at least once since the priced offer
+// went out. A mid-decision reply that mixes acceptance with a question ("yes,
+// but how about the deadline?") is classified as a hand-off, not an
+// acceptance, so the deal never moves to ACCEPTED on its own; after the
+// exchange plays out (delegate reply, or an AI auto-answer, followed by more
+// replies) the row would otherwise sit with no actionable button. Surface a
+// "Send contract" escape hatch here so the human can push the deal through
+// once they've concluded it. Routed through POST /:id/contract, which records
+// the approval and generates + emails the signing link regardless of stage.
+//
+// Gated on "creator replied AFTER the offer" so a fresh AWAITING_DECISION row
+// waiting on the very first response stays silent — the button appears only
+// once there's an actual back-and-forth to conclude.
 function isManualContractSendPending(r) {
   if (r.negotiation_status !== 'AWAITING_DECISION') return false;
   if (r.contract_approved) return false;
   if (r.contract && r.contract.status) return false;
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
-  for (let i = log.length - 1; i >= 0; i--) {
-    const e = log[i];
+  let sawOffer = false;
+  for (const e of log) {
     if (!e) continue;
-    if (e.type === 'sent_delegate_reply') return true;
-    // Any other outbound (auto-reply, follow-up, manual reply, offer send) means
-    // the human hasn't specifically taken over yet — keep the row silent so
-    // AWAITING_DECISION rows waiting on the creator don't sprout a stray button.
-    if (
-      e.type === 'sent_negotiation' ||
-      e.type === 'sent_followup' ||
-      e.type === 'sent_manual_reply' ||
-      e.type === 'rate_offer_sent' ||
-      e.type === 'sent_outreach'
-    ) return false;
+    if (e.type === 'rate_offer_sent') sawOffer = true;
+    else if (sawOffer && e.type === 'replied') return true;
   }
   return false;
 }
