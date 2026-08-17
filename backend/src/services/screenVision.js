@@ -105,18 +105,22 @@ function findByRidPriority(elements, names) {
   return null;
 }
 
-function findByLabel(elements, names) {
+function findByLabel(elements, names, { exact = false } = {}) {
   return (
     elements.find((e) => {
       const l = labelOf(e);
-      return names.some((n) => l === n || l.includes(n));
+      return names.some((n) => (exact ? l === n : l === n || l.includes(n)));
     }) || null
   );
 }
 
 // Priority resolve: try resource-id signals, then label signals.
-function resolveTarget(elements, { rids = [], labels = [] }) {
-  return findByRid(elements, rids) || findByLabel(elements, labels) || null;
+//
+// `exact` narrows the label match to a whole-string comparison — needed wherever
+// several controls share one rid and only the content-desc tells them apart (the
+// profile's Grid | Reels | Tagged tabs are the case that matters).
+function resolveTarget(elements, { rids = [], labels = [], exact = false }) {
+  return findByRid(elements, rids) || findByLabel(elements, labels, { exact }) || null;
 }
 
 const SIGNALS = {
@@ -143,24 +147,43 @@ const SIGNALS = {
     labels: ['back', 'navigate up'],
   },
   reelsTab: {
-    // Real IG uses a single `profile_tab_icon_view` per tab (Grid | Reels | Photos-of-you)
-    // — the one with content-desc="Reels" is what we want. The `labels: ['reels']`
-    // matcher below catches it via the content-desc; the rids here stay as extras.
+    // Real IG uses the SAME `profile_tab_icon_view` rid for every tab
+    // (Grid | Reels | Photos-of-you), so matching that rid returns whichever tab
+    // comes first in the tree — the POSTS grid. That is how the scout kept
+    // landing on post thumbnails, which carry no view count, and reporting
+    // "only 0 reels" for creators whose Reels grid was full.
+    //
+    // Only the content-desc distinguishes them, so the specific rids are listed
+    // first and the ambiguous one is deliberately absent: `labels` is what
+    // resolves this control. See resolveTarget's labelFirst handling.
     rids: [
-      'profile_tab_icon_view', 'profile_tab_icon_view_reels', 'row_profile_tab_reels', 'reels_tab',
+      'profile_tab_icon_view_reels', 'row_profile_tab_reels', 'reels_tab',
     ],
     labels: ['reels'],
+    // Match the desc EXACTLY: a substring match on 'reels' also hits
+    // "Reels and clips", "Photos of you" tabs' longer descriptions, and the
+    // bottom-nav Reels button.
+    exact: true,
   },
-  // The REELS chip on the search results page — a different control from the
+  // The CONTENT tab on the search results page — a different control from the
   // profile's Reels sub-tab above, and the one that turns a keyword query into
-  // content results. Without tapping it IG answers a keyword with ACCOUNTS whose
-  // handle matched the string, which is not what the keyword was asking for.
+  // content results. Without it IG answers a keyword with ACCOUNTS whose handle
+  // matched the string, which is not what the keyword was asking for.
+  //
+  // Current Instagram labels this tab "For you" and there is NO "Reels" tab on
+  // the results page at all — the strip is `For you | Accounts | Audio | Tags`.
+  // Looking only for "Reels" therefore never matched, and the navigator's
+  // fallback (paging the strip sideways) walked it into Accounts and then Audio,
+  // which is the last place a creator should be sourced from. "For you" is both
+  // the reel-content tab AND the default, so the usual cost here is zero taps.
   searchReelsTab: {
     rids: [
+      'serp_tab_for_you', 'serp_journey_header_tab_for_you',
       'serp_tab_reels', 'search_tab_reels', 'serp_journey_header_tab_reels',
       'tab_bar_reels', 'clips_tab',
     ],
-    labels: ['reels'],
+    labels: ['for you', 'reels'],
+    exact: true,
   },
   // Full-screen reel player engagement buttons. 'like' matches both the Like and
   // Unlike states (same button); already-liked is detected separately so we never

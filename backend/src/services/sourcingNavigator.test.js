@@ -535,25 +535,38 @@ test('back uses a real key press, never an edge swipe, when the driver has one',
   assert.strictEqual(edgeSwipes.length, 0, 'no left-edge gesture that IG would read as a tab swipe');
 });
 
-// The tabs are a horizontally scrollable strip and Reels often starts
-// off-screen, so "no chip in the tree" does not mean "this build has no Reels".
-test('pages the results tab strip to reveal an off-screen Reels chip', async () => {
+// Current IG's results strip is `For you | Accounts | Audio | Tags` — there is no
+// "Reels" tab to find. Paging sideways looking for one is what walked live runs
+// into Accounts and then Audio, where a "creator" is a song.
+test('never pages the results tab strip sideways', async () => {
+  const driver = driverWithSearch();
+  const empty = { screen: 'search_results', targets: {} };
+  const views = [...OPEN_SEARCH, empty, empty, empty, empty, empty, empty];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
+  for await (const _c of gen) { /* drain */ }
+
+  const sideways = driver.ops.filter((o) => o[0] === 'swipe' && o[1].y1 === o[1].y2);
+  assert.strictEqual(sideways.length, 0, 'no horizontal swipes — Audio is never a source');
+});
+
+// "For you" IS the content tab on current IG, and it is the default — so when the
+// reader does surface it, that is the one to tap.
+test('taps the For you content tab when the page has nothing yet', async () => {
   const driver = driverWithSearch();
   const views = [
     ...OPEN_SEARCH,
-    { screen: 'search_results', targets: {} },                                  // no chip, nothing usable
-    { screen: 'search_results', targets: { searchReelsTab: { x: 700, y: 300 } } }, // after paging
-    { screen: 'search_results', targets: {} },
-    { screen: 'search_results', targets: {} },
+    { screen: 'search_results', targets: { searchReelsTab: { x: 120, y: 300 } } },
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: {} },   // openAndCaptureProfile: link gone -> bail
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
   ];
   const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'] }, read: scriptedRead(views) });
   for await (const _c of gen) { /* drain */ }
 
-  const strip = driver.ops.filter((o) => o[0] === 'swipe' && o[1].y1 === o[1].y2 && o[1].x1 > o[1].x2);
-  assert.ok(strip.length >= 1, 'paged the strip horizontally');
   assert.ok(
-    driver.ops.some((o) => o[0] === 'tap' && o[1] === 700 && o[2] === 300),
-    'tapped the chip once it came into view',
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 120 && o[2] === 300),
+    'tapped the content tab',
   );
 });
 
@@ -902,4 +915,92 @@ test('a frozen feed is recovered rather than scrolled at forever', async () => {
   for await (const _c of gen) { /* drain */ }
 
   assert.ok(driver.ops.some((o) => o[0] === 'back'), 'tried to get unstuck');
+});
+
+// ── a run keeps going until the target or the cap (§bug 4) ──────────────────
+
+// One pass over the keywords used to BE the whole run, so a run targeting 6
+// reported "done" having added 1 — it had run out of keywords, not out of
+// creators, and not out of its profile budget.
+test('keywords are re-run until the target is met, not abandoned after one pass', async () => {
+  const driver = driverWithSearch();
+  const profileHop = (handle) => [
+    { screen: 'search_results', results: [handle], targets: { back: BACK } },
+    { screen: 'search_results', targets: { [`result:${handle}`]: { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const views = [
+    // pass 1 — one keyword, one creator
+    ...OPEN_SEARCH, ...profileHop('alpha'),
+    // pass 2 — same keyword, but it scrolls deeper first (that scroll costs one
+    // read; landing on a screen with no results leaves the page we had intact)
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['bravo'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },   // the deeper-scroll read
+    { screen: 'search_results', targets: { 'result:bravo': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    // pass 3 — nothing new, so the run ends here
+    ...Array(12).fill({ screen: 'search_results', targets: { back: BACK } }),
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 6 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 2, 'a second pass found a creator the first never reached');
+  assert.deepStrictEqual(out.map((c) => c.username), ['alpha', 'bravo']);
+});
+
+// Without this the pass loop would spin forever on a keyword that yields nobody.
+test('a pass that finds nobody new ends the run', async () => {
+  const driver = driverWithSearch();
+  const empty = { screen: 'search_results', targets: { back: BACK } };
+  const views = [...OPEN_SEARCH, empty, empty, empty, ...Array(40).fill(empty)];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 50 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 0);
+  // Two passes at most: one that finds nothing, and the guard that notices.
+  const searches = driver.ops.filter((o) => o[0] === 'submitSearch').length;
+  assert.ok(searches <= 2, `stopped promptly, ran ${searches} searches`);
+});
+
+// A control momentarily missing used to throw straight out of the generator and
+// end the entire run — including every keyword after it.
+test('a missing search control skips that keyword instead of killing the run', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    { screen: 'unknown', targets: {} },        // no searchTab -> skip "one"
+    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } }, // ensureInInstagram
+    // "two" proceeds normally
+    { screen: 'search', targets: { searchTab: { x: 1, y: 1 } } },
+    { screen: 'search', targets: { searchBox: { x: 1, y: 1 } } },
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    ...Array(20).fill({ screen: 'search_results', targets: { back: BACK } }),
+  ];
+  const out = [];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['one', 'two'], max: 5 }, read: scriptedRead(views),
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(out.length, 1, 'the second keyword still ran');
+  assert.strictEqual(out[0].username, 'coach');
 });

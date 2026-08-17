@@ -52,3 +52,25 @@ test('toKeywordList accepts arrays and delimited strings', () => {
   assert.deepStrictEqual(toKeywordList('a,b\nc'), ['a', 'b', 'c']);
   assert.deepStrictEqual(toKeywordList(null), []);
 });
+
+// buildConfig is a WHITELIST: a knob absent here is silently dropped no matter
+// what the dashboard sends. clipsPerProfile / maxProfiles / stallMs were added
+// to the UI and the navigator but never to this list, so all three were dead.
+test('buildConfig carries the per-run navigator knobs', () => {
+  const cfg = buildConfig({}, { clipsPerProfile: '2', maxProfiles: '50', stallMs: '30000' });
+  assert.strictEqual(cfg.clipsPerProfile, 2);
+  assert.strictEqual(cfg.maxProfiles, 50);
+  assert.strictEqual(cfg.stallMs, 30000);
+
+  // Absent means "use the navigator's default", not 0 — a 0 cap would disable
+  // the profile budget and a 0 clip count would stop recording entirely.
+  const bare = buildConfig({}, {});
+  assert.strictEqual(bare.clipsPerProfile, undefined);
+  assert.strictEqual(bare.maxProfiles, undefined);
+  assert.strictEqual(bare.stallMs, undefined);
+});
+
+test("buildConfig accepts the 'all' risk level", () => {
+  assert.strictEqual(buildConfig({}, { risk: 'all' }).risk, 'all');
+  assert.strictEqual(buildConfig({}, { risk: 'nonsense' }).risk, 'medium');
+});
