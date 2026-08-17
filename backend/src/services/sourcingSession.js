@@ -198,4 +198,65 @@ function activeRunId(hostId) {
 function _activeCount() { return active.size; }
 function _reset() { active.clear(); }
 
-module.exports = { start, isActive, activeRunId, _activeCount, _reset, DEFAULT_PACING_MS, DEFAULT_CAPTURE_CAP };
+/**
+ * Run one feed warm-up pass on a host — likes only, no scouting.
+ *
+ * Deliberately a separate entry point from `start`, not a phase of a run: a
+ * session that likes and scouts in the same pass has a far more conspicuous
+ * pattern than either alone, and the warm-up is meant to be short and
+ * occasional. See services/feedWarmup.js for the risk posture.
+ */
+async function runWarmup({ hostId, config = {}, deps = {} }) {
+  const chan = deps.commands || commands;
+  const makeDriver = deps.makeDriver || makeRemoteDriver;
+  const warm = deps.warmFeed || require('./feedWarmup').warmFeed;
+  const listApproved = deps.approvedHandles || store.approvedHandles;
+  const log = (deps.logger && deps.logger.log) ? deps.logger.log.bind(deps.logger) : console.log;
+
+  const approved = await listApproved({ campaignId: config.campaignId || null });
+  if (!approved.length) {
+    log('[warmup] no gate-passed creators yet — nothing to warm the feed with');
+    return { liked: 0, seen: 0, blocked: false, skipped: {} };
+  }
+
+  chan.beginSession(hostId);
+  const driver = makeDriver({ hostId, channel: chan });
+  try { await driver.keepAwake(); } catch (_) { /* best effort */ }
+  try { await driver.wake(); } catch (_) { /* best effort */ }
+
+  try {
+    const pacingMs = Number(
+      config.pacingMs || deps.pacingMs || process.env.SOURCING_PACING_MS || DEFAULT_PACING_MS,
+    );
+    const stats = await warm({
+      driver,
+      config: {
+        ...config,
+        pacingMs,
+        tapJitterPx: Number(
+          deps.tapJitterPx != null ? deps.tapJitterPx : process.env.SOURCING_TAP_JITTER_PX || 5,
+        ),
+      },
+      approved,
+      deps: { log },
+    });
+    log(
+      `[warmup] host ${hostId}: liked ${stats.liked} of ${stats.seen} reels seen`
+      + `${stats.blocked ? ' (stopped early — action blocked)' : ''}`,
+    );
+    return stats;
+  } finally {
+    chan.endSession(hostId);
+  }
+}
+
+module.exports = {
+  start,
+  isActive,
+  activeRunId,
+  runWarmup,
+  _activeCount,
+  _reset,
+  DEFAULT_PACING_MS,
+  DEFAULT_CAPTURE_CAP,
+};

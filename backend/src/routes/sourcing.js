@@ -404,6 +404,41 @@ router.post('/hosts/:id/session/claim', requireRemoteControl, requireHostOrSlack
   }
 });
 
+// Dashboard -> backend: run one feed WARM-UP pass on a host. Likes only, and
+// only reels by creators that already passed the gate — see
+// services/feedWarmup.js for why that distinction is the whole point, and for
+// the risk posture (hard caps, no shares, stops dead on an activity block).
+//
+// Deliberately separate from a scouting run rather than a phase of one: a session
+// that likes and scouts together has a far more conspicuous pattern than either
+// on its own.
+router.post('/hosts/:id/warmup', requireRemoteControl, requireHostOrSlack, async (req, res, next) => {
+  try {
+    const hostId = Number(req.params.id);
+    if (sourcingSession.isActive(hostId)) {
+      return res.status(409).json({ error: 'a scouting run is using this host — warm up separately' });
+    }
+    // The same human-hours guard scouting uses. Liking reels at 4am is exactly
+    // the pattern this is trying not to have.
+    if (!humanize.withinActiveHours(new Date(), process.env.SOURCING_ACTIVE_HOURS)) {
+      return res.status(409).json({ error: 'outside active hours' });
+    }
+    const body = req.body || {};
+    const stats = await sourcingSession.runWarmup({
+      hostId,
+      config: {
+        campaignId: body.campaignId || null,
+        maxLikes: body.maxLikes,
+        maxReels: body.maxReels,
+        likeProbability: body.likeProbability,
+      },
+    });
+    res.json(stats);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Agent -> backend: drain the queued device commands to execute. `done:true`
 // tells the agent the backend finished this run's session.
 router.get('/hosts/:id/commands', requireRemoteControl, requireHostOrSlack, (req, res, next) => {

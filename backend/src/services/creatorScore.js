@@ -23,19 +23,44 @@ const { reelViews, median, stability, round3, clamp01 } = require('./sourcingFil
 
 // Weights sum to 1. Fit carries the most, but never a majority — a creator the
 // model loves who posts wildly inconsistent reels should not sail through.
+//
+// Craft (creativity + hook) is 40% between them, up from 25%. At 25% it could
+// always be outvoted: `viewSteadiness` is nearly free to max out — any creator
+// with a consistent audience scores ~0.98 on it — so fit + consistency +
+// steadiness alone reached 0.82 with craft at half marks. Craft was being priced
+// as a tiebreaker when it is the thing we are actually buying.
+//
+// Note this still cannot make craft MANDATORY — that is arithmetic, not tuning:
+// a creator who is excellent everywhere else clears any threshold low enough to
+// admit good creators. That is what minCreativity below is for.
 const DEFAULT_WEIGHTS = Object.freeze({
-  fit: 0.35,
-  nicheConsistency: 0.20,
-  viewSteadiness: 0.20,
-  creativity: 0.15,
-  hook: 0.10,
+  fit: 0.30,
+  nicheConsistency: 0.15,
+  viewSteadiness: 0.15,
+  creativity: 0.25,
+  hook: 0.15,
 });
 
-const DEFAULT_PASS_THRESHOLD = 0.6;
+// Raised from 0.6: at 0.6 a creator with strong topical fit but mediocre craft
+// still cleared, because fit + niche consistency + steadiness alone add up past
+// the bar without creativity or hook contributing much. 0.72 requires the craft
+// components to actually carry weight.
+const DEFAULT_PASS_THRESHOLD = 0.72;
 
 // A creator whose best reel is this far above their typical one is carried by a
 // single outlier rather than a real audience.
 const DEFAULT_MAX_SPIKE = 12;
+
+// Craft has a floor, checked separately from the weighted score.
+//
+// Creativity and hook together carry only 25% of the weighting, so a creator the
+// model rates highly on FIT but poorly on craft still clears the threshold on
+// fit + consistency + steadiness alone — which is exactly the "right keywords,
+// low-quality content" case that kept getting through. A weighted average cannot
+// express "no amount of topical fit rescues bad content"; a floor can.
+//
+// 0 disables it, for a run that would rather judge on the blend alone.
+const DEFAULT_MIN_CREATIVITY = 5;
 
 function num(v) {
   const n = Number(v);
@@ -89,6 +114,9 @@ function scoreCreator({ creator = {}, clips = [], reels = [], followers = null }
     ? config.creatorPassThreshold
     : DEFAULT_PASS_THRESHOLD;
   const maxSpike = config.maxViewSpike != null ? config.maxViewSpike : DEFAULT_MAX_SPIKE;
+  const minCreativity = config.minCreativity != null
+    ? config.minCreativity
+    : DEFAULT_MIN_CREATIVITY;
 
   const stats = reelStats(reels);
   const clipList = Array.isArray(clips) ? clips.filter(Boolean) : [];
@@ -117,6 +145,14 @@ function scoreCreator({ creator = {}, clips = [], reels = [], followers = null }
   }
 
   if (clipList.some((c) => c.brand_safety === 'unsafe')) return reject('brand unsafe');
+
+  // A craft floor, independent of the blend. Only applied when the analysis
+  // actually scored creativity — an unjudged creator is not accused of being
+  // uncreative, same principle as the originality flag above.
+  const creativity = meanOf(clipList, 'creativity');
+  if (minCreativity > 0 && creativity != null && creativity < minCreativity) {
+    return reject(`creativity ${round3(creativity)} below ${minCreativity}`);
+  }
 
   const followerCount = num(followers);
   const minFollowers = num(config.minFollowers);
@@ -153,4 +189,5 @@ module.exports = {
   DEFAULT_WEIGHTS,
   DEFAULT_PASS_THRESHOLD,
   DEFAULT_MAX_SPIKE,
+  DEFAULT_MIN_CREATIVITY,
 };

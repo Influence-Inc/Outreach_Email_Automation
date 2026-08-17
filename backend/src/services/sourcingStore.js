@@ -182,6 +182,27 @@ function makeDeps(run, { nicheClassify = reelJudge.makeClassifier() } = {}) {
   };
 }
 
+/**
+ * Handles that PASSED the deterministic gate — the only creators the feed
+ * warm-up may like (services/feedWarmup.js).
+ *
+ * Deliberately `decision = 'added'` rather than anything looser: a candidate in
+ * review has not been judged good yet, and liking on a raw niche score would
+ * teach the feed our keywords instead of our taste.
+ */
+async function approvedHandles({ campaignId = null, limit = 500 } = {}) {
+  const rows = await db.many(
+    `SELECT DISTINCT LOWER(username) AS username
+       FROM sourced_candidates
+      WHERE decision = 'added'
+        AND ($1::text IS NULL OR campaign_id = $1)
+      ORDER BY 1
+      LIMIT $2`,
+    [campaignId, Math.max(1, Number(limit) || 500)],
+  );
+  return rows.map((r) => r.username).filter(Boolean);
+}
+
 module.exports = {
   createRun,
   getRun,
@@ -191,5 +212,6 @@ module.exports = {
   rejectCandidate,
   getCandidate,
   updateRun,
+  approvedHandles,
   makeDeps,
 };

@@ -22,6 +22,11 @@ const { callClaudeMessages, parseJsonLoose } = require('./claudeClient');
 const DEFAULTS = {
   reelsWindow: 12,   // how many recent reels to measure
   minReels: 6,       // fewer than this and we can't judge the creator
+  // How many of the window may sit below the floor. Demanding that ALL twelve
+  // clear it rejects good creators for a couple of quiet posts — a far stricter
+  // test than "minimum views" sounds like, and it was throwing away creators
+  // who were 10-for-12.
+  floorTolerance: 2,
   nicheThreshold: 0.5,
   // Risk-classification knobs (tunable). See classifyRisk().
   lowCv: 0.4,        // coefficient-of-variation ceiling for a "stable" (low) creator

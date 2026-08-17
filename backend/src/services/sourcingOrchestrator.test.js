@@ -186,10 +186,12 @@ test('reels-mode still rejects an off-niche reel', async () => {
 
 test('processCandidate records a floor rejection', async () => {
   const { candidates, deps } = memStore();
+  // Three below the floor — past the default tolerance of 2, which exists so a
+  // creator with a couple of quiet posts is not thrown away.
   const res = await processCandidate(
     run,
     { floor: 15000, risk: 'high' },
-    { username: 'lowviews', reels: [...Array(11).fill({ views: 100000 }), { views: 9000 }] },
+    { username: 'lowviews', reels: [...Array(9).fill({ views: 100000 }), { views: 9000 }, { views: 8000 }, { views: 7000 }] },
     deps,
   );
   assert.strictEqual(res.added, false);

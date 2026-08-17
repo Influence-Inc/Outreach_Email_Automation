@@ -161,10 +161,34 @@ test('decide passes a well-matched creator', () => {
 });
 
 test('decide rejects on the view floor', () => {
-  const views = [...Array(11).fill(100000), 10000];
+  // Three below the floor is past the default tolerance of 2.
+  const views = [...Array(9).fill(100000), 10000, 9000, 8000];
   const out = F.decide({ reels: reelsOf(views, 'gym') }, { floor: 15000, risk: 'high' });
   assert.strictEqual(out.pass, false);
   assert.match(out.rejectReason, /below floor/);
+});
+
+// Real creators have quiet posts. Demanding all twelve clear the floor is a much
+// stricter test than "minimum views" sounds like, and it was rejecting creators
+// who were 10-for-12 on an otherwise strong window.
+test('a couple of reels below the floor is tolerated by default', () => {
+  const views = [...Array(10).fill(100000), 10000, 9000];
+  const out = F.decide(
+    { reels: reelsOf(views, 'gym') },
+    { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4 },
+  );
+  assert.strictEqual(out.pass, true, out.rejectReason || '');
+  assert.strictEqual(out.viewFloorPass, true);
+});
+
+test('the floor can still be made absolute', () => {
+  const views = [...Array(11).fill(100000), 10000];
+  const strict = F.decide(
+    { reels: reelsOf(views, 'gym') },
+    { floor: 15000, risk: 'high', floorTolerance: 0 },
+  );
+  assert.strictEqual(strict.pass, false);
+  assert.match(strict.rejectReason, /1 of 12 reels below floor/);
 });
 
 test('decide rejects when the risk profile exceeds appetite', () => {
