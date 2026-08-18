@@ -44,6 +44,9 @@ const {
 } = require('../services/offerPortal/replies');
 const { normalizePhone, sendWhatsAppText, whatsappProvider } = require('../services/offerPortal/whatsapp');
 const { sendIMessageText } = require('../services/offerPortal/imessage');
+// Sender → creator resolution lives in its own module so the diagnostic endpoint
+// (GET /api/debug/messaging-inbound) can replay the exact same match.
+const { pickMatch, matchCreator } = require('../services/offerPortal/contactMatch');
 const {
   parseStatusEvent,
   extractProviderMessageId,
@@ -336,77 +339,11 @@ function authorizedSecret(req, secretEnv) {
   return header === secret || query === secret;
 }
 
-// Match an inbound number to a creator whose contact column (whatsapp/imessage)
-// matches. Compares on bare digits, then falls back to the last 10 digits so a
-// present/absent country code doesn't miss the match.
-// Pure matcher: pick the row whose contact matches fromDigits — exact bare-digits
-// first, else last-10-digits suffix (so a present/absent country code doesn't
-// miss). Each row exposes a normalisable `contact`. Extracted for unit testing.
-function pickMatch(rows, fromDigits) {
-  const tail = (s) => s.slice(-10);
-  let suffix = null;
-  for (const r of rows) {
-    const digits = normalizePhone(r.contact);
-    if (!digits) continue;
-    if (digits === fromDigits) return r; // exact wins immediately
-    if (tail(digits) && tail(digits) === tail(fromDigits)) suffix = suffix || r;
-  }
-  return suffix;
-}
-
-// Resolve the inbound number to the creator ROW the conversation is actually
-// about. Two steps, because one person can own several rows:
-//
-//   1. Identify the PERSON by phone (pickMatch over every row that has a number).
-//   2. Re-point to the row carrying their LIVE offer.
-//
-// Step 2 is what makes Used creators work. A Used creator has ONE ROW PER
-// CAMPAIGN (schema: UNIQUE (campaign_id, instagram_url)) — same person, same
-// phone, N rows — and step 1 returns an arbitrary one (unordered scan), which in
-// practice is an OLDER, finished campaign. The new campaign's pending offer
-// hangs off a DIFFERENT creator_id, so it stays invisible: the brief never
-// fires and "Hi" falls through to the generic support deflection.
-async function matchCreator(contactColumn, fromDigits) {
-  const rows = await db.many(
-    `SELECT id, whatsapp, imessage, first_name, full_name, established_channel, instagram_url,
-            ${contactColumn} AS contact
-     FROM creators WHERE ${contactColumn} IS NOT NULL`,
-  );
-  const matched = pickMatch(rows, fromDigits);
-  if (!matched || !matched.instagram_url) return matched;
-
-  // Same person (same Instagram profile), whichever campaign row holds the
-  // newest live offer. Nothing pending anywhere → keep the matched row.
-  const live = await db.one(
-    `SELECT c.id, c.whatsapp, c.imessage, c.first_name, c.full_name, c.established_channel, c.instagram_url
-       FROM creators c
-       JOIN offers o ON o.creator_id = c.id AND o.status = 'pending'
-      WHERE c.instagram_url = $1
-      ORDER BY o.created_at DESC
-      LIMIT 1`,
-    [matched.instagram_url],
-  );
-  if (!live || live.id === matched.id) return matched;
-
-  // The live row may not have the phone yet — the Creator-DB backfill that fills
-  // it is TTL-gated (see segmentation.segmentCreators), so a freshly added
-  // campaign row can be blank for hours. Carry the number over (and persist it,
-  // so later inbounds match this row directly) or the reply has no destination
-  // and sendOfferBriefing bails with no_contact_for_channel.
-  if (!live[contactColumn] && matched[contactColumn]) {
-    live[contactColumn] = matched[contactColumn];
-    try {
-      await db.query(
-        `UPDATE creators SET ${contactColumn} = COALESCE(${contactColumn}, $2), updated_at = NOW()
-         WHERE id = $1`,
-        [live.id, matched[contactColumn]],
-      );
-    } catch (err) {
-      console.error('[offer-webhook] contact backfill failed', err.message);
-    }
-  }
-  return live;
-}
+// Sender matching — bare-digits/last-10 comparison plus the campaign-row
+// re-point that lands a Used creator's "Hi" on the row holding their live offer
+// — lives in offerPortal/contactMatch.js, imported above and re-exported at the
+// bottom for the existing unit tests. Shared so the diagnostic endpoint
+// (GET /api/debug/messaging-inbound) replays the exact same resolution.
 
 // Pure routing for an inbound reply: which backend action it maps to. Keeps the
 // webhook's decision — and the guarantee that a messaged accept/decline converges
@@ -430,7 +367,10 @@ const firstNameOf = (creator) =>
 // offer_message. Best-effort — a send failure is logged, never thrown.
 async function sendChannelMessage(channel, creator, offerId, body) {
   const to = channel === 'imessage' ? creator.imessage : creator.whatsapp;
-  if (!to) return;
+  if (!to) {
+    console.warn(`[offer-webhook] creator ${creator.id} has no ${channel} number — reply not sent`);
+    return;
+  }
   try {
     const send = channel === 'imessage' ? sendIMessageText : sendWhatsAppText;
     const result = await send({ to, body });
@@ -439,6 +379,16 @@ async function sendChannelMessage(channel, creator, offerId, body) {
         `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
          VALUES ($1, $2, 'outbound', $3, $4, $5)`,
         [creator.id, offerId, channel, body, result.id || null],
+      );
+    } else if (result.skipped) {
+      // Credentials absent: the whole inbound ran fine and the creator still
+      // hears nothing. Loud, because it looks exactly like "the bot is broken".
+      console.warn(
+        `[offer-webhook] ${channel} reply to creator ${creator.id} SKIPPED — provider credentials not configured`,
+      );
+    } else {
+      console.error(
+        `[offer-webhook] ${channel} reply to creator ${creator.id} FAILED — ${result.error || 'unknown error'}`,
       );
     }
   } catch (err) {
@@ -473,12 +423,24 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   }
 
   const parsed = parseInbound(req.body);
-  if (!parsed) return res.json({ ok: true, ignored: 'unparseable' });
-  if (parsed.ignore) return res.json({ ok: true, ignored: parsed.ignore });
+  if (!parsed) {
+    console.warn(`[offer-webhook] inbound ${channel} had no recognisable sender — ignored as unparseable`);
+    return res.json({ ok: true, ignored: 'unparseable' });
+  }
+  if (parsed.ignore) {
+    console.log(`[offer-webhook] inbound ${channel} ignored (${parsed.ignore})`);
+    return res.json({ ok: true, ignored: parsed.ignore });
+  }
 
   const matched = await matchCreator(contactColumn, parsed.from);
   if (!matched) {
-    console.warn(`[offer-webhook] inbound ${channel} from unknown number ${parsed.from}`);
+    // The single most common reason a creator texts "Hi" and hears nothing: the
+    // number reached us fine but no creators row carries it.
+    console.warn(
+      `[offer-webhook] inbound ${channel} from unknown number ${parsed.from} — no creator has this ` +
+        `number in creators.${contactColumn}, so no reply was sent. ` +
+        `Diagnose with GET /api/debug/messaging-inbound?phone=${parsed.from}`,
+    );
     return res.json({ ok: true, ignored: 'unknown_sender' });
   }
 
@@ -493,7 +455,10 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
         WHERE direction = 'inbound' AND provider_message_id = $1 LIMIT 1`,
       [providerMessageId],
     );
-    if (seen) return res.json({ ok: true, deduped: true });
+    if (seen) {
+      console.log(`[offer-webhook] inbound ${channel} ${providerMessageId} already processed — deduped`);
+      return res.json({ ok: true, deduped: true });
+    }
   }
 
   // Compliance: STOP/UNSUBSCRIBE opt-out (and START opt-in). Handled before any
@@ -718,14 +683,28 @@ router.get('/whatsapp', (req, res) => {
 router.post('/whatsapp', async (req, res, next) => {
   try {
     if (whatsappProvider() === 'cloud') {
-      if (!verifyMetaSignature(req)) return res.status(401).json({ ok: false });
+      if (!verifyMetaSignature(req)) {
+        // Meta retries a rejected delivery and eventually disables the
+        // subscription, so a wrong App Secret presents as "inbound silently
+        // stopped working". Never let that happen without a log line.
+        console.warn(
+          '[offer-webhook] REJECTED inbound whatsapp — X-Hub-Signature-256 did not verify against ' +
+            'WHATSAPP_CLOUD_APP_SECRET. Confirm it matches developers.facebook.com → App settings → Basic → App secret.',
+        );
+        return res.status(401).json({ ok: false });
+      }
       try {
         console.log('[offer-webhook] inbound whatsapp (cloud) raw:', JSON.stringify(req.body).slice(0, 1000));
       } catch (_) {
         /* body not serialisable — ignore */
       }
       const flat = normalizeMetaWebhook(req.body);
-      if (!flat) return res.json({ ok: true, ignored: 'no_message' });
+      if (!flat) {
+        // Normal for the `messages` field's non-message notifications, but also
+        // what a wrongly-subscribed webhook field looks like — name it.
+        console.log('[offer-webhook] inbound whatsapp (cloud) carried neither a message nor a status — ignored');
+        return res.json({ ok: true, ignored: 'no_message' });
+      }
       req.body = flat; // hand the shared pipeline a shape it understands
       await handleInbound('whatsapp', 'whatsapp', () => true, req, res);
     } else {

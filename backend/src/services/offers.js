@@ -141,6 +141,22 @@ async function logOfferViewed(offerId) {
 // Outbound delivery (email + WhatsApp + iMessage)
 // ---------------------------------------------------------------------------
 
+// A messaging send that didn't go out is the most common reason a creator hears
+// nothing after texting "Hi". The send helpers return { sent: false } rather
+// than throwing (so one dead channel never breaks a flow), which means without
+// this the only trace is a `*_failed` string in an HTTP response nobody reads.
+// Pass every messaging send result through here.
+function logSendResult(where, channel, creatorId, result) {
+  if (!result || result.sent) return result;
+  const why = result.error || result.reason || 'unknown error';
+  if (result.skipped) {
+    console.warn(`[offers] ${where}: ${channel} send to creator ${creatorId} SKIPPED — provider credentials not configured`);
+  } else {
+    console.error(`[offers] ${where}: ${channel} send to creator ${creatorId} FAILED — ${why}`);
+  }
+  return result;
+}
+
 // The channel this creator has actually initiated contact on, if any — see
 // established_channel's schema comment. Null means "not yet."
 async function establishedMessagingChannel(creatorId) {
@@ -220,7 +236,7 @@ async function sendUsedCreatorBrief(creatorId, channel) {
   if (!c) return { sent: false, reason: 'not_found' };
 
   const to = channel === 'imessage' ? c.imessage : c.whatsapp;
-  if (!to) return { sent: false, reason: 'no_contact_for_channel' };
+  if (!to) return logSendResult('sendUsedCreatorBrief', channel, c.id, { sent: false, reason: 'no_contact_for_channel' });
 
   const firstName = firstNameOf(c);
   const custom = c.messaging_brief && String(c.messaging_brief).trim();
@@ -230,7 +246,7 @@ async function sendUsedCreatorBrief(creatorId, channel) {
   const body = renderMessagingBrief(firstName, brandBlurb);
 
   const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
-  const result = await send({ to, body });
+  const result = logSendResult('sendUsedCreatorBrief', channel, c.id, await send({ to, body }));
   if (result.sent) {
     await db.query(
       `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
@@ -275,7 +291,7 @@ async function sendOfferBriefing(offerId, channel) {
   const body = renderMessagingBrief(firstName, brandBlurb);
 
   const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
-  const result = await send({ to, body });
+  const result = logSendResult('sendOfferBriefing', channel, offer.creator_id, await send({ to, body }));
   if (result.sent) {
     await db.query(
       `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
@@ -319,7 +335,7 @@ async function deliverOfferOverChannel(offerId, channel) {
   const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
   const body = mod.renderOfferOutreachBody(params);
 
-  const result = await send({ to, body });
+  const result = logSendResult('deliverOfferOverChannel', channel, offer.creator_id, await send({ to, body }));
   if (result.sent) {
     await db.query(
       `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
