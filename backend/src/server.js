@@ -27,6 +27,7 @@ const {
   logOfferPortalConfig,
 } = require('./services/offerPortal/config');
 const offerImessage = require('./services/offerPortal/imessage');
+const { diagnoseInboundNumber } = require('./services/offerPortal/diagnose');
 const siteAuth = require('./services/siteAuth');
 const { preGateHostToken } = require('./services/hostTokens');
 
@@ -99,6 +100,26 @@ app.get('/api/debug/ig-cookie', (_req, res) => res.json(igCookieStatus()));
 app.get('/api/debug/offer-portal-config', (_req, res) =>
   res.json({ ...offerPortalConfig(), issues: offerPortalConfigIssues() }),
 );
+
+// "The creator texted Hi and nothing came back" — replays the inbound pipeline
+// for one number WITHOUT sending anything, and reports where it would stop
+// (unknown sender, channel not send-ready, opted out, …) plus what the bot would
+// reply with if it got through. Answers in one call what otherwise takes a round
+// of live texting and log-reading.
+//   GET /api/debug/messaging-inbound?phone=+919812345670[&channel=whatsapp]
+app.get('/api/debug/messaging-inbound', async (req, res) => {
+  const phone = String(req.query.phone || '').trim();
+  if (!phone) return res.status(400).json({ error: 'phone query param required, e.g. ?phone=+919812345670' });
+  const channel = String(req.query.channel || 'whatsapp').trim().toLowerCase();
+  if (channel !== 'whatsapp' && channel !== 'imessage') {
+    return res.status(400).json({ error: "channel must be 'whatsapp' or 'imessage'" });
+  }
+  try {
+    res.json(await diagnoseInboundNumber(phone, channel));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.use('/api/campaigns', campaigns);
 app.use('/api/creators', creators);
