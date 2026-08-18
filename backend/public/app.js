@@ -4469,12 +4469,20 @@ function isContractApprovalPending(r) {
 // POST /:id/contract, which records the approval and generates + emails the
 // signing link regardless of stage.
 //
-// Deliberately does NOT gate on negotiation_status — we've seen this land in
-// AWAITING_DECISION, NULL, and AWAITING_RATE depending on which side of the
-// hand-off ran last, and the user's need to send the contract is the same
-// in all of them. The rate_log signal ("offer sent, then at least one
-// reply") is enough on its own to keep this off fresh, silent-offer rows.
+// The live stages are BLOCKLISTED rather than allowlisted: the hand-off
+// exchange can leave the column at AWAITING_DECISION, NULL or AWAITING_RATE
+// depending on which side of the loop ran last, and the deal is equally
+// sendable in all of them. What must never show the button is a deal that is
+// already OVER — the creator declined (DECLINED), we dismissed their offer or
+// the idle follow-ups auto-closed the thread (CLOSED), or the creator was
+// stopped/removed from the campaign. Those rows all still carry an
+// "offer sent → creator replied" history, so the rate_log signal alone would
+// resurrect them as pending contracts.
+const CLOSED_NEGOTIATION_STAGES = new Set(['DECLINED', 'CLOSED']);
+
 function isManualContractSendPending(r) {
+  if (CLOSED_NEGOTIATION_STAGES.has(r.negotiation_status)) return false;
+  if (r.status === 'stopped') return false;
   if (r.contract_approved) return false;
   if (r.contract && r.contract.status) return false;
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
