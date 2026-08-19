@@ -157,6 +157,11 @@ function logSendResult(where, channel, creatorId, result) {
   return result;
 }
 
+// How long an inbound message keeps the conversation open. Both WhatsApp and
+// iMessage only permit a free-form reply inside the window the creator's own
+// message opens — the reason established_channel exists at all.
+const OPEN_CONVERSATION_HOURS = 24;
+
 // The channel this creator has actually initiated contact on, if any — see
 // established_channel's schema comment. Null means "not yet."
 async function establishedMessagingChannel(creatorId) {
@@ -191,7 +196,33 @@ async function subscribedChannelFor(contact) {
   }
 
   // Subscription is SAME-CAMPAIGN: only this campaign row's established_channel.
-  return contact.established_channel || null;
+  if (contact.established_channel) return contact.established_channel;
+
+  // …except a Used creator pulled into a NEW campaign gets a FRESH row whose
+  // established_channel is unset, even while an open conversation is running on
+  // their phone. Left there, the offer goes out as a "text Hi to continue" email
+  // to someone who is mid-chat with us and expecting the deal in that chat. A
+  // recent inbound from the same PERSON (phone tail, any row — the same identity
+  // rule the opt-out check above uses) means the window is open, so a direct
+  // reply is both permitted and what they are waiting for.
+  if (!tail) return null;
+  const recent = await db.one(
+    `SELECT m.channel
+       FROM offer_messages m
+       JOIN creators c ON c.id = m.creator_id
+      WHERE m.direction = 'inbound'
+        AND m.created_at > NOW() - make_interval(hours => $2)
+        AND right(regexp_replace(coalesce(c.whatsapp, c.imessage, ''), '[^0-9]', '', 'g'), 10) = $1
+      ORDER BY m.created_at DESC
+      LIMIT 1`,
+    [tail, OPEN_CONVERSATION_HOURS],
+  );
+  const channel = recent && recent.channel;
+  // Only usable when THIS row carries a number for that channel — the reply needs
+  // a destination, or deliverOfferOverChannel bails with no_contact_for_channel.
+  if (channel === 'whatsapp' && contact.whatsapp) return 'whatsapp';
+  if (channel === 'imessage' && contact.imessage) return 'imessage';
+  return null;
 }
 
 // Which of our own business messaging numbers to show a creator in the invite
@@ -452,7 +483,17 @@ async function sendOfferOutreach(offerId) {
   );
   if (!offer) return;
 
-  // Have they messaged us on a channel in THIS campaign already?
+  const firstName = firstNameOf(offer);
+  const url = offerUrl(offer.token);
+  const expiry = formatDate(offer.expires_at);
+  const logSend = (channel, body) =>
+    db.query(
+      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
+       VALUES ($1, $2, 'outbound', $3, $4)`,
+      [offer.creator_id, offer.id, channel, body],
+    );
+
+  // Have they messaged us on a channel we're allowed to reply on?
   const subscribedChannel = await subscribedChannelFor(offer);
   if (subscribedChannel) {
     try {
@@ -463,20 +504,41 @@ async function sendOfferOutreach(offerId) {
     } catch (err) {
       console.error('[offers] direct offer delivery failed', err.message);
     }
+    // …and by email as well, carrying the same link. The chat is where they are
+    // right now, but the inbox is what survives a scrolled-past conversation, and
+    // a creator should never have to work out which of the two is authoritative.
+    // Best-effort and isolated: a failed email never costs them the chat message.
+    if (offer.creator_email) {
+      try {
+        const res = await email.sendOfferEmail({
+          to: offer.creator_email,
+          firstName,
+          brandName: offer.brand_name,
+          offerUrl: url,
+          expiryDate: expiry,
+        });
+        if (res.sent) {
+          await logSend('email', `Offer email — "New collaboration opportunity — ${offer.brand_name}" (${url})`);
+        }
+      } catch (err) {
+        console.error('[offers] offer email alongside the messaging send failed', err.message);
+      }
+    }
     return;
   }
 
-  if (!offer.creator_email) return; // no established channel and no email — nothing to try
-
-  const firstName = firstNameOf(offer);
-  const url = offerUrl(offer.token);
-  const expiry = formatDate(offer.expires_at);
-  const logSend = (channel, body) =>
-    db.query(
-      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
-       VALUES ($1, $2, 'outbound', $3, $4)`,
-      [offer.creator_id, offer.id, channel, body],
+  // Nothing established: we never cold-push WhatsApp/iMessage, so the offer goes
+  // by email — with a "text Hi" invite when a messaging channel is usable.
+  if (!offer.creator_email) {
+    console.warn(
+      `[offers] offer ${offer.id}: creator ${offer.creator_id} has no established messaging channel and no email — nothing sent`,
     );
+    return;
+  }
+  console.log(
+    `[offers] offer ${offer.id}: no open messaging conversation with creator ${offer.creator_id} — ` +
+      'sending the email invite rather than a direct WhatsApp/iMessage offer',
+  );
 
   const { whatsappNumber: waNumber, imessageNumber: imNumber } = inviteNumbersFor(offer);
 

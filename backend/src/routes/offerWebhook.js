@@ -270,9 +270,48 @@ function twilioWebhookUrl(req) {
 // HMAC-SHA256 with the App Secret, delivered as `X-Hub-Signature-256:
 // sha256=<hex>`. Verification is disabled when WHATSAPP_CLOUD_APP_SECRET isn't
 // set (dev), matching the Twilio/Linq convention.
+// Forms of the configured secret worth trying. Pasting a value into a hosting
+// dashboard routinely picks up a trailing newline or wrapping quotes — invisible
+// in the UI, but they change the HMAC completely and present as "the secret is
+// definitely correct and it still fails". Accept those rather than reject a
+// genuine webhook over whitespace; the caller logs when normalising was needed
+// so the value still gets cleaned up.
+function appSecretCandidates(configured) {
+  const out = [];
+  const add = (s) => {
+    if (s && !out.includes(s)) out.push(s);
+  };
+  add(configured);
+  const trimmed = String(configured || '').trim();
+  add(trimmed);
+  add(trimmed.replace(/^(['"])([\s\S]*)\1$/, '$2').trim());
+  return out;
+}
+
+// Everything needed to tell the failure modes apart, WITHOUT ever printing the
+// secret: a wrong value (fingerprint differs from the one in Meta), a body we
+// failed to capture verbatim (rawBodyCaptured NO — the re-serialised fallback can
+// never match), or a right-but-mangled value (length/hex flags disagree).
+// `secretFingerprint` is sha256(trimmed secret) truncated — safe to log, and
+// comparable against the same hash taken of the App Secret shown in Meta.
+function describeSignatureFailure(req, configured, raw, provided) {
+  const trimmed = String(configured || '').trim();
+  const fingerprint = crypto.createHash('sha256').update(trimmed).digest('hex').slice(0, 12);
+  return [
+    `secretLength=${String(configured || '').length}`,
+    `trimmedLength=${trimmed.length}`,
+    `looksLikeAppSecret=${/^[0-9a-f]{32}$/i.test(trimmed)}`,
+    `secretFingerprint=${fingerprint}`,
+    `rawBodyCaptured=${req.rawBody ? 'yes' : 'NO'}`,
+    `bodyBytes=${raw.length}`,
+    `contentType=${req.headers['content-type'] || 'none'}`,
+    `receivedSig=${String(provided).slice(0, 23)}…`,
+  ].join(' ');
+}
+
 function verifyMetaSignature(req) {
-  const secret = process.env.WHATSAPP_CLOUD_APP_SECRET;
-  if (!secret) return true;
+  const configured = process.env.WHATSAPP_CLOUD_APP_SECRET;
+  if (!configured || !String(configured).trim()) return true;
   const provided = req.headers['x-hub-signature-256'];
   if (!provided) {
     console.warn('[offer-webhook] WHATSAPP_CLOUD_APP_SECRET set but X-Hub-Signature-256 header missing');
@@ -280,8 +319,20 @@ function verifyMetaSignature(req) {
   }
   // HMAC the raw bytes (captured in server.js), not a re-serialized copy.
   const raw = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
-  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
-  return safeEqual(provided, expected);
+  for (const secret of appSecretCandidates(configured)) {
+    const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+    if (safeEqual(provided, expected)) {
+      if (secret !== configured) {
+        console.warn(
+          '[offer-webhook] WHATSAPP_CLOUD_APP_SECRET verified only after stripping whitespace/quotes — ' +
+            'the stored value carries stray characters. Re-paste it cleanly.',
+        );
+      }
+      return true;
+    }
+  }
+  console.warn(`[offer-webhook] signature mismatch — ${describeSignatureFailure(req, configured, raw, provided)}`);
+  return false;
 }
 
 // Flatten a Meta Cloud API webhook (entry[].changes[].value) into the flat shape
@@ -730,6 +781,7 @@ router.parseInbound = parseInbound;
 router.verifyLinqSignature = verifyLinqSignature;
 router.verifyTwilioSignature = verifyTwilioSignature;
 router.verifyMetaSignature = verifyMetaSignature;
+router.appSecretCandidates = appSecretCandidates;
 router.normalizeMetaWebhook = normalizeMetaWebhook;
 router.twilioWebhookUrl = twilioWebhookUrl;
 router.eventType = eventType;
