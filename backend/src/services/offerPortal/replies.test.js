@@ -114,11 +114,14 @@ test('tooHighReply names the creator and the current rate', () => {
   assert.match(msg, /\$300/);
 });
 
-test('renderMessagingBrief greets by name, includes the blurb, and ends with a yes/no CTA', () => {
+test('renderMessagingBrief greets by name, includes the blurb, and ends with the interest question', () => {
   const msg = replies.renderMessagingBrief('Sam', 'Acme makes eco-friendly water bottles.');
   assert.match(msg, /^Hi Sam,/);
   assert.match(msg, /Acme makes eco-friendly water bottles\./);
-  assert.match(msg, /Reply Yes or No/);
+  assert.match(msg, /Interested in hearing more\?$/);
+  // The literal "Reply Yes or No" now belongs to INTEREST_FALLBACK_HINT, appended
+  // only on channels without tappable buttons — see replies.buttons.test.js.
+  assert.doesNotMatch(msg, /Reply Yes or No/);
 });
 
 test('interestClarificationMessage nudges toward Yes/No, not the generic deflection', () => {

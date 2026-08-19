@@ -26,7 +26,14 @@ const email = require('./offerPortal/email');
 const whatsapp = require('./offerPortal/whatsapp');
 const imessage = require('./offerPortal/imessage');
 const { offerPortalConfig } = require('./offerPortal/config');
-const { thankYouMessage, politeCloseMessage, notAFitCloseMessage, renderMessagingBrief } = require('./offerPortal/replies');
+const {
+  thankYouMessage,
+  politeCloseMessage,
+  notAFitCloseMessage,
+  renderMessagingBrief,
+  INTEREST_BUTTONS,
+  INTEREST_FALLBACK_HINT,
+} = require('./offerPortal/replies');
 const creatorDb = require('./creatorDb');
 const campaignDashboard = require('./campaignDashboard');
 
@@ -157,6 +164,21 @@ function logSendResult(where, channel, creatorId, result) {
   return result;
 }
 
+// The creator's current offer, when the deal is still live or already agreed.
+// 'declined' and 'expired' are finished, so pricing a fresh offer after one of
+// those is a legitimate re-approach rather than a duplicate. Scoped to this
+// creator ROW, which is per-campaign — a Used creator pulled into a new campaign
+// has no offers on the new row, so this never blocks a genuine new-campaign
+// offer.
+async function liveOfferFor(creatorId) {
+  return db.one(
+    `SELECT id, token, status FROM offers
+      WHERE creator_id = $1 AND status IN ('pending', 'accepted')
+      ORDER BY created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+}
+
 // How long an inbound message keeps the conversation open. Both WhatsApp and
 // iMessage only permit a free-form reply inside the window the creator's own
 // message opens — the reason established_channel exists at all.
@@ -248,6 +270,16 @@ function inviteNumbersFor(contact) {
   };
 }
 
+// Ask a question with tappable options where the channel supports them, and the
+// same question with the options written out where it doesn't. iMessage (Linq)
+// has no button concept, so it always takes the written form.
+function sendChoiceOn(channel, { to, body, buttons, fallbackHint }) {
+  if (channel === 'imessage') {
+    return imessage.sendIMessageText({ to, body: fallbackHint ? `${body}\n\n${fallbackHint}` : body });
+  }
+  return whatsapp.sendWhatsAppChoice({ to, body, buttons, fallbackHint });
+}
+
 // Send the brand/product brief + a yes/no interest check to a used creator who
 // has messaged us but has NO priced offer yet — the offer-less counterpart of
 // sendOfferBriefing. This is what lets the WhatsApp/iMessage bot OPEN with brand
@@ -276,8 +308,17 @@ async function sendUsedCreatorBrief(creatorId, channel) {
     : `We're running a paid collaboration campaign with ${c.brand_name || 'a brand'} and think you'd be a great fit.`;
   const body = renderMessagingBrief(firstName, brandBlurb);
 
-  const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
-  const result = logSendResult('sendUsedCreatorBrief', channel, c.id, await send({ to, body }));
+  const result = logSendResult(
+    'sendUsedCreatorBrief',
+    channel,
+    c.id,
+    await sendChoiceOn(channel, {
+      to,
+      body,
+      buttons: INTEREST_BUTTONS,
+      fallbackHint: INTEREST_FALLBACK_HINT,
+    }),
+  );
   if (result.sent) {
     await db.query(
       `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
@@ -321,8 +362,17 @@ async function sendOfferBriefing(offerId, channel) {
     : `We're running a paid collaboration campaign with ${offer.brand_name} and think you'd be a great fit.`;
   const body = renderMessagingBrief(firstName, brandBlurb);
 
-  const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
-  const result = logSendResult('sendOfferBriefing', channel, offer.creator_id, await send({ to, body }));
+  const result = logSendResult(
+    'sendOfferBriefing',
+    channel,
+    offer.creator_id,
+    await sendChoiceOn(channel, {
+      to,
+      body,
+      buttons: INTEREST_BUTTONS,
+      fallbackHint: INTEREST_FALLBACK_HINT,
+    }),
+  );
   if (result.sent) {
     await db.query(
       `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
@@ -615,8 +665,12 @@ async function sendUsedCreatorInvite(creatorId) {
         creator.brand_name ? ` with ${creator.brand_name}` : ''
       } and thought you'd be a great fit.`;
       const body = renderMessagingBrief(firstName, blurb);
-      const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
-      const result = await send({ to, body });
+      const result = await sendChoiceOn(channel, {
+        to,
+        body,
+        buttons: INTEREST_BUTTONS,
+        fallbackHint: INTEREST_FALLBACK_HINT,
+      });
       if (result.sent) {
         await db.query(
           `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
@@ -741,6 +795,20 @@ async function sendUsedCreatorOffer(creatorId) {
   );
   if (!creator) return { sent: false, reason: 'not_found' };
   if (creator.messaging_opted_out) return { sent: false, reason: 'opted_out' };
+
+  // Never mint a second offer while one is live or already agreed. Every re-run
+  // of outreach — a second dashboard click, a scheduler sweep, a retry — used to
+  // create a fresh offer with a fresh token and deliver it, so the creator
+  // collected a stack of competing links, and one that landed AFTER they had
+  // accepted reopened a deal they had already signed.
+  const live = await liveOfferFor(creatorId);
+  if (live) {
+    console.warn(
+      `[offers] creator ${creatorId} already has a ${live.status} offer (${live.id}) — not pricing a second one`,
+    );
+    return { sent: false, reason: `offer_already_${live.status}`, offerId: live.id, token: live.token };
+  }
+
   if (!creator.ig_scraped_data) return { sent: false, reason: 'no_stats' };
 
   const campaignForCpm = { max_cpm: creator.max_cpm, data: creator.campaign_data };
@@ -2036,6 +2104,19 @@ async function sendPortalOffer(creatorId, approved) {
   if (!approved || approved.flat_fee == null) return { skipped: 'no approved offer to send' };
   if (!creator.email && !creator.whatsapp && !creator.imessage) {
     return { skipped: 'no email / WhatsApp / iMessage on file for this creator' };
+  }
+
+  // Same duplicate guard as sendUsedCreatorOffer — a second click on "send
+  // offer" must not put a competing link in front of the creator, and must never
+  // land a new offer on top of one they have already accepted.
+  const live = await liveOfferFor(creatorId);
+  if (live) {
+    return {
+      skipped: `creator already has a ${live.status} offer — decline or expire it before sending another`,
+      offerId: live.id,
+      token: live.token,
+      url: offerUrl(live.token),
+    };
   }
 
   const terms = offerTermsFromApproved(creator, approved);
