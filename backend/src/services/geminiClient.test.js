@@ -6,7 +6,9 @@ const gc = require('./geminiClient');
 
 const GEMINI_ENVS = ['GEMINI_API_KEY', 'GEMINI_MODEL', 'GEMINI_MEDIA_RESOLUTION'];
 function clearEnv() { for (const k of GEMINI_ENVS) delete process.env[k]; }
-test.afterEach(clearEnv);
+// mediaResolution support is remembered process-wide once probed, so a test that
+// makes the model reject it must not decide the outcome of the next test.
+test.afterEach(() => { clearEnv(); gc._resetMediaResolutionSupport(); });
 
 function fakeFetch({ ok = true, status = 200, json, text } = {}) {
   const calls = [];
@@ -150,6 +152,85 @@ test('returns null (no request) when no API key is set', async () => {
   const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 1 }) });
   assert.strictEqual(await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'x', fetchImpl }), null);
   assert.strictEqual(fetchImpl.calls.length, 0);
+});
+
+// A model that rejects generationConfig.mediaResolution answers with a bare 400
+// INVALID_ARGUMENT naming no field — the exact failure that silently killed every
+// video judgement in production while the text-only health ping kept succeeding.
+function fetch400ThenOk(json) {
+  const calls = [];
+  const fn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    calls.push({ url, opts, body });
+    const sentMediaRes = body.generationConfig.mediaResolution != null;
+    if (sentMediaRes) {
+      return {
+        ok: false,
+        status: 400,
+        async text() { return '{"error":{"code":400,"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}'; },
+        async json() { return {}; },
+      };
+    }
+    return { ok: true, status: 200, async json() { return json; }, async text() { return ''; } };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('a 400 on mediaResolution is retried without it, and the verdict still comes back', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const fetchImpl = fetch400ThenOk(verdictResponse({ niche_score: 0.8, genre: 'fitness' }));
+  const out = await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'judge', fetchImpl });
+
+  assert.deepStrictEqual(out, { niche_score: 0.8, genre: 'fitness' });
+  assert.strictEqual(fetchImpl.calls.length, 2, 'tried with the field, then without');
+  assert.strictEqual(fetchImpl.calls[0].body.generationConfig.mediaResolution, 'MEDIA_RESOLUTION_LOW');
+  assert.strictEqual(fetchImpl.calls[1].body.generationConfig.mediaResolution, undefined);
+  // Everything else about the request must survive the retry — notably the video.
+  assert.strictEqual(fetchImpl.calls[1].body.contents[0].parts[0].inlineData.data, 'AAAA');
+});
+
+test('once the model has rejected mediaResolution, later calls skip it entirely', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const probe = fetch400ThenOk(verdictResponse({ niche_score: 0.5 }));
+  await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'x', fetchImpl: probe });
+
+  const after = fetch400ThenOk(verdictResponse({ niche_score: 0.6 }));
+  const out = await gc.classifyReelVideo({ videoBase64: 'BBBB', promptText: 'x', fetchImpl: after });
+  assert.deepStrictEqual(out, { niche_score: 0.6 });
+  assert.strictEqual(after.calls.length, 1, 'no second probe — the answer is remembered');
+  assert.strictEqual(after.calls[0].body.generationConfig.mediaResolution, undefined);
+});
+
+test('GEMINI_MEDIA_RESOLUTION=off never sends the field at all', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  process.env.GEMINI_MEDIA_RESOLUTION = 'off';
+  const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 0.4 }) });
+  await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'x', fetchImpl });
+  assert.strictEqual(fetchImpl.calls.length, 1);
+  assert.strictEqual(JSON.parse(fetchImpl.calls[0].opts.body).generationConfig.mediaResolution, undefined);
+});
+
+test('images ride along as inline parts after the video', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 0.7 }) });
+  await gc.classifyReelVideo({
+    videoBase64: 'VVVV',
+    images: [{ data: 'VVV1', mimeType: 'image/png' }, { data: 'VVV2', mimeType: 'image/png' }],
+    promptText: 'judge the profile',
+    fetchImpl,
+  });
+  const parts = JSON.parse(fetchImpl.calls[0].opts.body).contents[0].parts;
+  assert.strictEqual(parts[0].inlineData.data, 'VVVV');
+  assert.strictEqual(parts[1].inlineData.data, 'VVV1');
+  assert.strictEqual(parts[2].inlineData.mimeType, 'image/png');
+  assert.strictEqual(parts[3].text, 'judge the profile');
+});
+
+test('a 200 with no text (safety block / truncation) returns null', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const fetchImpl = fakeFetch({ json: { candidates: [{ finishReason: 'SAFETY', content: { parts: [] } }] } });
+  assert.strictEqual(await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'x', fetchImpl }), null);
 });
 
 test('returns null on a non-2xx response (caller falls back)', async () => {

@@ -37,6 +37,15 @@ const app = express();
 // them (Secure cookie flag, request-derived OAuth redirect URI).
 app.set('trust proxy', 1);
 app.use(cors());
+// A paired phone answers a `screenshot` command with the PNG inline as base64,
+// and a full-resolution phone screen easily clears 1 MB once base64-encoded.
+// Under the global 1 MB parser below that POST 413s, the agent's result never
+// reaches the awaiting navigator, and the backend sits on a 30-second command
+// timeout for every profile it photographs — far worse than having no
+// screenshots at all. Parsing this one route first (body-parser marks the body
+// as read, so the global parser then skips it) keeps the larger limit tightly
+// scoped to the route that needs it.
+app.use('/api/sourcing/hosts/:id/commands/result', express.json({ limit: '12mb' }));
 app.use(express.json({
   limit: '1mb',
   // Capture the raw body so webhook handlers can verify HMAC signatures

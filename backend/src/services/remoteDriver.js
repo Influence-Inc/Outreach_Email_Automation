@@ -43,6 +43,11 @@ function makeRemoteDriver({ hostId, channel = commands, timeoutMs } = {}) {
     openProfile: (username) => call('openProfile', { username }, { timeoutMs: timeoutMs || 45_000 }),
     home: () => call('home', {}),
     dumpUi: () => call('dumpUi', {}),
+    // A picture of the screen as the phone renders it, for the parts of a
+    // profile the UI tree cannot express: how the bio and the reels grid
+    // actually LOOK. Returns { mediaType, dataBase64 } — bigger than a UI dump,
+    // so the navigator takes these deliberately (two per creator), never per step.
+    screenshot: () => call('screenshot', {}, { timeoutMs: timeoutMs || 45_000 }),
     getWindowSize: () => call('getWindowSize', {}),
     keepAwake: () => call('keepAwake', {}),
     wake: () => call('wake', {}),

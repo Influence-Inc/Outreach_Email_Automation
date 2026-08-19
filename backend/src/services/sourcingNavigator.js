@@ -508,6 +508,12 @@ async function* scoutReelFeed({
     if (!skip && link && !(author && seen.has(author))) {
       if (author) seen.add(author);
       if (!cap || cap.take()) {
+        // The reel on screen is the one this keyword's feed served us — record it
+        // here, in its own player, as the creator's most search-relevant sample.
+        // eslint-disable-next-line no-await-in-loop
+        const sourceClip = await recordCurrentReel({ driver, clipSeconds, getClip });
+        if (sourceClip) sourceClip.caption = feed.caption || undefined;
+
         // Verify we actually reached the profile. A tap that lands during a
         // re-layout silently does nothing, and the analysis that followed used
         // to read the reel player as though it were a profile header.
@@ -526,6 +532,7 @@ async function* scoutReelFeed({
             source: 'backend-navigator:feed-scroll',
             screens: ['reels_feed', 'profile', 'reels_tab'],
             view: arrived.view,
+            sourceClip,
           });
           if (profile) {
             yield profile;
@@ -577,6 +584,12 @@ async function captureViaReel({
     return null;
   }
 
+  // Record THIS reel — the one the keyword matched — while we are still standing
+  // in its player. It is the most relevant sample of this creator's work for the
+  // search we ran, and it is free to reach from here.
+  const sourceClip = await recordCurrentReel({ driver, clipSeconds, getClip });
+  if (sourceClip) sourceClip.caption = feed.caption || undefined;
+
   const arrived = await arriveAt({
     driver, read, pacingMs, jitterPx, log, what: `@${feed.author}`,
     wanted: ['profile', 'reels_tab'],
@@ -590,6 +603,7 @@ async function captureViaReel({
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
     view: arrived.view,
+    sourceClip,
   });
 }
 
@@ -604,11 +618,14 @@ async function analyseProfile({
   clipSeconds = 12, getClip = async () => null,
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
   reelsWindow = REELS_PER_PROFILE, recordClip = true, clipsWanted = CLIPS_PER_PROFILE,
-  view: arrivedOn = null,
+  view: arrivedOn = null, sourceClip = null, sourceTerm = null,
 }) {
   // The caller that verified we reached this profile already read the screen;
   // reading it again is a round-trip to the phone for a picture we have.
   const header = arrivedOn || await read(driver);
+
+  // What the bio actually looks like, before we navigate away from it.
+  const bioShot = await grabShot({ driver, kind: 'bio' });
 
   // Switch to Reels unless we are already there (IG sometimes opens a profile
   // on the Reels sub-tab, in which case reel overlays are already present).
@@ -619,6 +636,11 @@ async function analyseProfile({
     view = await read(driver);
   }
 
+  // The grid at its top — the creator's most recent work, as a picture. Taken
+  // before the scroll, so it frames what they post now rather than wherever the
+  // reach window happened to stop.
+  const gridShot = await grabShot({ driver, kind: 'reels_grid' });
+
   // Read the whole reach window FIRST. Which reels are worth watching is a
   // question about the window as a whole — the best performer and the typical
   // one are only knowable once every view count is in — so recording has to come
@@ -627,16 +649,24 @@ async function analyseProfile({
     driver, read, view, pacingMs, jitterPx, screen, want: reelsWindow,
   });
 
-  // Then walk back UP the grid recording the chosen reels. Skipped entirely when
-  // the caller already has a judged clip: reels mode records and judges the feed
-  // reel before it ever opens the profile, and re-recording would spend another
-  // stretch on the phone plus more Gemini calls to answer a settled question.
-  const clips = recordClip
-    ? await captureReelClips({
+  // The reel that surfaced this creator is already the most keyword-relevant
+  // sample there is, so when we have it we do NOT go back down the grid
+  // recording three more. That was three extra recordings and three extra Gemini
+  // calls per creator to answer a question the search itself already answered,
+  // and every one of them was another stretch of the phone being driven.
+  let clips;
+  if (sourceClip) {
+    clips = [sourceClip];
+  } else if (recordClip) {
+    clips = await captureReelClips({
       driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip,
       reels, want: clipsWanted, view: gridView,
-    })
-    : [];
+    });
+  } else {
+    clips = [];
+  }
+
+  const shots = [bioShot, gridShot].filter(Boolean);
 
   return {
     username: header.username || fallbackUsername,
@@ -652,12 +682,20 @@ async function analyseProfile({
     // predates multi-clip capture reads that field.
     clip: clips[0] || undefined,
     clips: clips.length ? clips : undefined,
+    // Pixels of the bio and the reels grid. The judge reads these alongside the
+    // captions and the example reel (services/reelJudge.js).
+    shots: shots.length ? shots : undefined,
     evidence: {
       capturedAt: new Date().toISOString(),
       screens,
       reelsRead: reels.length,
       clipCaptured: !!clips.length,
       clipsCaptured: clips.length,
+      shotsCaptured: shots.map((s) => s.kind),
+      // Which reel the video actually is: the one the keyword surfaced, or a
+      // sample picked off the creator's own grid.
+      clipSource: sourceClip ? 'keyword-match' : (clips.length ? 'profile-grid' : null),
+      sourceTerm: sourceTerm || undefined,
       source,
     },
   };
@@ -732,6 +770,56 @@ async function collectReels({ driver, read, view, pacingMs, jitterPx = 0, screen
   // `view` is the grid as it stands now, handed on so the recording pass does
   // not pay for a screen read it already has.
   return { reels: Array.from(seen.values()).slice(0, target), view: last };
+}
+
+// clipStore hands back { buf, mediaType }; the judge reads { dataBase64,
+// mimeType }. Attaching the store's record verbatim meant classifyWithGemini saw
+// no dataBase64 and every candidate quietly fell through to the bio-text tier —
+// recorded and uploaded, then never judged.
+function toClip(stored) {
+  if (!stored) return null;
+  if (stored.buf) return { dataBase64: stored.buf.toString('base64'), mimeType: stored.mediaType || 'video/mp4' };
+  if (stored.dataBase64) return stored;
+  return null;
+}
+
+/**
+ * A picture of the screen as it stands, labelled.
+ *
+ * The UI tree says what text is on a profile; it cannot say what the profile
+ * LOOKS like — whether the grid is a person on camera or a wall of reposted
+ * memes, whether the bio reads as a real creator. That judgement needs pixels,
+ * so the judge gets two of them per creator. Best-effort: a host too old to have
+ * the op, or a failed capture, just means the judge works from text and video.
+ */
+async function grabShot({ driver, kind }) {
+  if (!driver.screenshot) return null;
+  try {
+    const shot = await driver.screenshot();
+    if (!shot || !shot.dataBase64) return null;
+    return { kind, mimeType: shot.mediaType || 'image/png', dataBase64: shot.dataBase64 };
+  } catch (_) {
+    return null; // enrichment, never a reason to drop a candidate
+  }
+}
+
+/**
+ * Record the reel that is already playing.
+ *
+ * This is THE reel that matched the keyword — the one whose presence in the
+ * results is the reason we are looking at this creator at all — so it is the
+ * most relevant possible sample of their work for the search we ran. Recording
+ * it here, in the player we already stand in, also costs nothing extra to reach.
+ */
+async function recordCurrentReel({ driver, clipSeconds = 12, getClip = async () => null }) {
+  if (!driver.recordClip) return null;
+  try {
+    const rec = await driver.recordClip(clipSeconds);
+    const clipId = rec && (rec.clipId || rec);
+    return toClip(clipId ? await getClip(clipId) : null);
+  } catch (_) {
+    return null;
+  }
 }
 
 // Record ONE reel already on screen at `point` (video + audio), and come back to

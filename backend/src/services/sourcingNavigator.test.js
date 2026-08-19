@@ -516,6 +516,78 @@ test('analyseProfile can skip recording when the caller already judged a clip', 
   assert.strictEqual(profile.evidence.clipCaptured, false);
 });
 
+// ── the evidence bundle a creator is judged from ────────────────────────────
+
+test('analyseProfile photographs the bio and the reels grid', async () => {
+  const { analyseProfile } = require('./sourcingNavigator');
+  const driver = driverWithSearch();
+  let shots = 0;
+  driver.screenshot = async () => {
+    shots += 1;
+    return { mediaType: 'image/png', dataBase64: `SHOT${shots}` };
+  };
+  const views = [
+    { screen: 'profile', bio: 'home fitness coach', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, caption: 'leg day' }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, caption: 'leg day' }], targets: { back: BACK } },
+  ];
+  const profile = await analyseProfile({
+    driver,
+    pacingMs: 0,
+    read: scriptedRead(views),
+    screen: { width: 1080, height: 2400 },
+    recordClip: false,
+  });
+
+  // One of the bio (before leaving the header) and one of the grid (at its top).
+  assert.deepStrictEqual(profile.shots.map((s) => s.kind), ['bio', 'reels_grid']);
+  assert.deepStrictEqual(profile.shots.map((s) => s.dataBase64), ['SHOT1', 'SHOT2']);
+  assert.deepStrictEqual(profile.evidence.shotsCaptured, ['bio', 'reels_grid']);
+});
+
+test('a host too old to take screenshots still yields a candidate', async () => {
+  const { analyseProfile } = require('./sourcingNavigator');
+  const driver = driverWithSearch(); // no screenshot op at all
+  const views = [
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+  ];
+  const profile = await analyseProfile({
+    driver, pacingMs: 0, read: scriptedRead(views), screen: { width: 1080, height: 2400 }, recordClip: false,
+  });
+  assert.strictEqual(profile.shots, undefined);
+  assert.deepStrictEqual(profile.reels.map((r) => r.views), [7], 'reach still collected');
+});
+
+// The reel that matched the keyword is the most search-relevant sample there is,
+// so when the caller hands one over the grid is NOT re-recorded — that was three
+// extra recordings and three extra Gemini calls per creator.
+test('a keyword-matched reel is used as the example, and the grid is not re-recorded', async () => {
+  const { analyseProfile } = require('./sourcingNavigator');
+  const driver = driverWithSearch();
+  driver.recordClip = async () => { throw new Error('must not record again'); };
+  const views = [
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
+  ];
+  const sourceClip = { dataBase64: 'KEYWORDREEL', mimeType: 'video/mp4' };
+  const profile = await analyseProfile({
+    driver,
+    pacingMs: 0,
+    read: scriptedRead(views),
+    screen: { width: 1080, height: 2400 },
+    sourceClip,
+    sourceTerm: 'homegym',
+  });
+
+  assert.strictEqual(profile.clip.dataBase64, 'KEYWORDREEL');
+  assert.deepStrictEqual(profile.clips, [sourceClip]);
+  assert.strictEqual(profile.evidence.clipSource, 'keyword-match');
+  assert.strictEqual(profile.evidence.sourceTerm, 'homegym');
+});
+
 // ── back navigation must not page the tabs ──────────────────────────────────
 
 // Instagram's search results are horizontally paged. The old fallback swiped in

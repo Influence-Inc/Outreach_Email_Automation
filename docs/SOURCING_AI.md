@@ -30,7 +30,7 @@ model docs for current rates.
 | --- | --- | --- |
 | `GEMINI_API_KEY` | *(unset)* | Enables the multimodal judge. Unset ⇒ falls back to Claude/keywords. **Paste the raw value — no surrounding quotes, no leading space.** |
 | `GEMINI_MODEL` | `gemini-flash-lite-latest` | Judge model. Quotes/whitespace are stripped. The default is Google's rolling alias for the current flash-lite model — a pinned generation (e.g. `gemini-2.5-flash-lite`) can 404 later with `"this model is no longer available to new users"` even though nothing in this repo changed; pin a dated snapshot only if you need reproducibility across a model upgrade. |
-| `GEMINI_MEDIA_RESOLUTION` | `low` | `low` (cheapest) / `medium` / `high`. |
+| `GEMINI_MEDIA_RESOLUTION` | `low` | `low` (cheapest) / `medium` / `high` / `off`. Not every model accepts this field — one that doesn't answers with a bare `400 INVALID_ARGUMENT` naming no field. The client probes once, retries without it, and then stops sending it; `off` skips the probe. |
 | `SOURCING_REMOTE_CONTROL` | off | `on` enables backend‑driven scouting + the reel pipeline (agent mode). |
 | `SOURCING_AI_SEARCH_TERMS` | on when `GEMINI_API_KEY` is set | `off` disables AI search‑term expansion (see *Search terms* below). |
 | `SOURCING_ENGAGEMENT` | off | `on` allows like/save. **Off = watch‑only (near‑zero ban risk).** |
@@ -82,6 +82,32 @@ These are **purely additive and always last**, so your own keywords are searched
 first. Disable with `SOURCING_AI_SEARCH_TERMS=off`. With no key, or on any
 model/network failure, expansion returns nothing and scouting proceeds on the
 configured terms.
+
+### What the judge actually sees
+
+A creator is judged from an **evidence bundle**, in one multimodal call:
+
+| Evidence | Where it comes from |
+| --- | --- |
+| **The reel that matched** (video **+ audio**) | Recorded in the player we land in after tapping the keyword's result — so it is the most search-relevant sample of that creator's work, not a reel picked at random off their grid. |
+| **A screenshot of the bio** | Taken on the profile header before navigating away. |
+| **A screenshot of the reels grid** | Taken at the top of the Reels tab — their most recent work, with view counts. |
+| **Caption text + reach** | Read off the grid (`reelsWindow` reels), plus followers and the lowest / typical / highest view counts. |
+
+The pictures are what text cannot give: whether the grid is a person on camera or
+a wall of reposted memes, and whether the bio reads like a real creator. The
+verdict lands on `sourced_candidates.evidence.niche`, including `evidenceUsed`
+(which of the four were actually present), so a thin judgement is visible as a
+thin one in the review queue.
+
+When the navigator captured no screenshots (an older host), it falls back to
+judging the recorded clips individually, then to Claude on captions, then to
+keyword scoring — the pipeline always degrades rather than stalling.
+
+> A phone answers `screenshot` with the PNG inline as base64, which clears 1 MB
+> routinely, so `/api/sourcing/hosts/:id/commands/result` parses at a 12 MB limit
+> (the global JSON limit stays 1 MB). Under the smaller limit the result 413s and
+> the navigator waits out a 30-second command timeout on every profile.
 
 ### Search flow: reels first
 
