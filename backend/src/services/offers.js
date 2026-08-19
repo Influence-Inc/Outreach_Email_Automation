@@ -233,9 +233,9 @@ async function subscribedChannelFor(contact) {
        FROM offer_messages m
        JOIN creators c ON c.id = m.creator_id
       WHERE m.direction = 'inbound'
-        AND m.created_at > NOW() - make_interval(hours => $2)
+        AND m.sent_at > NOW() - make_interval(hours => $2)
         AND right(regexp_replace(coalesce(c.whatsapp, c.imessage, ''), '[^0-9]', '', 'g'), 10) = $1
-      ORDER BY m.created_at DESC
+      ORDER BY m.sent_at DESC
       LIMIT 1`,
     [tail, OPEN_CONVERSATION_HOURS],
   );
