@@ -99,9 +99,48 @@ const DEFLECTION_MESSAGE =
 // resolved by the caller (the campaign's custom messaging_brief, placeholder-
 // filled, or a generic brand-name-only fallback); this just wraps it with a
 // greeting and the interest yes/no CTA.
-function renderMessagingBrief(firstName, brandBlurb) {
-  return `Hi ${firstName}, this is INFLUENCE. ${brandBlurb} Interested in hearing more? Reply Yes or No.`;
+// Does the copy already open with its own greeting? A campaign's custom
+// messaging_brief is usually written as a complete message and starts with
+// "Hi {firstName}," — prepending ours on top of it went out as
+// "Hi Sam, this is INFLUENCE. Hi Sam, …", which reads like a broken mail merge.
+function startsWithGreeting(text, firstName) {
+  const head = String(text || '').trimStart().slice(0, 80).toLowerCase();
+  if (/^(hi|hey|hello|dear|good (morning|afternoon|evening))\b/.test(head)) return true;
+  const name = String(firstName || '').trim().toLowerCase();
+  return !!name && head.startsWith(name);
 }
+
+// The brief the creator sees first. Blocks are separated by blank lines rather
+// than run together on one line — an admin's brief ends with a sign-off, and
+// gluing the interest question onto it produced
+// "…Head of Partnerships Interested in hearing more?".
+// The yes/no prompt itself is NOT included: on WhatsApp Cloud the options are
+// tappable buttons (INTEREST_BUTTONS), and sendWhatsAppChoice appends
+// INTEREST_FALLBACK_HINT only where buttons aren't available.
+function renderMessagingBrief(firstName, brandBlurb) {
+  const blurb = String(brandBlurb || '').trim();
+  const opener = startsWithGreeting(blurb, firstName)
+    ? blurb
+    : `Hi ${firstName}, this is INFLUENCE.\n\n${blurb}`;
+  return `${opener}\n\nInterested in hearing more?`;
+}
+
+// Tappable reply options. The TITLE is what the creator taps and also what Meta
+// echoes back as the inbound message body, so every title must classify to the
+// intent it promises — classifyInterest for the brief stage, classifyReply for
+// the binding accept/decline. replies.buttons.test.js pins exactly that, so a
+// reworded button can never silently start meaning the opposite.
+const INTEREST_BUTTONS = [
+  { id: 'interest_yes', title: 'Yes, tell me more' },
+  { id: 'interest_no', title: 'Not right now' },
+];
+const INTEREST_FALLBACK_HINT = 'Reply Yes or No.';
+
+const OFFER_BUTTONS = [
+  { id: 'offer_accept', title: 'Accept offer' },
+  { id: 'offer_decline', title: 'Decline' },
+];
+const OFFER_FALLBACK_HINT = 'Reply Accept or Decline, or open the link above for the full details.';
 
 // Sent when a reply to the brief (awaiting a yes/no on INTEREST, not yet a rate
 // decision) doesn't classify as either. A stage-appropriate nudge instead of
@@ -204,8 +243,13 @@ module.exports = {
   notAFitCloseMessage,
   tooHighReply,
   renderMessagingBrief,
+  startsWithGreeting,
   interestClarificationMessage,
   firstContactHoldingMessage,
+  INTEREST_BUTTONS,
+  INTEREST_FALLBACK_HINT,
+  OFFER_BUTTONS,
+  OFFER_FALLBACK_HINT,
   DEFLECTION_MESSAGE,
   OPT_OUT_CONFIRMATION,
   OPT_IN_CONFIRMATION,

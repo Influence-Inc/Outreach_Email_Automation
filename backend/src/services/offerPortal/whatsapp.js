@@ -196,6 +196,85 @@ async function sendWhatsAppText({ to, body }) {
   return whatsappProvider() === 'cloud' ? sendCloudText({ to, body }) : sendTwilioText({ to, body });
 }
 
+// --- Interactive reply buttons --------------------------------------------
+// Meta caps an interactive message at 3 reply buttons with 20-character titles
+// and a 1024-character body (a quarter of the plain-text limit) and rejects the
+// whole send if any is exceeded — so the limits are enforced here rather than
+// discovered as a 400 with the message lost.
+const MAX_BUTTONS = 3;
+const BUTTON_TITLE_MAX = 20;
+const INTERACTIVE_BODY_MAX = 1024;
+
+// Free-form interactive message with tappable reply buttons. Cloud API only, and
+// subject to the same 24h window as text. Meta echoes the tapped button's TITLE
+// back as the inbound message body, so the titles double as the words our reply
+// classifier sees — see offerPortal/replies.js.
+async function sendCloudButtons({ to, body, buttons }) {
+  if (!cloudToken() || !cloudPhoneNumberId()) {
+    console.warn(
+      `[offer-whatsapp] WHATSAPP_CLOUD_ACCESS_TOKEN/PHONE_NUMBER_ID not set — skipping buttons to ${to}`,
+    );
+    return { sent: false, skipped: true };
+  }
+  const recipient = normalizePhone(to);
+  if (!recipient) return { sent: false, error: 'invalid recipient number' };
+
+  const replies = (buttons || [])
+    .filter((b) => b && b.title)
+    .slice(0, MAX_BUTTONS)
+    .map((b, i) => ({
+      type: 'reply',
+      reply: {
+        id: String(b.id || `opt_${i}`).slice(0, 256),
+        title: String(b.title).slice(0, BUTTON_TITLE_MAX),
+      },
+    }));
+  // Nothing tappable left — a plain text send still delivers the message.
+  if (!replies.length) return sendCloudText({ to, body });
+
+  try {
+    const res = await fetch(cloudMessagesUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cloudToken()}`,
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipient,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: String(body || '') },
+          action: { buttons: replies },
+        },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      return { sent: true, id: extractCloudMessageId(data) };
+    }
+    const text = await res.text().catch(() => '');
+    return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
+  } catch (err) {
+    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
+  }
+}
+
+// Ask a question with tappable options where the provider supports them, and the
+// same question with the options written out where it doesn't (Twilio, or a body
+// too long for an interactive message). A creator can always answer either way —
+// the buttons are an affordance, never the only route.
+async function sendWhatsAppChoice({ to, body, buttons, fallbackHint }) {
+  const hint = fallbackHint || (buttons || []).map((b) => b && b.title).filter(Boolean).join(' or ');
+  const asText = () => sendWhatsAppText({ to, body: hint ? `${body}\n\n${hint}` : body });
+
+  if (whatsappProvider() !== 'cloud') return asText();
+  if (String(body || '').length > INTERACTIVE_BODY_MAX) return asText();
+  return sendCloudButtons({ to, body, buttons });
+}
+
 // The offer-reveal message body (free-form session reply used by
 // deliverOfferOverChannel) — also stored in offer_messages so the admin can see
 // what the creator received. Points them straight at the portal link to view
@@ -217,6 +296,11 @@ module.exports = {
   toWhatsAppAddr,
   businessNumber,
   sendWhatsAppText,
+  sendWhatsAppChoice,
+  sendCloudButtons,
+  MAX_BUTTONS,
+  BUTTON_TITLE_MAX,
+  INTERACTIVE_BODY_MAX,
   renderOfferOutreachBody,
   renderContentBriefReadyBody,
   // Exposed for tests.
