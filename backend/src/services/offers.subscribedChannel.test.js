@@ -109,7 +109,7 @@ test('no phone on file → falls back to this row (established, not opted out)',
 // priced the offer, and it went out as an email invite because the offer hung off
 // a fresh campaign row whose established_channel was still unset.
 test('a NEW campaign row inherits the channel when the person messaged us inside the window', async () => {
-  install({ recentInboundChannel: 'whatsapp' });
+  const queries = install({ recentInboundChannel: 'whatsapp' });
   try {
     const ch = await offers.subscribedChannelFor({
       whatsapp: '+18005551234',
@@ -118,6 +118,15 @@ test('a NEW campaign row inherits the channel when the person messaged us inside
       messaging_opted_out: false,
     });
     assert.strictEqual(ch, 'whatsapp');
+
+    // The stub returns a row for any offer_messages query, so a wrong column name
+    // passes here even though Postgres would throw "column m.created_at does not
+    // exist" and abort the whole offer send. offer_messages timestamps its rows
+    // as sent_at (NOT created_at), so pin the real column the query must use.
+    const inboundQuery = queries.find((q) => /FROM offer_messages/i.test(q.sql));
+    assert.ok(inboundQuery, 'the open-conversation lookup ran');
+    assert.match(inboundQuery.sql, /\bm\.sent_at\b/, 'must filter/order on offer_messages.sent_at');
+    assert.doesNotMatch(inboundQuery.sql, /\bm\.created_at\b/, 'offer_messages has no created_at column');
   } finally {
     restore();
   }
