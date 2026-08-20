@@ -32,6 +32,7 @@ async function dismissFlag(r) {
 // backend uses to compute the counts in the stats bar (see routes/campaigns.js).
 // Keeping these in sync means clicking a stat shows exactly that many rows.
 const STAGE_FILTERS = {
+  total: (r) => r.outreach_sent_at != null || r.ig_dm_sent_at != null,
   sent: (r) => r.outreach_sent_at != null,
   opened: (r) => Number(r.open_count) > 0,
   replied: (r) => r.status === 'replied',
@@ -366,6 +367,7 @@ async function selectCampaign(id) {
   const repliedPct = emailsSent > 0 ? Math.round((Number(c.replied_count) || 0) / emailsSent * 100) : null;
   const signedPct = emailsSent > 0 ? Math.round((Number(c.contracted_count) || 0) / emailsSent * 100) : null;
   const stats = [
+    { stage: 'total', label: 'Total', value: c.outreach_sent_count },
     { stage: 'sent', label: 'Sent', value: c.email_sent_count },
     { stage: 'opened', label: 'Opened', value: c.opened_count, pct: openedPct },
     { stage: 'replied', label: 'Replied', value: c.replied_count, accent: true, pct: repliedPct },
