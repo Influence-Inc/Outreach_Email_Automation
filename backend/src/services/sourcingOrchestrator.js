@@ -11,7 +11,7 @@
 // routes/sourcing.js builds the production `deps` from db, duplicateGuard,
 // creatorDb and the shared creator-insert helper.
 
-const { nicheMatch, decide, decideReel } = require('./sourcingFilters');
+const { nicheMatch, decide, decideReel, prefilter } = require('./sourcingFilters');
 const { scoreCreator } = require('./creatorScore');
 
 const REVIEW_BAND_DEFAULT = 0.15;
@@ -67,16 +67,6 @@ async function processCandidate(run, config, candidate, deps) {
     .trim();
   if (!username) return { decision: 'rejected', added: false, rejectReason: 'no username' };
 
-  // Rule 1/3: niche score (AI when available, deterministic keyword fallback).
-  const niche = await nicheMatch(candidate, config, { classify: deps.nicheClassify });
-  candidate.nicheScore = niche.nicheScore;
-  candidate.nicheReason = niche.nicheReason;
-  // Preserve the multimodal verdict (genre / audience match / spoken topic) on the
-  // candidate's evidence so an admin can audit why it was matched.
-  if (niche.evidence) {
-    candidate.evidence = { ...(candidate.evidence || {}), niche: niche.evidence };
-  }
-
   // Reels mode used to mean "no reach data": a single reel off the feed carries
   // no view counts, so it got a niche-only verdict and was always parked in the
   // review queue for a human to confirm reach by hand.
@@ -90,6 +80,57 @@ async function processCandidate(run, config, candidate, deps) {
   const hasReach = Array.isArray(candidate.reels)
     && candidate.reels.some((r) => r && Number.isFinite(Number(r.views)));
   const reachUnverified = reelsMode && !hasReach;
+
+  // CHEAP GATES FIRST. Reel count, the view floor and the risk shape are
+  // arithmetic on numbers already read off the grid, and between them they reject
+  // most creators. Judging the niche is a multimodal model call on recorded video
+  // — by far the slowest thing in the pipeline — so it must never be spent on a
+  // creator whose views already disqualified them.
+  //
+  // Skipped when reach is unverified (a reel straight off the feed has no view
+  // counts), because there is nothing for these gates to measure and the niche
+  // judgement is the only signal available.
+  if (!reachUnverified) {
+    const pre = prefilter(candidate, config);
+    if (!pre.pass) {
+      const row = await deps.persistCandidate({
+        run_id: run.id,
+        campaign_id: campaignId,
+        username,
+        full_name: candidate.full_name || candidate.fullName || null,
+        followers: candidate.followers ?? null,
+        bio: candidate.bio || null,
+        reels: candidate.reels || [],
+        niche_score: null,
+        niche_reason: 'not judged — rejected on reach before analysis',
+        view_floor_pass: pre.viewFloorPass,
+        risk_profile: pre.riskProfile,
+        stability_score: null,
+        growth_trend: null,
+        evidence: candidate.evidence || null,
+        decision: 'pending',
+      });
+      if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted' };
+      await deps.updateCandidate(row.id, {
+        decision: 'rejected', reject_reason: pre.rejectReason, decided_by: 'rule',
+      });
+      return {
+        decision: 'rejected', added: false, candidateId: row.id, rejectReason: pre.rejectReason,
+      };
+    }
+  }
+
+  // Rule 1/3: niche score (AI when available, deterministic keyword fallback).
+  // Only reached by creators the cheap gates could not reject.
+  const niche = await nicheMatch(candidate, config, { classify: deps.nicheClassify });
+  candidate.nicheScore = niche.nicheScore;
+  candidate.nicheReason = niche.nicheReason;
+  // Preserve the multimodal verdict (genre / audience match / spoken topic) on the
+  // candidate's evidence so an admin can audit why it was matched.
+  if (niche.evidence) {
+    candidate.evidence = { ...(candidate.evidence || {}), niche: niche.evidence };
+  }
+
   const verdict = reachUnverified ? decideReel(candidate, config) : decide(candidate, config);
 
   // The model's fit_score is an INPUT, never the decision. When the analyses are

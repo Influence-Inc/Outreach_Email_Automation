@@ -168,27 +168,42 @@ test('decide rejects on the view floor', () => {
   assert.match(out.rejectReason, /below floor/);
 });
 
-// Real creators have quiet posts. Demanding all twelve clear the floor is a much
-// stricter test than "minimum views" sounds like, and it was rejecting creators
-// who were 10-for-12 on an otherwise strong window.
-test('a couple of reels below the floor is tolerated by default', () => {
-  const views = [...Array(10).fill(100000), 10000, 9000];
+// The floor is the campaign's MINIMUM. A minimum that eleven of twelve reels
+// satisfy is not a minimum — one reel under the number the brand is buying
+// against means the creator does not clear it.
+test('a single reel below the floor rejects by default', () => {
+  const views = [...Array(11).fill(100000), 10000];
   const out = F.decide(
     { reels: reelsOf(views, 'gym') },
     { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4 },
   );
-  assert.strictEqual(out.pass, true, out.rejectReason || '');
-  assert.strictEqual(out.viewFloorPass, true);
+  assert.strictEqual(out.pass, false);
+  assert.strictEqual(out.viewFloorPass, false);
+  assert.match(out.rejectReason, /1 of 12 reels below floor 15000/);
 });
 
-test('the floor can still be made absolute', () => {
-  const views = [...Array(11).fill(100000), 10000];
-  const strict = F.decide(
-    { reels: reelsOf(views, 'gym') },
-    { floor: 15000, risk: 'high', floorTolerance: 0 },
+test('a whole window above the floor passes', () => {
+  const out = F.decide(
+    { reels: reelsOf(Array(12).fill(100000), 'gym') },
+    { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4 },
   );
-  assert.strictEqual(strict.pass, false);
-  assert.match(strict.rejectReason, /1 of 12 reels below floor/);
+  assert.strictEqual(out.pass, true, out.rejectReason || '');
+});
+
+// Slack is still available, it is just no longer the default.
+test('a campaign can opt back into tolerating dips', () => {
+  const views = [...Array(11).fill(100000), 10000];
+  const out = F.decide(
+    { reels: reelsOf(views, 'gym') },
+    { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, floorTolerance: 2 },
+  );
+  assert.strictEqual(out.pass, true, out.rejectReason || '');
+});
+
+// "all N below floor" reads very differently from "3 of 12" when scanning a run.
+test('a creator entirely under the floor says so', () => {
+  const out = F.decide({ reels: reelsOf(Array(12).fill(500), 'gym') }, { floor: 15000, risk: 'high' });
+  assert.match(out.rejectReason, /all 12 reels below floor 15000/);
 });
 
 test('decide rejects when the risk profile exceeds appetite', () => {

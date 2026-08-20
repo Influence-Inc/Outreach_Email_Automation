@@ -72,6 +72,8 @@ function readForm() {
     maxProfiles: numOrUndef('maxProfiles'),
     creatorPassThreshold: numOrUndef('creatorPassThreshold'),
     minCreativity: numOrUndef('minCreativity'),
+    minBrandFit: numOrUndef('minBrandFit'),
+    brandProduct: el('brandProduct').value.trim(),
     discovery: el('discovery').value,
     reviewBorderline: el('reviewBorderline').checked,
   };
@@ -82,7 +84,7 @@ function fillForm(cfg) {
   el('niche').value = cfg.niche || '';
   el('keywords').value = Array.isArray(cfg.keywords) ? cfg.keywords.join(', ') : (cfg.keywords || '');
   el('floor').value = cfg.floor ?? '';
-  el('floorTolerance').value = cfg.floorTolerance ?? 2;
+  el('floorTolerance').value = cfg.floorTolerance ?? 0;
   el('ceiling').value = cfg.ceiling ?? '';
   el('risk').value = ['low', 'medium', 'high', 'all'].includes(cfg.risk) ? cfg.risk : 'medium';
   el('targetCount').value = cfg.targetCount ?? '';
@@ -91,6 +93,8 @@ function fillForm(cfg) {
   el('maxProfiles').value = cfg.maxProfiles ?? '';
   el('creatorPassThreshold').value = cfg.creatorPassThreshold ?? 0.72;
   el('minCreativity').value = cfg.minCreativity ?? 5;
+  el('minBrandFit').value = cfg.minBrandFit ?? 4;
+  el('brandProduct').value = cfg.brandProduct || '';
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
   el('reviewBorderline').checked = !!cfg.reviewBorderline;
 }

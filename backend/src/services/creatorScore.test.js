@@ -274,3 +274,78 @@ test('the raised default bar is the one in force', () => {
   assert.strictEqual(scoreCreator(borderline, { creatorPassThreshold: 0.95 }).pass, false);
   assert.strictEqual(scoreCreator(borderline, { creatorPassThreshold: 0.5 }).pass, true);
 });
+
+// ── brand fit ───────────────────────────────────────────────────────────────
+
+// The closest thing in the blend to the question an outreach actually asks:
+// could this creator hold THIS product and have it look native.
+test('a creator who could not plausibly hold the product is rejected', () => {
+  const r = scoreCreator(strong({
+    creator: { fit_score: 95, consistency_of_niche: 9 },
+    clips: [
+      { creativity: 9, hook_strength: 9, is_original_creator: true, brand_fit: 2 },
+      { creativity: 9, hook_strength: 8, is_original_creator: true, brand_fit: 3 },
+    ],
+  }), {});
+  assert.strictEqual(r.pass, false);
+  assert.match(r.rejectReason, /brand fit 2\.5 below 4/);
+});
+
+test('the brand-fit floor is tunable, and 0 turns it off', () => {
+  const poor = strong({ clips: [{ creativity: 9, hook_strength: 9, is_original_creator: true, brand_fit: 2 }] });
+  assert.match(scoreCreator(poor, {}).rejectReason, /brand fit/);
+  assert.ok(!/brand fit/.test(String(scoreCreator(poor, { minBrandFit: 0 }).rejectReason)));
+  assert.match(scoreCreator(strong({
+    clips: [{ creativity: 9, hook_strength: 9, is_original_creator: true, brand_fit: 6 }],
+  }), { minBrandFit: 8 }).rejectReason, /brand fit 6 below 8/);
+});
+
+test('strong brand fit lifts a creator materially', () => {
+  const base = { creator: { fit_score: 70, consistency_of_niche: 7 } };
+  const weak = scoreCreator(strong({ ...base, clips: [{ creativity: 7, hook_strength: 7, is_original_creator: true, brand_fit: 4 }] }), {});
+  const great = scoreCreator(strong({ ...base, clips: [{ creativity: 7, hook_strength: 7, is_original_creator: true, brand_fit: 10 }] }), {});
+  assert.ok(great.score - weak.score > 0.13, `brand fit moved the score by ${great.score - weak.score}`);
+});
+
+// ── unknown is not zero ─────────────────────────────────────────────────────
+
+// A campaign that never said what it sells is never asked about brand fit. It
+// must not be scored as though the answer were "no" — its weight is redistributed
+// across the components that WERE measured.
+test('a campaign with no product configured is not penalised for brand fit', () => {
+  const withoutField = scoreCreator(strong({
+    clips: [{ creativity: 8, hook_strength: 8, is_original_creator: true }],
+  }), {});
+  const withGreatFit = scoreCreator(strong({
+    clips: [{ creativity: 8, hook_strength: 8, is_original_creator: true, brand_fit: 8 }],
+  }), {});
+
+  assert.strictEqual(withoutField.components.brandFit, null, 'unmeasured, not zero');
+  assert.ok(withoutField.pass, 'still judged on everything else');
+  // Scoring 8/10 on brand fit is close to the 0.8 the other craft numbers sit at,
+  // so the two scores should be near-identical rather than 0.25 apart.
+  assert.ok(
+    Math.abs(withGreatFit.score - withoutField.score) < 0.05,
+    `absent brand fit did not drag the score down (${withoutField.score} vs ${withGreatFit.score})`,
+  );
+});
+
+// The same trap that made an unanalysed creator score 0 on craft.
+test('an unmeasured component drops out of the average rather than scoring zero', () => {
+  const noClips = scoreCreator({
+    creator: { fit_score: 90, consistency_of_niche: 9 },
+    clips: [],
+    reels: [{ views: 50000 }, { views: 51000 }, { views: 49000 }],
+  }, {});
+  assert.strictEqual(noClips.components.creativity, null);
+  assert.strictEqual(noClips.components.hook, null);
+  // fit 0.9, consistency 0.9, steadiness ~0.98 — nothing else was measured, so
+  // the score reflects those three and not three phantom zeroes.
+  assert.ok(noClips.score > 0.85, `scored ${noClips.score} on what was actually known`);
+});
+
+test('a creator with nothing measurable at all scores zero rather than dividing by zero', () => {
+  const r = scoreCreator({}, {});
+  assert.strictEqual(r.score, 0);
+  assert.strictEqual(r.pass, false);
+});
