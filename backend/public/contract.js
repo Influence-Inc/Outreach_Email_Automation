@@ -482,32 +482,31 @@
   }
 
   // ── Secret fields (account number / IBAN) ──────────────────────────────
-  // Rendered as type=password so characters are masked. We additionally block
-  // copy / cut / drag / right-click so the entered value can't be lifted back
-  // out of the field even if it's still selected — the creator types their
-  // details, we accept them, and they stay hidden.
+  // Rendered as type=password so characters are masked at rest. Every secret
+  // field reveals its value (type=text) while focused so the creator can read
+  // back what they entered, and re-masks on blur. copy / cut / drag /
+  // right-click stay blocked so the value can't be lifted back out even when
+  // it's visible on screen.
   //
-  // IBANs (.secret-reveal) are a special case: they're long, structured, and
-  // easy to mistype, and creators told us the mask made them uncertain they'd
-  // entered the right thing. Those fields still block copy/cut, but they
-  // ALLOW paste, reveal their value (type=text) while focused so the creator
-  // can read back what they entered, and re-mask (type=password) on blur.
-  // The confirm field still guards against a bad paste on either side.
+  // Paste is blocked by default — the account number must be typed, and the
+  // confirm field can't just be pasted to match. IBANs opt out with
+  // .secret-pastable: they're long, structured, and easy to mistype, so
+  // pasting is the safer path; the confirm field still guards against a bad
+  // paste on either side.
   function lockSecretFields() {
     var nodes = document.querySelectorAll('input.secret');
     for (var i = 0; i < nodes.length; i += 1) {
       var el = nodes[i];
-      var reveal = el.classList.contains('secret-reveal');
+      var allowPaste = el.classList.contains('secret-pastable');
       el.addEventListener('copy', function (e) { e.preventDefault(); });
       el.addEventListener('cut', function (e) { e.preventDefault(); });
       el.addEventListener('dragstart', function (e) { e.preventDefault(); });
       el.addEventListener('drop', function (e) { e.preventDefault(); });
       el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-      if (!reveal) {
+      el.addEventListener('focus', function (e) { e.target.type = 'text'; });
+      el.addEventListener('blur', function (e) { e.target.type = 'password'; });
+      if (!allowPaste) {
         el.addEventListener('paste', function (e) { e.preventDefault(); });
-      } else {
-        el.addEventListener('focus', function (e) { e.target.type = 'text'; });
-        el.addEventListener('blur', function (e) { e.target.type = 'password'; });
       }
     }
   }
