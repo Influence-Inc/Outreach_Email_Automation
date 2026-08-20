@@ -157,7 +157,9 @@ async function processCandidate(run, config, candidate, deps) {
   if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted' };
 
   if (!verdict.pass) {
-    await deps.updateCandidate(row.id, { decision: 'rejected', reject_reason: verdict.rejectReason });
+    await deps.updateCandidate(row.id, {
+      decision: 'rejected', reject_reason: verdict.rejectReason, decided_by: 'rule',
+    });
     return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: verdict.rejectReason };
   }
 
@@ -165,14 +167,18 @@ async function processCandidate(run, config, candidate, deps) {
   // campaign (reuses the same duplicateGuard the manual add path uses)...
   const dup = await deps.findDuplicate({ campaignId, username, email: null });
   if (dup) {
-    await deps.updateCandidate(row.id, { decision: 'rejected', reject_reason: 'already in campaign' });
+    await deps.updateCandidate(row.id, {
+      decision: 'rejected', reject_reason: 'already in campaign', decided_by: 'rule',
+    });
     return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'already in campaign' };
   }
   // ...and (best-effort) against creators already USED in the Creator-DB.
   if (deps.isUsed) {
     try {
       if (await deps.isUsed(username)) {
-        await deps.updateCandidate(row.id, { decision: 'rejected', reject_reason: 'used creator' });
+        await deps.updateCandidate(row.id, {
+          decision: 'rejected', reject_reason: 'used creator', decided_by: 'rule',
+        });
         return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'used creator' };
       }
     } catch (_) {
@@ -186,7 +192,7 @@ async function processCandidate(run, config, candidate, deps) {
   // creator sat in review forever with no decision made.
   const disposition = reachUnverified ? 'review' : reviewDecision(verdict, config);
   if (disposition === 'review') {
-    await deps.updateCandidate(row.id, { decision: 'review' });
+    await deps.updateCandidate(row.id, { decision: 'review', decided_by: 'rule' });
     return { decision: 'review', added: false, candidateId: row.id };
   }
 
@@ -197,7 +203,7 @@ async function processCandidate(run, config, candidate, deps) {
     firstName: candidate.first_name || candidate.firstName || null,
     sourcedVia: sourceTag(run, config, candidate, { niche, gate }),
   });
-  await deps.updateCandidate(row.id, { decision: 'added', creator_id: creator.id });
+  await deps.updateCandidate(row.id, { decision: 'added', creator_id: creator.id, decided_by: 'rule' });
   return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id };
 }
 

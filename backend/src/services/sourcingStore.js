@@ -72,7 +72,9 @@ async function approveCandidate(id) {
     firstName: null,
   });
   await db.query(
-    `UPDATE sourced_candidates SET decision = 'added', creator_id = $2 WHERE id = $1`,
+    `UPDATE sourced_candidates
+        SET decision = 'added', creator_id = $2, decided_by = 'human'
+      WHERE id = $1`,
     [id, creator.id],
   );
   await db.query(
@@ -84,7 +86,10 @@ async function approveCandidate(id) {
 
 async function rejectCandidate(id, reason = 'rejected in review') {
   return db.one(
-    `UPDATE sourced_candidates SET decision = 'rejected', reject_reason = $2 WHERE id = $1 RETURNING *`,
+    `UPDATE sourced_candidates
+        SET decision = 'rejected', reject_reason = $2, decided_by = 'human'
+      WHERE id = $1
+      RETURNING *`,
     [id, reason],
   );
 }
@@ -148,7 +153,7 @@ function makeDeps(run, { nicheClassify = reelJudge.makeClassifier() } = {}) {
     },
 
     async updateCandidate(id, patch) {
-      const cols = { decision: true, reject_reason: true, creator_id: true };
+      const cols = { decision: true, reject_reason: true, creator_id: true, decided_by: true };
       const sets = [];
       const params = [id];
       for (const [k, v] of Object.entries(patch || {})) {

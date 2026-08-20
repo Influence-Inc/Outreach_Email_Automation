@@ -171,6 +171,10 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     `Reach across ${stats.count || 0} recent reels — lowest ${stats.min ?? '?'}, `
       + `typical ${stats.typical ?? '?'}, highest ${stats.max ?? '?'}.`,
     captions.length ? `Recent reel captions:\n- ${captions.join('\n- ')}` : 'Recent reel captions: (none)',
+    // The brand's own past approve/reject calls, as few-shot examples. This is
+    // the call that produces fit_score, so it is where taste has to land — see
+    // services/nicheCalibration.js.
+    (config.calibration && config.calibration.text) || '',
     '',
     'Respond with ONLY a JSON object of exactly this shape, no prose and no',
     'markdown fences. Scores marked 0-10 are integers; niche_score, audience_match',
@@ -281,6 +285,13 @@ function buildCreatorPrompt({ candidate = {}, clips = [], stats = {} } = {}, con
     '',
     'Reel analyses:',
     JSON.stringify(clips, null, 2),
+    // The brand's own past approve/reject calls, as few-shot examples. Carried
+    // here rather than on the per-CLIP prompt for two reasons: this is the call
+    // that produces fit_score (the number the gate weighs most heavily), and it
+    // runs once per creator where the clip prompt runs three times — so
+    // calibration costs a third as much exactly where it matters most.
+    // See services/nicheCalibration.js.
+    (config.calibration && config.calibration.text) || '',
     '',
     'reject_reason must be null unless this creator should be dropped, in which',
     'case give the reason in a few words. fit_score is 0-100.',

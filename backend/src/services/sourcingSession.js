@@ -13,12 +13,14 @@
 // side-effecting is injectable via `deps`, so the whole executor is unit-testable
 // with fakes — no DB, no phone, no network.
 
+const db = require('../db');
 const { runWithSource } = require('./sourcingOrchestrator');
 const { makeRemoteDriver } = require('./remoteDriver');
 const { scout } = require('./sourcingNavigator');
 const commands = require('./hostCommands');
 const store = require('./sourcingStore');
 const searchTerms = require('./searchTerms');
+const nicheCalibration = require('./nicheCalibration');
 
 const DEFAULT_PACING_MS = 1800; // human-like pacing between IG actions (anti-flag)
 const DEFAULT_CAPTURE_CAP = 500; // safety cap on captures per run
@@ -80,6 +82,26 @@ async function runSession({ hostId, run, deps }) {
   try { await driver.wake(); } catch (err) { log(`[sourcing-session] wake failed: ${(err && err.message) || err}`); }
 
   const config = run.config || {};
+
+  // Few-shot calibration from the admin's OWN past approve/reject calls on this
+  // campaign — see services/nicheCalibration.js. Loaded once for the whole run
+  // (it is the same for every creator) and attached to the config the judge
+  // already receives. Best-effort: no examples yet, or a failed query, just
+  // means this run judges the way every run did before.
+  const calibration = await (deps.loadCalibration || nicheCalibration.loadCalibration)({
+    db,
+    campaignId: run.campaign_id,
+    perSide: config.calibrationExamples,
+    logger: deps.logger || console,
+  });
+  if (calibration) {
+    config.calibration = calibration;
+    log(
+      `[sourcing-session] calibrating on ${calibration.counts.approved} approved `
+      + `+ ${calibration.counts.rejected} rejected creators`,
+    );
+  }
+
   const opts = {
     keywords: config.keywords || [],
     hashtags: config.hashtags || [],

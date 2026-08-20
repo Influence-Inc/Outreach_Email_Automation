@@ -661,3 +661,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sourced_candidates_campaign_username
 -- keyword — or which mode — is worth running again.
 -- { mode, keyword, genre, nicheScore, creatorScore, runId, sourcedAt }
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS sourced_via JSONB;
+
+-- Who made the call on a candidate: 'rule' (the deterministic scouting rules or
+-- the creator gate) or 'human' (an admin in the review queue). Only HUMAN
+-- decisions are taste signal — a rule rejection just restates the rules, and
+-- feeding those back to the model as examples would teach it nothing it does not
+-- already enforce. See services/nicheCalibration.js.
+ALTER TABLE sourced_candidates ADD COLUMN IF NOT EXISTS decided_by TEXT;
