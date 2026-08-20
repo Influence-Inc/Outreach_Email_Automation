@@ -485,19 +485,30 @@
   // Rendered as type=password so characters are masked. We additionally block
   // copy / cut / drag / right-click so the entered value can't be lifted back
   // out of the field even if it's still selected — the creator types their
-  // details, we accept them, and they stay hidden. Pasting is blocked too so
-  // the account number / IBAN must be typed (and the confirm field can't just
-  // be pasted to match).
+  // details, we accept them, and they stay hidden.
+  //
+  // IBANs (.secret-reveal) are a special case: they're long, structured, and
+  // easy to mistype, and creators told us the mask made them uncertain they'd
+  // entered the right thing. Those fields still block copy/cut, but they
+  // ALLOW paste, reveal their value (type=text) while focused so the creator
+  // can read back what they entered, and re-mask (type=password) on blur.
+  // The confirm field still guards against a bad paste on either side.
   function lockSecretFields() {
     var nodes = document.querySelectorAll('input.secret');
     for (var i = 0; i < nodes.length; i += 1) {
       var el = nodes[i];
+      var reveal = el.classList.contains('secret-reveal');
       el.addEventListener('copy', function (e) { e.preventDefault(); });
       el.addEventListener('cut', function (e) { e.preventDefault(); });
-      el.addEventListener('paste', function (e) { e.preventDefault(); });
       el.addEventListener('dragstart', function (e) { e.preventDefault(); });
       el.addEventListener('drop', function (e) { e.preventDefault(); });
       el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+      if (!reveal) {
+        el.addEventListener('paste', function (e) { e.preventDefault(); });
+      } else {
+        el.addEventListener('focus', function (e) { e.target.type = 'text'; });
+        el.addEventListener('blur', function (e) { e.target.type = 'password'; });
+      }
     }
   }
 
@@ -719,6 +730,7 @@
       { id: 'bankAccount', label: 'your account number',     block: 'accountNumBlock' },
       { id: 'bankAccountConfirm', label: 'the confirmation account number', block: 'accountNumBlock' },
       { id: 'bankIban',    label: 'your IBAN',               block: 'ibanBlock' },
+      { id: 'bankIbanConfirm', label: 'the confirmation IBAN', block: 'ibanBlock' },
       { id: 'bankRouting', label: 'your routing number',     block: 'routingBlock' },
       { id: 'bankIfsc',    label: 'your IFSC code',          block: 'indiaRow' },
       { id: 'bankPan',     label: 'your PAN number',         block: 'indiaRow' },
@@ -741,6 +753,14 @@
     if (blockVisible('accountNumBlock') && acct !== acct2) {
       errEl.textContent = 'Account number and confirmation do not match.';
       highlight('bankAccountConfirm');
+      return;
+    }
+
+    var iban = ($('bankIban').value || '').trim();
+    var iban2 = ($('bankIbanConfirm').value || '').trim();
+    if (blockVisible('ibanBlock') && iban !== iban2) {
+      errEl.textContent = 'IBAN and confirmation do not match.';
+      highlight('bankIbanConfirm');
       return;
     }
 
@@ -773,7 +793,7 @@
           accountHolderName: $('bankHolder').value || null,
           bankName: $('bankName').value || null,
           accountNumber: acct || null,
-          iban: $('bankIban').value || null,
+          iban: iban || null,
           routingNumber: $('bankRouting').value || null,
           ifscCode: $('bankIfsc').value || null,
           panNumber: $('bankPan').value || null,
