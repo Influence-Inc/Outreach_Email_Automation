@@ -32,26 +32,10 @@ async function dismissFlag(r) {
 // backend uses to compute the counts in the stats bar (see routes/campaigns.js).
 // Keeping these in sync means clicking a stat shows exactly that many rows.
 const STAGE_FILTERS = {
-  creators: () => true,
-  // Awaiting outreach: we haven't reached them on any channel yet, and the
-  // row isn't an auto-rejected duplicate / stopped one. "Reached them" covers
-  // both email outreach (outreach_sent_at stamped when Instantly confirms) and
-  // an Instagram Priority DM (ig_dm_sent_at stamped when the extension confirms).
-  // Without the ig_dm_sent_at guard, DM'd creators kept showing up under
-  // Pending even though they'd already been contacted.
-  pending: (r) =>
-    !r.outreach_sent_at &&
-    !r.ig_dm_sent_at &&
-    r.status !== 'duplicate' &&
-    r.status !== 'stopped',
-  // Outreach confirmed sent, on any channel — email OR Instagram DM. Keeps the
-  // "how many creators have we actually reached out to?" number honest.
-  outreach: (r) => r.outreach_sent_at != null || r.ig_dm_sent_at != null,
+  sent: (r) => r.outreach_sent_at != null,
+  opened: (r) => Number(r.open_count) > 0,
   replied: (r) => r.status === 'replied',
-  // Contract signed or completed (a merely-sent 'pending' contract doesn't count).
-  contracted: (r) => r.contract && (r.contract.status === 'signed' || r.contract.status === 'completed'),
-  // Removed: outreach explicitly stopped for this creator (removed from campaign).
-  removed: (r) => r.status === 'stopped',
+  signed: (r) => r.contract && (r.contract.status === 'signed' || r.contract.status === 'completed'),
 };
 
 async function api(path, options = {}) {
@@ -377,19 +361,15 @@ async function selectCampaign(id) {
   state.searchQuery = '';
   const searchInput = el('creator-search');
   if (searchInput) searchInput.value = '';
-  // Reply rate: of the creators we emailed (email_sent_count, excluding IG
-  // DMs), how many replied. Shown next to the Replied number. Null when no
-  // email has gone out yet, so we don't render a meaningless "0%" (or divide
-  // by 0).
   const emailsSent = Number(c.email_sent_count) || 0;
+  const openedPct = emailsSent > 0 ? Math.round((Number(c.opened_count) || 0) / emailsSent * 100) : null;
   const repliedPct = emailsSent > 0 ? Math.round((Number(c.replied_count) || 0) / emailsSent * 100) : null;
+  const signedPct = emailsSent > 0 ? Math.round((Number(c.contracted_count) || 0) / emailsSent * 100) : null;
   const stats = [
-    { stage: 'creators', label: 'Creators', value: c.creator_count },
-    { stage: 'pending', label: 'Pending', value: c.pending_count },
-    { stage: 'outreach', label: 'Outreach', value: c.outreach_sent_count },
+    { stage: 'sent', label: 'Sent', value: c.email_sent_count },
+    { stage: 'opened', label: 'Opened', value: c.opened_count, pct: openedPct },
     { stage: 'replied', label: 'Replied', value: c.replied_count, accent: true, pct: repliedPct },
-    { stage: 'contracted', label: 'Contracted', value: c.contracted_count },
-    { stage: 'removed', label: 'Removed', value: c.stopped_count },
+    { stage: 'signed', label: 'Signed', value: c.contracted_count, pct: signedPct },
   ];
   const statsEl = el('campaign-stats');
   statsEl.hidden = false;
@@ -399,7 +379,7 @@ async function selectCampaign(id) {
         <div class="stat-label">${s.label}</div>
         <div class="stat-value num${s.accent && Number(s.value) > 0 ? ' accent' : ''}">${s.value}${
           s.pct != null
-            ? `<span class="stat-pct" title="Reply rate — replied of emails sent">${s.pct}%</span>`
+            ? `<span class="stat-pct" title="${s.label} rate — of emails sent">${s.pct}%</span>`
             : ''
         }</div>
       </button>`,
@@ -505,7 +485,7 @@ function syncContentBriefUI(c) {
 // Toggle the creator table's stage filter. Clicking the active stage (or the
 // "Creators" total, which represents everything) clears the filter.
 function setStageFilter(stage) {
-  const next = stage === 'creators' || state.stageFilter === stage ? null : stage;
+  const next = state.stageFilter === stage ? null : stage;
   state.stageFilter = next;
   syncStageFilterUI();
   refreshCreators();
@@ -3035,11 +3015,10 @@ async function refreshCreators() {
       msg = `No creators match "<b>${escapeHtml(state.searchQuery)}</b>". <a href="#" class="creator-search-clear">Clear search</a>`;
     } else {
       const label = {
-        pending: 'pending',
-        outreach: 'in outreach',
+        sent: 'sent',
+        opened: 'opened',
         replied: 'replied',
-        contracted: 'contracted',
-        removed: 'removed',
+        signed: 'signed',
       }[state.stageFilter];
       msg = `No ${label} creators. <a href="#" class="stage-filter-clear">Show all</a>`;
     }

@@ -49,6 +49,7 @@ router.get('/', async (_req, res, next) => {
               -- Deal Studio stats box (replies ÷ emails sent). Excludes IG DMs on
               -- purpose so the percentage reflects email outreach specifically.
               COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS email_sent_count,
+              COUNT(cr.id) FILTER (WHERE cr.open_count > 0)::int AS opened_count,
               -- Pending: creators we haven't reached yet on any channel — no
               -- email sent AND no IG DM sent. This includes 'outreach_queued'
               -- leads (enrolled in Instantly, email not yet confirmed) and
