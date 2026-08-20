@@ -47,68 +47,124 @@ function model() { return clean(process.env.GEMINI_MODEL) || DEFAULT_MODEL; }
 
 function mediaResolution() {
   const r = (clean(process.env.GEMINI_MEDIA_RESOLUTION) || 'low').toLowerCase();
+  if (r === 'off' || r === 'none') return null; // never send the field
   if (r === 'medium') return 'MEDIA_RESOLUTION_MEDIUM';
   if (r === 'high') return 'MEDIA_RESOLUTION_HIGH';
   if (r === 'default') return 'MEDIA_RESOLUTION_MEDIUM'; // API has no explicit "default" enum; medium is the middle
   return 'MEDIA_RESOLUTION_LOW';
 }
 
+// `mediaResolution` is a per-MODEL capability, not a universal one: the models
+// this key can reach reject it with a bare 400 INVALID_ARGUMENT ("Request
+// contains an invalid argument") that names no field, which is what silently
+// killed every video judgement while the identical text-only /gemini/health ping
+// — which never sends the field — kept succeeding.
+//
+// It is worth sending when accepted (media_resolution=low is the difference
+// between 66 and 258 tokens per frame), so we try it once and, if that exact
+// request works without it, stop sending it for the life of the process. Reset
+// between tests via _resetMediaResolutionSupport().
+let mediaResolutionSupported = true;
+function _resetMediaResolutionSupport() { mediaResolutionSupported = true; }
+
 // Base64 length -> approximate decoded byte count (4 base64 chars ≈ 3 bytes).
 function approxBytes(b64) {
   return Math.floor((String(b64 || '').length * 3) / 4);
 }
 
+function kb(bytes) { return `${Math.round(bytes / 1024)}KB`; }
+
 // Low-level call. Returns the model's text (a JSON string, per responseMimeType)
 // or null on any failure so callers degrade gracefully. `fetchImpl` is injectable
 // for tests.
+//
+// Every call logs what went out and what came back (`[gemini] ->` / `<-`), because
+// the graceful null makes a failing judge indistinguishable from a creator with
+// no clip — the pipeline just quietly scores on bio text instead, and nothing in
+// the logs says why. `label` names the caller in those lines.
 async function generate({
   videoBase64,
   mimeType = 'video/mp4',
   promptText,
   images = [],
   maxOutputTokens = 500,
+  label = 'judge',
   fetchImpl = globalThis.fetch,
 } = {}) {
   const key = apiKey();
   if (!key) return null;
   if (!fetchImpl) throw new Error('fetch is not available');
-  if (videoBase64 && approxBytes(videoBase64) > MAX_INLINE_BYTES) {
-    console.error('[gemini] clip too large for an inline request; skipping');
+  const videoBytes = videoBase64 ? approxBytes(videoBase64) : 0;
+  const imgList = (images || []).filter((i) => i && i.data);
+  const imageBytes = imgList.reduce((n, i) => n + approxBytes(i.data), 0);
+  if (videoBytes + imageBytes > MAX_INLINE_BYTES) {
+    console.error(
+      `[gemini] ${label}: media too large for an inline request `
+      + `(video ${kb(videoBytes)} + images ${kb(imageBytes)} > ${kb(MAX_INLINE_BYTES)}); skipping`,
+    );
     return null;
   }
 
   const parts = [];
   if (videoBase64) parts.push({ inlineData: { mimeType, data: videoBase64 } });
-  for (const img of images) {
-    if (img && img.data) parts.push({ inlineData: { mimeType: img.mimeType || 'image/jpeg', data: img.data } });
+  for (const img of imgList) {
+    parts.push({ inlineData: { mimeType: img.mimeType || 'image/jpeg', data: img.data } });
   }
   parts.push({ text: promptText || '' });
 
-  const body = {
-    contents: [{ role: 'user', parts }],
-    generationConfig: {
-      temperature: 0,
-      maxOutputTokens,
-      responseMimeType: 'application/json',
-      mediaResolution: mediaResolution(),
-    },
+  const mdl = model();
+  const url = `${BASE}/models/${encodeURIComponent(mdl)}:generateContent?key=${encodeURIComponent(key)}`;
+  const buildBody = (withMediaRes) => {
+    const generationConfig = { temperature: 0, maxOutputTokens, responseMimeType: 'application/json' };
+    const res = withMediaRes ? mediaResolution() : null;
+    if (res) generationConfig.mediaResolution = res;
+    return JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig });
   };
+  const post = (withMediaRes) => fetchImpl(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: buildBody(withMediaRes),
+  });
 
-  const url = `${BASE}/models/${encodeURIComponent(model())}:generateContent?key=${encodeURIComponent(key)}`;
+  console.log(
+    `[gemini] -> ${label} model=${mdl} video=${videoBytes ? kb(videoBytes) : 'none'} `
+    + `images=${imgList.length}${imageBytes ? ` (${kb(imageBytes)})` : ''} prompt=${(promptText || '').length}ch`,
+  );
+
+  const startedAt = Date.now();
   let res;
+  let usedMediaRes = mediaResolutionSupported;
   try {
-    res = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    res = await post(usedMediaRes);
+    // A 400 with the field is the signature of a model that doesn't take it.
+    // Retry once without it: if that works, the field was the whole problem, so
+    // stop sending it rather than failing every remaining judgement identically.
+    if (res && res.status === 400 && usedMediaRes && mediaResolution()) {
+      const first = await res.text().catch(() => '');
+      console.warn(
+        `[gemini] ${label}: 400 with mediaResolution=${mediaResolution()} — retrying without it. `
+        + `First error: ${String(first).slice(0, 300)}`,
+      );
+      usedMediaRes = false;
+      res = await post(false);
+      if (res && res.ok) {
+        mediaResolutionSupported = false;
+        console.warn(
+          `[gemini] model ${mdl} does not accept mediaResolution — dropping it for the rest of `
+          + 'this process (set GEMINI_MEDIA_RESOLUTION=off to skip the probe entirely)',
+        );
+      }
+    }
   } catch (err) {
-    console.error('[gemini] request failed:', err.message);
+    console.error(`[gemini] ${label}: request failed after ${Date.now() - startedAt}ms:`, err.message);
     return null;
   }
+  const ms = Date.now() - startedAt;
   if (!res.ok) {
     const t = await res.text().catch(() => '');
-    console.error(`[gemini] ${res.status}: ${String(t).slice(0, 200)}`);
+    // Full body, not a 200-char slice: Google puts the actionable part (which
+    // field, which limit) at the end of the message.
+    console.error(`[gemini] <- ${label} ${res.status} in ${ms}ms: ${String(t).slice(0, 1200)}`);
     return null;
   }
   const json = await res.json().catch(() => null);
@@ -116,7 +172,15 @@ async function generate({
   const text = cand && cand.content && Array.isArray(cand.content.parts)
     ? cand.content.parts.filter((p) => p.text).map((p) => p.text).join('').trim()
     : '';
-  return text || null;
+  if (!text) {
+    // A 200 with no text is usually a safety block or a truncation, and both are
+    // invisible without saying so — the caller only sees null.
+    const reason = (cand && (cand.finishReason || cand.finish_reason)) || 'no text in response';
+    console.warn(`[gemini] <- ${label} 200 in ${ms}ms but empty (${reason})`);
+    return null;
+  }
+  console.log(`[gemini] <- ${label} 200 in ${ms}ms, ${text.length}ch`);
+  return text;
 }
 
 // High-level: classify a reel clip -> parsed JSON verdict (or null on any failure).
@@ -190,6 +254,7 @@ module.exports = {
   ping,
   listModels,
   approxBytes,
+  _resetMediaResolutionSupport,
   MAX_INLINE_BYTES,
   DEFAULT_MODEL,
 };

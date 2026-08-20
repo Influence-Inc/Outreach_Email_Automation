@@ -118,6 +118,151 @@ function parseCreatorAnalysis(raw) {
   };
 }
 
+/**
+ * The profile prompt: what the creator's bio and grid LOOK like, what their
+ * captions say, their reach, and one reel — the one our keyword actually
+ * surfaced — watched and heard in full.
+ *
+ * This is one call where the older path spent four (three reels plus a
+ * creator-level pass), and it judges the thing we actually care about: not "was
+ * this one reel on-brand" but "is this creator, as a whole, on-brand". The media
+ * is described in the order geminiClient appends it — video first, then each
+ * screenshot — so the model knows which picture is which.
+ */
+function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
+  const captions = (candidate.reels || [])
+    .map((r) => (r && r.caption ? String(r.caption).slice(0, 200) : null))
+    .filter(Boolean)
+    .slice(0, 12);
+  const stats = reelStats(candidate.reels || []);
+  const clip = candidate.clip || {};
+  const media = [];
+  if (clip.dataBase64) {
+    media.push(
+      `1. A REEL VIDEO (with audio)${candidate.sourceTerm ? ` — this is the reel that came back for the search "${candidate.sourceTerm}"` : ''}`
+      + `${clip.caption ? `, captioned: "${String(clip.caption).slice(0, 200)}"` : ''}.`,
+    );
+  }
+  shots.forEach((s) => {
+    media.push(s.kind === 'reels_grid'
+      ? `${media.length + 1}. A SCREENSHOT of their reels grid — the thumbnails and view counts of their recent reels.`
+      : `${media.length + 1}. A SCREENSHOT of their profile header and bio.`);
+  });
+
+  return [
+    'You are judging an Instagram CREATOR for a brand campaign.',
+    '',
+    'You are given, in this order:',
+    ...(media.length ? media : ['(no media — judge from the text below alone)']),
+    '',
+    'Judge the CREATOR, not just the one reel: use the grid screenshot to see',
+    'whether the reel is typical of them or an outlier, and the bio screenshot to',
+    'see how they present themselves. Watch AND listen to the video — spoken topic,',
+    'language and music matter as much as the visuals.',
+    '',
+    `Target niche/genre: ${config.niche || '(unspecified)'}`,
+    `Campaign keywords: ${(config.keywords || []).join(', ') || '(none)'}`,
+    `Allowed genres: ${(config.genres || []).join(', ') || '(any)'}`,
+    `Brand target audience: ${config.targetAudience || '(unspecified)'}`,
+    '',
+    `Creator @${candidate.username || 'unknown'}`,
+    `Followers: ${candidate.followers ?? '(unknown)'}`,
+    `Bio text: ${candidate.bio || '(none)'}`,
+    `Reach across ${stats.count || 0} recent reels — lowest ${stats.min ?? '?'}, `
+      + `typical ${stats.typical ?? '?'}, highest ${stats.max ?? '?'}.`,
+    captions.length ? `Recent reel captions:\n- ${captions.join('\n- ')}` : 'Recent reel captions: (none)',
+    '',
+    'Respond with ONLY a JSON object of exactly this shape, no prose and no',
+    'markdown fences. Scores marked 0-10 are integers; niche_score, audience_match',
+    'and confidence are 0-1. is_original_creator is false for repost pages, meme',
+    'aggregators and clip farms. reject_reason is null unless the creator should be',
+    'dropped outright. fit_score is 0-100.',
+    '{',
+    '  "niche_score": 0.0,',
+    '  "audience_match": 0.0,',
+    '  "genre": "",',
+    '  "language": "",',
+    '  "spoken_topic": "",',
+    '  "confidence": 0.0,',
+    '  "reason": "",',
+    '  "niche": "",',
+    '  "sub_niche": "",',
+    '  "content_format": "talking_head | vlog | skit | tutorial | review | ugc_ad | compilation | other",',
+    '  "production_quality": 0,',
+    '  "creativity": 0,',
+    '  "hook_strength": 0,',
+    '  "brand_safety": "safe | caution | unsafe",',
+    '  "is_original_creator": true,',
+    '  "spoken_language": "",',
+    '  "on_screen_products": [],',
+    '  "ugc_ad_fit": 0,',
+    '  "reasoning": "",',
+    '  "primary_niche": "",',
+    '  "consistency_of_niche": 0,',
+    '  "audience_guess": "",',
+    '  "fit_score": 0,',
+    '  "reject_reason": null,',
+    '  "recommended_campaign_types": []',
+    '}',
+  ].join('\n');
+}
+
+/**
+ * Judge a creator from the whole evidence bundle in ONE multimodal call.
+ *
+ * Preferred over judgeClips whenever the navigator captured profile screenshots,
+ * because it answers the creator-level question directly from creator-level
+ * evidence — bio, grid, captions, reach and the keyword-matched reel — instead of
+ * inferring it from three reels judged in isolation.
+ */
+async function classifyProfile(candidate, config, deps = {}) {
+  const gemini = deps.gemini || geminiClientDefault;
+  if (!gemini.available || !gemini.available()) return null;
+
+  const shots = (candidate.shots || []).filter((s) => s && s.dataBase64);
+  const clip = candidate.clip && candidate.clip.dataBase64 ? candidate.clip : null;
+  if (!shots.length && !clip) return null; // nothing a picture-or-video judge can add
+
+  const parsed = await gemini.classifyReelVideo({
+    videoBase64: clip ? clip.dataBase64 : undefined,
+    mimeType: clip ? (clip.mimeType || 'video/mp4') : undefined,
+    images: shots.map((s) => ({ data: s.dataBase64, mimeType: s.mimeType || 'image/png' })),
+    promptText: buildProfilePrompt(candidate, config, shots),
+    label: `profile @${candidate.username || '?'}`,
+    maxOutputTokens: 800,
+  });
+  if (!parsed || typeof parsed.niche_score !== 'number') return null;
+
+  const clipAnalysis = parseClipAnalysis(parsed);
+  const creator = parseCreatorAnalysis(parsed);
+
+  return {
+    score: clamp01(parsed.niche_score),
+    reason: parsed.reason || clipAnalysis?.reasoning || 'gemini-profile',
+    source: 'gemini-profile',
+    clip: clipAnalysis,
+    creatorAnalysis: creator,
+    evidence: {
+      source: 'gemini-profile',
+      genre: parsed.genre || clipAnalysis?.niche || null,
+      audienceMatch: typeof parsed.audience_match === 'number' ? clamp01(parsed.audience_match) : null,
+      language: parsed.language || clipAnalysis?.spoken_language || null,
+      spokenTopic: parsed.spoken_topic || null,
+      confidence: typeof parsed.confidence === 'number' ? clamp01(parsed.confidence) : null,
+      reason: parsed.reason || clipAnalysis?.reasoning || null,
+      clip: clipAnalysis,
+      creator,
+      // What the verdict was actually looking at, so a review can tell a
+      // full-evidence judgement from a thin one.
+      evidenceUsed: {
+        video: !!clip,
+        shots: shots.map((s) => s.kind),
+        captions: (candidate.reels || []).filter((r) => r && r.caption).length,
+      },
+    },
+  };
+}
+
 /** The per-creator prompt: all three clip results, the profile, the reach. */
 function buildCreatorPrompt({ candidate = {}, clips = [], stats = {} } = {}, config = {}) {
   return [
@@ -296,6 +441,12 @@ function makeClassifier(deps = {}) {
     // Reuse a verdict already computed upstream (e.g. the reels-feed navigator
     // judged the clip to decide engagement) so we never pay for Gemini twice.
     if (candidate && candidate._nicheVerdict) return candidate._nicheVerdict;
+    // Whole-profile evidence (bio + grid pictures alongside the reel) answers the
+    // creator-level question directly, so it wins when the navigator captured it.
+    if (candidate && Array.isArray(candidate.shots) && candidate.shots.length) {
+      const p = await classifyProfile(candidate, config, deps);
+      if (p) return p;
+    }
     const g = await judgeClips(candidate, config, deps);
     if (g) return g;
     return claudeClassify(candidate, config);
@@ -305,7 +456,9 @@ function makeClassifier(deps = {}) {
 module.exports = {
   buildPrompt,
   buildCreatorPrompt,
+  buildProfilePrompt,
   classifyWithGemini,
+  classifyProfile,
   judgeClips,
   makeClassifier,
   parseClipAnalysis,

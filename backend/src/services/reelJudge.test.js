@@ -16,6 +16,95 @@ const clipCandidate = {
   reels: [{ caption: 'home gym workout' }],
 };
 
+// A creator captured with the full evidence bundle: bio + grid pictures, the
+// captions off the grid, and the reel the keyword actually surfaced.
+const profileCandidate = {
+  username: 'home.fit.mia',
+  bio: 'home fitness coach',
+  followers: 48000,
+  sourceTerm: 'homegym',
+  clip: { dataBase64: 'VIDEO', mimeType: 'video/mp4', caption: 'full home gym tour' },
+  shots: [
+    { kind: 'bio', dataBase64: 'BIOSHOT', mimeType: 'image/png' },
+    { kind: 'reels_grid', dataBase64: 'GRIDSHOT', mimeType: 'image/png' },
+  ],
+  reels: [{ caption: 'home gym workout', views: 90000 }, { caption: 'leg day', views: 40000 }],
+};
+
+const profileVerdict = {
+  niche_score: 0.86, audience_match: 0.72, genre: 'home fitness', language: 'en',
+  spoken_topic: 'home gym setup', confidence: 0.9, reason: 'consistently home fitness',
+  niche: 'fitness', content_format: 'talking_head', production_quality: 8, creativity: 7,
+  hook_strength: 8, brand_safety: 'safe', is_original_creator: true,
+  primary_niche: 'home fitness', consistency_of_niche: 9, audience_guess: 'women 25-34',
+  fit_score: 82, reject_reason: null, recommended_campaign_types: ['ugc'],
+};
+
+test('buildProfilePrompt describes the media in the order it is sent', () => {
+  const p = reelJudge.buildProfilePrompt(profileCandidate, { niche: 'fitness', keywords: ['homegym'] }, profileCandidate.shots);
+  // Video first, then each screenshot — matching how geminiClient appends parts.
+  assert.match(p, /1\. A REEL VIDEO/);
+  assert.match(p, /this is the reel that came back for the search "homegym"/);
+  assert.match(p, /2\. A SCREENSHOT of their profile header and bio/);
+  assert.match(p, /3\. A SCREENSHOT of their reels grid/);
+  assert.match(p, /home gym workout/); // captions
+  assert.match(p, /Followers: 48000/);
+  assert.match(p, /"fit_score"/); // creator-level fields asked for in the same call
+});
+
+test('classifyProfile sends the video + both screenshots in ONE call', async () => {
+  const seen = [];
+  const gemini = {
+    available: () => true,
+    classifyReelVideo: async (opts) => { seen.push(opts); return profileVerdict; },
+  };
+  const r = await reelJudge.classifyProfile(profileCandidate, { niche: 'fitness' }, { gemini });
+
+  assert.strictEqual(seen.length, 1, 'one call, not one per reel');
+  assert.strictEqual(seen[0].videoBase64, 'VIDEO');
+  assert.deepStrictEqual(seen[0].images.map((i) => i.data), ['BIOSHOT', 'GRIDSHOT']);
+
+  assert.strictEqual(r.source, 'gemini-profile');
+  assert.strictEqual(r.score, 0.86);
+  assert.strictEqual(r.evidence.genre, 'home fitness');
+  assert.strictEqual(r.creatorAnalysis.fit_score, 82);
+  assert.strictEqual(r.creatorAnalysis.consistency_of_niche, 9);
+  assert.strictEqual(r.clip.content_format, 'talking_head');
+  assert.deepStrictEqual(r.evidence.evidenceUsed, { video: true, shots: ['bio', 'reels_grid'], captions: 2 });
+});
+
+test('classifyProfile still judges when only screenshots came back (no clip)', async () => {
+  const seen = [];
+  const gemini = {
+    available: () => true,
+    classifyReelVideo: async (opts) => { seen.push(opts); return profileVerdict; },
+  };
+  const noClip = { ...profileCandidate, clip: undefined };
+  const r = await reelJudge.classifyProfile(noClip, {}, { gemini });
+  assert.strictEqual(seen[0].videoBase64, undefined);
+  assert.strictEqual(seen[0].images.length, 2);
+  assert.strictEqual(r.evidence.evidenceUsed.video, false);
+  assert.strictEqual(r.score, 0.86);
+});
+
+test('classifyProfile returns null with no media at all, so the text tiers run', async () => {
+  const gemini = fakeGemini(profileVerdict);
+  assert.strictEqual(await reelJudge.classifyProfile({ username: 'a' }, {}, { gemini }), null);
+});
+
+test('the composite classifier prefers the profile bundle over per-clip judging', async () => {
+  const prompts = [];
+  const gemini = {
+    available: () => true,
+    classifyReelVideo: async (opts) => { prompts.push(opts); return profileVerdict; },
+  };
+  const classify = reelJudge.makeClassifier({ gemini, claudeClassify: async () => ({ score: 0, source: 'claude' }) });
+  // Two clips AND a shot bundle: the bundle wins, and it costs a single call.
+  const r = await classify({ ...profileCandidate, clips: [profileCandidate.clip, profileCandidate.clip] }, {});
+  assert.strictEqual(r.source, 'gemini-profile');
+  assert.strictEqual(prompts.length, 1);
+});
+
 test('buildPrompt embeds the rules, target audience, genres, bio + captions', () => {
   const p = reelJudge.buildPrompt(clipCandidate, {
     niche: 'fitness',
