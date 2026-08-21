@@ -74,6 +74,14 @@ function buildConfig(defaults = {}, override = {}) {
     minCreativity: num(merged.minCreativity),
     // A hard floor on brand fit, same shape. 0 disables it.
     minBrandFit: num(merged.minBrandFit),
+    // Look at the profile screenshots before recording any video, and skip a
+    // creator the pictures say is plainly in another line of work. Costs one
+    // small image call; saves a recording, an upload and a video call every time
+    // it fires. See services/nichePrescreen.js.
+    prescreenNiche: merged.prescreenNiche === true || merged.prescreenNiche === 'true',
+    // How sure the prescreen must be before it drops a creator. A skipped
+    // creator is never looked at again, so this is deliberately high.
+    prescreenMinConfidence: num(merged.prescreenMinConfidence),
   };
 }
 
