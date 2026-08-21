@@ -83,6 +83,42 @@ first. Disable with `SOURCING_AI_SEARCH_TERMS=off`. With no key, or on any
 model/network failure, expansion returns nothing and scouting proceeds on the
 configured terms.
 
+### Per-campaign scoring
+
+`creatorScore` blends five components — `fit`, `nicheConsistency`,
+`viewSteadiness`, `creativity`, `hook`. A skincare brand is buying production
+quality, a meme brand is buying the hook, a B2B brand is buying audience fit, so
+the blend is per campaign:
+
+```json
+{ "creatorWeights": { "hook": 3, "creativity": 2, "fit": 1 },
+  "creatorPassThreshold": 0.72,
+  "maxViewSpike": 40 }
+```
+
+Weights are relative, not required to sum to 1 — `{fit: 2, hook: 1}` means
+exactly what it looks like. Unknown keys are dropped rather than diluting the
+real ones, and an absent `creatorWeights` uses the defaults.
+
+There is **no follower band**. Reach is what a campaign buys and `floor` /
+`ceiling` gate on it directly; a band on followers only ever rejected creators
+whose reach we had already measured and liked.
+
+### Never scouting the same creator twice
+
+A creator this campaign has already looked at — added, rejected, in review, or
+merely seen — is skipped. `sourcingStore.scoutedHandles` loads them at run start
+and seeds the navigator's memory, so it outlives the run rather than resetting
+with it.
+
+The check also happens at the **first moment the handle is knowable**: one card
+tap and one screen read into the reel player, before the recording, the profile
+hop, the grid scroll and the multimodal call. The unique index on
+`(campaign_id, lower(username))` always caught the duplicate, but it caught it at
+persist time — after everything it cost had been spent. Overlapping keywords hit
+this constantly, because the same popular accounts head the results for all of
+them.
+
 ### What the judge actually sees
 
 A creator is judged from an **evidence bundle**, in one multimodal call:

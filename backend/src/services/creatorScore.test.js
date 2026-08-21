@@ -143,20 +143,13 @@ test('caution is not the same as unsafe', () => {
   assert.strictEqual(r.pass, true);
 });
 
-test('a follower count outside the band is rejected', () => {
-  assert.match(
-    scoreCreator(strong({ followers: 500 }), { minFollowers: 10000 }).rejectReason,
-    /below the follower band/,
-  );
-  assert.match(
-    scoreCreator(strong({ followers: 5000000 }), { maxFollowers: 1000000 }).rejectReason,
-    /above the follower band/,
-  );
-});
-
-test('an unknown follower count does not reject on the band', () => {
-  const r = scoreCreator(strong({ followers: null }), { minFollowers: 10000 });
-  assert.strictEqual(r.pass, true);
+// Reach is what a campaign buys, and `floor` / `ceiling` gate on it directly.
+// A follower band only ever rejected creators whose reach we had measured and
+// liked, so it is gone — and must not come back through config.
+test('follower count no longer gates a creator', () => {
+  assert.strictEqual(scoreCreator(strong({ followers: 500 }), { minFollowers: 10000 }).pass, true);
+  assert.strictEqual(scoreCreator(strong({ followers: 5000000 }), { maxFollowers: 1000000 }).pass, true);
+  assert.strictEqual(scoreCreator(strong({ followers: null }), {}).pass, true);
 });
 
 // "Consistently performs" vs "got one lucky hit" is the distinction a single
@@ -273,4 +266,40 @@ test('the raised default bar is the one in force', () => {
   const borderline = strong({ creator: { fit_score: 70, consistency_of_niche: 7 } });
   assert.strictEqual(scoreCreator(borderline, { creatorPassThreshold: 0.95 }).pass, false);
   assert.strictEqual(scoreCreator(borderline, { creatorPassThreshold: 0.5 }).pass, true);
+});
+
+// Every campaign shared one set of weights, because creatorWeights never crossed
+// buildConfig's whitelist. A skincare brand buys production quality; a meme
+// brand buys the hook — the same blend cannot serve both.
+test('per-campaign weights change which creator passes', () => {
+  // Strong hook, weak niche consistency.
+  const hooky = {
+    creator: { fit_score: 60, consistency_of_niche: 2 },
+    clips: [{ creativity: 9, hook_strength: 10, is_original_creator: true, brand_safety: 'safe' }],
+    reels: [{ views: 100000 }, { views: 100000 }, { views: 100000 }],
+  };
+  const balanced = scoreCreator(hooky, {});
+  const hookLed = scoreCreator(hooky, { creatorWeights: { hook: 3, creativity: 2, fit: 1, nicheConsistency: 0, viewSteadiness: 1 } });
+  assert.ok(hookLed.score > balanced.score, `hook-led ${hookLed.score} should beat balanced ${balanced.score}`);
+});
+
+test('weights are relative, not required to sum to 1', () => {
+  const cand = {
+    creator: { fit_score: 100, consistency_of_niche: 10 },
+    clips: [{ creativity: 10, hook_strength: 10, is_original_creator: true, brand_safety: 'safe' }],
+    reels: [{ views: 50000 }, { views: 50000 }],
+  };
+  // All components maxed, so any weighting must normalise to 1.
+  assert.strictEqual(scoreCreator(cand, { creatorWeights: { fit: 2, hook: 2 } }).score, 1);
+});
+
+test('maxViewSpike is tunable per campaign', () => {
+  // Best reel 20x the typical one.
+  const spiky = {
+    creator: { fit_score: 90, consistency_of_niche: 9 },
+    clips: [{ creativity: 9, hook_strength: 9, is_original_creator: true, brand_safety: 'safe' }],
+    reels: [{ views: 10000 }, { views: 10000 }, { views: 200000 }],
+  };
+  assert.match(scoreCreator(spiky, {}).rejectReason, /single outlier/); // default 12
+  assert.strictEqual(scoreCreator(spiky, { maxViewSpike: 50 }).pass, true, 'a burst-y niche can allow it');
 });

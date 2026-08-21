@@ -111,7 +111,6 @@ async function processCandidate(run, config, candidate, deps) {
       creator: creatorAnalysis || {},
       clips: clipAnalyses,
       reels: candidate.reels || [],
-      followers: candidate.followers,
     }, config)
     : null;
 

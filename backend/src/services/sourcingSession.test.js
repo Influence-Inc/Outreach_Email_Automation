@@ -27,6 +27,9 @@ function baseDeps({ events = [], runWithSource, getRun } = {}) {
     makeDeps: () => ({}),
     getRun: getRun || (async (id) => ({ id, status: 'running' })),
     runWithSource: runWithSource || (async () => ({ status: 'done', stats: {} })),
+    // Injected so the tests never reach for a database. Production loads the
+    // campaign's scouting history here (services/sourcingStore.scoutedHandles).
+    scoutedHandles: async () => [],
   };
 }
 
@@ -98,4 +101,33 @@ test('ends the channel session even when the run throws', async () => {
   await entry.promise;
   assert.deepStrictEqual(events, [['begin', 4], ['end', 4]]);
   assert.strictEqual(session.isActive(4), false);
+});
+
+// The scout's memory has to outlive the run, or every run re-walks the same
+// results pages and re-opens the same popular accounts — paying for the profile
+// hop, the recording and the judgement each time, only for the unique index to
+// drop the candidate at the very last step.
+test('the campaign scouting history is handed to the navigator', async () => {
+  let opts = null;
+  const deps = {
+    ...baseDeps(),
+    scoutedHandles: async ({ campaignId }) => {
+      assert.strictEqual(campaignId, 'camp-9', 'scoped to this campaign');
+      return ['oldcreator', 'anotherone'];
+    },
+    scout: (args) => { opts = args.opts; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 3, campaign_id: 'camp-9', config: {} }, deps }).promise;
+  assert.deepStrictEqual(opts.alreadyScouted, ['oldcreator', 'anotherone']);
+});
+
+test('a failed history read still lets the run go ahead', async () => {
+  let opts = null;
+  const deps = {
+    ...baseDeps(),
+    scoutedHandles: async () => { throw new Error('db down'); },
+    scout: (args) => { opts = args.opts; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 4, campaign_id: 'c', config: {} }, deps }).promise;
+  assert.strictEqual(opts.alreadyScouted, undefined, 'dedupes within the run as it always did');
 });
