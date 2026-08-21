@@ -208,7 +208,14 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   // Creators already analysed, across every keyword AND every pass — a results
   // page re-surfaces the same popular accounts, and re-opening one burns a slot
   // against N.
-  const seenCreators = new Set();
+  //
+  // Seeded with everyone this CAMPAIGN has scouted before (opts.alreadyScouted),
+  // so the memory outlives the run. Without that seed a second run over the same
+  // keywords re-walks the same top-of-page creators from scratch.
+  const seenCreators = new Set(
+    (opts.alreadyScouted || []).map((u) => String(u).toLowerCase()).filter(Boolean),
+  );
+  if (seenCreators.size) log(`[sourcing] starting with ${seenCreators.size} creators already scouted for this campaign`);
 
   // One pass over the keywords used to be the whole run, so a run whose target
   // was 6 reported "done" after finding 1 — it had simply run out of keywords,
@@ -349,13 +356,14 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
       if (emitted >= max) return;
-      if (!cap.take()) return; // the run has looked at enough profiles
+      if (cap.spent()) return; // the run has looked at enough profiles
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
-        reelsWindow, clipsWanted, log, config, prescreen,
+        reelsWindow, clipsWanted, log, config, prescreen, seen: seenCreators, cap, term,
       });
-      // A grid card gives no handle until the reel is open, so the duplicate
-      // check has to happen here rather than before the hop.
+      // A grid card gives no handle until the reel is open — but once it IS open
+      // the handle is known, and captureViaReel drops a creator we have already
+      // scouted before it records or opens anything.
       const handle = profile && profile.username && String(profile.username).toLowerCase();
       if (profile && handle && !seenCreators.has(handle)) {
         seenCreators.add(handle);
@@ -576,6 +584,7 @@ async function captureViaReel({
   driver, reelIndex, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
   clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null,
+  seen = null, cap = null, term = null,
 }) {
   const serp = await read(driver);
   const card = serp.targets && serp.targets[`reelResult:${reelIndex}`];
@@ -591,6 +600,21 @@ async function captureViaReel({
     return null;
   }
 
+  // The handle is knowable HERE — one tap and one screen read in — and everything
+  // after this point is expensive: a 12-second recording, the hop to the profile,
+  // scrolling the grid, and a multimodal judgement. This check used to happen on
+  // the way out instead, so a creator we had already scouted cost the entire
+  // capture before being thrown away. Overlapping keywords hit this constantly:
+  // the same popular accounts head the results for every one of them.
+  if (seen && seen.has(String(feed.author).toLowerCase())) {
+    log(`[sourcing] @${feed.author} already scouted${term ? ` (surfaced again by "${term}")` : ''} — skipping before the recording`);
+    return null;
+  }
+
+  // Opening a profile is what the run's profile budget actually counts, so it is
+  // spent here rather than on every card we merely glance at.
+  if (cap && !cap.take()) return null;
+
   // Deliberately NOT recording here any more.
   //
   // Standing in the player is the cheapest place to reach this reel, which is why
@@ -602,6 +626,7 @@ async function captureViaReel({
   //
   // analyseProfile records from the creator's own grid instead, and only after
   // the cheap gates have had their say.
+
   const arrived = await arriveAt({
     driver, read, pacingMs, jitterPx, log, what: `@${feed.author}`,
     wanted: ['profile', 'reels_tab'],
@@ -616,6 +641,7 @@ async function captureViaReel({
     screens: ['reels_feed', 'profile', 'reels_tab'],
     view: arrived.view,
     config, prescreen,
+    sourceTerm: term,
   });
 }
 

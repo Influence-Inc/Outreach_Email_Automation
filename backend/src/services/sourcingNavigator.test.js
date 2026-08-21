@@ -1278,6 +1278,65 @@ test('a keyword that can never be typed is retired, not retried forever', async 
   assert.ok(opens <= 6, `bounded recovery attempts, saw ${opens} launches`);
 });
 
+// ── never scout the same creator twice ──────────────────────────────────────
+
+// The scout's memory used to last exactly one run: `seenCreators` was a fresh
+// Set every time, so a second run over the same keywords re-walked the same
+// results page and re-opened the same popular accounts. The duplicate was
+// always caught — by the unique index, at persist time, AFTER the profile hop,
+// the recording and the multimodal judgement had all been paid for.
+test('creators this campaign already scouted are skipped before anything is spent', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', activeTab: 'for you', reelResults: [{ index: 0, label: 'a' }], targets: { 'reelResult:0': { x: 5, y: 5 }, back: BACK } },
+    // captureViaReel re-reads the SERP, taps the card, then reads the player.
+    { screen: 'search_results', activeTab: 'for you', reelResults: [{ index: 0, label: 'a' }], targets: { 'reelResult:0': { x: 5, y: 5 }, back: BACK } },
+    { screen: 'reels_feed', author: 'AlreadySeen', targets: { authorProfile: { x: 7, y: 7 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
+  ];
+
+  const out = [];
+  for await (const c of scout({
+    driver,
+    config: { pacingMs: 0 },
+    read: scriptedRead(views),
+    // Seeded from the campaign's history — note the different casing.
+    opts: { keywords: ['homegym'], max: 5, alreadyScouted: ['alreadyseen'] },
+  })) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'nothing captured');
+  assert.ok(!driver.ops.some((o) => o[0] === 'recordClip'), 'no reel was recorded for a known creator');
+});
+
+test('a creator not seen before is still captured normally', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', activeTab: 'for you', reelResults: [{ index: 0, label: 'a' }], targets: { 'reelResult:0': { x: 5, y: 5 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'for you', reelResults: [{ index: 0, label: 'a' }], targets: { 'reelResult:0': { x: 5, y: 5 }, back: BACK } },
+    { screen: 'reels_feed', author: 'freshcreator', caption: 'home gym tour', targets: { authorProfile: { x: 7, y: 7 }, back: BACK } },
+    { screen: 'profile', username: 'freshcreator', followers: 40000, targets: { reelsTab: { x: 4, y: 4 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 50000, caption: 'leg day' }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 50000, caption: 'leg day' }], targets: { back: BACK } },
+    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
+  ];
+
+  const out = [];
+  for await (const c of scout({
+    driver,
+    config: { pacingMs: 0 },
+    read: scriptedRead(views),
+    opts: { keywords: ['homegym'], max: 1, alreadyScouted: ['someone.else'] },
+    deps: { getClip: async () => ({ buf: Buffer.from('mp4'), mediaType: 'video/mp4' }) },
+  })) out.push(c);
+
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].username, 'freshcreator');
+  // The keyword that surfaced them is stamped on the candidate either way.
+  assert.strictEqual(out[0].sourceTerm, 'homegym');
+});
+
 // ── nothing expensive happens before the cheap gates (Tier 0) ───────────────
 
 // The recording used to happen in the reel player, before the profile was even

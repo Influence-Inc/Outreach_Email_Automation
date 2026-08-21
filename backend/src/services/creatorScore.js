@@ -119,7 +119,7 @@ function reelStats(reels) {
  *            components:object, stats:object}}
  *          `score` is 0–1 and is only meaningful when nothing hard-rejected.
  */
-function scoreCreator({ creator = {}, clips = [], reels = [], followers = null } = {}, config = {}) {
+function scoreCreator({ creator = {}, clips = [], reels = [] } = {}, config = {}) {
   const weights = { ...DEFAULT_WEIGHTS, ...(config.creatorWeights || {}) };
   const threshold = config.creatorPassThreshold != null
     ? config.creatorPassThreshold
@@ -182,13 +182,10 @@ function scoreCreator({ creator = {}, clips = [], reels = [], followers = null }
     return reject(`brand fit ${round3(brandFit)} below ${minBrandFit}`);
   }
 
-  const followerCount = num(followers);
-  const minFollowers = num(config.minFollowers);
-  const maxFollowers = num(config.maxFollowers);
-  if (followerCount != null) {
-    if (minFollowers != null && followerCount < minFollowers) return reject('below the follower band');
-    if (maxFollowers != null && followerCount > maxFollowers) return reject('above the follower band');
-  }
+  // No follower-band reject. Follower count is a vanity number that reach
+  // already answers better: what a campaign buys is views, and `floor` /
+  // `ceiling` gate on those directly. A band on followers only ever rejected
+  // creators whose reach we had actually measured and liked.
 
   // Carried by one outlier rather than a real audience.
   if (stats.spike != null && maxSpike > 0 && stats.spike > maxSpike) {

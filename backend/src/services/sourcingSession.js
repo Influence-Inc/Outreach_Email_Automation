@@ -110,6 +110,25 @@ async function runSession({ hostId, run, deps }) {
     max: captureCap,
   };
 
+  // Everyone this campaign has already looked at. Without this the scout's memory
+  // lasts exactly one run, so every new run walks back down the same results
+  // pages and re-opens the same popular accounts — paying for the profile, the
+  // recording and the judgement each time, only to have the unique index drop
+  // the candidate at the very last step. Overlapping keywords make it worse,
+  // because they surface the same creators as each other.
+  try {
+    const listScouted = deps.scoutedHandles || store.scoutedHandles;
+    const seen = await listScouted({ campaignId: run.campaign_id });
+    if (seen.length) {
+      opts.alreadyScouted = seen;
+      log(`[sourcing-session] run #${run.id}: skipping ${seen.length} creators this campaign has already scouted`);
+    }
+  } catch (err) {
+    // A campaign with no history, or a read that failed, just means the run
+    // dedupes within itself as it always did.
+    log(`[sourcing-session] could not load scouted history: ${(err && err.message) || err}`);
+  }
+
   // Optional AI layer: turn the campaign's niche/genres into extra single-word
   // search terms. Purely additive — the operator's own keywords are still
   // searched first, and with no GEMINI_API_KEY this is a no-op (see

@@ -208,6 +208,30 @@ async function approvedHandles({ campaignId = null, limit = 500 } = {}) {
   return rows.map((r) => r.username).filter(Boolean);
 }
 
+/**
+ * Every creator this campaign has ALREADY looked at, whatever came of it.
+ *
+ * The unique index on (campaign_id, lower(username)) means a re-scouted creator
+ * is dropped at persist time — but that is the very last step, after the phone
+ * has opened their profile, scrolled their grid, recorded a reel and paid for a
+ * multimodal judgement. The duplicate was always caught; it was just caught
+ * after we had spent everything it cost.
+ *
+ * Deliberately every decision, not just 'added': 'rejected' means we decided
+ * against them, 'review' means a human already has them queued, and 'pending'
+ * means we looked. All four are creators there is no reason to visit again.
+ */
+async function scoutedHandles({ campaignId = null, limit = 20000 } = {}) {
+  const rows = await db.many(
+    `SELECT DISTINCT LOWER(username) AS username
+       FROM sourced_candidates
+      WHERE ($1::text IS NULL OR campaign_id = $1)
+      LIMIT $2`,
+    [campaignId, Math.max(1, Number(limit) || 20000)],
+  );
+  return rows.map((r) => r.username).filter(Boolean);
+}
+
 module.exports = {
   createRun,
   getRun,
@@ -218,5 +242,6 @@ module.exports = {
   getCandidate,
   updateRun,
   approvedHandles,
+  scoutedHandles,
   makeDeps,
 };

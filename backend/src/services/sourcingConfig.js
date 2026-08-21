@@ -23,6 +23,28 @@ function num(v) {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// The five things creatorScore weighs. Named here so a typo in a saved campaign
+// config ("creativty") is dropped rather than silently becoming a sixth
+// component that dilutes every real one.
+const WEIGHT_KEYS = ['fit', 'nicheConsistency', 'viewSteadiness', 'creativity', 'hook', 'brandFit'];
+
+/**
+ * Per-campaign scoring weights, or undefined to use creatorScore's defaults.
+ *
+ * Values are taken as given rather than normalised — creatorScore divides by the
+ * total, so {fit: 2, hook: 1} means exactly what it looks like, and a campaign
+ * can express "hook matters twice as much as craft" without doing the arithmetic.
+ */
+function weightsOf(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out = {};
+  for (const k of WEIGHT_KEYS) {
+    const n = num(v[k]);
+    if (n != null && n >= 0) out[k] = n;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function buildConfig(defaults = {}, override = {}) {
   const merged = { ...(defaults || {}), ...(override || {}) };
   return {
@@ -82,7 +104,17 @@ function buildConfig(defaults = {}, override = {}) {
     // How sure the prescreen must be before it drops a creator. A skipped
     // creator is never looked at again, so this is deliberately high.
     prescreenMinConfidence: num(merged.prescreenMinConfidence),
+    // What THIS brand is buying. A skincare campaign is buying production
+    // quality, a meme brand is buying the hook, a B2B brand is buying audience
+    // fit — one set of weights cannot serve all three, and every campaign shared
+    // creatorScore's defaults because these never crossed the whitelist.
+    // Unknown keys are dropped; the rest fall back to DEFAULT_WEIGHTS.
+    creatorWeights: weightsOf(merged.creatorWeights),
+    // How far the best reel may sit above the typical one before the creator
+    // counts as carried by a single outlier. Niches differ: comedy goes viral in
+    // bursts, a tutorial channel does not.
+    maxViewSpike: num(merged.maxViewSpike),
   };
 }
 
-module.exports = { buildConfig, toKeywordList, RISKS };
+module.exports = { buildConfig, toKeywordList, weightsOf, RISKS, WEIGHT_KEYS };

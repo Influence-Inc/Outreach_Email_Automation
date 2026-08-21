@@ -105,3 +105,42 @@ test('buildConfig carries the screenshot prescreen knobs', () => {
   // Off unless asked for — it costs a call per creator.
   assert.strictEqual(buildConfig({}, {}).prescreenNiche, false);
 });
+
+// buildConfig is a whitelist, so a knob it does not name is silently dropped no
+// matter what the campaign saved. creatorScore has always READ creatorWeights
+// and maxViewSpike; they just never got there, so every campaign scored on the
+// defaults and per-brand tuning did nothing.
+test('per-campaign scoring weights reach the scorer', () => {
+  const cfg = buildConfig({ creatorWeights: { hook: 3, creativity: 2, fit: 1 } }, {});
+  assert.deepStrictEqual(cfg.creatorWeights, { hook: 3, creativity: 2, fit: 1 });
+});
+
+test('maxViewSpike reaches the scorer', () => {
+  assert.strictEqual(buildConfig({ maxViewSpike: 40 }, {}).maxViewSpike, 40);
+});
+
+test('unknown or malformed weight keys are dropped, not passed through', () => {
+  // A typo must not become an extra component diluting the real ones.
+  assert.deepStrictEqual(buildConfig({ creatorWeights: { creativty: 5, hook: 2 } }, {}).creatorWeights, { hook: 2 });
+  assert.strictEqual(buildConfig({ creatorWeights: { creativty: 5 } }, {}).creatorWeights, undefined);
+  assert.strictEqual(buildConfig({ creatorWeights: 'heavy' }, {}).creatorWeights, undefined);
+  assert.strictEqual(buildConfig({ creatorWeights: [1, 2] }, {}).creatorWeights, undefined);
+  assert.strictEqual(buildConfig({}, {}).creatorWeights, undefined, 'absent means creatorScore defaults');
+});
+
+test('a negative weight is rejected but its siblings survive', () => {
+  assert.deepStrictEqual(buildConfig({ creatorWeights: { hook: -1, fit: 2 } }, {}).creatorWeights, { fit: 2 });
+});
+
+// The whitelist and the scorer must agree on what a component IS. brandFit was
+// added to creatorScore's blend as its single largest weight; a whitelist that
+// did not know the name would have made the one weight a brand most wants to
+// tune the one weight it could not.
+test('every component the scorer weighs can be tuned per campaign', () => {
+  const { DEFAULT_WEIGHTS } = require('./creatorScore');
+  const asked = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 1]));
+  assert.deepStrictEqual(
+    Object.keys(buildConfig({ creatorWeights: asked }, {}).creatorWeights).sort(),
+    Object.keys(DEFAULT_WEIGHTS).sort(),
+  );
+});
