@@ -18,6 +18,8 @@
 const { readScreen } = require('./screenVision');
 const { jitteredDelay, jitterTap } = require('./humanize');
 const { normalizeTerms } = require('./searchTerms');
+const { prefilter } = require('./sourcingFilters');
+const { makePrescreen } = require('./nichePrescreen');
 const {
   clearDialogs, arriveAt, createStallGuard, recoverFromStall, createProfileCap,
 } = require('./sourcingResilience');
@@ -190,6 +192,13 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const stall = createStallGuard({ timeoutMs: config.stallMs, now: deps.now });
   const cap = createProfileCap({ max: config.maxProfiles, log });
 
+  // A cheap look at the profile pictures before any video is recorded — see
+  // services/nichePrescreen.js. Opt-in, and null when it cannot run at all, so
+  // "off" and "said yes" stay distinguishable further down.
+  const prescreen = config.prescreenNiche
+    ? (deps.prescreen !== undefined ? deps.prescreen : makePrescreen({ logger: { log } }))
+    : null;
+
   await driver.openApp(IG_ANDROID_PACKAGE);
   await sleep(jitteredDelay(pacingMs));
 
@@ -311,7 +320,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     if (view.screen === 'reels_feed') {
       for await (const profile of scoutReelFeed({
         driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
-        remaining: max - emitted, seen: seenCreators, stall, cap, log,
+        remaining: max - emitted, seen: seenCreators, stall, cap, log, config, prescreen,
       })) {
         yield tag(profile);
         emitted += 1;
@@ -343,7 +352,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       if (!cap.take()) return; // the run has looked at enough profiles
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
-        reelsWindow, clipsWanted, log,
+        reelsWindow, clipsWanted, log, config, prescreen,
       });
       // A grid card gives no handle until the reel is open, so the duplicate
       // check has to happen here rather than before the hop.
@@ -372,7 +381,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         seenCreators.add(String(handle).toLowerCase());
         const profile = await openAndCaptureProfile({
           driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
-          clipsWanted, log,
+          clipsWanted, log, config, prescreen,
         });
         if (profile) {
           yield tag(profile);
@@ -473,7 +482,7 @@ async function* scoutReelFeed({
   driver, read = readView, pacingMs, jitterPx = 0, screen,
   clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
   reelsWindow = REELS_PER_PROFILE, clipsWanted = CLIPS_PER_PROFILE,
-  stall = null, cap = null, log = () => {},
+  stall = null, cap = null, log = () => {}, config = {}, prescreen = null,
 }) {
   const size = screen || { width: 1080, height: 2400 };
   let produced = 0;
@@ -508,12 +517,10 @@ async function* scoutReelFeed({
     if (!skip && link && !(author && seen.has(author))) {
       if (author) seen.add(author);
       if (!cap || cap.take()) {
-        // The reel on screen is the one this keyword's feed served us — record it
-        // here, in its own player, as the creator's most search-relevant sample.
-        // eslint-disable-next-line no-await-in-loop
-        const sourceClip = await recordCurrentReel({ driver, clipSeconds, getClip });
-        if (sourceClip) sourceClip.caption = feed.caption || undefined;
-
+        // Recording waits until the profile has been read — see captureViaReel
+        // for why the cheapest place to reach a reel is the worst place to decide
+        // it is worth recording.
+        //
         // Verify we actually reached the profile. A tap that lands during a
         // re-layout silently does nothing, and the analysis that followed used
         // to read the reel player as though it were a profile header.
@@ -532,7 +539,7 @@ async function* scoutReelFeed({
             source: 'backend-navigator:feed-scroll',
             screens: ['reels_feed', 'profile', 'reels_tab'],
             view: arrived.view,
-            sourceClip,
+            config, prescreen,
           });
           if (profile) {
             yield profile;
@@ -568,7 +575,7 @@ async function* scoutReelFeed({
 async function captureViaReel({
   driver, reelIndex, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
-  clipsWanted = CLIPS_PER_PROFILE, log = () => {},
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null,
 }) {
   const serp = await read(driver);
   const card = serp.targets && serp.targets[`reelResult:${reelIndex}`];
@@ -584,12 +591,17 @@ async function captureViaReel({
     return null;
   }
 
-  // Record THIS reel — the one the keyword matched — while we are still standing
-  // in its player. It is the most relevant sample of this creator's work for the
-  // search we ran, and it is free to reach from here.
-  const sourceClip = await recordCurrentReel({ driver, clipSeconds, getClip });
-  if (sourceClip) sourceClip.caption = feed.caption || undefined;
-
+  // Deliberately NOT recording here any more.
+  //
+  // Standing in the player is the cheapest place to reach this reel, which is why
+  // the recording used to happen at this point — but it is also the point at
+  // which we know least about the creator. Their view counts, follower count and
+  // bio are all one screen away, and most creators fail on those. Recording first
+  // meant paying a recording, an upload and a model call for every creator to
+  // learn something the next screen would have told us for free.
+  //
+  // analyseProfile records from the creator's own grid instead, and only after
+  // the cheap gates have had their say.
   const arrived = await arriveAt({
     driver, read, pacingMs, jitterPx, log, what: `@${feed.author}`,
     wanted: ['profile', 'reels_tab'],
@@ -603,7 +615,7 @@ async function captureViaReel({
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
     view: arrived.view,
-    sourceClip,
+    config, prescreen,
   });
 }
 
@@ -619,6 +631,7 @@ async function analyseProfile({
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
   reelsWindow = REELS_PER_PROFILE, recordClip = true, clipsWanted = CLIPS_PER_PROFILE,
   view: arrivedOn = null, sourceClip = null, sourceTerm = null,
+  config = {}, prescreen = null, log = () => {},
 }) {
   // The caller that verified we reached this profile already read the screen;
   // reading it again is a round-trip to the phone for a picture we have.
@@ -649,6 +662,38 @@ async function analyseProfile({
     driver, read, view, pacingMs, jitterPx, screen, want: reelsWindow,
   });
 
+  // ── the gate, before anything expensive ───────────────────────────────────
+  //
+  // Everything above this line is free: the view counts, follower count and bio
+  // came out of the accessibility tree we were reading anyway. Everything below
+  // costs real money and real seconds on the phone — a recording, an upload, a
+  // multimodal model call.
+  //
+  // The same deterministic prefilter the backend runs, run HERE instead, so a
+  // creator whose reach disqualifies them is dropped before a single frame is
+  // recorded. The backend still re-runs it and does the bookkeeping; this just
+  // means it reaches that point with nothing costly attached.
+  const window = reels.map(({ point, ...r }) => r); // eslint-disable-line no-unused-vars
+  const pre = prefilter({ reels: window, followers: header.followers }, config);
+  let skipReason = pre.pass ? null : pre.rejectReason;
+
+  // A second, cheaper-than-video gate: the pictures we already took. Answers
+  // "is this creator even in the right line of work" from the bio and the grid
+  // — a question a thumbnail grid settles far better than bio text, and for a
+  // fraction of what watching a reel costs. Opt-in, and never fatal.
+  if (!skipReason && prescreen && shotsSoFar(bioShot, gridShot).length) {
+    const verdict = await prescreen({
+      candidate: { username: header.username || fallbackUsername, bio: header.bio, reels: window },
+      shots: shotsSoFar(bioShot, gridShot),
+      config,
+    });
+    if (verdict && verdict.pass === false) skipReason = verdict.reason || 'off-niche on the profile screenshots';
+  }
+
+  if (skipReason) {
+    log(`[sourcing] @${header.username || fallbackUsername || '?'}: ${skipReason} — not recording`);
+  }
+
   // The reel that surfaced this creator is already the most keyword-relevant
   // sample there is, so when we have it we do NOT go back down the grid
   // recording three more. That was three extra recordings and three extra Gemini
@@ -656,7 +701,12 @@ async function analyseProfile({
   // and every one of them was another stretch of the phone being driven.
   let clips;
   if (sourceClip) {
+    // A clip the caller already recorded. The gate exists to avoid SPENDING, not
+    // to discard what has already been spent — throwing this away would lose the
+    // judge its best evidence and save nothing.
     clips = [sourceClip];
+  } else if (skipReason) {
+    clips = [];
   } else if (recordClip) {
     clips = await captureReelClips({
       driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip,
@@ -695,6 +745,9 @@ async function analyseProfile({
       // Which reel the video actually is: the one the keyword surfaced, or a
       // sample picked off the creator's own grid.
       clipSource: sourceClip ? 'keyword-match' : (clips.length ? 'profile-grid' : null),
+      // Why nothing was recorded, when nothing was. Reaches the dashboard as
+      // part of the candidate's evidence.
+      notRecorded: skipReason || undefined,
       sourceTerm: sourceTerm || undefined,
       source,
     },
@@ -792,10 +845,25 @@ function toClip(stored) {
  * so the judge gets two of them per creator. Best-effort: a host too old to have
  * the op, or a failed capture, just means the judge works from text and video.
  */
+// Sourcing screenshots are asked for as downscaled JPEG, not the full-resolution
+// PNG the op returns by default.
+//
+// A q100 PNG of a 1080x2400 screen runs to megabytes, and two ride along with
+// every creator — comparable to the reel video itself. The judge is answering
+// "is this person a runner or a chef", which 720px settles as well as 1080p, so
+// the extra pixels were pure upload. An agent too old to understand the request
+// simply returns the PNG and everything still works.
+const SHOT_ARGS = { format: 'jpeg', maxWidth: 720, quality: 70 };
+
+/** The shots taken so far, for a gate that runs before the final list is built. */
+function shotsSoFar(...shots) {
+  return shots.filter(Boolean);
+}
+
 async function grabShot({ driver, kind }) {
   if (!driver.screenshot) return null;
   try {
-    const shot = await driver.screenshot();
+    const shot = await driver.screenshot(SHOT_ARGS);
     if (!shot || !shot.dataBase64) return null;
     return { kind, mimeType: shot.mediaType || 'image/png', dataBase64: shot.dataBase64 };
   } catch (_) {
@@ -811,17 +879,6 @@ async function grabShot({ driver, kind }) {
  * most relevant possible sample of their work for the search we ran. Recording
  * it here, in the player we already stand in, also costs nothing extra to reach.
  */
-async function recordCurrentReel({ driver, clipSeconds = 12, getClip = async () => null }) {
-  if (!driver.recordClip) return null;
-  try {
-    const rec = await driver.recordClip(clipSeconds);
-    const clipId = rec && (rec.clipId || rec);
-    return toClip(clipId ? await getClip(clipId) : null);
-  } catch (_) {
-    return null;
-  }
-}
-
 // Record ONE reel already on screen at `point` (video + audio), and come back to
 // the grid. Best-effort throughout: a host without recordClip or a failed
 // recording must never cost the reach data we already have.
@@ -943,7 +1000,7 @@ async function captureReelClips({
 async function openAndCaptureProfile({
   driver, handle, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
-  clipsWanted = CLIPS_PER_PROFILE, log = () => {},
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null,
 }) {
   // Open the profile from the results list.
   const results = await read(driver);
@@ -966,6 +1023,7 @@ async function openAndCaptureProfile({
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
     view: arrived.view,
+    config, prescreen,
   });
   return { ...profile, username: handle };
 }

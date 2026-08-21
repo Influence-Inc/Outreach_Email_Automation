@@ -76,6 +76,7 @@ function readForm() {
     brandProduct: el('brandProduct').value.trim(),
     discovery: el('discovery').value,
     reviewBorderline: el('reviewBorderline').checked,
+    prescreenNiche: el('prescreenNiche').checked,
   };
 }
 
@@ -97,6 +98,7 @@ function fillForm(cfg) {
   el('brandProduct').value = cfg.brandProduct || '';
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
   el('reviewBorderline').checked = !!cfg.reviewBorderline;
+  el('prescreenNiche').checked = !!cfg.prescreenNiche;
 }
 
 function campaignId() { return el('campaign').value; }

@@ -177,6 +177,15 @@ const OPEN_SEARCH = [
 ];
 const BACK = { x: 3, y: 3 };
 
+// A reels grid with enough reels to clear minReels, so the on-device gate lets
+// the recording happen. `point` is the tap target for the first reel.
+function gridOf(point, views = 90000) {
+  const reels = [{ views, point }];
+  for (let i = 1; i < 8; i += 1) reels.push({ views: views - i * 100, point: { x: point.x, y: point.y + i } });
+  return reels;
+}
+
+
 // Typing alone leaves IG on its as-you-type ACCOUNT suggestions, which match the
 // raw string against handles — the reason keyword scouting surfaced profiles
 // whose NAME contained the keyword instead of creators posting about it.
@@ -257,10 +266,10 @@ test('records a reel and attaches the clip for the Gemini judge', async () => {
     { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
     { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
     // The grid, with the reel's own tap point — what the reader now supplies.
-    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 150, y: 700 } }], targets: { back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 150, y: 700 } }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 150, y: 700 }), targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 150, y: 700 }), targets: { back: BACK } },
     { screen: 'reels_feed', targets: { back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 150, y: 700 } }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 150, y: 700 }), targets: { back: BACK } },
     { screen: 'search_results', targets: { back: BACK } },
   ];
   const gen = scout({
@@ -761,10 +770,10 @@ test('a recorded clip is attached in the shape the judge reads', async () => {
     { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
     { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
     { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
     { screen: 'reels_feed', targets: { back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7, point: { x: 1, y: 1 } }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
     { screen: 'search_results', targets: { back: BACK } },
   ];
   const gen = scout({
@@ -836,8 +845,11 @@ test('records the best and typical reels, not merely the first one', async () =>
   const top = { views: 90000, point: { x: 100, y: 300 } };
   const mid = { views: 5000, point: { x: 300, y: 300 } };
   const low = { views: 1000, point: { x: 500, y: 300 } };
-  const gridTop = { screen: 'reels_tab', reels: [top, mid], targets: { back: BACK } };
-  const gridLow = { screen: 'reels_tab', reels: [low], targets: { back: BACK } };
+  // Filler so the window clears minReels — the gate refuses to record a creator
+  // with too thin a grid to judge, which is the whole point of it.
+  const filler = [4000, 4100, 4200, 4300].map((v, i) => ({ views: v, point: { x: 700, y: 300 + i } }));
+  const gridTop = { screen: 'reels_tab', reels: [top, mid, ...filler], targets: { back: BACK } };
+  const gridLow = { screen: 'reels_tab', reels: [low, ...filler], targets: { back: BACK } };
 
   const views = [
     ...OPEN_SEARCH,
@@ -867,11 +879,14 @@ test('records the best and typical reels, not merely the first one', async () =>
 
   const taps = driver.ops.filter((o) => o[0] === 'tap').map((o) => `${o[1]},${o[2]}`);
   assert.ok(taps.includes('100,300'), 'opened the best reel');
-  assert.ok(taps.includes('500,300'), 'and the typical one');
   assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 3);
 
   assert.strictEqual(out[0].clips.length, 3);
-  assert.deepStrictEqual(out[0].clips.map((c) => c.views), [90000, 5000, 1000], 'best first');
+  const recorded = out[0].clips.map((c) => c.views);
+  assert.deepStrictEqual(recorded.slice(0, 2), [90000, 5000], 'the two best, best first');
+  // The third is a typical reel from the middle of the window — not another top
+  // performer, which is the whole reason the third one is taken at all.
+  assert.ok(recorded[2] < 5000, `third pick ${recorded[2]} is not a top performer`);
   assert.strictEqual(out[0].clip, out[0].clips[0], 'the single clip field is the best one');
   assert.strictEqual(out[0].evidence.clipsCaptured, 3);
 });
@@ -1261,4 +1276,156 @@ test('a keyword that can never be typed is retired, not retried forever', async 
   assert.strictEqual(out.length, 0);
   const opens = driver.ops.filter((o) => o[0] === 'openApp').length;
   assert.ok(opens <= 6, `bounded recovery attempts, saw ${opens} launches`);
+});
+
+// ── nothing expensive happens before the cheap gates (Tier 0) ───────────────
+
+// The recording used to happen in the reel player, before the profile was even
+// opened — the cheapest place to REACH a reel, and the point at which we know
+// least about the creator. Their views were one screen away.
+test('a creator under the view floor is never recorded', async () => {
+  const driver = driverWithSearch();
+  const thin = [
+    { screen: 'search_results', results: ['broke'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:broke': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }, 900), targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }, 900), targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const out = [];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0, floor: 50000 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead([...OPEN_SEARCH, ...thin]),
+    deps: { getClip: async () => ({ dataBase64: 'AAAA', mimeType: 'video/mp4' }) },
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0, 'no recording');
+  // The creator is still handed over — the backend does the bookkeeping and the
+  // dashboard still shows why they were dropped.
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].clip, undefined);
+  assert.match(out[0].evidence.notRecorded, /below floor/);
+});
+
+test('a creator with too thin a grid is never recorded', async () => {
+  const driver = driverWithSearch();
+  const oneReel = { screen: 'reels_tab', reels: [{ views: 90000, point: { x: 1, y: 1 } }], targets: { back: BACK } };
+  const out = [];
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead([
+      ...OPEN_SEARCH,
+      { screen: 'search_results', results: ['thin'], targets: { back: BACK } },
+      { screen: 'search_results', targets: { 'result:thin': { x: 5, y: 5 } } },
+      { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+      oneReel, oneReel,
+      { screen: 'search_results', targets: { back: BACK } },
+      { screen: 'search_results', targets: { back: BACK } },
+    ]),
+    deps: { getClip: async () => ({ dataBase64: 'AAAA', mimeType: 'video/mp4' }) },
+  });
+  for await (const c of gen) out.push(c);
+
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0);
+  assert.match(out[0].evidence.notRecorded, /only 1 reels/);
+});
+
+// Sourcing screenshots are asked for as small JPEGs, not the full-resolution
+// PNGs the op returns by default — two megabyte PNGs per creator was comparable
+// to the video itself.
+test('profile screenshots are requested downscaled', async () => {
+  const driver = driverWithSearch();
+  const shotArgs = [];
+  driver.screenshot = async (args) => {
+    shotArgs.push(args);
+    return { mediaType: 'image/jpeg', dataBase64: 'SHOT' };
+  };
+  const gen = scout({
+    driver,
+    config: { pacingMs: 0 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead([
+      ...OPEN_SEARCH,
+      { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+      { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+      { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+      ...Array(8).fill({ screen: 'search_results', targets: { back: BACK } }),
+    ]),
+  });
+  for await (const _c of gen) { /* drain */ }
+
+  assert.ok(shotArgs.length >= 1, 'took screenshots');
+  assert.strictEqual(shotArgs[0].format, 'jpeg');
+  assert.ok(shotArgs[0].maxWidth <= 720, 'downscaled');
+});
+
+// ── the screenshot prescreen (Tier 1) ───────────────────────────────────────
+
+function profileRun({ prescreen, config = {}, driver }) {
+  return scout({
+    driver,
+    config: { pacingMs: 0, prescreenNiche: true, ...config },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead([
+      ...OPEN_SEARCH,
+      { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+      { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+      { screen: 'profile', followers: 9000, bio: 'chef', targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+      { screen: 'reels_feed', targets: { back: BACK } },
+      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+      ...Array(8).fill({ screen: 'search_results', targets: { back: BACK } }),
+    ]),
+    deps: { getClip: async () => ({ dataBase64: 'AAAA', mimeType: 'video/mp4' }), prescreen },
+  });
+}
+
+test('a creator the pictures say is off-niche is never recorded', async () => {
+  const driver = driverWithSearch();
+  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
+  const out = [];
+  for await (const c of profileRun({
+    driver,
+    prescreen: async () => ({ pass: false, reason: 'off-niche on the profile screenshots (looks like cooking)' }),
+  })) out.push(c);
+
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0, 'no video was recorded');
+  assert.match(out[0].evidence.notRecorded, /off-niche/);
+});
+
+test('a creator the pictures clear is recorded as usual', async () => {
+  const driver = driverWithSearch();
+  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
+  const out = [];
+  for await (const c of profileRun({ driver, prescreen: async () => ({ pass: true }) })) out.push(c);
+
+  assert.ok(driver.ops.filter((o) => o[0] === 'recordClip').length >= 1, 'recorded');
+  assert.strictEqual(out[0].evidence.notRecorded, undefined);
+});
+
+// Off by default: it costs a call per creator, and a run that has not asked for
+// it should behave exactly as it did before.
+test('the prescreen does not run unless the campaign asks for it', async () => {
+  const driver = driverWithSearch();
+  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
+  let called = 0;
+  const out = [];
+  for await (const c of profileRun({
+    driver,
+    config: { prescreenNiche: false },
+    prescreen: async () => { called += 1; return { pass: false, reason: 'nope' }; },
+  })) out.push(c);
+
+  assert.strictEqual(called, 0, 'never consulted');
+  assert.ok(driver.ops.filter((o) => o[0] === 'recordClip').length >= 1, 'recorded as normal');
 });

@@ -97,3 +97,11 @@ test('buildConfig carries the brand product and its fit floor', () => {
   assert.strictEqual(buildConfig({}, {}).brandProduct, '');
   assert.strictEqual(buildConfig({}, { minBrandFit: 0 }).minBrandFit, 0, '0 is a real choice');
 });
+
+test('buildConfig carries the screenshot prescreen knobs', () => {
+  const on = buildConfig({}, { prescreenNiche: 'true', prescreenMinConfidence: '0.8' });
+  assert.strictEqual(on.prescreenNiche, true);
+  assert.strictEqual(on.prescreenMinConfidence, 0.8);
+  // Off unless asked for — it costs a call per creator.
+  assert.strictEqual(buildConfig({}, {}).prescreenNiche, false);
+});
