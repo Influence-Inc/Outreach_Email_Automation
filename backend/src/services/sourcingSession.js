@@ -161,7 +161,19 @@ async function runSession({ hostId, run, deps }) {
     const clipStore = require('./clipStore');
     gen = (deps.scoutReels || scoutReels)({
       driver,
+      // The WHOLE campaign config, not just the mechanical knobs.
+      //
+      // Reels mode judges inside the navigator (the analysis queue keeps the
+      // phone scrolling while the model thinks), so this object is what the
+      // judge's prompt is built from. Passing only pacing/clipSeconds/etc. meant
+      // every reels-mode verdict was written against no niche, no keywords, no
+      // target audience and no brand product — the model said so in its own
+      // reasoning ("No information provided about target niche, campaign
+      // keywords...") and returned a neutral 0.50 for everyone. Profiles mode
+      // was unaffected because there the orchestrator judges, with the real
+      // config. Mechanical values still win, so nothing about pacing changes.
       config: {
+        ...config,
         pacingMs,
         clipSeconds: config.clipSeconds,
         reelsWindow: config.reelsWindow,

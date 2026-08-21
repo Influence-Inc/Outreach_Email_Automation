@@ -119,6 +119,24 @@ persist time — after everything it cost had been spent. Overlapping keywords h
 this constantly, because the same popular accounts head the results for all of
 them.
 
+### Reels mode judges the creator, not just the reel
+
+Reels mode judges *inside* the navigator (the analysis queue keeps the phone
+scrolling while the model thinks), which makes two things easy to get wrong, and
+both were:
+
+- **The judge is built from the config handed to `scoutReels`**, so that object
+  is the whole campaign config, not just pacing/clipSeconds. With only the
+  mechanical knobs the prompt carried no niche, no keywords and no product — the
+  model said exactly that back (*"No information provided about target niche,
+  campaign keywords"*) and returned a neutral `0.50` for every creator scanned.
+- **The feed reel is judged before the profile is opened**, to have a score ready
+  in case engagement is on. That early verdict must NOT be pinned as the final
+  one: it saw a single clip and a caption, with no bio, no reach window and no
+  screenshots. Once the profile visit produces reach or pictures, the verdict is
+  re-made downstream from the whole bundle, and the feed-reel verdict is kept
+  alongside as `evidence.feedReelVerdict`.
+
 ### What the judge actually sees
 
 A creator is judged from an **evidence bundle**, in one multimodal call:

@@ -164,7 +164,12 @@ test('opens the creator directly and scrolls their reels grid for reach', async 
   assert.deepStrictEqual(out[0].reels.map((r) => r.views), [30000, 41000, 52000]);
   assert.strictEqual(out[0].followers, 84000);
   assert.strictEqual(out[0].username, 'mia');
-  assert.ok(out[0]._nicheVerdict, 'the async verdict was attached');
+  // The profile handed back a real reach window, so the feed-reel verdict is NOT
+  // pinned: pinning it told the orchestrator "already judged" and threw away the
+  // bio, the reach and the screenshots this visit just gathered. It is kept as
+  // evidence instead, and the full bundle is judged downstream.
+  assert.strictEqual(out[0]._nicheVerdict, undefined, 'the thin feed verdict does not win');
+  assert.ok('feedReelVerdict' in out[0].evidence, 'but it is kept as evidence');
 });
 
 test('a creator with no author target still yields the judged reel', async () => {
@@ -399,7 +404,7 @@ test('collecting runs at the same speed when analysis never returns', async () =
 // Deterministic on purpose: the judge settles on the first microtask, so it is
 // certainly ready by the time the handle phase reaches this creator. Racing a
 // real timer here would only test the scheduler.
-test('a verdict that landed by handling time is attached', async () => {
+test('a verdict that landed by handling time is kept as evidence, not pinned', async () => {
   const driver = batchDriver();
   const views = [
     { screen: 'home', targets: { reelsNavTab: { x: 1, y: 1 } } },
@@ -418,7 +423,9 @@ test('a verdict that landed by handling time is attached', async () => {
     out.push(c);
   }
 
-  assert.deepStrictEqual(out[0]._nicheVerdict, { score: 0.77 });
+  // Same reason: a profile with reach outranks the feed-reel-only verdict.
+  assert.strictEqual(out[0]._nicheVerdict, undefined);
+  assert.strictEqual(out[0].evidence.feedReelVerdict, null, 'kept, though this verdict carried no evidence of its own');
   assert.notStrictEqual(out[0].evidence.analysis, 'incomplete');
 });
 
@@ -496,4 +503,82 @@ test('the profile cap stops a run that keeps finding nothing', async () => {
   })) out.push(c);
 
   assert.ok(out.length <= 2, `stopped at the cap, got ${out.length}`);
+});
+
+// ── the judge must be told what the campaign is looking for ─────────────────
+
+// Reels mode judges INSIDE the navigator, so the config handed to scoutReels is
+// what the prompt gets built from. It used to receive only the mechanical knobs
+// (pacing, clipSeconds, reelsWindow), so every reels-mode verdict was written
+// against no niche and no keywords — the model said so in its own words ("No
+// information provided about target niche, campaign keywords") and returned a
+// neutral 0.50 for every creator scanned.
+test('the campaign rules reach the judge, not just the pacing knobs', async () => {
+  const driver = fakeDriver();
+  driver.openProfile = async () => {};
+  const seen = [];
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 1, y: 1 } } },
+    { screen: 'reels_feed', author: 'mia', caption: 'gym', targets: { like: { x: 9, y: 9 } } },
+    { screen: 'profile', followers: 84000, bio: 'coach', targets: { reelsTab: { x: 4, y: 5 }, back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 30000 }], targets: { back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 30000 }], targets: { back: { x: 3, y: 3 } } },
+  ];
+  const deps = {
+    judge: async (_cand, cfg) => { seen.push(cfg); return { score: 0.9 }; },
+    getClip: async () => ({ buf: Buffer.from('X'), mediaType: 'video/mp4' }),
+    engagement: { policy: { enabled: false }, decide: () => ({ like: false, save: false, share: false }) },
+  };
+  const out = [];
+  for await (const c of scoutReels({
+    driver,
+    config: {
+      pacingMs: 0,
+      niche: 'fitness',
+      keywords: ['homegym'],
+      targetAudience: 'women 25-34',
+      brandProduct: 'a resistance band set',
+    },
+    opts: { keywords: ['homegym'], max: 1 },
+    read: scriptedRead(views),
+    deps,
+  })) out.push(c);
+
+  assert.strictEqual(seen.length, 1);
+  assert.strictEqual(seen[0].niche, 'fitness');
+  assert.deepStrictEqual(seen[0].keywords, ['homegym']);
+  assert.strictEqual(seen[0].targetAudience, 'women 25-34');
+  assert.strictEqual(seen[0].brandProduct, 'a resistance band set');
+});
+
+// The profile visit photographs the bio and the reels grid. Dropping them here
+// meant reels mode paid for the pictures on the phone and then judged without
+// them — which is the whole reason the profile is opened at all.
+test('the profile screenshots survive onto the candidate', async () => {
+  const driver = fakeDriver();
+  driver.openProfile = async () => {};
+  let n = 0;
+  driver.screenshot = async () => { n += 1; return { mediaType: 'image/png', dataBase64: `SHOT${n}` }; };
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 1, y: 1 } } },
+    { screen: 'reels_feed', author: 'mia', caption: 'gym', targets: { like: { x: 9, y: 9 } } },
+    { screen: 'profile', followers: 84000, bio: 'coach', targets: { reelsTab: { x: 4, y: 5 }, back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 30000 }], targets: { back: { x: 3, y: 3 } } },
+    { screen: 'reels_tab', reels: [{ views: 30000 }], targets: { back: { x: 3, y: 3 } } },
+  ];
+  const deps = {
+    judge: async () => ({ score: 0.9 }),
+    getClip: async () => ({ buf: Buffer.from('X'), mediaType: 'video/mp4' }),
+    engagement: { policy: { enabled: false }, decide: () => ({ like: false, save: false, share: false }) },
+  };
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['x'], max: 1 }, read: scriptedRead(views), deps,
+  })) out.push(c);
+
+  assert.deepStrictEqual(out[0].shots.map((s) => s.kind), ['bio', 'reels_grid']);
+  // And the reel itself is still attached, so the downstream judgement watches
+  // and hears the video alongside the pictures.
+  assert.ok(out[0].clip.dataBase64);
+  assert.strictEqual(out[0].followers, 84000);
 });
