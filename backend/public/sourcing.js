@@ -43,6 +43,24 @@ function fmt(n) {
   return String(v);
 }
 
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}
+
+// A sourced handle rendered as a link to the creator's Instagram profile, opened
+// in a new tab. The handle is scraped off-screen, so it is escaped for the visible
+// text and URL-encoded for the href even though Instagram usernames are meant to
+// be [a-z0-9._] only — the reader can misread, and a broken handle should not
+// break the row or the link.
+function handleLink(username) {
+  const handle = String(username || '').replace(/^@/, '').trim();
+  if (!handle) return '—';
+  const url = `https://www.instagram.com/${encodeURIComponent(handle)}/`;
+  return `<a href="${url}" target="_blank" rel="noopener">@${escapeHtml(handle)}</a>`;
+}
+
 // Colour the last-seen time by freshness: green < 2 min, amber < 1 h, grey older.
 function seenFreshness(iso) {
   if (!iso) return '<span class="scout-hint">never</span>';
@@ -210,7 +228,7 @@ function renderCandidates(rows) {
     const niche = c.niche_score == null ? '—' : Number(c.niche_score).toFixed(2);
     const risk = c.risk_profile || '—';
     tr.innerHTML = `
-      <td>@${c.username}</td>
+      <td>${handleLink(c.username)}</td>
       <td>${fmt(c.followers)}</td>
       <td>${viewRange(c.reels)}</td>
       <td>${niche}</td>
@@ -266,7 +284,7 @@ function renderReview(rows) {
     const why = ev.reason || c.niche_reason || '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>@${c.username}</td>
+      <td>${handleLink(c.username)}</td>
       <td>${fmt(c.followers)}</td>
       <td>${niche}</td>
       <td>${genreAud}</td>
