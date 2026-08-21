@@ -292,6 +292,10 @@ async function handleCreator({
         candidate.followers = profile.followers;
         candidate.bio = profile.bio;
         if (Array.isArray(profile.reels) && profile.reels.length) candidate.reels = profile.reels;
+        // The pictures of the bio and the reels grid. These were being dropped
+        // here, so reels mode captured them on the phone and then judged without
+        // them — the whole point of opening the profile at all.
+        if (Array.isArray(profile.shots) && profile.shots.length) candidate.shots = profile.shots;
         candidate.evidence = { ...candidate.evidence, ...profile.evidence, source: 'reels-feed' };
       }
     } catch (err) {
@@ -302,8 +306,23 @@ async function handleCreator({
   // Collect the verdict if it has landed. A creator whose analysis is still in
   // flight is kept and marked incomplete rather than stalling the run.
   const verdict = entry.verdict || await queue.take(String(entry.username).toLowerCase());
-  if (verdict) {
+
+  // `_nicheVerdict` tells the orchestrator "already judged, do not judge again".
+  // The queued verdict was written from the FEED reel alone — one clip, one
+  // caption, no bio, no reach window and no profile pictures — so pinning it
+  // here threw away everything the profile visit just gathered and made opening
+  // the profile pointless for scoring. Keep it only when the profile gave us
+  // nothing better; otherwise let the orchestrator judge the whole bundle
+  // (video + bio + grid screenshots + captions + reach) against the campaign's
+  // actual rules. The clip is carried across so that richer call still watches
+  // and hears the reel.
+  const richer = !!(candidate.shots || (Array.isArray(candidate.reels) && candidate.reels.some((r) => r && r.views != null)));
+  if (verdict && !richer) {
     candidate._nicheVerdict = verdict;
+  } else if (verdict) {
+    // Not the verdict, but worth keeping as evidence of what the feed reel alone
+    // looked like next to the fuller judgement.
+    candidate.evidence = { ...candidate.evidence, feedReelVerdict: verdict.evidence || null };
   } else if (entry.clip) {
     candidate.evidence = { ...candidate.evidence, analysis: 'incomplete' };
   }
