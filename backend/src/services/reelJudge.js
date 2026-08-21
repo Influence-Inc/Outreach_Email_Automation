@@ -38,6 +38,8 @@ const CLIP_SCHEMA = [
   '  "spoken_language": "",',
   '  "on_screen_products": [],',
   '  "ugc_ad_fit": 0,',
+  '  "brand_fit": 0,',
+  '  "brand_fit_reason": "",',
   '  "niche_score": 0.0,',
   '  "reasoning": ""',
   '}',
@@ -96,6 +98,10 @@ function parseClipAnalysis(raw) {
       ? raw.on_screen_products.map(str).filter(Boolean)
       : [],
     ugc_ad_fit: scale10(raw.ugc_ad_fit),
+    // Null when the model was never asked (no brandProduct configured) — the
+    // scorer treats that as "not judged", never as a fit of zero.
+    brand_fit: scale10(raw.brand_fit),
+    brand_fit_reason: str(raw.brand_fit_reason),
     reasoning: str(raw.reasoning),
   };
 }
@@ -164,7 +170,22 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     `Campaign keywords: ${(config.keywords || []).join(', ') || '(none)'}`,
     `Allowed genres: ${(config.genres || []).join(', ') || '(any)'}`,
     `Brand target audience: ${config.targetAudience || '(unspecified)'}`,
+    `What the brand sells: ${config.brandProduct || '(unspecified)'}`,
     '',
+    // The question that actually decides whether an outreach is worth sending.
+    // "Are they in the right niche" and "could they hold this product in a reel
+    // without it looking bought" are different questions, and only the second
+    // predicts whether a collaboration works. Asked only when the campaign said
+    // what it sells — there is nothing to judge fit against otherwise.
+    ...(config.brandProduct ? [
+      'BRAND FIT — judge this specifically: could THIS creator feature the product',
+      'above in one of their own reels and have it look native rather than a paid',
+      'read? Consider what they already make, who watches them, and whether the',
+      'product belongs in that world. A creator in the right niche who could not',
+      'plausibly hold this product scores LOW. Put the score in brand_fit (0-10)',
+      'and one line of why in brand_fit_reason.',
+      '',
+    ] : []),
     `Creator @${candidate.username || 'unknown'}`,
     `Followers: ${candidate.followers ?? '(unknown)'}`,
     `Bio text: ${candidate.bio || '(none)'}`,
@@ -200,6 +221,8 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     '  "spoken_language": "",',
     '  "on_screen_products": [],',
     '  "ugc_ad_fit": 0,',
+    '  "brand_fit": 0,',
+    '  "brand_fit_reason": "",',
     '  "reasoning": "",',
     '  "primary_niche": "",',
     '  "consistency_of_niche": 0,',

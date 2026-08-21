@@ -89,3 +89,11 @@ test('buildConfig carries the quality dials', () => {
   assert.strictEqual(off.floorTolerance, 0);
   assert.strictEqual(off.minCreativity, 0);
 });
+
+test('buildConfig carries the brand product and its fit floor', () => {
+  const cfg = buildConfig({}, { brandProduct: '  a carbon-plate racing shoe  ', minBrandFit: '6' });
+  assert.strictEqual(cfg.brandProduct, 'a carbon-plate racing shoe');
+  assert.strictEqual(cfg.minBrandFit, 6);
+  assert.strictEqual(buildConfig({}, {}).brandProduct, '');
+  assert.strictEqual(buildConfig({}, { minBrandFit: 0 }).minBrandFit, 0, '0 is a real choice');
+});

@@ -45,6 +45,18 @@ function apiKey() { return clean(process.env.GEMINI_API_KEY); }
 function available() { return !!apiKey(); }
 function model() { return clean(process.env.GEMINI_MODEL) || DEFAULT_MODEL; }
 
+// How long to wait for one generateContent call. Video analysis is genuinely slow,
+// so this is generous — it exists to stop a hung socket stalling a run, not to
+// rush the model. 0 disables the bound.
+const DEFAULT_TIMEOUT_MS = 90_000;
+
+function timeoutMs() {
+  const raw = clean(process.env.GEMINI_TIMEOUT_MS);
+  if (raw === '') return DEFAULT_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_TIMEOUT_MS;
+}
+
 function mediaResolution() {
   const r = (clean(process.env.GEMINI_MEDIA_RESOLUTION) || 'low').toLowerCase();
   if (r === 'off' || r === 'none') return null; // never send the field
@@ -120,11 +132,29 @@ async function generate({
     if (res) generationConfig.mediaResolution = res;
     return JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig });
   };
-  const post = (withMediaRes) => fetchImpl(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: buildBody(withMediaRes),
-  });
+  // A bounded call. Without this a Gemini request that never answers blocks the
+  // creator being judged, and with it the whole run — the phone sits idle waiting
+  // on a socket. A judgement we waited too long for is worth less than moving on:
+  // the caller degrades to the next classifier tier, which is exactly what it
+  // does for any other failure.
+  const post = (withMediaRes) => {
+    const ms = timeoutMs();
+    if (!ms) {
+      return fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: buildBody(withMediaRes),
+      });
+    }
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), ms);
+    return fetchImpl(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: buildBody(withMediaRes),
+      signal: ac.signal,
+    }).finally(() => clearTimeout(timer));
+  };
 
   console.log(
     `[gemini] -> ${label} model=${mdl} video=${videoBytes ? kb(videoBytes) : 'none'} `
@@ -156,7 +186,15 @@ async function generate({
       }
     }
   } catch (err) {
-    console.error(`[gemini] ${label}: request failed after ${Date.now() - startedAt}ms:`, err.message);
+    // An abort here is our own timeout firing, not a network fault — worth saying
+    // plainly, because the fix for one is a bigger GEMINI_TIMEOUT_MS and the fix
+    // for the other is not.
+    const aborted = err && (err.name === 'AbortError' || err.name === 'TimeoutError');
+    console.error(
+      `[gemini] ${label}: ${aborted ? `timed out after ${timeoutMs()}ms` : 'request failed'} `
+      + `(${Date.now() - startedAt}ms):`,
+      err.message,
+    );
     return null;
   }
   const ms = Date.now() - startedAt;

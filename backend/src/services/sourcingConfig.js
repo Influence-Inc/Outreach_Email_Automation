@@ -31,13 +31,18 @@ function buildConfig(defaults = {}, override = {}) {
     // Free-text description of who the brand wants to reach — fed to the Gemini
     // reel judge so it scores audience fit, not just topic.
     targetAudience: merged.targetAudience ? String(merged.targetAudience).trim() : '',
+    // What the campaign is actually selling, in the operator's own words. The
+    // judge needs this to answer "could THIS creator put THIS product in a reel
+    // and have it look native" — a different question from "are they in the right
+    // niche", and the one that decides whether an outreach is worth sending.
+    brandProduct: merged.brandProduct ? String(merged.brandProduct).trim() : '',
     // Optional allow-list of genres the reel judge should treat as on-brand.
     genres: toKeywordList(merged.genres),
     floor: num(merged.floor),
-    // How many of the recent reels may sit BELOW the floor. Real creators have
-    // quiet posts, and demanding that all twelve clear the floor rejects good
-    // creators for a couple of off days — a stricter test than "min views"
-    // sounds like.
+    // How many of the recent reels may sit BELOW the floor. 0 by default: the
+    // floor is the campaign's minimum, and a "minimum" that eleven of twelve
+    // reels satisfy is not a minimum. Raise it only for a campaign that
+    // deliberately wants slack.
     floorTolerance: num(merged.floorTolerance),
     ceiling: num(merged.ceiling),
     risk: RISKS.includes(merged.risk) ? merged.risk : 'medium',
@@ -67,6 +72,8 @@ function buildConfig(defaults = {}, override = {}) {
     creatorPassThreshold: num(merged.creatorPassThreshold),
     // A hard floor on craft, checked outside the weighted blend. 0 disables it.
     minCreativity: num(merged.minCreativity),
+    // A hard floor on brand fit, same shape. 0 disables it.
+    minBrandFit: num(merged.minBrandFit),
   };
 }
 
