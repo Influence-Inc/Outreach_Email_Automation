@@ -26,7 +26,7 @@ function num(v) {
 // The five things creatorScore weighs. Named here so a typo in a saved campaign
 // config ("creativty") is dropped rather than silently becoming a sixth
 // component that dilutes every real one.
-const WEIGHT_KEYS = ['fit', 'nicheConsistency', 'viewSteadiness', 'creativity', 'hook'];
+const WEIGHT_KEYS = ['fit', 'nicheConsistency', 'viewSteadiness', 'creativity', 'hook', 'brandFit'];
 
 /**
  * Per-campaign scoring weights, or undefined to use creatorScore's defaults.
@@ -53,13 +53,18 @@ function buildConfig(defaults = {}, override = {}) {
     // Free-text description of who the brand wants to reach — fed to the Gemini
     // reel judge so it scores audience fit, not just topic.
     targetAudience: merged.targetAudience ? String(merged.targetAudience).trim() : '',
+    // What the campaign is actually selling, in the operator's own words. The
+    // judge needs this to answer "could THIS creator put THIS product in a reel
+    // and have it look native" — a different question from "are they in the right
+    // niche", and the one that decides whether an outreach is worth sending.
+    brandProduct: merged.brandProduct ? String(merged.brandProduct).trim() : '',
     // Optional allow-list of genres the reel judge should treat as on-brand.
     genres: toKeywordList(merged.genres),
     floor: num(merged.floor),
-    // How many of the recent reels may sit BELOW the floor. Real creators have
-    // quiet posts, and demanding that all twelve clear the floor rejects good
-    // creators for a couple of off days — a stricter test than "min views"
-    // sounds like.
+    // How many of the recent reels may sit BELOW the floor. 0 by default: the
+    // floor is the campaign's minimum, and a "minimum" that eleven of twelve
+    // reels satisfy is not a minimum. Raise it only for a campaign that
+    // deliberately wants slack.
     floorTolerance: num(merged.floorTolerance),
     ceiling: num(merged.ceiling),
     risk: RISKS.includes(merged.risk) ? merged.risk : 'medium',
@@ -89,6 +94,16 @@ function buildConfig(defaults = {}, override = {}) {
     creatorPassThreshold: num(merged.creatorPassThreshold),
     // A hard floor on craft, checked outside the weighted blend. 0 disables it.
     minCreativity: num(merged.minCreativity),
+    // A hard floor on brand fit, same shape. 0 disables it.
+    minBrandFit: num(merged.minBrandFit),
+    // Look at the profile screenshots before recording any video, and skip a
+    // creator the pictures say is plainly in another line of work. Costs one
+    // small image call; saves a recording, an upload and a video call every time
+    // it fires. See services/nichePrescreen.js.
+    prescreenNiche: merged.prescreenNiche === true || merged.prescreenNiche === 'true',
+    // How sure the prescreen must be before it drops a creator. A skipped
+    // creator is never looked at again, so this is deliberately high.
+    prescreenMinConfidence: num(merged.prescreenMinConfidence),
     // What THIS brand is buying. A skincare campaign is buying production
     // quality, a meme brand is buying the hook, a B2B brand is buying audience
     // fit — one set of weights cannot serve all three, and every campaign shared

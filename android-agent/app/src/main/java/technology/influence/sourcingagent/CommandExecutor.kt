@@ -114,10 +114,29 @@ class CommandExecutor(
             }
 
             "screenshot" -> {
-                val png = service().screenshotPng()
-                JSONObject().apply {
-                    put("mediaType", "image/png")
-                    put("dataBase64", Base64.encodeToString(png, Base64.NO_WRAP))
+                // Sourcing asks for a downscaled JPEG; anything that does not ask
+                // still gets the full-resolution PNG it always got.
+                //
+                // A full-res q100 PNG of a 1080x2400 screen is megabytes, and two
+                // of them ride along with every creator. The judge is deciding
+                // "is this person a runner or a chef" — a question 720px answers
+                // as well as 1080p does, for a fraction of the phone's upload.
+                val wantsJpeg = a.optString("format", "png").equals("jpeg", ignoreCase = true)
+                if (wantsJpeg) {
+                    val bytes = service().screenshotJpeg(
+                        maxWidth = a.optInt("maxWidth", 720),
+                        startQuality = a.optInt("quality", 70),
+                    )
+                    JSONObject().apply {
+                        put("mediaType", "image/jpeg")
+                        put("dataBase64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                    }
+                } else {
+                    val png = service().screenshotPng()
+                    JSONObject().apply {
+                        put("mediaType", "image/png")
+                        put("dataBase64", Base64.encodeToString(png, Base64.NO_WRAP))
+                    }
                 }
             }
 

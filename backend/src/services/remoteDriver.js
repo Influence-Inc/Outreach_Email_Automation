@@ -47,7 +47,10 @@ function makeRemoteDriver({ hostId, channel = commands, timeoutMs } = {}) {
     // profile the UI tree cannot express: how the bio and the reels grid
     // actually LOOK. Returns { mediaType, dataBase64 } — bigger than a UI dump,
     // so the navigator takes these deliberately (two per creator), never per step.
-    screenshot: () => call('screenshot', {}, { timeoutMs: timeoutMs || 45_000 }),
+    // `args` lets a caller ask for a downscaled JPEG instead of the default
+    // full-resolution PNG. An agent too old to understand them returns the PNG,
+    // which still works — every caller reads whatever mediaType comes back.
+    screenshot: (args = {}) => call('screenshot', args, { timeoutMs: timeoutMs || 45_000 }),
     getWindowSize: () => call('getWindowSize', {}),
     keepAwake: () => call('keepAwake', {}),
     wake: () => call('wake', {}),

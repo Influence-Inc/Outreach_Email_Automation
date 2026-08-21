@@ -79,10 +79,13 @@
         <input id="floor" type="number" min="0" step="1000" placeholder="15000" />
 
         <label for="floorTolerance">Reels allowed below floor</label>
-        <input id="floorTolerance" type="number" min="0" max="6" step="1" value="2" />
+        <input id="floorTolerance" type="number" min="0" max="6" step="1" value="0" />
 
         <label for="ceiling">Max of range (ceiling)</label>
         <input id="ceiling" type="number" min="0" step="1000" placeholder="500000" />
+
+        <label for="brandProduct">What you're selling</label>
+        <input id="brandProduct" type="text" placeholder="e.g. a carbon-plate racing shoe for sub-4 marathoners" />
 
         <label for="risk">Risk level</label>
         <select id="risk">
@@ -115,6 +118,15 @@
 
         <label for="minCreativity">Min creativity (1-10)</label>
         <input id="minCreativity" type="number" min="0" max="10" step="1" value="5" />
+
+        <label for="minBrandFit">Min brand fit (1-10)</label>
+        <input id="minBrandFit" type="number" min="0" max="10" step="1" value="4" />
+
+        <label for="prescreenNiche">Screenshot pre-check</label>
+        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">
+          <input id="prescreenNiche" type="checkbox" style="width:auto" />
+          Check the profile pictures before recording, and skip plainly off-niche creators
+        </label>
 
         <label for="reviewBorderline">Borderline → review</label>
         <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">

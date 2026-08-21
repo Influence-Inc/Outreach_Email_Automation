@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const gc = require('./geminiClient');
 
-const GEMINI_ENVS = ['GEMINI_API_KEY', 'GEMINI_MODEL', 'GEMINI_MEDIA_RESOLUTION'];
+const GEMINI_ENVS = ['GEMINI_API_KEY', 'GEMINI_MODEL', 'GEMINI_MEDIA_RESOLUTION', 'GEMINI_TIMEOUT_MS'];
 function clearEnv() { for (const k of GEMINI_ENVS) delete process.env[k]; }
 // mediaResolution support is remembered process-wide once probed, so a test that
 // makes the model reject it must not decide the outcome of the next test.
@@ -245,4 +245,47 @@ test('skips an oversized inline clip without calling the API', async () => {
   const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 1 }) });
   assert.strictEqual(await gc.generate({ videoBase64: oversized, promptText: 'x', fetchImpl }), null);
   assert.strictEqual(fetchImpl.calls.length, 0);
+});
+
+// ── the call is bounded ─────────────────────────────────────────────────────
+
+// Without a bound, a Gemini request that never answers blocks the creator being
+// judged and with it the whole run — the phone sits idle on a socket.
+test('a request that never answers is aborted rather than hanging the run', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  process.env.GEMINI_TIMEOUT_MS = '20';
+
+  // Never resolves on its own; only the abort signal ends it.
+  const hangingFetch = (_url, opts) => new Promise((_resolve, reject) => {
+    opts.signal.addEventListener('abort', () => {
+      const err = new Error('The operation was aborted.');
+      err.name = 'AbortError';
+      reject(err);
+    });
+  });
+
+  const started = Date.now();
+  const out = await gc.classifyReelVideo({
+    videoBase64: 'AAAA', promptText: 'judge', fetchImpl: hangingFetch,
+  });
+
+  assert.strictEqual(out, null, 'degrades to null so the caller falls to the next tier');
+  assert.ok(Date.now() - started < 2000, 'gave up promptly instead of waiting forever');
+});
+
+test('the timeout is configurable and 0 disables the bound', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  process.env.GEMINI_TIMEOUT_MS = '0';
+  const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 0.7 }) });
+
+  const out = await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'judge', fetchImpl });
+  assert.strictEqual(out.niche_score, 0.7);
+  assert.strictEqual(fetchImpl.calls[0].opts.signal, undefined, 'no abort signal attached');
+});
+
+test('a bounded call still passes a signal through', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 0.7 }) });
+  await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'judge', fetchImpl });
+  assert.ok(fetchImpl.calls[0].opts.signal, 'the default timeout is in force');
 });

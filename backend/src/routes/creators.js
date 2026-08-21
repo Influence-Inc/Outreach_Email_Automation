@@ -10,6 +10,7 @@ const offerPortal = require('../services/offers');
 const briefs = require('../services/briefs');
 const segmentation = require('../services/segmentation');
 const creatorDb = require('../services/creatorDb');
+const { syncCreatorNames } = require('../services/creatorNameSync');
 const { resolveHandle } = require('../services/creatorIdentity');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
@@ -412,6 +413,15 @@ async function attachCategories(rows) {
     // "already in DB with N past contracts" tooltips without a second call.
     r.creator_db_ref = c.creator || null;
   }
+
+  // Creator-DB owns the creator's name, and its record is already in hand — so
+  // repair any row whose name has drifted from it (see creatorNameSync.js).
+  // Best-effort: a failure here must never cost the dashboard its creator list.
+  try {
+    await syncCreatorNames(rows);
+  } catch (err) {
+    console.warn('[creators] creator-name sync failed:', err.message);
+  }
 }
 
 // Attach a `rate_log` array (oldest→newest) to each creator row, in place. One
@@ -674,8 +684,11 @@ router.post('/', async (req, res, next) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (campaign_id, instagram_url) DO UPDATE SET
          email = COALESCE(EXCLUDED.email, creators.email),
-         first_name = COALESCE(EXCLUDED.first_name, creators.first_name),
-         full_name = COALESCE(EXCLUDED.full_name, creators.full_name),
+         -- Names here come from the extension's Instagram read. Re-adding a
+         -- creator must not overwrite a name already on file (imported from
+         -- Creator-DB, or corrected by hand) with their IG display name.
+         first_name = COALESCE(creators.first_name, EXCLUDED.first_name),
+         full_name = COALESCE(creators.full_name, EXCLUDED.full_name),
          instagram_username = COALESCE(EXCLUDED.instagram_username, creators.instagram_username),
          updated_at = NOW()
        RETURNING *`,
@@ -981,9 +994,13 @@ router.post('/bulk/fetch-email', async (req, res) => {
           instagramUsername: creator.instagram_username,
         });
         const params = [creator.id, scraped.fullName, scraped.firstName];
+        // A name we already hold came from Creator-DB or a human, both of which
+        // outrank an Instagram display name — the scrape only FILLS BLANKS.
+        // Overwriting here is what rewrote imported creators to their IG handle
+        // name and sent offers addressed to the wrong person.
         const updates = [
-          `full_name = COALESCE($2, full_name)`,
-          `first_name = COALESCE($3, first_name)`,
+          `full_name = COALESCE(full_name, $2)`,
+          `first_name = COALESCE(first_name, $3)`,
           `updated_at = NOW()`,
         ];
         if (scraped.email) {
@@ -1407,8 +1424,10 @@ router.post('/:id/fetch-email', async (req, res) => {
 
     const updates = [
       `instagram_username = COALESCE(creators.instagram_username, $2)`,
-      `full_name = COALESCE($3, full_name)`,
-      `first_name = COALESCE($4, first_name)`,
+      // Fill blanks only — see the batch scrape above. An imported Creator-DB
+      // name (or an admin's manual correction) outranks the IG profile name.
+      `full_name = COALESCE(full_name, $3)`,
+      `first_name = COALESCE(first_name, $4)`,
       `updated_at = NOW()`,
     ];
     const params = [creator.id, scraped.username, scraped.fullName, scraped.firstName];

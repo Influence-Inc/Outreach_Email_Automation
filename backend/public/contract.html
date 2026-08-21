@@ -310,11 +310,19 @@
             </div>
           </div>
 
-          <div class="field" id="ibanBlock">
-            <label class="field-label" for="bankIban">IBAN</label>
-            <input id="bankIban" class="secret" type="password" autocomplete="off"
-                   spellcheck="false" autocapitalize="off"
-                   data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+          <div class="row-2" id="ibanBlock">
+            <div class="field">
+              <label class="field-label" for="bankIban">IBAN</label>
+              <input id="bankIban" class="secret secret-pastable" type="password" autocomplete="off"
+                     spellcheck="false" autocapitalize="off"
+                     data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="bankIbanConfirm">Confirm IBAN</label>
+              <input id="bankIbanConfirm" class="secret secret-pastable" type="password" autocomplete="off"
+                     spellcheck="false" autocapitalize="off"
+                     data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+            </div>
           </div>
 
           <div class="field" id="routingBlock" hidden>

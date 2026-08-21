@@ -38,6 +38,8 @@ const CLIP_SCHEMA = [
   '  "spoken_language": "",',
   '  "on_screen_products": [],',
   '  "ugc_ad_fit": 0,',
+  '  "brand_fit": 0,',
+  '  "brand_fit_reason": "",',
   '  "niche_score": 0.0,',
   '  "reasoning": ""',
   '}',
@@ -96,6 +98,10 @@ function parseClipAnalysis(raw) {
       ? raw.on_screen_products.map(str).filter(Boolean)
       : [],
     ugc_ad_fit: scale10(raw.ugc_ad_fit),
+    // Null when the model was never asked (no brandProduct configured) — the
+    // scorer treats that as "not judged", never as a fit of zero.
+    brand_fit: scale10(raw.brand_fit),
+    brand_fit_reason: str(raw.brand_fit_reason),
     reasoning: str(raw.reasoning),
   };
 }
@@ -164,13 +170,32 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     `Campaign keywords: ${(config.keywords || []).join(', ') || '(none)'}`,
     `Allowed genres: ${(config.genres || []).join(', ') || '(any)'}`,
     `Brand target audience: ${config.targetAudience || '(unspecified)'}`,
+    `What the brand sells: ${config.brandProduct || '(unspecified)'}`,
     '',
+    // The question that actually decides whether an outreach is worth sending.
+    // "Are they in the right niche" and "could they hold this product in a reel
+    // without it looking bought" are different questions, and only the second
+    // predicts whether a collaboration works. Asked only when the campaign said
+    // what it sells — there is nothing to judge fit against otherwise.
+    ...(config.brandProduct ? [
+      'BRAND FIT — judge this specifically: could THIS creator feature the product',
+      'above in one of their own reels and have it look native rather than a paid',
+      'read? Consider what they already make, who watches them, and whether the',
+      'product belongs in that world. A creator in the right niche who could not',
+      'plausibly hold this product scores LOW. Put the score in brand_fit (0-10)',
+      'and one line of why in brand_fit_reason.',
+      '',
+    ] : []),
     `Creator @${candidate.username || 'unknown'}`,
     `Followers: ${candidate.followers ?? '(unknown)'}`,
     `Bio text: ${candidate.bio || '(none)'}`,
     `Reach across ${stats.count || 0} recent reels — lowest ${stats.min ?? '?'}, `
       + `typical ${stats.typical ?? '?'}, highest ${stats.max ?? '?'}.`,
     captions.length ? `Recent reel captions:\n- ${captions.join('\n- ')}` : 'Recent reel captions: (none)',
+    // The brand's own past approve/reject calls, as few-shot examples. This is
+    // the call that produces fit_score, so it is where taste has to land — see
+    // services/nicheCalibration.js.
+    (config.calibration && config.calibration.text) || '',
     '',
     'Respond with ONLY a JSON object of exactly this shape, no prose and no',
     'markdown fences. Scores marked 0-10 are integers; niche_score, audience_match',
@@ -196,6 +221,8 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     '  "spoken_language": "",',
     '  "on_screen_products": [],',
     '  "ugc_ad_fit": 0,',
+    '  "brand_fit": 0,',
+    '  "brand_fit_reason": "",',
     '  "reasoning": "",',
     '  "primary_niche": "",',
     '  "consistency_of_niche": 0,',
@@ -281,6 +308,13 @@ function buildCreatorPrompt({ candidate = {}, clips = [], stats = {} } = {}, con
     '',
     'Reel analyses:',
     JSON.stringify(clips, null, 2),
+    // The brand's own past approve/reject calls, as few-shot examples. Carried
+    // here rather than on the per-CLIP prompt for two reasons: this is the call
+    // that produces fit_score (the number the gate weighs most heavily), and it
+    // runs once per creator where the clip prompt runs three times — so
+    // calibration costs a third as much exactly where it matters most.
+    // See services/nicheCalibration.js.
+    (config.calibration && config.calibration.text) || '',
     '',
     'reject_reason must be null unless this creator should be dropped, in which',
     'case give the reason in a few words. fit_score is 0-100.',

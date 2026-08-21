@@ -22,11 +22,12 @@ const { callClaudeMessages, parseJsonLoose } = require('./claudeClient');
 const DEFAULTS = {
   reelsWindow: 12,   // how many recent reels to measure
   minReels: 6,       // fewer than this and we can't judge the creator
-  // How many of the window may sit below the floor. Demanding that ALL twelve
-  // clear it rejects good creators for a couple of quiet posts — a far stricter
-  // test than "minimum views" sounds like, and it was throwing away creators
-  // who were 10-for-12.
-  floorTolerance: 2,
+  // How many of the window may sit below the floor. ZERO by design: the floor is
+  // the campaign's minimum, and "minimum" that eleven of twelve reels satisfy is
+  // not a minimum. A creator whose recent reels dip below the number the brand is
+  // buying against does not clear it, and no amount of the rest being strong
+  // changes that. Raise it per-run if a campaign genuinely wants slack.
+  floorTolerance: 0,
   nicheThreshold: 0.5,
   // Risk-classification knobs (tunable). See classifyRisk().
   lowCv: 0.4,        // coefficient-of-variation ceiling for a "stable" (low) creator
@@ -296,6 +297,43 @@ function clamp01(n) {
 // should attach `candidate.nicheScore` (from nicheMatch) beforehand; if absent we
 // fall back to the deterministic keyword score. Returns the full evaluation so it
 // can be persisted on sourced_candidates and shown in the dashboard.
+/**
+ * The gates that need NO model call: reel count, the view floor, risk shape.
+ *
+ * These are pure arithmetic on view counts we already read off the grid, and they
+ * reject the large majority of creators. Running them BEFORE the niche judgement
+ * is what stops a run paying for a Gemini video analysis on a creator whose views
+ * disqualified them before anyone watched anything — the analysis was the slowest
+ * step in the pipeline and most of it was being spent on creators already out.
+ *
+ * `pass: true` means "worth judging", not "accepted".
+ */
+function prefilter(candidate, config = {}) {
+  const cfg = { ...DEFAULTS, ...config };
+  const views = reelViews(candidate.reels);
+  const reelCount = views.length;
+  const viewFloorPass = passesViewFloor(views, cfg.floor, cfg.floorTolerance || 0);
+  const riskProfile = classifyRisk(views, cfg);
+
+  let rejectReason = null;
+  if (reelCount < cfg.minReels) {
+    rejectReason = `only ${reelCount} reels (need ${cfg.minReels})`;
+  } else if (!viewFloorPass) {
+    const low = views.filter((v) => v < cfg.floor).length;
+    rejectReason = low === reelCount
+      ? `all ${reelCount} reels below floor ${cfg.floor}`
+      : `${low} of ${reelCount} reels below floor ${cfg.floor}`;
+  } else if (!matchesRisk(riskProfile, cfg.risk)) {
+    rejectReason = `risk ${riskProfile} exceeds appetite ${cfg.risk}`;
+  }
+
+  return {
+    views, reelCount, viewFloorPass, riskProfile,
+    pass: !rejectReason,
+    rejectReason,
+  };
+}
+
 function decide(candidate, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
   const views = reelViews(candidate.reels);
@@ -320,7 +358,9 @@ function decide(candidate, config = {}) {
     evalResult.rejectReason = `only ${evalResult.reelCount} reels (need ${cfg.minReels})`;
   } else if (!evalResult.viewFloorPass) {
     const low = views.filter((v) => v < cfg.floor).length;
-    evalResult.rejectReason = `${low} of ${views.length} reels below floor ${cfg.floor}`;
+    evalResult.rejectReason = low === views.length
+      ? `all ${views.length} reels below floor ${cfg.floor}`
+      : `${low} of ${views.length} reels below floor ${cfg.floor}`;
   } else if (!matchesRisk(evalResult.riskProfile, cfg.risk)) {
     evalResult.rejectReason = `risk ${evalResult.riskProfile} exceeds appetite ${cfg.risk}`;
   } else if (
@@ -364,6 +404,7 @@ function decideReel(candidate, config = {}) {
 }
 
 module.exports = {
+  prefilter,
   DEFAULTS,
   parseCount,
   reelViews,

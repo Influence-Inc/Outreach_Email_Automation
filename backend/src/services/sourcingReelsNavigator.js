@@ -246,7 +246,7 @@ async function collectBatch({
  * that happens once per batch instead of once per creator.
  */
 async function handleCreator({
-  driver, read, entry, queue, size, pacingMs, jitterPx, reelsWindow, warn,
+  driver, read, entry, queue, size, pacingMs, jitterPx, reelsWindow, warn, config = {},
 }) {
   const candidate = {
     username: entry.username,
@@ -279,6 +279,7 @@ async function handleCreator({
         reelsWindow,
         fallbackUsername: entry.username,
         source: 'reels-feed',
+        config,
         screens: ['profile', 'reels_tab'],
         // The feed reel is already recorded and in the analysis queue; a second
         // recording would cost another stretch on the phone for a verdict we
@@ -361,7 +362,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       if (emitted >= max) break;
       // eslint-disable-next-line no-await-in-loop
       const candidate = await handleCreator({
-        driver, read, entry, queue, size, pacingMs, jitterPx, reelsWindow, warn,
+        driver, read, entry, queue, size, pacingMs, jitterPx, reelsWindow, warn, config,
       });
       // No keyword here — this mode takes whoever the warmed feed serves, so the
       // mode itself IS the provenance worth recording.

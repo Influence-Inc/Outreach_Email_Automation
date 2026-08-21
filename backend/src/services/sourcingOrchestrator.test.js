@@ -451,3 +451,94 @@ test('the creator analysis is taken from the classifier, not only the candidate'
 
   assert.ok(candidates[0].evidence.creatorScore.components.fit > 0.9);
 });
+
+// ── cheap gates run before the model (the time-delay fix) ──────────────────
+
+// Judging a creator is a multimodal call on recorded video — the slowest thing in
+// the pipeline. Spending it on a creator whose view counts already disqualified
+// them is pure waiting, and with an absolute floor that is most of them.
+test('a creator rejected on views never reaches the classifier', async () => {
+  const { candidates, deps } = memStore();
+  let judged = 0;
+  const custom = { ...deps, nicheClassify: async () => { judged += 1; return { score: 0.99 }; } };
+
+  const res = await processCandidate(
+    { id: 1 },
+    { floor: 15000, risk: 'high', targetCount: 5 },
+    { username: 'lowviews', bio: 'fitness', reels: Array(12).fill({ views: 900, caption: 'gym' }) },
+    custom,
+  );
+
+  assert.strictEqual(judged, 0, 'no model call was made');
+  assert.strictEqual(res.decision, 'rejected');
+  assert.match(res.rejectReason, /below floor/);
+  // Still recorded, so the run's numbers and the dashboard stay honest.
+  assert.strictEqual(candidates[0].decision, 'rejected');
+  assert.strictEqual(candidates[0].view_floor_pass, false);
+  assert.strictEqual(candidates[0].decided_by, 'rule');
+});
+
+test('a creator with too few reels never reaches the classifier either', async () => {
+  const { deps } = memStore();
+  let judged = 0;
+  const custom = { ...deps, nicheClassify: async () => { judged += 1; return { score: 0.99 }; } };
+
+  const res = await processCandidate(
+    { id: 1 }, { floor: 1000, minReels: 6, risk: 'high', targetCount: 5 },
+    { username: 'thin', reels: [{ views: 50000 }, { views: 60000 }] },
+    custom,
+  );
+  assert.strictEqual(judged, 0);
+  assert.match(res.rejectReason, /only 2 reels/);
+});
+
+// The gates only skip the model when they can actually reject. A creator whose
+// views are fine must still be judged.
+test('a creator who clears the view gates is still judged', async () => {
+  const { deps, creators } = memStore();
+  let judged = 0;
+  const custom = {
+    ...deps,
+    nicheClassify: async () => { judged += 1; return { score: 0.95, reason: 'on brand' }; },
+  };
+
+  await processCandidate(
+    { id: 1 },
+    { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, targetCount: 5 },
+    { username: 'good', bio: 'fitness', reels: fitReels() },
+    custom,
+  );
+
+  assert.strictEqual(judged, 1, 'the model was consulted for a creator worth judging');
+  assert.strictEqual(creators.length, 1);
+});
+
+// A reel straight off the feed carries no view counts, so there is nothing for
+// the cheap gates to measure — skipping the model there would leave no signal.
+test('a reels-mode candidate with no reach is still judged', async () => {
+  const { deps } = memStore();
+  let judged = 0;
+  const custom = { ...deps, nicheClassify: async () => { judged += 1; return { score: 0.9 }; } };
+
+  await processCandidate(
+    { id: 1 },
+    { discovery: 'reels', floor: 15000, niche: 'fitness', keywords: ['gym'], targetCount: 5 },
+    { username: 'fromfeed', reels: [{ caption: 'gym day' }] },
+    custom,
+  );
+  assert.strictEqual(judged, 1);
+});
+
+// The prefilter persists its own row, so a handle already scouted this campaign
+// must still be reported as skipped rather than inserted twice.
+test('a duplicate handle rejected on views is skipped, not double-inserted', async () => {
+  const { candidates, deps } = memStore();
+  const cfg = { floor: 15000, risk: 'high', targetCount: 5 };
+  const cand = () => ({ username: 'dupe', reels: Array(12).fill({ views: 900 }) });
+
+  await processCandidate({ id: 1 }, cfg, cand(), deps);
+  const second = await processCandidate({ id: 1 }, cfg, cand(), deps);
+
+  assert.strictEqual(second.decision, 'skipped');
+  assert.strictEqual(candidates.length, 1);
+});

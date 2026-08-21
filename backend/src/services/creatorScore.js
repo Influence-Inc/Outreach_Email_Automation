@@ -34,11 +34,16 @@ const { reelViews, median, stability, round3, clamp01 } = require('./sourcingFil
 // a creator who is excellent everywhere else clears any threshold low enough to
 // admit good creators. That is what minCreativity below is for.
 const DEFAULT_WEIGHTS = Object.freeze({
-  fit: 0.30,
-  nicheConsistency: 0.15,
-  viewSteadiness: 0.15,
-  creativity: 0.25,
+  fit: 0.20,
+  nicheConsistency: 0.10,
+  viewSteadiness: 0.10,
+  creativity: 0.20,
   hook: 0.15,
+  // Whether this creator could put THIS product in a reel and have it look
+  // native. The largest single weight, because it is the closest thing in the
+  // whole blend to the question an outreach is actually asking. Scored only when
+  // the campaign said what it sells; see the null handling below.
+  brandFit: 0.25,
 });
 
 // Raised from 0.6: at 0.6 a creator with strong topical fit but mediocre craft
@@ -61,6 +66,12 @@ const DEFAULT_MAX_SPIKE = 12;
 //
 // 0 disables it, for a run that would rather judge on the blend alone.
 const DEFAULT_MIN_CREATIVITY = 5;
+
+// Brand fit is a new judgement and its calibration is unproven, so the default
+// floor rejects only a clearly implausible pairing rather than trying to be
+// selective. Raise it once a few runs show what the numbers look like in
+// practice. 0 disables it.
+const DEFAULT_MIN_BRAND_FIT = 4;
 
 function num(v) {
   const n = Number(v);
@@ -117,16 +128,24 @@ function scoreCreator({ creator = {}, clips = [], reels = [] } = {}, config = {}
   const minCreativity = config.minCreativity != null
     ? config.minCreativity
     : DEFAULT_MIN_CREATIVITY;
+  const minBrandFit = config.minBrandFit != null ? config.minBrandFit : DEFAULT_MIN_BRAND_FIT;
 
   const stats = reelStats(reels);
   const clipList = Array.isArray(clips) ? clips.filter(Boolean) : [];
 
+  // A component is null when it could not be measured — NOT zero. Treating
+  // "unknown" as "worst possible" is how a creator nobody analysed scored 0 on
+  // craft and failed for it, and it is what would break every run the moment a
+  // new field (brandFit) started out absent. Unmeasured components drop out of
+  // the average entirely; see the weighted score below.
+  const scale = (v, max) => (v == null ? null : clamp01(v / max));
   const components = {
-    fit: clamp01((num(creator.fit_score) ?? 0) / 100),
-    nicheConsistency: clamp01((num(creator.consistency_of_niche) ?? 0) / 10),
-    viewSteadiness: stats.steadiness == null ? 0 : clamp01(stats.steadiness),
-    creativity: clamp01((meanOf(clipList, 'creativity') ?? 0) / 10),
-    hook: clamp01((meanOf(clipList, 'hook_strength') ?? 0) / 10),
+    fit: scale(num(creator.fit_score), 100),
+    nicheConsistency: scale(num(creator.consistency_of_niche), 10),
+    viewSteadiness: stats.steadiness == null ? null : clamp01(stats.steadiness),
+    creativity: scale(meanOf(clipList, 'creativity'), 10),
+    hook: scale(meanOf(clipList, 'hook_strength'), 10),
+    brandFit: scale(meanOf(clipList, 'brand_fit'), 10),
   };
 
   // ── hard rejects ──────────────────────────────────────────────────────────
@@ -154,6 +173,15 @@ function scoreCreator({ creator = {}, clips = [], reels = [] } = {}, config = {}
     return reject(`creativity ${round3(creativity)} below ${minCreativity}`);
   }
 
+  // The same shape for brand fit: a creator who could not plausibly hold this
+  // product is not a borderline call, however well they score on everything
+  // else. Off unless the campaign asks for it, because a campaign that never
+  // said what it sells has no fit to measure.
+  const brandFit = meanOf(clipList, 'brand_fit');
+  if (minBrandFit > 0 && brandFit != null && brandFit < minBrandFit) {
+    return reject(`brand fit ${round3(brandFit)} below ${minBrandFit}`);
+  }
+
   // No follower-band reject. Follower count is a vanity number that reach
   // already answers better: what a campaign buys is views, and `floor` /
   // `ceiling` gate on those directly. A band on followers only ever rejected
@@ -166,10 +194,18 @@ function scoreCreator({ creator = {}, clips = [], reels = [] } = {}, config = {}
 
   // ── weighted score ────────────────────────────────────────────────────────
 
-  const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0) || 1;
-  const weighted = Object.entries(weights)
-    .reduce((sum, [key, w]) => sum + (components[key] ?? 0) * w, 0);
-  const score = round3(weighted / totalWeight);
+  // Average over the components we could actually measure. A campaign with no
+  // product configured never gets a brandFit score, and it must not be penalised
+  // for a question nobody asked it — its weight is simply redistributed across
+  // the rest.
+  let totalWeight = 0;
+  let weighted = 0;
+  for (const [key, w] of Object.entries(weights)) {
+    if (components[key] == null) continue;
+    totalWeight += w;
+    weighted += components[key] * w;
+  }
+  const score = totalWeight > 0 ? round3(weighted / totalWeight) : 0;
 
   return {
     pass: score >= threshold,
@@ -187,4 +223,5 @@ module.exports = {
   DEFAULT_PASS_THRESHOLD,
   DEFAULT_MAX_SPIKE,
   DEFAULT_MIN_CREATIVITY,
+  DEFAULT_MIN_BRAND_FIT,
 };

@@ -280,3 +280,53 @@ test('the composite classifier uses every clip when there are several', async ()
   assert.strictEqual(gemini.calls.filter((c) => c.videoBase64).length, 3);
   assert.strictEqual(r.evidence.creator.fit_score, 60);
 });
+
+// ── calibration reaches the prompt (services/nicheCalibration.js) ───────────
+
+test('the brand\'s past decisions are carried into the creator prompt', () => {
+  const p = reelJudge.buildCreatorPrompt(
+    { candidate: { username: 'mia' }, clips: [{ creativity: 8 }], stats: { count: 3, typical: 50000 } },
+    { niche: 'running', calibration: { text: '\nCALIBRATION — past decisions.\nACCEPTED: [...]\n' } },
+  );
+  assert.match(p, /CALIBRATION — past decisions/);
+  assert.match(p, /"niche_score"|primary_niche/, 'still asks for the documented shape');
+});
+
+// A campaign with no history must produce exactly the prompt it always did.
+test('no calibration leaves the creator prompt unchanged', () => {
+  const base = { candidate: { username: 'mia' }, clips: [{ creativity: 8 }], stats: { count: 3 } };
+  const withNone = reelJudge.buildCreatorPrompt(base, { niche: 'running' });
+  const withEmpty = reelJudge.buildCreatorPrompt(base, { niche: 'running', calibration: null });
+  assert.strictEqual(withNone, withEmpty);
+  assert.ok(!withNone.includes('CALIBRATION'));
+});
+
+// classifyProfile is the PREFERRED path when the navigator captured screenshots,
+// so calibration has to land there or it never applies on a live run.
+test("the brand's past decisions are carried into the profile prompt", () => {
+  const p = reelJudge.buildProfilePrompt(
+    { username: 'mia', reels: [{ views: 1000 }] },
+    { niche: 'running', calibration: { text: '\nCALIBRATION — past decisions.\n' } },
+    [{ kind: 'reels_grid' }],
+  );
+  assert.match(p, /CALIBRATION — past decisions/);
+});
+
+test('no calibration leaves the profile prompt unchanged', () => {
+  const cand = { username: 'mia', reels: [{ views: 1000 }] };
+  const a = reelJudge.buildProfilePrompt(cand, { niche: 'running' }, []);
+  const b = reelJudge.buildProfilePrompt(cand, { niche: 'running', calibration: null }, []);
+  assert.strictEqual(a, b);
+  assert.ok(!a.includes('CALIBRATION'));
+});
+
+// Calibration rides on the per-creator calls only. The per-clip prompt runs three
+// times per creator, so putting it there would triple the cost for a judgement
+// the creator-level pass is the one making.
+test('calibration does not ride on the per-clip prompt', () => {
+  const p = reelJudge.buildPrompt(
+    { username: 'mia', reels: [] },
+    { niche: 'running', calibration: { text: 'CALIBRATION — past decisions.' } },
+  );
+  assert.ok(!p.includes('CALIBRATION'));
+});
