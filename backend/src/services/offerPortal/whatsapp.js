@@ -342,26 +342,31 @@ async function sendWhatsAppLink({ to, body, buttonText, url, fallbackBody }) {
 // The offer-reveal message body (free-form session reply used by
 // deliverOfferOverChannel) — also stored in offer_messages so the admin can see
 // what the creator received. Points them straight at the portal link to view
-// AND accept the offer. Copy, not vendor-specific plumbing — unchanged. This is
-// the FALLBACK text (Twilio, or an oversized body) — the link is written out
-// inline. For Cloud, sendWhatsAppLink sends renderOfferOutreachIntro as the
-// message and the same link as a tappable button instead.
-function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate }) {
-  return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
+// AND accept the offer. This is the FALLBACK text (Twilio, or an oversized
+// body) — the link is written out inline. For Cloud, sendWhatsAppLink sends
+// renderOfferOutreachIntro as the message and the same link as a tappable
+// button instead.
+//
+// No greeting here — "Hi {firstName}, this is INFLUENCE" only opens the FIRST
+// message of the conversation (replies.renderBriefIntro); every later message
+// is a reply in an already-introduced thread, and reintroducing ourselves on
+// every send read like a broken mail merge.
+function renderOfferOutreachBody({ brandName, offerUrl, expiryDate }) {
+  return `Here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
 }
 
 // Same offer-reveal copy as renderOfferOutreachBody, but without the link
 // text — used as the body of the Cloud "View Offer" button message, where the
 // link lives on the button instead of repeated in the message.
-function renderOfferOutreachIntro({ firstName, brandName, expiryDate }) {
-  return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap below to view the full details and accept (open until ${expiryDate}).`;
+function renderOfferOutreachIntro({ brandName, expiryDate }) {
+  return `Here's your ${brandName} collaboration offer. Tap below to view the full details and accept (open until ${expiryDate}).`;
 }
 
 // Sent once an admin publishes the creator's personalised content brief (see
 // offers.deliverBriefToCreator) — a free-form session reply on an already-
-// established channel, same style as renderOfferOutreachBody.
-function renderContentBriefReadyBody({ firstName, brandName, briefUrl }) {
-  return `Hi ${firstName}, this is INFLUENCE — your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
+// established channel. No greeting — see renderOfferOutreachBody above.
+function renderContentBriefReadyBody({ brandName, briefUrl }) {
+  return `Your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
 }
 
 module.exports = {
