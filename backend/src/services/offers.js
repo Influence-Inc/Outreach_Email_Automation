@@ -447,16 +447,32 @@ async function deliverOfferOverChannel(offerId, channel) {
     offerUrl: offerUrl(offer.token),
     expiryDate: formatDate(offer.expires_at),
   };
-  const mod = channel === 'imessage' ? imessage : whatsapp;
-  const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
-  const body = mod.renderOfferOutreachBody(params);
 
-  const result = logSendResult('deliverOfferOverChannel', channel, offer.creator_id, await send({ to, body }));
+  // The full text-with-link copy — what actually goes out on iMessage/Twilio,
+  // and what's recorded in offer_messages either way so the dashboard history
+  // always shows the link, even when the live bubble carried it on a button
+  // instead of in the text (see renderOfferOutreachIntro).
+  const loggedBody =
+    channel === 'imessage' ? imessage.renderOfferOutreachBody(params) : whatsapp.renderOfferOutreachBody(params);
+
+  const send =
+    channel === 'imessage'
+      ? () => imessage.sendIMessageText({ to, body: loggedBody })
+      : () =>
+          whatsapp.sendWhatsAppLink({
+            to,
+            body: whatsapp.renderOfferOutreachIntro(params),
+            buttonText: 'View Offer',
+            url: params.offerUrl,
+            fallbackBody: loggedBody,
+          });
+
+  const result = logSendResult('deliverOfferOverChannel', channel, offer.creator_id, await send());
   if (result.sent) {
     await db.query(
       `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
        VALUES ($1, $2, 'outbound', $3, $4, $5)`,
-      [offer.creator_id, offer.id, channel, body, result.id || null],
+      [offer.creator_id, offer.id, channel, loggedBody, result.id || null],
     );
     await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'sent', $2)`, [offer.id, channel]);
     await db.query(`UPDATE offers SET messaging_stage = 'revealed' WHERE id = $1`, [offer.id]);

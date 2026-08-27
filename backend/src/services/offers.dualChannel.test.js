@@ -21,6 +21,7 @@ const orig = {
   sendOfferEmail: email.sendOfferEmail,
   sendOfferWithContactEmail: email.sendOfferWithContactEmail,
   sendWhatsAppText: whatsapp.sendWhatsAppText,
+  sendWhatsAppLink: whatsapp.sendWhatsAppLink,
   env: { ...process.env },
 };
 
@@ -83,6 +84,12 @@ function install({ establishedChannel = null, recentInbound = null } = {}) {
     sent.whatsapp += 1;
     return { sent: true, id: 'wamid.test' };
   };
+  // deliverOfferOverChannel sends the priced offer as a "View Offer" link
+  // button via sendWhatsAppLink, not sendWhatsAppText — see whatsapp.js.
+  whatsapp.sendWhatsAppLink = async () => {
+    sent.whatsapp += 1;
+    return { sent: true, id: 'wamid.test' };
+  };
   return { sent, logged };
 }
 
@@ -91,6 +98,7 @@ function restore() {
   email.sendOfferEmail = orig.sendOfferEmail;
   email.sendOfferWithContactEmail = orig.sendOfferWithContactEmail;
   whatsapp.sendWhatsAppText = orig.sendWhatsAppText;
+  whatsapp.sendWhatsAppLink = orig.sendWhatsAppLink;
 }
 
 test('an established channel gets the offer over BOTH WhatsApp and email', async () => {
