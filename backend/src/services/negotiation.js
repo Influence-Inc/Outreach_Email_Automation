@@ -263,6 +263,72 @@ function askedForReferences(text) {
   return patterns.some((re) => re.test(s));
 }
 
+// Is the creator (or their manager) sharing a VIDEO DRAFT for our review, asking
+// us for feedback, or asking us to check the content they've produced for the
+// collab? Team policy: we NEVER auto-reply to these — a person must review the
+// content and respond — so a match here always routes the thread to the Delegate
+// window (needs_human), at any stage, before Claude ever classifies it.
+//
+// Conservative like askedForReferences: every signal is tied to the DELIVERABLE
+// (the video / reel / clip / cut / edit itself, or an explicit content "draft"),
+// never a bare "review"/"feedback"/"draft" that could mean the offer, the
+// contract, or the brief. Biased toward the safe direction the policy asks for —
+// when in doubt about a content-review ask, flag it — over silently auto-replying
+// to a creator who is waiting on our notes.
+function sharesVideoDraftForReview(text) {
+  if (!text) return false;
+  const s = String(text);
+
+  // The deliverable the creator makes for us. "content" is deliberately NOT in
+  // this group on its own (too broad) — it's handled only in the tied phrases
+  // below ("check the content", "feedback on the content").
+  const deliverable = '(?:videos?|reels?|clips?|footage|edits?)';
+  const patterns = [
+    // A draft / cut / version of the deliverable: "video draft", "reel cut",
+    // "rough cut", "first cut of the video", "final edit of the reel".
+    /\b(?:rough|first|final|initial|draft)\s+cut\b/i,
+    new RegExp(`\\b${deliverable}\\s+(?:rough\\s+)?(?:cut|draft|edit|version|preview)\\b`, 'i'),
+    new RegExp(
+      `\\b(?:rough\\s+|first\\s+|final\\s+|initial\\s+|draft\\s+)?(?:cut|draft|edit|version|preview)\\s+of\\s+(?:the\\s+|my\\s+|our\\s+|this\\s+|a\\s+)?(?:${deliverable}|content)\\b`,
+      'i',
+    ),
+    // Asking us to review / check / approve the content: "review the video",
+    // "check the content", "approve the reel", "take a look at the edit",
+    // "sign off on the video". Includes bare draft/cut/edit as targets — in a
+    // video-collab thread those read as the deliverable, and flagging is the
+    // safe default.
+    new RegExp(
+      `\\b(?:review|check(?:\\s+out)?|approve|approving|look\\s+over|take\\s+a\\s+look\\s+at|sign\\s*-?\\s*off\\s+on)\\s+(?:the\\s+|my\\s+|our\\s+|this\\s+|a\\s+|your\\s+)?(?:${deliverable}|content|draft|cut)\\b`,
+      'i',
+    ),
+    // Asking for feedback / thoughts / notes on the content.
+    new RegExp(
+      `\\b(?:feedback|thoughts|comments?|input|notes?)\\s+on\\s+(?:the\\s+|my\\s+|our\\s+|this\\s+|your\\s+)?(?:${deliverable}|content|draft|cut)\\b`,
+      'i',
+    ),
+    // Handing the content over for review/feedback/approval: "the reel is ready
+    // for your review", "sharing the video for feedback", "draft for approval".
+    new RegExp(
+      `\\b(?:${deliverable}|content|draft|cut)\\s+(?:is\\s+)?(?:ready\\s+)?(?:for|to)\\s+(?:your\\s+)?(?:review|feedback|approval|approve|sign\\s*-?\\s*off)\\b`,
+      'i',
+    ),
+  ];
+  if (patterns.some((re) => re.test(s))) return true;
+
+  // Softer signal: the creator names the deliverable AND asks, open-endedly, for
+  // our reaction to it — "here's the reel, let me know what you think",
+  // "attached the video — does this look good?", "sending the cut, any changes?".
+  const mentionsDeliverable =
+    /\b(?:videos?|reels?|clips?|footage|rough\s+cut|final\s+cut|the\s+cut|the\s+edit|the\s+draft)\b/i.test(
+      s,
+    );
+  const asksForReaction =
+    /\b(?:let\s+me\s+know\s+(?:what\s+you\s+think|your\s+thoughts|if\s+(?:it|this|that)\s+works|if\s+(?:it|this|that)\s+looks?\s+(?:good|ok|okay|right)|if\s+(?:any|there\s+are)\s+(?:changes|edits|notes))|what\s+do\s+you\s+think|does\s+(?:it|this|that)\s+(?:look\s+good|work\s+for\s+you)|any\s+(?:changes|edits|feedback|thoughts|notes)|are\s+you\s+happy\s+with\s+(?:it|this)|happy\s+with\s+(?:it|this))\b/i.test(
+      s,
+    );
+  return mentionsDeliverable && asksForReaction;
+}
+
 // ── Context ───────────────────────────────────────────────────────────────
 async function loadCreator(creatorId) {
   return db.one(
@@ -567,6 +633,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     `- "accepted": the creator agreed to the priced offer we already sent, or clearly signalled they are ready to proceed with it ("sounds good, let's do it", "perfect, next steps?", "I'm in", "let's go", "yes, happy with that"). ONLY valid once an offer is on the table (current stage AWAITING_DECISION) — never accept when no offer has been sent. Write a short warm acceptance email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "declined": they are GENUINELY not interested or not available — explicit "no thanks", "passing on this one", "not the right fit", "too busy right now", "please stop reaching out". Do NOT use "declined" for "this rate is too low" or "can you do better" — those are "request_counter_rate" (if no number given) or "counter" (if a number is given). Write a brief gracious email signed "- ${v.managerName}". send_now=true. quoted_rate=null.`,
     `- "escalate": use this when (a) the creator asks about contractual terms outside what is already in the templates / approved offer (a different payment structure, a usage-rights ask, an NDA, a legal question, a dispute, a complaint); OR (b) the creator's question references specifics not present in the campaign context, templates, past example exchanges, or already-quoted offer (a different brand, a different campaign, a custom timeline, a special exception); OR (c) the message is unusual, emotionally heated, or otherwise needs a human decision. email=null, send_now=false; a human will take over. When in doubt about whether you have enough information to answer correctly, escalate — but prefer "answer_question" for benign factual questions the templates or past example exchanges DO cover, and prefer "request_our_offer" when the creator simply wants US to name/propose a first rate (that is handled by the admin pricing an offer, not a human reply).`,
+    `- VIDEO DRAFT / CONTENT REVIEW — always "escalate". If the creator (or their manager) is sharing a video/reel/clip draft, cut, or edit for our review, asking us for feedback or notes on the content, or asking us to check/approve the content they've made for this collab, use "escalate" (email=null, send_now=false) no matter the stage. A person must review the content and reply — never draft an approval, critique, or acknowledgement of a draft yourself.`,
     `- "other": only a trivial acknowledgement that needs no action (e.g. "got it, thanks"). email=null, send_now=false.`,
     `- ACKNOWLEDGE the creator's actual message. Whenever you write an email (asking_details, answer_question, request_counter_rate, declined, accepted), OPEN by briefly and specifically reacting to what THIS reply said — a compliment they paid, a preference or constraint they mentioned (a timeline, a platform, a video count, their availability), a piece of context they shared, or the question they asked — in one warm, natural sentence before you move into the template content. Never send the canonical template as a generic form letter that ignores what they wrote. Do NOT invent facts or answer things outside your source material just to seem responsive: if they raised something you cannot address from the templates / campaign context / past examples / approved offer, acknowledge it warmly and handle it per the action rules above (fold it in where you can, otherwise "escalate").`,
     '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
@@ -1482,6 +1549,23 @@ async function processReply(creatorId) {
       [creator.id, inbound.messageId || null, inbound.text, greeting.name, greeting.isDelegate],
     );
 
+  // Video draft / content-review ask -> ALWAYS a human. When the creator (or
+  // their manager) shares a draft for review, asks for feedback, or asks us to
+  // check the content, we never auto-reply: a person reviews the content and
+  // responds. Checked before Claude classifies so it holds at every stage.
+  if (sharesVideoDraftForReview(inbound.text)) {
+    console.log(
+      `[negotiation] creator ${creator.id}: video draft / content-review ask — delegating for manual review`,
+    );
+    await delegate(
+      creator,
+      inbound,
+      'Creator (or their manager) shared a video draft / asked for feedback or a content review — flagged for manual review.',
+    );
+    await markHandled();
+    return { action: 'delegated', reason: 'video_draft_review' };
+  }
+
   // AI off for this template -> always hand the reply to a human.
   if (!(await aiRepliesEnabledForCreator(creator))) {
     console.log(
@@ -2017,6 +2101,21 @@ async function handleAcceptedReply(creatorId) {
        WHERE id = $1 AND latest_inbound_text IS NOT DISTINCT FROM $2`,
       [creator.id, inbound],
     );
+
+  // 0. Video draft / content-review ask — the most common shape of a
+  //    post-acceptance reply once the creator is producing content. Sharing a
+  //    draft for review, asking for feedback, or asking us to check the content
+  //    always goes to a human; we never auto-reply to it. Checked first so it
+  //    takes precedence over the classifier below.
+  if (sharesVideoDraftForReview(inbound)) {
+    await delegate(
+      creator,
+      { text: inbound },
+      'Creator (or their manager) shared a video draft / asked for feedback or a content review — flagged for manual review.',
+    );
+    await markHandled();
+    return { action: 'delegated', reason: 'video_draft_review' };
+  }
 
   // 1. Usage-rights dispute on a free_only campaign — drop ad rights from the
   //    (unsigned) contract and hand to a human. Usage-rights conversations
@@ -2741,6 +2840,7 @@ module.exports = {
   detectSenderName,
   nameFromEmail,
   askedForReferences,
+  sharesVideoDraftForReview,
   extractOfferAmount,
   parseRateOptionsFromText,
   parseRateFromText,
