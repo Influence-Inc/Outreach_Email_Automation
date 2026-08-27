@@ -50,6 +50,20 @@ admin picks a campaign → adds creator IG URL → status: pending_extraction
   ↓ status: followup_sent
 ```
 
+## Signed contracts
+
+When a creator signs at `/contract/:token`, the backend records the signature,
+syncs the deal onward — and emails the creator their executed copy with the
+signed PDF attached (`backend/src/services/signedContractEmail.js`). It's the
+same document the team downloads from `/api/contract-pdf/:token`, with account
+and tax identifiers masked to their last four digits, so it's safe to forward.
+
+The send is best-effort: it never blocks the signature. A miss (Resend down, the
+API key added later) is picked up by the scheduler's retry sweep, which re-tries
+contracts signed in the last 14 days, up to 5 attempts each. Every attempt lands
+in `email_events` as `contract_copy_emailed`, and a delivered copy shows on the
+creator's dashboard timeline.
+
 ## Quick start
 
 See [`docs/SETUP.md`](./docs/SETUP.md). Short version:

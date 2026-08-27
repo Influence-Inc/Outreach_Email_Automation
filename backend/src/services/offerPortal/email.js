@@ -47,12 +47,32 @@ ${inner}
 </body></html>`;
 }
 
-async function deliver({ to, subject, text, html }) {
+// Whether live sending is possible at all. Callers that would otherwise do
+// expensive work before a send (rendering a contract PDF, sweeping the DB for
+// unsent copies) check this first rather than building a payload deliver() will
+// only warn about and drop.
+function isConfigured() {
+  return !!apiKey();
+}
+
+// Wrap a Buffer as a Resend attachment. Resend takes the file inline as base64
+// under `content`, so nothing has to be hosted for the recipient to fetch.
+function attachment(filename, buffer) {
+  return { filename, content: Buffer.from(buffer).toString('base64') };
+}
+
+// `attachments` is Resend's own shape: [{ filename, content }] where content is
+// the file's bytes base64-encoded (see attachment() above). Omitted from the
+// payload entirely when there are none, so every existing plain send is
+// byte-for-byte unchanged.
+async function deliver({ to, subject, text, html, attachments }) {
   const key = apiKey();
   if (!key) {
     console.warn(`[offer-email] RESEND_API_KEY not set — skipping "${subject}" -> ${to}`);
     return { sent: false, skipped: true };
   }
+  const payload = { from: fromAddress(), to, subject, text, html };
+  if (Array.isArray(attachments) && attachments.length) payload.attachments = attachments;
   try {
     const res = await fetch(RESEND_API_URL, {
       method: 'POST',
@@ -60,7 +80,7 @@ async function deliver({ to, subject, text, html }) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${key}`,
       },
-      body: JSON.stringify({ from: fromAddress(), to, subject, text, html }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -390,7 +410,54 @@ async function sendBriefReadyEmail({ to, firstName, brandName, briefUrl }) {
   return deliver({ to, subject, text, html });
 }
 
+// Signed-contract copy — sent to the creator the moment they sign, with the
+// executed PDF attached (services/signedContractEmail.js builds it). Creators
+// routinely ask for "a copy of what I signed" days later; this puts it in their
+// inbox before they have to ask. Short by design: the document IS the message,
+// so the email only says what's attached and how to raise a problem.
+function renderSignedContractEmail({ firstName, brandName, campaignName }) {
+  const brand = brandName || 'the brand';
+  const forCampaign = campaignName ? ` for ${campaignName}` : '';
+  const subject = `Your signed ${brand} agreement`;
+
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `Thanks for signing — your agreement with ${brand}${forCampaign} is now complete.`,
+    ``,
+    `A copy is attached for your records. It has the terms you agreed to, the details you submitted and your signature. Your account and tax identifiers are partially masked on it, so it's safe to keep or forward.`,
+    ``,
+    `If anything looks wrong, just reply to this email and we'll fix it.`,
+    ``,
+    `Thank you,`,
+    `Team INFLUENCE`,
+  ].join('\n');
+
+  const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
+    <p>Thanks for signing &mdash; your agreement with <strong>${escapeHtml(brand)}</strong>${forCampaign ? ` for ${escapeHtml(campaignName)}` : ''} is now complete.</p>
+    <p>A copy is attached for your records. It has the terms you agreed to, the details you submitted and your signature. Your account and tax identifiers are partially masked on it, so it's safe to keep or forward.</p>
+    <p>If anything looks wrong, just reply to this email and we'll fix it.</p>
+    <p style="margin-top:24px;">Thank you,<br/>Team INFLUENCE</p>`);
+
+  return { subject, text, html };
+}
+
+// `pdf` is the rendered contract (a Buffer) and `filename` the name it should
+// land under in the creator's inbox — both from services/contractPdf.js.
+async function sendSignedContractEmail({ to, firstName, brandName, campaignName, pdf, filename }) {
+  const { subject, text, html } = renderSignedContractEmail({ firstName, brandName, campaignName });
+  return deliver({
+    to,
+    subject,
+    text,
+    html,
+    attachments: pdf ? [attachment(filename || 'Contract-Signed.pdf', pdf)] : [],
+  });
+}
+
 module.exports = {
+  isConfigured,
+  attachment,
   renderOfferEmail,
   sendOfferEmail,
   renderPortalInviteEmail,
@@ -403,4 +470,6 @@ module.exports = {
   sendGraduationEmail,
   renderBriefReadyEmail,
   sendBriefReadyEmail,
+  renderSignedContractEmail,
+  sendSignedContractEmail,
 };

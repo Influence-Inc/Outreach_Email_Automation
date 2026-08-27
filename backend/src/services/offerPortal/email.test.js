@@ -237,3 +237,46 @@ test('sendPortalInviteEmail skips gracefully when RESEND_API_KEY is absent', asy
     else process.env.RESEND_API_KEY = saved;
   }
 });
+
+// The attachment field is opt-in: adding it for the signed-contract copy must
+// not put an empty `attachments` key on every other send (Resend rejects some
+// malformed shapes, and an unexpected key is a silent behaviour change).
+test('a plain send carries no attachments key; an attached send carries exactly one', async () => {
+  const savedKey = process.env.RESEND_API_KEY;
+  const savedFetch = global.fetch;
+  const payloads = [];
+  try {
+    process.env.RESEND_API_KEY = 'test_key';
+    global.fetch = async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      return { ok: true, status: 200, json: async () => ({ id: 'm1' }), text: async () => '{}' };
+    };
+
+    await email.sendBriefReadyEmail({
+      to: 'creator@example.com',
+      firstName: 'Sam',
+      brandName: 'Acme',
+      briefUrl: 'https://example.com/b/1',
+    });
+    assert.ok(!('attachments' in payloads[0]), 'plain sends must not declare attachments');
+
+    await email.sendSignedContractEmail({
+      to: 'creator@example.com',
+      firstName: 'Sam',
+      brandName: 'Acme',
+      campaignName: 'Spring',
+      pdf: Buffer.from('%PDF-1.4 test'),
+      filename: 'Sam-Contract-Signed.pdf',
+    });
+    assert.strictEqual(payloads[1].attachments.length, 1);
+    assert.strictEqual(payloads[1].attachments[0].filename, 'Sam-Contract-Signed.pdf');
+    assert.strictEqual(
+      Buffer.from(payloads[1].attachments[0].content, 'base64').toString(),
+      '%PDF-1.4 test',
+    );
+  } finally {
+    global.fetch = savedFetch;
+    if (savedKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = savedKey;
+  }
+});

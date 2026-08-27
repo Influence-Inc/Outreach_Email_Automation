@@ -531,8 +531,12 @@
   }
 
   // ── States ─────────────────────────────────────────────────────────────
-  function markSigned() {
+  // `copyEmailed` comes from the submit response: true only when the executed
+  // PDF was actually emailed to the creator, so the confirmation never claims an
+  // inbox copy that didn't send.
+  function markSigned(copyEmailed) {
     $('page1').hidden = true; $('page2').hidden = true; $('done').hidden = false;
+    if (copyEmailed) $('done-copy').hidden = false;
   }
 
   // A returning visitor whose contract is already signed sees the actual
@@ -811,7 +815,7 @@
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (!res.ok) throw new Error((res.j && res.j.error) || 'Something went wrong.');
-        markSigned();
+        markSigned(res.j && res.j.copyEmailed);
       })
       .catch(function (err) {
         errEl.textContent = err.message || 'Something went wrong. Please try again.';

@@ -87,6 +87,7 @@ const RATE_LOG_TYPES = [
   'contract_approved',
   'contract_sent',
   'contract_signed',
+  'contract_copy_emailed',
   'contract_synced',
   'outreach_stopped',
 ];
@@ -319,6 +320,10 @@ function rateLogEntry(type, detail, msg, summary) {
       return { text: 'Contract sent', tone: 'active' };
     case 'contract_signed':
       return { text: 'Contract signed ✓', tone: 'success' };
+    case 'contract_copy_emailed':
+      // Only a delivered copy earns a step; a failed attempt stays quiet (the
+      // scheduler retries it) so the creator row never shows a transient error.
+      return d.ok ? { text: 'Signed copy emailed to creator ✓', tone: 'done' } : null;
     case 'contract_synced':
       // Only the successful sync closes out the deal on the timeline; a failed
       // sync stays quiet (it's retried) so the creator row never shows an error.

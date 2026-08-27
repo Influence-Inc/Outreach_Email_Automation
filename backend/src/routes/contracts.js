@@ -11,6 +11,7 @@ const contracts = require('../services/contracts');
 const creatorDb = require('../services/creatorDb');
 const campaignDashboard = require('../services/campaignDashboard');
 const briefs = require('../services/briefs');
+const signedContractEmail = require('../services/signedContractEmail');
 
 const api = express.Router();
 
@@ -117,7 +118,23 @@ api.post('/:token/submit', async (req, res, next) => {
       console.error(`[contracts] flagBriefPending failed for token ${token}:`, err.message);
     }
 
-    res.json({ status: synced ? 'completed' : 'signed', synced });
+    // Email the creator their executed copy with the signed PDF attached — the
+    // same document the team downloads from /api/contract-pdf/:token. Sent from
+    // the freshly-signed `row` so the attachment carries this signature, and
+    // best-effort like the syncs above: a mail failure never fails the signing
+    // POST, and the scheduler's retry sweep picks the copy up afterwards.
+    let copyEmailed = false;
+    try {
+      const sendResult = await signedContractEmail.sendSignedContractCopy(row, creator);
+      copyEmailed = !!sendResult.sent;
+      if (!sendResult.sent && !sendResult.skipped) {
+        console.error(`[contracts] signed-copy email failed for token ${token}:`, sendResult.error);
+      }
+    } catch (err) {
+      console.error(`[contracts] signed-copy email threw for token ${token}:`, err.message);
+    }
+
+    res.json({ status: synced ? 'completed' : 'signed', synced, copyEmailed });
   } catch (err) {
     next(err);
   }
