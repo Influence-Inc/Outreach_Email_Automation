@@ -11,6 +11,7 @@ const db = require('../db');
 const contracts = require('../services/contracts');
 const { runBackfill } = require('../services/contractBackfill');
 const { runBackfill: runDashboardBackfill } = require('../services/dashboardBackfill');
+const creatorUpdates = require('../services/creatorUpdates');
 
 const router = express.Router();
 
@@ -98,6 +99,102 @@ router.post('/sync-contracts-to-dashboard', requireBotToken, async (req, res, ne
     if (err.code === 'NOT_CONFIGURED') {
       return res.status(400).json({ error: 'CAMPAIGN_DASHBOARD_URL is not set on this service' });
     }
+    next(err);
+  }
+});
+
+// --- Campaign-update ingest ------------------------------------------------
+// POST /api/bot/creator-updates
+//
+// The INFLUENCE Slack bot's side of the campaign-update lane. That bot sees the
+// events (a draft submitted, a brand approval, feedback in the review chat, a
+// post link, deliverables complete) but has no phone numbers and no WhatsApp
+// credentials; this app has both. So the bot reports WHAT happened and to WHOM
+// in its own vocabulary — an Instagram handle and a campaign — and everything
+// after that (is this creator subscribed, is their window open, template or
+// free-form, queue or send now) is decided here.
+//
+// Body:
+//   { event, creator: { username, email }, campaign: { id, name, brandName },
+//     data: { ... }, dedupKey }
+//
+// `data` carries the kind-specific fields the copy needs (submitPostsUrl,
+// feedback, senderName, chatUrl, postUrl) — see UPDATE_KINDS in
+// services/creatorUpdates.js.
+//
+// Always answers 200 with an outcome, never a 4xx, for anything short of a
+// malformed request: the bot fires these fire-and-forget with no retries, and an
+// unmatched handle or an unsubscribed creator is a perfectly ordinary result
+// (most creators are not on this lane), not a failure the bot can do anything
+// about. The outcome string says which it was.
+router.post('/creator-updates', requireBotToken, async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const event = String(body.event || '').trim();
+    const creator = body.creator || {};
+    const campaign = body.campaign || {};
+    const data = body.data && typeof body.data === 'object' ? body.data : {};
+
+    if (!event) return res.status(400).json({ error: 'event is required' });
+    if (!creator.username && !creator.email) {
+      return res.status(400).json({ error: 'creator.username or creator.email is required' });
+    }
+    if (!creatorUpdates.isKnownKind(event)) {
+      return res.status(400).json({
+        error: `unknown event "${event}"`,
+        known: Object.keys(creatorUpdates.UPDATE_KINDS),
+      });
+    }
+
+    const match = await creatorUpdates.resolveCreator({
+      username: creator.username,
+      email: creator.email,
+      campaignId: campaign.id,
+    });
+    if (!match) {
+      return res.json({ ok: true, outcome: 'no_matching_creator' });
+    }
+
+    // The bot names the brand; fall back to our own campaign row when it
+    // doesn't, so the copy never says "your campaign" for a creator whose brand
+    // we know perfectly well.
+    const payload = { ...data };
+    if (campaign.brandName) payload.brandName = campaign.brandName;
+
+    const result =
+      event === 'deliverables_complete'
+        ? await creatorUpdates.onDeliverablesComplete(match.id, {
+            campaignId: campaign.id,
+            brandName: payload.brandName,
+            dedupKey: body.dedupKey,
+          })
+        : await creatorUpdates.notify(match.id, event, payload, {
+            campaignId: campaign.id,
+            dedupKey: body.dedupKey,
+          });
+
+    return res.json({
+      ok: true,
+      creatorId: match.id,
+      outcome: result.queued ? (result.sent ? 'sent' : 'queued') : result.reason || 'not_queued',
+      reason: result.reason || null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/bot/creator-updates/:creatorId — subscription state + recent update
+// history for one creator. The answer to "did she actually get the approval
+// message?" without a database session.
+router.get('/creator-updates/:creatorId', requireBotToken, async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.creatorId, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'creatorId must be a number' });
+    const status = await creatorUpdates.statusFor(id);
+    if (!status) return res.status(404).json({ error: 'Creator not found' });
+    res.json(status);
+  } catch (err) {
     next(err);
   }
 });

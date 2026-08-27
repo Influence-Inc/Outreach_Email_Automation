@@ -668,3 +668,75 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS sourced_via JSONB;
 -- feeding those back to the model as examples would teach it nothing it does not
 -- already enforce. See services/nicheCalibration.js.
 ALTER TABLE sourced_candidates ADD COLUMN IF NOT EXISTS decided_by TEXT;
+
+-- ---------------------------------------------------------------------------
+-- Campaign-update messaging (WhatsApp), for creators who have SIGNED.
+-- ---------------------------------------------------------------------------
+-- A separate lane from the offer portal above. The offer portal courts a
+-- creator UP TO the signature; from the signature onwards the same phone number
+-- carries a different conversation — "here's your brief", "the brand approved
+-- your draft", "you're all done" — which must keep running for months, across
+-- campaigns, long after the offer that started it is closed.
+--
+-- Subscription starts at the creator's FIRST signed contract (either signing
+-- path: the full contract at /contract/:token, or the offer portal's mini
+-- contract) and never expires on its own: once deliverables are complete the
+-- creator stays subscribed so the next campaign's outreach reaches them over
+-- WhatsApp instead of a cold email. Only a STOP reply (messaging_opted_out,
+-- above) ends it.
+--   updates_subscribed_at   : first contract signature — when this lane opened.
+--   updates_hi_requested_at : when we last asked them to send "Hi" (the inbound
+--                             that opens WhatsApp's 24h free-form window).
+--   updates_intro_sent_at   : when the one-time intro ("here's what I'll send
+--                             you") went out. NULL ⇒ the next message on this
+--                             lane leads with the intro.
+--   updates_last_inbound_at : their most recent inbound on ANY channel. Decides
+--                             free-form vs. template on every send.
+--   updates_campaign_id     : the campaign whose updates are currently live.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS updates_subscribed_at   TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS updates_hi_requested_at TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS updates_intro_sent_at   TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS updates_last_inbound_at TIMESTAMPTZ;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS updates_campaign_id     TEXT;
+CREATE INDEX IF NOT EXISTS idx_creators_updates_subscribed
+  ON creators(updates_subscribed_at) WHERE updates_subscribed_at IS NOT NULL;
+
+-- The update queue. Every campaign update is written here FIRST and delivered
+-- second, because the moment an update happens is usually not a moment we are
+-- allowed to send: WhatsApp only permits free-form text inside the 24h window
+-- the creator's own message opens. A brief published at 2am lands in this table
+-- as 'pending' and goes out the moment the window is open (or immediately as an
+-- approved template, when one is configured for that kind).
+--
+--   kind        : which update — see UPDATE_KINDS in services/creatorUpdates.js.
+--   dedup_key   : natural key for the underlying event (e.g. the review id).
+--                 UNIQUE, so a webhook redelivery and the polling safety net
+--                 can both report the same approval without sending it twice.
+--   status      : pending | sent | skipped | failed
+--                 pending — not yet deliverable (window shut, no template yet);
+--                           the sweep retries it.
+--                 skipped — deliberately not sent (opted out, unsubscribed,
+--                           superseded). Terminal, with the reason recorded.
+--   attempts / last_error : why a pending row is still pending, without having
+--                 to read the logs.
+CREATE TABLE IF NOT EXISTS creator_updates (
+  id           SERIAL PRIMARY KEY,
+  creator_id   INTEGER NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  campaign_id  TEXT REFERENCES campaigns(id) ON DELETE SET NULL,
+  kind         TEXT NOT NULL,
+  payload      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedup_key    TEXT UNIQUE,
+  status       TEXT NOT NULL DEFAULT 'pending',
+  channel      TEXT,
+  body         TEXT,
+  provider_message_id TEXT,
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  last_error   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_creator_updates_creator ON creator_updates(creator_id);
+-- The sweep's query: oldest pending first, so a creator's updates always arrive
+-- in the order the events actually happened.
+CREATE INDEX IF NOT EXISTS idx_creator_updates_pending
+  ON creator_updates(created_at) WHERE status = 'pending';

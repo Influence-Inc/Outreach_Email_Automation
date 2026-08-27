@@ -11,6 +11,7 @@ const contracts = require('../services/contracts');
 const creatorDb = require('../services/creatorDb');
 const campaignDashboard = require('../services/campaignDashboard');
 const briefs = require('../services/briefs');
+const creatorUpdates = require('../services/creatorUpdates');
 
 const api = express.Router();
 
@@ -115,6 +116,17 @@ api.post('/:token/submit', async (req, res, next) => {
       await briefs.flagBriefPending(row.creator_id);
     } catch (err) {
       console.error(`[contracts] flagBriefPending failed for token ${token}:`, err.message);
+    }
+
+    // Open the WhatsApp campaign-update lane. This is the signature that starts
+    // it for a NEW creator — from here their brief, review outcomes and
+    // completion notice reach them on WhatsApp instead of email. Idempotent on a
+    // creator who is already subscribed, and best-effort like every other
+    // post-signature step: the contract is signed either way.
+    try {
+      await creatorUpdates.onContractSigned(row.creator_id, { campaignId: creator.campaign_id });
+    } catch (err) {
+      console.error(`[contracts] creator-updates subscribe failed for token ${token}:`, err.message);
     }
 
     res.json({ status: synced ? 'completed' : 'signed', synced });

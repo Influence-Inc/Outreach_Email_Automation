@@ -524,6 +524,30 @@ async function deliverBriefToCreator(creatorId, briefUrl) {
       { channel, briefUrl },
     ]);
 
+  // A SIGNED creator's brief belongs on the campaign-update lane
+  // (services/creatorUpdates.js): it is the first of the updates that lane
+  // exists to carry, and routing it there is what lets it reach a creator whose
+  // 24h window is shut — queued now, delivered as an approved template or the
+  // moment they write in. The branches below stay for everyone the lane doesn't
+  // cover: a creator mid-negotiation who hasn't signed, or one who opted out.
+  try {
+    const queued = await require('./creatorUpdates').notify(
+      c.id,
+      'brief_ready',
+      { brandName, briefUrl },
+      { dedupKey: `creator:${c.id}:brief:${briefUrl}` },
+    );
+    if (queued.queued) {
+      if (queued.sent) await logDelivered(queued.channel || 'whatsapp');
+      return { sent: !!queued.sent, queued: true, channel: queued.channel || 'whatsapp', reason: queued.reason };
+    }
+    // 'duplicate' means this exact brief URL was already handed to the lane —
+    // a re-publish of an unchanged brief. Don't fall through and email it again.
+    if (queued.reason === 'duplicate') return { sent: false, queued: true, reason: 'duplicate' };
+  } catch (err) {
+    console.error('[offers] creator-updates brief delivery failed, falling back:', err.message);
+  }
+
   const channel = c.messaging_opted_out ? null : c.established_channel;
   const to = channel === 'imessage' ? c.imessage : channel === 'whatsapp' ? c.whatsapp : null;
   if (channel && to) {
@@ -2103,6 +2127,19 @@ async function signMiniContract({ token, signature, signerName, ip }) {
     await require('./briefs').flagBriefPending(offer.creator_id);
   } catch (err) {
     console.error('[offers] flagBriefPending failed', err.message);
+  }
+
+  // Open the WhatsApp campaign-update lane — the same one routes/contracts.js
+  // opens on the full contract. A used creator signing here has usually already
+  // been messaging us, so onContractSigned finds the window open and skips
+  // straight past the "send us a Hi" ask. Lazily required: creatorUpdates
+  // requires nothing from offers.js today, but the brief/offer paths make that a
+  // plausible future edge, and every other cross-service call in this file
+  // already takes the lazy form for exactly that reason.
+  try {
+    await require('./creatorUpdates').onContractSigned(offer.creator_id, { campaignId: offer.campaign_id });
+  } catch (err) {
+    console.error('[offers] creator-updates subscribe failed', err.message);
   }
 
   return { ok: true, signerName: name, signedAtFormatted: formatDate(new Date()) };
