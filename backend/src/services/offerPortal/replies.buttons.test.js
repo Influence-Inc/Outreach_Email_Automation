@@ -11,12 +11,13 @@ const assert = require('node:assert');
 
 const {
   INTEREST_BUTTONS,
+  INTEREST_QUESTION,
   INTEREST_FALLBACK_HINT,
   OFFER_BUTTONS,
   OFFER_FALLBACK_HINT,
   classifyInterest,
   classifyReply,
-  renderMessagingBrief,
+  renderBriefIntro,
   startsWithGreeting,
 } = require('./replies');
 const { MAX_BUTTONS, BUTTON_TITLE_MAX } = require('./whatsapp');
@@ -58,30 +59,33 @@ test('the written-out fallbacks classify the same way as the buttons', () => {
 });
 
 // --- brief copy -------------------------------------------------------------
+// The brief goes out as TWO messages: renderBriefIntro (the brand pitch) sent
+// first, then INTEREST_QUESTION (with buttons — see offers.sendBriefMessages)
+// sent on its own once the pitch has landed, the way a person pitching a
+// partnership sends the pitch and then asks, rather than one merged paragraph.
 
 test('a campaign brief that already greets the creator is not greeted twice', () => {
   const custom = 'Hi Himanshu,\nNetflix is running a paid collaboration.\n\nJennifer\nHead of Partnerships';
-  const out = renderMessagingBrief('Himanshu', custom);
+  const out = renderBriefIntro('Himanshu', custom);
   assert.strictEqual(out.match(/Hi Himanshu/g).length, 1, 'exactly one greeting');
   assert.ok(!out.includes('this is INFLUENCE'), 'the custom copy owns the opener');
 });
 
 test('a bare blurb still gets our greeting, on its own line', () => {
-  const out = renderMessagingBrief('Sam', 'Netflix is running a paid collaboration.');
+  const out = renderBriefIntro('Sam', 'Netflix is running a paid collaboration.');
   assert.ok(out.startsWith('Hi Sam, this is INFLUENCE.'));
   assert.ok(out.includes('INFLUENCE.\n\nNetflix'), 'greeting and blurb are separate blocks');
 });
 
-test('the interest question is never glued onto the end of a sign-off', () => {
-  const out = renderMessagingBrief('Sam', 'Netflix is hiring creators.\n\nJennifer\nHead of Partnerships');
-  assert.ok(out.includes('Partnerships\n\nInterested in hearing more?'));
-  assert.ok(!/Partnerships Interested/.test(out));
+test('the intro message never carries the interest question — it is a separate message', () => {
+  const out = renderBriefIntro('Sam', 'Netflix is hiring creators.\n\nJennifer\nHead of Partnerships');
+  assert.ok(out.endsWith('Head of Partnerships'));
+  assert.ok(!/Interested in hearing more/.test(out));
 });
 
-test('the yes/no prompt is left to the buttons, not baked into the brief', () => {
-  const out = renderMessagingBrief('Sam', 'Netflix is hiring creators.');
-  assert.ok(out.endsWith('Interested in hearing more?'));
-  assert.ok(!/reply yes or no/i.test(out), 'the hint is added only where buttons are unavailable');
+test('INTEREST_QUESTION is the standalone yes/no prompt, with no baked-in hint', () => {
+  assert.strictEqual(INTEREST_QUESTION, 'Interested in hearing more?');
+  assert.ok(!/reply yes or no/i.test(INTEREST_QUESTION), 'the hint is added only where buttons are unavailable');
 });
 
 test('startsWithGreeting recognises the common openers and nothing else', () => {

@@ -30,7 +30,8 @@ const {
   thankYouMessage,
   politeCloseMessage,
   notAFitCloseMessage,
-  renderMessagingBrief,
+  renderBriefIntro,
+  INTEREST_QUESTION,
   INTEREST_BUTTONS,
   INTEREST_FALLBACK_HINT,
 } = require('./offerPortal/replies');
@@ -280,6 +281,50 @@ function sendChoiceOn(channel, { to, body, buttons, fallbackHint }) {
   return whatsapp.sendWhatsAppChoice({ to, body, buttons, fallbackHint });
 }
 
+// Open a messaging conversation as TWO messages, not one merged paragraph: the
+// brand pitch, then — as its own message, once the pitch has landed — the
+// interest question (tappable buttons where the channel supports them). Mirrors
+// how someone actually pitches a partnership over chat: send it, then ask,
+// rather than a wall of text ending in a question mark.
+//
+// Returns a result shaped for logSendResult/offer_messages logging:
+//   { sent, skipped?, error?, reason?, intro: {sent, id, body, ...}, question: {...}|null }
+// The top-level fields mirror whichever message is the meaningful outcome: the
+// question's result once the intro landed (the CTA is what callers gate
+// established_channel/messaging_stage on), or the intro's own failure when it
+// never sent — there is no interest question to ask if the pitch didn't arrive.
+async function sendBriefMessages(channel, { to, firstName, blurb }) {
+  const introBody = renderBriefIntro(firstName, blurb);
+  const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
+  const introResult = await send({ to, body: introBody });
+  if (!introResult.sent) {
+    return { ...introResult, intro: { ...introResult, body: introBody }, question: null };
+  }
+
+  const questionResult = await sendChoiceOn(channel, {
+    to,
+    body: INTEREST_QUESTION,
+    buttons: INTEREST_BUTTONS,
+    fallbackHint: INTEREST_FALLBACK_HINT,
+  });
+  return {
+    ...questionResult,
+    intro: { ...introResult, body: introBody },
+    question: { ...questionResult, body: INTEREST_QUESTION },
+  };
+}
+
+// Log both legs of a sendBriefMessages() result into offer_messages — the intro
+// whenever it actually sent (worth keeping in the conversation history even if
+// the follow-up question then failed), the question whenever IT sent. `insert`
+// is one of the two INSERT shapes the call sites already use (with or without
+// offer_id) so this stays a thin, shared tail rather than another shape to keep
+// in sync.
+async function logBriefMessages(result, insert) {
+  if (result.intro && result.intro.sent) await insert(result.intro.body, result.intro.id);
+  if (result.question && result.question.sent) await insert(result.question.body, result.question.id);
+}
+
 // Send the brand/product brief + a yes/no interest check to a used creator who
 // has messaged us but has NO priced offer yet — the offer-less counterpart of
 // sendOfferBriefing. This is what lets the WhatsApp/iMessage bot OPEN with brand
@@ -306,25 +351,20 @@ async function sendUsedCreatorBrief(creatorId, channel) {
   const brandBlurb = custom
     ? fillTemplate(custom, { firstName, brandName: c.brand_name || 'INFLUENCE', campaignName: c.campaign_name || '' })
     : `We're running a paid collaboration campaign with ${c.brand_name || 'a brand'} and think you'd be a great fit.`;
-  const body = renderMessagingBrief(firstName, brandBlurb);
-
   const result = logSendResult(
     'sendUsedCreatorBrief',
     channel,
     c.id,
-    await sendChoiceOn(channel, {
-      to,
-      body,
-      buttons: INTEREST_BUTTONS,
-      fallbackHint: INTEREST_FALLBACK_HINT,
-    }),
+    await sendBriefMessages(channel, { to, firstName, blurb: brandBlurb }),
   );
-  if (result.sent) {
-    await db.query(
+  await logBriefMessages(result, (body, providerId) =>
+    db.query(
       `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
        VALUES ($1, 'outbound', $2, $3, $4)`,
-      [c.id, channel, body, result.id || null],
-    );
+      [c.id, channel, body, providerId || null],
+    ),
+  );
+  if (result.sent) {
     await db.query(
       `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
       [c.id, channel],
@@ -360,25 +400,20 @@ async function sendOfferBriefing(offerId, channel) {
   const brandBlurb = custom
     ? fillTemplate(custom, { firstName, brandName: offer.brand_name, campaignName: offer.campaign_name || '' })
     : `We're running a paid collaboration campaign with ${offer.brand_name} and think you'd be a great fit.`;
-  const body = renderMessagingBrief(firstName, brandBlurb);
-
   const result = logSendResult(
     'sendOfferBriefing',
     channel,
     offer.creator_id,
-    await sendChoiceOn(channel, {
-      to,
-      body,
-      buttons: INTEREST_BUTTONS,
-      fallbackHint: INTEREST_FALLBACK_HINT,
-    }),
+    await sendBriefMessages(channel, { to, firstName, blurb: brandBlurb }),
   );
-  if (result.sent) {
-    await db.query(
+  await logBriefMessages(result, (body, providerId) =>
+    db.query(
       `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
        VALUES ($1, $2, 'outbound', $3, $4, $5)`,
-      [offer.creator_id, offer.id, channel, body, result.id || null],
-    );
+      [offer.creator_id, offer.id, channel, body, providerId || null],
+    ),
+  );
+  if (result.sent) {
     await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'briefed', $2)`, [offer.id, channel]);
     await db.query(`UPDATE offers SET messaging_stage = 'briefed' WHERE id = $1`, [offer.id]);
     await db.query(
@@ -664,19 +699,15 @@ async function sendUsedCreatorInvite(creatorId) {
       const blurb = `We're running a new paid collaboration campaign${
         creator.brand_name ? ` with ${creator.brand_name}` : ''
       } and thought you'd be a great fit.`;
-      const body = renderMessagingBrief(firstName, blurb);
-      const result = await sendChoiceOn(channel, {
-        to,
-        body,
-        buttons: INTEREST_BUTTONS,
-        fallbackHint: INTEREST_FALLBACK_HINT,
-      });
-      if (result.sent) {
-        await db.query(
+      const result = await sendBriefMessages(channel, { to, firstName, blurb });
+      await logBriefMessages(result, (body, providerId) =>
+        db.query(
           `INSERT INTO offer_messages (creator_id, direction, channel, body, provider_message_id)
            VALUES ($1, 'outbound', $2, $3, $4)`,
-          [creator.id, channel, body, result.id || null],
-        );
+          [creator.id, channel, body, providerId || null],
+        ),
+      );
+      if (result.sent) {
         // Establish this campaign's row too, so a reply here is handled in context.
         await db.query(
           `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
