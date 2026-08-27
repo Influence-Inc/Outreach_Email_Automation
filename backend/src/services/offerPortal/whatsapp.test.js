@@ -179,26 +179,36 @@ test('sendWhatsAppText rejects an unparseable recipient before hitting the netwo
   assert.match(res.error, /invalid recipient/);
 });
 
-test('renderOfferOutreachBody names creator + brand and includes the link + expiry', () => {
+// No greeting on these — "Hi {firstName}, this is INFLUENCE" only opens the
+// FIRST message of the conversation (replies.renderBriefIntro); these are
+// replies later in an already-introduced thread. See replies.buttons.test.js
+// for the greeting-placement rule itself.
+test('renderOfferOutreachBody names the brand and includes the link + expiry, with no greeting', () => {
   const body = whatsapp.renderOfferOutreachBody({
-    firstName: 'Sam',
     brandName: 'Acme',
     offerUrl: 'https://x.test/o/tok',
     expiryDate: 'Aug 1',
   });
-  assert.match(body, /Sam/);
   assert.match(body, /Acme/);
   assert.match(body, /https:\/\/x\.test\/o\/tok/);
   assert.match(body, /Aug 1/);
+  assert.doesNotMatch(body, /this is INFLUENCE/);
 });
 
-test('renderContentBriefReadyBody names creator + brand and includes the brief link', () => {
+test('renderOfferOutreachIntro names the brand and expiry, with no link and no greeting', () => {
+  const body = whatsapp.renderOfferOutreachIntro({ brandName: 'Acme', expiryDate: 'Aug 1' });
+  assert.match(body, /Acme/);
+  assert.match(body, /Aug 1/);
+  assert.doesNotMatch(body, /https?:\/\//, 'the link lives on the button, not the text');
+  assert.doesNotMatch(body, /this is INFLUENCE/);
+});
+
+test('renderContentBriefReadyBody names the brand and includes the brief link, with no greeting', () => {
   const body = whatsapp.renderContentBriefReadyBody({
-    firstName: 'Sam',
     brandName: 'Acme',
     briefUrl: 'https://x.test/brief/tok',
   });
-  assert.match(body, /Sam/);
   assert.match(body, /Acme/);
   assert.match(body, /https:\/\/x\.test\/brief\/tok/);
+  assert.doesNotMatch(body, /this is INFLUENCE/);
 });

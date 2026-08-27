@@ -84,8 +84,11 @@ async function sendIMessageText({ to, body }) {
 // Offer reveal over iMessage — same copy as the WhatsApp reveal so the creator
 // gets a consistent message whichever channel reaches them. Points them straight
 // at the portal link to view AND accept the offer.
-function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate }) {
-  return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
+//
+// No greeting — "Hi {firstName}, this is INFLUENCE" only opens the FIRST
+// message of the conversation; this is a reply in an already-introduced thread.
+function renderOfferOutreachBody({ brandName, offerUrl, expiryDate }) {
+  return `Here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
 }
 
 async function sendOfferOutreachIMessage(params) {
@@ -94,9 +97,10 @@ async function sendOfferOutreachIMessage(params) {
 
 // Sent once an admin publishes the creator's personalised content brief (see
 // offers.deliverBriefToCreator) — same copy as the WhatsApp version so the
-// creator gets a consistent message whichever channel reaches them.
-function renderContentBriefReadyBody({ firstName, brandName, briefUrl }) {
-  return `Hi ${firstName}, this is INFLUENCE — your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
+// creator gets a consistent message whichever channel reaches them. No
+// greeting — see renderOfferOutreachBody above.
+function renderContentBriefReadyBody({ brandName, briefUrl }) {
+  return `Your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
 }
 
 // Our own iMessage sender number, shown in the invite email so a creator knows

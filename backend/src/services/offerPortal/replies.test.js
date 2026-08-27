@@ -114,13 +114,13 @@ test('tooHighReply names the creator and the current rate', () => {
   assert.match(msg, /\$300/);
 });
 
-test('renderMessagingBrief greets by name, includes the blurb, and ends with the interest question', () => {
-  const msg = replies.renderMessagingBrief('Sam', 'Acme makes eco-friendly water bottles.');
+test('renderBriefIntro greets by name and includes the blurb, but is not the interest question', () => {
+  // The brief now goes out as two SEPARATE messages (see replies.buttons.test.js
+  // for the split) — renderBriefIntro builds only the first one.
+  const msg = replies.renderBriefIntro('Sam', 'Acme makes eco-friendly water bottles.');
   assert.match(msg, /^Hi Sam,/);
   assert.match(msg, /Acme makes eco-friendly water bottles\./);
-  assert.match(msg, /Interested in hearing more\?$/);
-  // The literal "Reply Yes or No" now belongs to INTEREST_FALLBACK_HINT, appended
-  // only on channels without tappable buttons — see replies.buttons.test.js.
+  assert.doesNotMatch(msg, /Interested in hearing more/, 'the interest question is its own message now');
   assert.doesNotMatch(msg, /Reply Yes or No/);
 });
 

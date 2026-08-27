@@ -55,28 +55,29 @@ test('businessNumber reflects IMESSAGE_FROM_NUMBER (empty when unset)', () => {
   }
 });
 
-test('renderContentBriefReadyBody includes name, brand, and the brief link', () => {
+// No greeting on these — "Hi {firstName}, this is INFLUENCE" only opens the
+// FIRST message of the conversation; these are replies later in an
+// already-introduced thread.
+test('renderContentBriefReadyBody includes brand and the brief link, with no greeting', () => {
   const body = imessage.renderContentBriefReadyBody({
-    firstName: 'Sam',
     brandName: 'Acme',
     briefUrl: 'https://x.test/brief/tok',
   });
-  assert.match(body, /Sam/);
   assert.match(body, /Acme/);
   assert.match(body, /https:\/\/x\.test\/brief\/tok/);
+  assert.doesNotMatch(body, /this is INFLUENCE/);
 });
 
-test('renderOfferOutreachBody includes name, brand, link, and expiry', () => {
+test('renderOfferOutreachBody includes brand, link, and expiry, with no greeting', () => {
   const body = imessage.renderOfferOutreachBody({
-    firstName: 'Sam',
     brandName: 'Acme',
     offerUrl: 'https://x.test/o/tok',
     expiryDate: 'Aug 1',
   });
-  assert.match(body, /Sam/);
   assert.match(body, /Acme/);
   assert.match(body, /https:\/\/x\.test\/o\/tok/);
   assert.match(body, /Aug 1/);
+  assert.doesNotMatch(body, /this is INFLUENCE/);
 });
 
 test('renderRedirectPage opens Messages to the business number (normalised)', () => {

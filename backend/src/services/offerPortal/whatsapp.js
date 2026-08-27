@@ -275,19 +275,98 @@ async function sendWhatsAppChoice({ to, body, buttons, fallbackHint }) {
   return sendCloudButtons({ to, body, buttons });
 }
 
+// A single call-to-action button that OPENS A LINK, distinct from
+// sendCloudButtons' quick-reply buttons — those echo their title back as the
+// creator's next message, which makes no sense for a URL. Cloud API only:
+// Twilio has no ad-hoc equivalent outside pre-approved Content Templates, which
+// this codebase deliberately avoids (see the WHATSAPP_PROVIDER notes in
+// .env.example) — sendWhatsAppLink below falls back to the link written into
+// the message text for Twilio.
+async function sendCloudLinkButton({ to, body, buttonText, url }) {
+  if (!cloudToken() || !cloudPhoneNumberId()) {
+    console.warn(`[offer-whatsapp] WHATSAPP_CLOUD_ACCESS_TOKEN/PHONE_NUMBER_ID not set — skipping link button to ${to}`);
+    return { sent: false, skipped: true };
+  }
+  const recipient = normalizePhone(to);
+  if (!recipient) return { sent: false, error: 'invalid recipient number' };
+
+  try {
+    const res = await fetch(cloudMessagesUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cloudToken()}`,
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipient,
+        type: 'interactive',
+        interactive: {
+          type: 'cta_url',
+          body: { text: String(body || '') },
+          action: {
+            name: 'cta_url',
+            parameters: {
+              display_text: String(buttonText || 'View').slice(0, BUTTON_TITLE_MAX),
+              url: String(url),
+            },
+          },
+        },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      return { sent: true, id: extractCloudMessageId(data) };
+    }
+    const text = await res.text().catch(() => '');
+    return { sent: false, error: `${res.status} ${text.slice(0, 200)}` };
+  } catch (err) {
+    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
+  }
+}
+
+// Send a message whose call to action is a LINK: a tappable "View Offer"-style
+// button on Cloud, or the same message with the link written out everywhere
+// else (Twilio, or a body too long for an interactive message) — the link is
+// never silently dropped. `fallbackBody` is the full text WITH the link baked
+// in (renderOfferOutreachBody); `body` is the button-message text, which must
+// NOT repeat the link since the button already carries it.
+async function sendWhatsAppLink({ to, body, buttonText, url, fallbackBody }) {
+  if (whatsappProvider() !== 'cloud' || String(body || '').length > INTERACTIVE_BODY_MAX) {
+    return sendWhatsAppText({ to, body: fallbackBody });
+  }
+  return sendCloudLinkButton({ to, body, buttonText, url });
+}
+
 // The offer-reveal message body (free-form session reply used by
 // deliverOfferOverChannel) — also stored in offer_messages so the admin can see
 // what the creator received. Points them straight at the portal link to view
-// AND accept the offer. Copy, not vendor-specific plumbing — unchanged.
-function renderOfferOutreachBody({ firstName, brandName, offerUrl, expiryDate }) {
-  return `Hi ${firstName}, this is INFLUENCE — here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
+// AND accept the offer. This is the FALLBACK text (Twilio, or an oversized
+// body) — the link is written out inline. For Cloud, sendWhatsAppLink sends
+// renderOfferOutreachIntro as the message and the same link as a tappable
+// button instead.
+//
+// No greeting here — "Hi {firstName}, this is INFLUENCE" only opens the FIRST
+// message of the conversation (replies.renderBriefIntro); every later message
+// is a reply in an already-introduced thread, and reintroducing ourselves on
+// every send read like a broken mail merge.
+function renderOfferOutreachBody({ brandName, offerUrl, expiryDate }) {
+  return `Here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
+}
+
+// Same offer-reveal copy as renderOfferOutreachBody, but without the link
+// text — used as the body of the Cloud "View Offer" button message, where the
+// link lives on the button instead of repeated in the message.
+function renderOfferOutreachIntro({ brandName, expiryDate }) {
+  return `Here's your ${brandName} collaboration offer. Tap below to view the full details and accept (open until ${expiryDate}).`;
 }
 
 // Sent once an admin publishes the creator's personalised content brief (see
 // offers.deliverBriefToCreator) — a free-form session reply on an already-
-// established channel, same style as renderOfferOutreachBody.
-function renderContentBriefReadyBody({ firstName, brandName, briefUrl }) {
-  return `Hi ${firstName}, this is INFLUENCE — your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
+// established channel. No greeting — see renderOfferOutreachBody above.
+function renderContentBriefReadyBody({ brandName, briefUrl }) {
+  return `Your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
 }
 
 module.exports = {
@@ -298,10 +377,13 @@ module.exports = {
   sendWhatsAppText,
   sendWhatsAppChoice,
   sendCloudButtons,
+  sendWhatsAppLink,
+  sendCloudLinkButton,
   MAX_BUTTONS,
   BUTTON_TITLE_MAX,
   INTERACTIVE_BODY_MAX,
   renderOfferOutreachBody,
+  renderOfferOutreachIntro,
   renderContentBriefReadyBody,
   // Exposed for tests.
   buildTwilioForm,

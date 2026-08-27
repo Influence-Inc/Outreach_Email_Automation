@@ -110,20 +110,21 @@ function startsWithGreeting(text, firstName) {
   return !!name && head.startsWith(name);
 }
 
-// The brief the creator sees first. Blocks are separated by blank lines rather
-// than run together on one line — an admin's brief ends with a sign-off, and
-// gluing the interest question onto it produced
-// "…Head of Partnerships Interested in hearing more?".
-// The yes/no prompt itself is NOT included: on WhatsApp Cloud the options are
-// tappable buttons (INTEREST_BUTTONS), and sendWhatsAppChoice appends
-// INTEREST_FALLBACK_HINT only where buttons aren't available.
-function renderMessagingBrief(firstName, brandBlurb) {
+// The brief the creator sees first — greeting + brand context, sent as its OWN
+// message. Kept apart from the interest question (INTEREST_QUESTION, below)
+// rather than one long paragraph: a person pitching a partnership sends the
+// pitch, waits, then asks if you're interested — not both in one breath. It
+// also means the buttons on the second message sit right next to the question
+// they answer, not scrolled away under a wall of brand copy.
+function renderBriefIntro(firstName, brandBlurb) {
   const blurb = String(brandBlurb || '').trim();
-  const opener = startsWithGreeting(blurb, firstName)
-    ? blurb
-    : `Hi ${firstName}, this is INFLUENCE.\n\n${blurb}`;
-  return `${opener}\n\nInterested in hearing more?`;
+  return startsWithGreeting(blurb, firstName) ? blurb : `Hi ${firstName}, this is INFLUENCE.\n\n${blurb}`;
 }
+
+// The second message: a standalone interest question. On WhatsApp Cloud it
+// carries tappable buttons (INTEREST_BUTTONS); sendWhatsAppChoice appends
+// INTEREST_FALLBACK_HINT only where buttons aren't available.
+const INTEREST_QUESTION = 'Interested in hearing more?';
 
 // Tappable reply options. The TITLE is what the creator taps and also what Meta
 // echoes back as the inbound message body, so every title must classify to the
@@ -242,7 +243,8 @@ module.exports = {
   politeCloseMessage,
   notAFitCloseMessage,
   tooHighReply,
-  renderMessagingBrief,
+  renderBriefIntro,
+  INTEREST_QUESTION,
   startsWithGreeting,
   interestClarificationMessage,
   firstContactHoldingMessage,
