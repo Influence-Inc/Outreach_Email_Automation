@@ -28,6 +28,12 @@ docs/         Setup walkthrough (Gmail OAuth, Postgres, IG session)
 - **creators** → IG URL, extracted email, status, message + thread IDs, open count.
   Linked to a campaign by upstream campaign id.
 - **email_events** → audit log of sent / opened / replied / failed events
+- **creator_updates** → the post-signature WhatsApp update queue: one row per
+  campaign update (brief ready, draft approved, brand feedback, …), written
+  before it is delivered so an update produced while the creator's 24h WhatsApp
+  window is shut is retried rather than lost. `dedup_key` is UNIQUE, so a
+  webhook redelivery and the polling safety net can both report the same
+  approval without messaging the creator twice.
 - **oauth_tokens** → Jennifer's Gmail refresh token (one-time consent)
 
 ## Email flow
@@ -49,6 +55,66 @@ admin picks a campaign → adds creator IG URL → status: pending_extraction
     · if 48h elapsed and no reply → sends follow-up
   ↓ status: followup_sent
 ```
+
+## Campaign updates over WhatsApp (after signing)
+
+Everything above courts a creator up to their signature. From the signature
+onwards the same phone number carries a different conversation, run by
+`backend/src/services/creatorUpdates.js`: their content brief, draft-review
+outcomes, brand feedback, post confirmations and the campaign wrap-up.
+
+```
+creator signs their FIRST contract                    ← either signing path:
+  (/contract/:token, or the offer portal's                /contract/:token
+   mini contract at /o/:token)                            or /o/:token
+  ↓ creators.updates_subscribed_at is stamped — the lane opens, for good
+  ↓ we ask for the inbound that makes free-form replies legal:
+      WhatsApp template if one is configured, else email with a wa.me
+      "Hi" deep link
+  │
+  ├── SCENARIO 1 — the creator replies "Hi"
+  │     ↓ inbound lands on /webhook/whatsapp → creatorUpdates.onInboundMessage
+  │     ↓ intro ("here's what I'll send you"), then every queued update
+  │       flushed in the order the events happened
+  │
+  └── SCENARIO 2 — the creator never writes in
+        ↓ updates go out as approved WhatsApp templates (WHATSAPP_TEMPLATE_*)
+        ↓ any kind with no template configured stays queued in creator_updates
+          until they do write in — never dropped
+
+campaign updates, from either scenario:
+    brief_ready · review_submitted · review_approved · review_feedback
+    post_submitted · deliverables_complete
+
+  ↓ deliverables complete → wrap-up message, and the creator STAYS subscribed
+  ↓ next campaign → outreach.sendOutreach opens it in that same WhatsApp
+    thread (creatorUpdates.startNextCampaign) instead of a cold email
+```
+
+**The 24h window** is why the queue exists. WhatsApp only permits free-form
+text to someone who messaged you in the last 24 hours, and campaign updates
+happen outside it by nature — a brief published on Tuesday, an approval on
+Friday. So every update is written to `creator_updates` first and delivered
+second: free-form inside a window, an approved template outside one, and
+`pending` (retried by the scheduler sweep) when neither is available.
+
+**Where the events come from.** The INFLUENCE Slack bot
+(`Influence-Inc/Influence_Bot`) sees them — a draft submitted, a brand
+approving it, feedback typed into the review chat — and reports each to
+`POST /api/bot/creator-updates` with `x-bot-token: OUTREACH_BOT_TOKEN`. It
+sends an Instagram handle and a campaign; every decision needing data it
+doesn't have (subscribed? window open? template or free-form?) is made here.
+`brief_ready` is the exception — that one originates locally, from the brief
+publish.
+
+Only a `STOP` reply ends a subscription (`creators.messaging_opted_out`),
+which is honoured across every campaign the person appears in.
+
+Diagnose one creator with `GET /api/debug/creator-updates?creatorId=123` —
+subscription state, whether their window is open right now, and every update
+sent or still pending with the reason it hasn't gone out. See the
+`WHATSAPP_TEMPLATE_*` block in `backend/.env.example` for how to register the
+templates.
 
 ## Quick start
 

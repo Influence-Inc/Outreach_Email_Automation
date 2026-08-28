@@ -117,6 +117,34 @@ function offerPortalConfig() {
     sampleLink: `${offerBase.replace(/\/+$/, '')}/o/<token>`,
   };
 
+  // Campaign-update lane (services/creatorUpdates.js): which update kinds can
+  // reach a creator whose 24h window is SHUT. Free-form updates always work
+  // inside a window; a kind with no approved template simply waits for one, so
+  // `templates` is the list of kinds that can also be delivered cold — and an
+  // empty list is exactly why "the creator never got their brief" happens.
+  const UPDATE_TEMPLATE_VARS = {
+    hi_request: 'WHATSAPP_TEMPLATE_HI_REQUEST',
+    brief_ready: 'WHATSAPP_TEMPLATE_BRIEF_READY',
+    review_submitted: 'WHATSAPP_TEMPLATE_REVIEW_SUBMITTED',
+    review_approved: 'WHATSAPP_TEMPLATE_REVIEW_APPROVED',
+    review_feedback: 'WHATSAPP_TEMPLATE_REVIEW_FEEDBACK',
+    post_submitted: 'WHATSAPP_TEMPLATE_POST_SUBMITTED',
+    deliverables_complete: 'WHATSAPP_TEMPLATE_DELIVERABLES_COMPLETE',
+    next_campaign: 'WHATSAPP_TEMPLATE_NEXT_CAMPAIGN',
+  };
+  const configuredTemplates = Object.keys(UPDATE_TEMPLATE_VARS).filter((k) => boolEnv(UPDATE_TEMPLATE_VARS[k]));
+  const campaignUpdates = {
+    // Templates only exist on Cloud; Twilio's Content Templates are not used here.
+    templatesSupported: waProvider === 'cloud' && whatsapp.hasApiKey,
+    templates: configuredTemplates,
+    // The one that gets a silent creator talking in the first place.
+    hiRequestTemplate: boolEnv('WHATSAPP_TEMPLATE_HI_REQUEST'),
+    // In-window updates need nothing but a working WhatsApp channel.
+    inWindowReady: whatsapp.conversationReady,
+    // Reaching a creator who has gone quiet needs at least one template.
+    outOfWindowReady: waProvider === 'cloud' && whatsapp.hasApiKey && configuredTemplates.length > 0,
+  };
+
   // The "text us" invite can only be sent when the invite EMAIL can go out
   // (Resend) AND there is at least one business number to put in it.
   const inviteReady = email.configured && (whatsapp.inviteReady || imessage.inviteReady);
@@ -125,7 +153,7 @@ function offerPortalConfig() {
   const conversationReady =
     email.configured && (whatsapp.conversationReady || imessage.conversationReady);
 
-  return { email, whatsapp, imessage, offerLink, inviteReady, conversationReady };
+  return { email, whatsapp, imessage, offerLink, campaignUpdates, inviteReady, conversationReady };
 }
 
 // Human-readable list of what's missing for the Used-creator messaging invite to
@@ -167,6 +195,41 @@ function offerPortalConfigIssues() {
   return issues;
 }
 
+// What's missing for the campaign-update lane (services/creatorUpdates.js) to
+// reach a creator whose 24h WhatsApp window is SHUT.
+//
+// Deliberately NOT folded into offerPortalConfigIssues above. That list means
+// "the offer portal is not fully wired", and a healthy Twilio deploy would
+// otherwise carry a permanent entry here forever — which is how an issues list
+// stops being read. These are their own concern with their own remedy: register
+// templates in WhatsApp Manager and name them in the env.
+//
+// An empty list is NOT the same as "no templates needed": with none configured,
+// in-window updates still work perfectly and everything else queues, which is a
+// legitimate way to run this. So nothing is reported until the lane is otherwise
+// operational (a working WhatsApp channel) and the gap actually bites.
+function campaignUpdatesIssues() {
+  const c = offerPortalConfig();
+  const issues = [];
+  if (!c.campaignUpdates.inWindowReady) return issues; // WhatsApp itself isn't wired — already reported above.
+  if (!c.campaignUpdates.templatesSupported) {
+    issues.push(
+      'campaign-update templates require the Meta Cloud provider — on Twilio, updates only reach creators whose 24h window is open and the rest stay queued in creator_updates',
+    );
+    return issues;
+  }
+  if (!c.campaignUpdates.templates.length) {
+    issues.push(
+      'no WHATSAPP_TEMPLATE_* names are set — campaign updates only reach creators whose 24h window is open; the rest stay queued in creator_updates',
+    );
+  } else if (!c.campaignUpdates.hiRequestTemplate) {
+    issues.push(
+      'WHATSAPP_TEMPLATE_HI_REQUEST is not set — newly-signed creators are asked for their opening "Hi" by email instead of on WhatsApp',
+    );
+  }
+  return issues;
+}
+
 // One-line, log-friendly summary of channel state.
 function offerPortalConfigSummary() {
   const c = offerPortalConfig();
@@ -176,6 +239,7 @@ function offerPortalConfigSummary() {
     `WhatsApp/${c.whatsapp.provider}(number=${yn(c.whatsapp.inviteReady)},api=${yn(c.whatsapp.hasApiKey)}); ` +
     `iMessage(number=${yn(c.imessage.inviteReady)},api=${yn(c.imessage.hasApiKey)}); ` +
     `offerLink=${c.offerLink.pointsAtCampaignsService ? 'WRONG(→campaigns/stats)' : c.offerLink.configured ? 'on' : 'OFF'}; ` +
+    `campaign-updates(in-window=${yn(c.campaignUpdates.inWindowReady)},templates=${c.campaignUpdates.templates.length}); ` +
     `used-creator invite ${c.inviteReady ? 'READY' : 'DISABLED (falls back to Instantly email)'}`
   );
 }
@@ -187,11 +251,15 @@ function logOfferPortalConfig(log = console) {
   for (const issue of offerPortalConfigIssues()) {
     log.warn(`[offer-portal] ${issue}`);
   }
+  for (const issue of campaignUpdatesIssues()) {
+    log.warn(`[creator-updates] ${issue}`);
+  }
 }
 
 module.exports = {
   offerPortalConfig,
   offerPortalConfigIssues,
+  campaignUpdatesIssues,
   offerPortalConfigSummary,
   logOfferPortalConfig,
 };
