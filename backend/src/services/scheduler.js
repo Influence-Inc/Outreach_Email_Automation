@@ -290,12 +290,13 @@ async function maybeSourcingSweep() {
   }
 }
 
-// Catch signed contracts whose executed-copy email never made it out (Resend
-// down at the moment of signing, the API key added afterwards). The send happens
-// inline on the signing POST — this only mops up the misses, so it normally
-// matches nothing. Bounded by signedContractEmail's own window + attempt cap.
+// Catch signed agreements — full contracts AND offer-portal mini contracts —
+// whose executed-copy email never made it out (Resend down at the moment of
+// signing, the API key added afterwards). The send happens inline on the signing
+// request; this only mops up the misses, so it normally matches nothing.
+// Bounded by signedContractEmail's own window + attempt cap.
 async function retryContractCopies() {
-  await signedContractEmail.retryUnsentContractCopies();
+  await signedContractEmail.retryUnsentCopies();
 }
 
 async function tick() {

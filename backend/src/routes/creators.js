@@ -323,6 +323,8 @@ function rateLogEntry(type, detail, msg, summary) {
     case 'contract_copy_emailed':
       // Only a delivered copy earns a step; a failed attempt stays quiet (the
       // scheduler retries it) so the creator row never shows a transient error.
+      // Same step for both signing flows — from the team's side "the creator has
+      // their copy" is one fact, whichever document it was.
       return d.ok ? { text: 'Signed copy emailed to creator ✓', tone: 'done' } : null;
     case 'contract_synced':
       // Only the successful sync closes out the deal on the timeline; a failed

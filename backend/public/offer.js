@@ -513,7 +513,8 @@
       h('div', { class: 'ic ok' }, '✓'),
       h('h1', {}, 'Agreement signed'),
       h('p', {}, 'Thanks, ' + (offer.serverSignerName || offer.firstName) +
-        ". Your agreement is confirmed — you'll get your personalised content brief link from us shortly.")));
+        ". Your agreement is confirmed — you'll get your personalised content brief link from us shortly." +
+        (offer.copyEmailed ? ' A signed copy is on its way to your inbox.' : ''))));
     var box = contractTermsBlock(c);
     box.appendChild(contractRow('Signed by', offer.serverSignerName || offer.firstName));
     if (offer.signedAtFormatted) box.appendChild(contractRow('Signed on', offer.signedAtFormatted));
@@ -537,6 +538,9 @@
         offer.serverSignerName = data.signerName || offer.firstName;
         offer.signedAtFormatted = data.signedAtFormatted || null;
         offer.contractSigned = true;
+        // Only true when the signed copy actually went out — the confirmation
+        // never promises an inbox delivery that didn't happen.
+        offer.copyEmailed = !!data.copyEmailed;
         view = 'signed';
       } else if (data.reason === 'already_signed') { return location.reload(); }
       else if (data.reason === 'not_accepted') { error = 'Please accept the offer first.'; }

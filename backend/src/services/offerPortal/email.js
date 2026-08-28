@@ -14,6 +14,14 @@ function fromAddress() {
   return process.env.OFFER_EMAIL_FROM || process.env.EMAIL_FROM || 'INFLUENCE <offers@useinfluence.xyz>';
 }
 
+// Executed-agreement copies go out from contracts@, not the offers@ sender the
+// rest of this module uses: a creator replying to a contract copy ("this fee is
+// wrong", "please resend") is raising a contract question, and it should land
+// with whoever handles contracts rather than in the offer-outreach stream.
+function contractFromAddress() {
+  return process.env.CONTRACT_EMAIL_FROM || 'INFLUENCE <contracts@useinfluence.xyz>';
+}
+
 function baseUrl() {
   return (process.env.PUBLIC_BASE_URL || process.env.OFFER_PORTAL_BASE_URL || '').replace(/\/$/, '');
 }
@@ -64,14 +72,15 @@ function attachment(filename, buffer) {
 // `attachments` is Resend's own shape: [{ filename, content }] where content is
 // the file's bytes base64-encoded (see attachment() above). Omitted from the
 // payload entirely when there are none, so every existing plain send is
-// byte-for-byte unchanged.
-async function deliver({ to, subject, text, html, attachments }) {
+// byte-for-byte unchanged. `from` overrides the default sender for the one case
+// that needs its own address (contract copies); everything else omits it.
+async function deliver({ to, subject, text, html, attachments, from }) {
   const key = apiKey();
   if (!key) {
     console.warn(`[offer-email] RESEND_API_KEY not set — skipping "${subject}" -> ${to}`);
     return { sent: false, skipped: true };
   }
-  const payload = { from: fromAddress(), to, subject, text, html };
+  const payload = { from: from || fromAddress(), to, subject, text, html };
   if (Array.isArray(attachments) && attachments.length) payload.attachments = attachments;
   try {
     const res = await fetch(RESEND_API_URL, {
@@ -410,22 +419,30 @@ async function sendBriefReadyEmail({ to, firstName, brandName, briefUrl }) {
   return deliver({ to, subject, text, html });
 }
 
-// Signed-contract copy — sent to the creator the moment they sign, with the
+// Signed-agreement copy — sent to the creator the moment they sign, with the
 // executed PDF attached (services/signedContractEmail.js builds it). Creators
 // routinely ask for "a copy of what I signed" days later; this puts it in their
 // inbox before they have to ask. Short by design: the document IS the message,
 // so the email only says what's attached and how to raise a problem.
-function renderSignedContractEmail({ firstName, brandName, campaignName }) {
+//
+// Serves both signing flows. `masked` is true for the full contract, whose copy
+// carries partially-redacted account and tax identifiers and needs to say so;
+// the offer-portal mini contract collects no such details, so that sentence
+// would be a lie there and is dropped.
+function renderSignedContractEmail({ firstName, brandName, campaignName, masked = true }) {
   const brand = brandName || 'the brand';
   const forCampaign = campaignName ? ` for ${campaignName}` : '';
   const subject = `Your signed ${brand} agreement`;
+  const contents = masked
+    ? `A copy is attached for your records. It has the terms you agreed to, the details you submitted and your signature. Your account and tax identifiers are partially masked on it, so it's safe to keep or forward.`
+    : `A copy is attached for your records — the terms you agreed to and your signature, exactly as you signed them.`;
 
   const text = [
     `Hi ${firstName},`,
     ``,
     `Thanks for signing — your agreement with ${brand}${forCampaign} is now complete.`,
     ``,
-    `A copy is attached for your records. It has the terms you agreed to, the details you submitted and your signature. Your account and tax identifiers are partially masked on it, so it's safe to keep or forward.`,
+    contents,
     ``,
     `If anything looks wrong, just reply to this email and we'll fix it.`,
     ``,
@@ -435,19 +452,22 @@ function renderSignedContractEmail({ firstName, brandName, campaignName }) {
 
   const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
     <p>Thanks for signing &mdash; your agreement with <strong>${escapeHtml(brand)}</strong>${forCampaign ? ` for ${escapeHtml(campaignName)}` : ''} is now complete.</p>
-    <p>A copy is attached for your records. It has the terms you agreed to, the details you submitted and your signature. Your account and tax identifiers are partially masked on it, so it's safe to keep or forward.</p>
+    <p>${escapeHtml(contents)}</p>
     <p>If anything looks wrong, just reply to this email and we'll fix it.</p>
     <p style="margin-top:24px;">Thank you,<br/>Team INFLUENCE</p>`);
 
   return { subject, text, html };
 }
 
-// `pdf` is the rendered contract (a Buffer) and `filename` the name it should
-// land under in the creator's inbox — both from services/contractPdf.js.
-async function sendSignedContractEmail({ to, firstName, brandName, campaignName, pdf, filename }) {
-  const { subject, text, html } = renderSignedContractEmail({ firstName, brandName, campaignName });
+// `pdf` is the rendered agreement (a Buffer) and `filename` the name it should
+// land under in the creator's inbox — from services/contractPdf.js for the full
+// contract, services/miniContractPdf.js for the portal one. Sent from the
+// contracts@ address, not the offers@ default.
+async function sendSignedContractEmail({ to, firstName, brandName, campaignName, pdf, filename, masked = true }) {
+  const { subject, text, html } = renderSignedContractEmail({ firstName, brandName, campaignName, masked });
   return deliver({
     to,
+    from: contractFromAddress(),
     subject,
     text,
     html,
@@ -458,6 +478,7 @@ async function sendSignedContractEmail({ to, firstName, brandName, campaignName,
 module.exports = {
   isConfigured,
   attachment,
+  contractFromAddress,
   renderOfferEmail,
   sendOfferEmail,
   renderPortalInviteEmail,

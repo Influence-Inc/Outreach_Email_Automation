@@ -11,7 +11,41 @@ const db = require('../db');
 const email = require('./offerPortal/email');
 const signedContractEmail = require('./signedContractEmail');
 
-const { recipientFor, firstNameFor, buildContractCopyEmail, sendSignedContractCopy } = signedContractEmail;
+const {
+  recipientFor,
+  firstNameFor,
+  buildContractCopyEmail,
+  sendSignedContractCopy,
+  sendMiniContractCopy,
+} = signedContractEmail;
+
+const SIGNED_OFFER = {
+  id: 12,
+  creator_id: 88,
+  token: 'offertok',
+  status: 'accepted',
+  brand_name: 'Netflix',
+  campaign_name: 'Summer Launch',
+  rate: '2500.00',
+  currency: 'USD',
+  deliverables: ['2 Reels'],
+  first_name: 'Sam',
+  full_name: 'Sam Rivera',
+  email: 'sam@example.com',
+  instagram_username: 'samrivera',
+  contract_signed_at: '2026-08-25T10:15:00Z',
+  contract_signer_name: 'Sam Rivera',
+  contract_signer_ip: '9.9.9.9',
+  contract_signature: null,
+  contract_terms: {
+    creatorName: 'Sam Rivera',
+    brandName: 'Netflix',
+    campaignName: 'Summer Launch',
+    deliverables: ['2 Reels'],
+    platforms: ['Instagram'],
+    timeline: 'Content to be posted around 5 September 2026.',
+  },
+};
 
 const SIGNED_ROW = {
   token: 'tok_abc',
@@ -252,5 +286,164 @@ test('retryUnsentContractCopies is a no-op when Resend is not configured', async
     },
     () => signedContractEmail.retryUnsentContractCopies(),
   );
+  assert.deepStrictEqual(out, { checked: 0, sent: 0, failed: 0 });
+});
+
+// ── The sender ─────────────────────────────────────────────────────────────
+
+test('a contract copy is sent from contracts@, not the offers@ default', async () => {
+  let payload = null;
+  await withStubs(
+    {
+      env: { RESEND_API_KEY: 'test_key', CONTRACT_EMAIL_FROM: undefined },
+      one: async () => null,
+      query: async () => ({ rowCount: 1 }),
+      fetchFn: async (_url, init) => {
+        payload = JSON.parse(init.body);
+        return okResponse();
+      },
+    },
+    () => sendSignedContractCopy(SIGNED_ROW, { id: 7, first_name: 'Rachel' }),
+  );
+  assert.strictEqual(payload.from, 'INFLUENCE <contracts@useinfluence.xyz>');
+  assert.strictEqual(email.contractFromAddress(), 'INFLUENCE <contracts@useinfluence.xyz>');
+});
+
+test('CONTRACT_EMAIL_FROM overrides the contracts@ default', async () => {
+  let payload = null;
+  await withStubs(
+    {
+      env: { RESEND_API_KEY: 'test_key', CONTRACT_EMAIL_FROM: 'Legal <legal@example.com>' },
+      one: async () => null,
+      query: async () => ({ rowCount: 1 }),
+      fetchFn: async (_url, init) => {
+        payload = JSON.parse(init.body);
+        return okResponse();
+      },
+    },
+    () => sendSignedContractCopy(SIGNED_ROW, { id: 7, first_name: 'Rachel' }),
+  );
+  assert.strictEqual(payload.from, 'Legal <legal@example.com>');
+});
+
+// ── The offer-portal mini contract ─────────────────────────────────────────
+
+test('sendMiniContractCopy attaches the portal agreement and audits it as mini', async () => {
+  const events = [];
+  let payload = null;
+  const result = await withStubs(
+    {
+      env: { RESEND_API_KEY: 'test_key' },
+      one: async () => null, // no prior copy
+      query: async (_sql, params) => {
+        events.push(params);
+        return { rowCount: 1 };
+      },
+      fetchFn: async (_url, init) => {
+        payload = JSON.parse(init.body);
+        return okResponse({ id: 'msg_mini' });
+      },
+    },
+    () => sendMiniContractCopy(SIGNED_OFFER),
+  );
+
+  assert.strictEqual(result.sent, true);
+  assert.strictEqual(result.to, 'sam@example.com');
+  assert.strictEqual(payload.from, 'INFLUENCE <contracts@useinfluence.xyz>');
+  assert.match(payload.subject, /signed Netflix agreement/i);
+  assert.match(payload.text, /^Hi Sam,/);
+  // The portal collects no bank or tax details, so the copy must not claim
+  // anything on it is masked.
+  assert.doesNotMatch(payload.text, /masked/i);
+
+  assert.strictEqual(payload.attachments[0].filename, 'Sam-Rivera-Agreement-Signed.pdf');
+  const pdf = Buffer.from(payload.attachments[0].content, 'base64');
+  assert.strictEqual(pdf.subarray(0, 5).toString('latin1'), '%PDF-');
+
+  const [creatorId, detail] = events[0];
+  assert.strictEqual(creatorId, 88);
+  assert.strictEqual(detail.ok, true);
+  assert.strictEqual(detail.kind, 'mini');
+  assert.strictEqual(detail.token, 'offertok');
+});
+
+test('sendMiniContractCopy skips an unsigned offer and never double-sends', async () => {
+  const unsigned = await withStubs({ env: { RESEND_API_KEY: 'test_key' } }, () =>
+    sendMiniContractCopy({ ...SIGNED_OFFER, contract_signed_at: null }),
+  );
+  assert.strictEqual(unsigned.reason, 'not_signed');
+
+  let fetched = 0;
+  const again = await withStubs(
+    {
+      env: { RESEND_API_KEY: 'test_key' },
+      one: async () => ({ '?column?': 1 }), // a copy already went out
+      query: async () => ({ rowCount: 1 }),
+      fetchFn: async () => {
+        fetched += 1;
+        return okResponse();
+      },
+    },
+    () => sendMiniContractCopy(SIGNED_OFFER),
+  );
+  assert.deepStrictEqual(again, { sent: false, skipped: true, reason: 'already_emailed' });
+  assert.strictEqual(fetched, 0);
+});
+
+test('sendMiniContractCopy looks the creator up when the offer row has no address', async () => {
+  let payload = null;
+  const looked = [];
+  const result = await withStubs(
+    {
+      env: { RESEND_API_KEY: 'test_key' },
+      one: async (sql) => {
+        if (/FROM email_events/i.test(sql)) return null;
+        looked.push(sql);
+        return { id: 88, first_name: 'Sam', email: 'lookup@example.com', instagram_username: 'samrivera' };
+      },
+      query: async () => ({ rowCount: 1 }),
+      fetchFn: async (_url, init) => {
+        payload = JSON.parse(init.body);
+        return okResponse();
+      },
+    },
+    () => sendMiniContractCopy({ ...SIGNED_OFFER, email: null, first_name: null, full_name: null }),
+  );
+  assert.strictEqual(result.sent, true);
+  assert.strictEqual(payload.to, 'lookup@example.com');
+  assert.strictEqual(looked.length, 1, 'the creator is fetched once, only when needed');
+});
+
+test('retryUnsentMiniContractCopies sweeps signed offers with no delivered copy', async () => {
+  let sql = '';
+  await withStubs(
+    {
+      env: { RESEND_API_KEY: 'test_key' },
+      many: async (text) => {
+        sql = text;
+        return [];
+      },
+    },
+    () => signedContractEmail.retryUnsentMiniContractCopies(),
+  );
+  assert.match(sql, /FROM offers o/);
+  assert.match(sql, /o\.contract_signed_at IS NOT NULL/);
+  assert.match(sql, /contract_copy_emailed/);
+});
+
+test('retryUnsentCopies runs both sweeps and survives one of them failing', async () => {
+  let calls = 0;
+  const out = await withStubs(
+    {
+      env: { RESEND_API_KEY: 'test_key' },
+      many: async (text) => {
+        calls += 1;
+        if (/FROM contracts c/.test(text)) throw new Error('contracts sweep down');
+        return [];
+      },
+    },
+    () => signedContractEmail.retryUnsentCopies(),
+  );
+  assert.strictEqual(calls, 2, 'the mini sweep still runs after the contract sweep throws');
   assert.deepStrictEqual(out, { checked: 0, sent: 0, failed: 0 });
 });
