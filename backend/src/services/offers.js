@@ -192,60 +192,129 @@ async function establishedMessagingChannel(creatorId) {
   return (row && row.established_channel) || null;
 }
 
-// Which channel to reach this creator on WITHOUT a fresh "Hi" — i.e. when we can
-// skip the email invite and message them directly. This is scoped to the CURRENT
-// campaign: only THIS campaign row's established_channel counts, so a used creator
-// pulled into a NEW campaign (a fresh row with established_channel unset) is
-// invited by email again rather than silently messaged, EVEN IF they've chatted
-// with us in another campaign. Opt-out, by contrast, stays cross-campaign for
-// compliance: if the PERSON — matched by phone across every row, the same way the
-// inbound webhook matches senders — opted out ANYWHERE, we never proactively
-// message them. Returns the channel, or null. `contact` needs whatsapp, imessage,
+// The last 10 digits of a contact's number — the identity key used to recognise
+// the same PERSON across their many per-campaign creators rows.
+const phoneTailOf = (contact) => {
+  const phone = (contact && (contact.whatsapp || contact.imessage)) || null;
+  return phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+};
+
+// Has this PERSON opted out anywhere? Compliance is cross-campaign: one STOP on
+// any row silences every row.
+async function optedOutAnywhere(contact) {
+  const tail = phoneTailOf(contact);
+  if (!tail) return !!(contact && contact.messaging_opted_out);
+  const norm = `right(regexp_replace(coalesce(whatsapp, imessage, ''), '[^0-9]', '', 'g'), 10)`;
+  const row = await db.one(
+    `SELECT bool_or(messaging_opted_out) AS opted_out FROM creators WHERE ${norm} = $1`,
+    [tail],
+  );
+  return !!(row && row.opted_out);
+}
+
+// Which channel this creator is SUBSCRIBED on — i.e. they have messaged our
+// business number at some point and never opted out.
+//
+// Subscription is PER PERSON, not per campaign: texting our number once opts
+// them in for good, across every campaign they are ever pulled into. It used to
+// be scoped to the current campaign row, so a creator who had been chatting with
+// us for months was emailed "text Hi to continue" every time a new campaign
+// added a fresh row — asking someone already in the conversation to re-introduce
+// themselves. The person is identified by phone tail, the same identity rule the
+// opt-out check and the inbound webhook's sender matching already use.
+//
+// NOTE: subscribed does NOT mean we may send right now — see openChannelFor.
+// Returns the channel, or null. `contact` needs whatsapp, imessage,
 // established_channel, messaging_opted_out.
 async function subscribedChannelFor(contact) {
-  const phone = contact.whatsapp || contact.imessage || null;
-  const tail = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+  if (await optedOutAnywhere(contact)) return null;
 
-  // Compliance opt-out spans all of the person's rows (cross-campaign).
-  if (tail) {
-    const norm = `right(regexp_replace(coalesce(whatsapp, imessage, ''), '[^0-9]', '', 'g'), 10)`;
-    const optOut = await db.one(
-      `SELECT bool_or(messaging_opted_out) AS opted_out FROM creators WHERE ${norm} = $1`,
-      [tail],
-    );
-    if (optOut && optOut.opted_out) return null;
-  } else if (contact.messaging_opted_out) {
-    return null;
-  }
-
-  // Subscription is SAME-CAMPAIGN: only this campaign row's established_channel.
+  // This row already knows the channel — no lookup needed.
   if (contact.established_channel) return contact.established_channel;
 
-  // …except a Used creator pulled into a NEW campaign gets a FRESH row whose
-  // established_channel is unset, even while an open conversation is running on
-  // their phone. Left there, the offer goes out as a "text Hi to continue" email
-  // to someone who is mid-chat with us and expecting the deal in that chat. A
-  // recent inbound from the same PERSON (phone tail, any row — the same identity
-  // rule the opt-out check above uses) means the window is open, so a direct
-  // reply is both permitted and what they are waiting for.
+  const tail = phoneTailOf(contact);
   if (!tail) return null;
-  const recent = await db.one(
-    `SELECT m.channel
-       FROM offer_messages m
-       JOIN creators c ON c.id = m.creator_id
-      WHERE m.direction = 'inbound'
-        AND m.sent_at > NOW() - make_interval(hours => $2)
-        AND right(regexp_replace(coalesce(c.whatsapp, c.imessage, ''), '[^0-9]', '', 'g'), 10) = $1
-      ORDER BY m.sent_at DESC
+
+  // Any other row for the same person carries the subscription.
+  const row = await db.one(
+    `SELECT established_channel
+       FROM creators
+      WHERE right(regexp_replace(coalesce(whatsapp, imessage, ''), '[^0-9]', '', 'g'), 10) = $1
+        AND established_channel IS NOT NULL
+      ORDER BY updated_at DESC
       LIMIT 1`,
-    [tail, OPEN_CONVERSATION_HOURS],
+    [tail],
   );
-  const channel = recent && recent.channel;
+  const channel = (row && row.established_channel) || null;
   // Only usable when THIS row carries a number for that channel — the reply needs
   // a destination, or deliverOfferOverChannel bails with no_contact_for_channel.
   if (channel === 'whatsapp' && contact.whatsapp) return 'whatsapp';
   if (channel === 'imessage' && contact.imessage) return 'imessage';
   return null;
+}
+
+// Record the subscription: this PERSON has messaged our business number, so
+// EVERY creators row sharing their phone becomes reachable on that channel —
+// not just the campaign row the message happened to match. That is what makes
+// "text Hi once and you're subscribed" hold: a campaign added months later
+// inherits it instead of emailing them to re-introduce themselves.
+//
+// COALESCE, never overwrite: a creator already established on iMessage isn't
+// flipped to WhatsApp by one stray message on the other channel.
+async function subscribeCreatorChannel(creatorId, channel) {
+  const row = await db.one(`SELECT whatsapp, imessage FROM creators WHERE id = $1`, [creatorId]);
+  const tail = phoneTailOf(row || {});
+  if (!tail) {
+    await db.query(
+      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
+      [creatorId, channel],
+    );
+    return 1;
+  }
+  const res = await db.query(
+    `UPDATE creators
+        SET established_channel = COALESCE(established_channel, $2), updated_at = NOW()
+      WHERE right(regexp_replace(coalesce(whatsapp, imessage, ''), '[^0-9]', '', 'g'), 10) = $1`,
+    [tail, channel],
+  );
+  return (res && res.rowCount) || 0;
+}
+
+// Is the provider's free-form window currently open for this person? WhatsApp
+// and iMessage both reject a free-form message to someone who hasn't written to
+// us in the last 24h (Meta 131047/131026, Twilio 63016) — a platform rule, not
+// a policy of ours, and the reason a subscription alone is not permission to
+// send. Only an inbound message reopens it.
+async function conversationWindowOpen(contact) {
+  const tail = phoneTailOf(contact);
+  if (!tail) return false;
+  const recent = await db.one(
+    `SELECT 1 AS open
+       FROM offer_messages m
+       JOIN creators c ON c.id = m.creator_id
+      WHERE m.direction = 'inbound'
+        AND m.sent_at > NOW() - make_interval(hours => $2)
+        AND right(regexp_replace(coalesce(c.whatsapp, c.imessage, ''), '[^0-9]', '', 'g'), 10) = $1
+      LIMIT 1`,
+    [tail, OPEN_CONVERSATION_HOURS],
+  );
+  return !!recent;
+}
+
+// The channel we may PROACTIVELY message on right now: subscribed AND inside the
+// provider's free-form window. Callers that push a message the creator did not
+// just ask for (a new offer, a new-campaign invite) must use this rather than
+// subscribedChannelFor — otherwise the send is rejected by the provider and the
+// creator silently hears nothing, which is strictly worse than the email invite
+// they would otherwise have received.
+//
+// Sending outside the window needs a Meta-approved message TEMPLATE (a paid,
+// business-initiated conversation); none is configured here yet, so a closed
+// window falls back to email. See .env.example's WhatsApp section.
+async function openChannelFor(contact) {
+  const channel = await subscribedChannelFor(contact);
+  if (!channel) return null;
+  return (await conversationWindowOpen(contact)) ? channel : null;
 }
 
 // Which of our own business messaging numbers to show a creator in the invite
@@ -365,10 +434,7 @@ async function sendUsedCreatorBrief(creatorId, channel) {
     ),
   );
   if (result.sent) {
-    await db.query(
-      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
-      [c.id, channel],
-    );
+    await subscribeCreatorChannel(c.id, channel);
   }
   return result;
 }
@@ -416,10 +482,7 @@ async function sendOfferBriefing(offerId, channel) {
   if (result.sent) {
     await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'briefed', $2)`, [offer.id, channel]);
     await db.query(`UPDATE offers SET messaging_stage = 'briefed' WHERE id = $1`, [offer.id]);
-    await db.query(
-      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
-      [offer.creator_id, channel],
-    );
+    await subscribeCreatorChannel(offer.creator_id, channel);
   }
   return result;
 }
@@ -476,10 +539,7 @@ async function deliverOfferOverChannel(offerId, channel) {
     );
     await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'sent', $2)`, [offer.id, channel]);
     await db.query(`UPDATE offers SET messaging_stage = 'revealed' WHERE id = $1`, [offer.id]);
-    await db.query(
-      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
-      [offer.creator_id, channel],
-    );
+    await subscribeCreatorChannel(offer.creator_id, channel);
   }
   return result;
 }
@@ -524,7 +584,35 @@ async function deliverBriefToCreator(creatorId, briefUrl) {
       { channel, briefUrl },
     ]);
 
-  const channel = c.messaging_opted_out ? null : c.established_channel;
+  // A SIGNED creator's brief belongs on the campaign-update lane
+  // (services/creatorUpdates.js): it is the first of the updates that lane
+  // exists to carry, and routing it there is what lets it reach a creator whose
+  // 24h window is shut — queued now, delivered as an approved template or the
+  // moment they write in. The branches below stay for everyone the lane doesn't
+  // cover: a creator mid-negotiation who hasn't signed, or one who opted out.
+  try {
+    const queued = await require('./creatorUpdates').notify(
+      c.id,
+      'brief_ready',
+      { brandName, briefUrl },
+      { dedupKey: `creator:${c.id}:brief:${briefUrl}` },
+    );
+    if (queued.queued) {
+      if (queued.sent) await logDelivered(queued.channel || 'whatsapp');
+      return { sent: !!queued.sent, queued: true, channel: queued.channel || 'whatsapp', reason: queued.reason };
+    }
+    // 'duplicate' means this exact brief URL was already handed to the lane —
+    // a re-publish of an unchanged brief. Don't fall through and email it again.
+    if (queued.reason === 'duplicate') return { sent: false, queued: true, reason: 'duplicate' };
+  } catch (err) {
+    console.error('[offers] creator-updates brief delivery failed, falling back:', err.message);
+  }
+
+  // Fallback for the creators the update lane doesn't cover (mid-negotiation,
+  // or opted out): person-level subscription AND an open free-form window, the
+  // same rule as every other proactive send. A shut window falls through to the
+  // email below rather than having the provider reject the send.
+  const channel = await openChannelFor(c);
   const to = channel === 'imessage' ? c.imessage : channel === 'whatsapp' ? c.whatsapp : null;
   if (channel && to) {
     const mod = channel === 'imessage' ? imessage : whatsapp;
@@ -594,8 +682,8 @@ async function sendOfferOutreach(offerId) {
       [offer.creator_id, offer.id, channel, body],
     );
 
-  // Have they messaged us on a channel we're allowed to reply on?
-  const subscribedChannel = await subscribedChannelFor(offer);
+  // Have they subscribed AND is the provider's free-form window open right now?
+  const subscribedChannel = await openChannelFor(offer);
   if (subscribedChannel) {
     try {
       // They've already opted in on this channel, so send the DEAL directly (no
@@ -702,11 +790,11 @@ async function sendUsedCreatorInvite(creatorId) {
   );
   if (!creator) return { sent: false, reason: 'not_found' };
 
-  // Already messaging us IN THIS campaign → outreach goes straight there, no "Hi"
-  // needed. A used creator pulled into a NEW campaign gets the email invite again
-  // (subscribedChannelFor is same-campaign for the channel, cross-campaign only
-  // for opt-out) so they're re-notified to start iMessage/WhatsApp here.
-  const subscribedChannel = await subscribedChannelFor(creator);
+  // Subscribed (they've texted our number before, on any campaign) AND the
+  // provider's free-form window is open → outreach goes straight to the chat, no
+  // "Hi" needed. A closed window falls back to the email invite below, since a
+  // free-form send would just be rejected by the provider.
+  const subscribedChannel = await openChannelFor(creator);
   if (subscribedChannel) {
     const channel = subscribedChannel;
     const to = channel === 'imessage' ? creator.imessage : creator.whatsapp;
@@ -725,10 +813,7 @@ async function sendUsedCreatorInvite(creatorId) {
       );
       if (result.sent) {
         // Establish this campaign's row too, so a reply here is handled in context.
-        await db.query(
-          `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
-          [creator.id, channel],
-        );
+        await subscribeCreatorChannel(creator.id, channel);
         return { sent: true, channels: [channel === 'imessage' ? 'iMessage' : 'WhatsApp'] };
       }
       // Channel send failed — fall through to the email invite below.
@@ -878,8 +963,8 @@ async function sendUsedCreatorOffer(creatorId) {
   const url = offerUrl(offer.token);
   const expiry = formatDate(offer.expires_at);
 
-  // Already messaging us in THIS campaign → DM the offer directly, no email.
-  const subscribedChannel = await subscribedChannelFor(creator);
+  // Subscribed and the window is open → DM the offer directly, no email.
+  const subscribedChannel = await openChannelFor(creator);
   if (subscribedChannel) {
     try {
       await deliverOfferOverChannel(offer.id, subscribedChannel);
@@ -1070,7 +1155,7 @@ async function onOfferResponded(offerId, response) {
     // contract — send them the link (accept over the web page goes straight to
     // the contract view, so this only matters for a messaged accept).
     if (response === 'accepted') {
-      body += ` To confirm, please review & sign your agreement here: ${offerUrl(offer.token)}`;
+      body += `\n\nOne last step — review and sign your agreement here: ${offerUrl(offer.token)}`;
     }
     const msgChannel = offer.messaging_opted_out ? null : offer.established_channel;
     if (msgChannel === 'whatsapp') {
@@ -2108,6 +2193,19 @@ async function signMiniContract({ token, signature, signerName, ip }) {
     console.error('[offers] flagBriefPending failed', err.message);
   }
 
+  // Open the WhatsApp campaign-update lane — the same one routes/contracts.js
+  // opens on the full contract. A used creator signing here has usually already
+  // been messaging us, so onContractSigned finds the window open and skips
+  // straight past the "send us a Hi" ask. Lazily required: creatorUpdates
+  // requires nothing from offers.js today, but the brief/offer paths make that a
+  // plausible future edge, and every other cross-service call in this file
+  // already takes the lazy form for exactly that reason.
+  try {
+    await require('./creatorUpdates').onContractSigned(offer.creator_id, { campaignId: offer.campaign_id });
+  } catch (err) {
+    console.error('[offers] creator-updates subscribe failed', err.message);
+  }
+
   // Email the creator their executed copy with the signed PDF attached — the
   // same courtesy the full contract flow gives (routes/contracts.js). A used
   // creator's portal signature IS their contract, so this is the only copy they
@@ -2386,6 +2484,10 @@ module.exports = {
   offerUrl,
   establishedMessagingChannel,
   subscribedChannelFor,
+  subscribeCreatorChannel,
+  openChannelFor,
+  conversationWindowOpen,
+  optedOutAnywhere,
   inviteNumbersFor,
   sendUsedCreatorInvite,
   sendUsedCreatorOffer,

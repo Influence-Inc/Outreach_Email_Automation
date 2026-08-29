@@ -2,6 +2,7 @@ const db = require('../db');
 const negotiation = require('./negotiation');
 const offers = require('./offers');
 const graduation = require('./graduation');
+const creatorUpdates = require('./creatorUpdates');
 const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const segmentation = require('./segmentation');
@@ -25,12 +26,19 @@ const graduationSweepMs = () => Number(process.env.GRADUATION_SWEEP_MINUTES || 6
 // mark stale hosts, auto-enqueue runs for enabled campaigns (TTL-gated, default
 // 10 min; 0 disables the sweep entirely).
 const sourcingSweepMs = () => Number(process.env.SOURCING_SWEEP_MINUTES || 10) * 60 * 1000;
+// How often the campaign-update lane catches up: flush updates that queued while
+// a creator's WhatsApp window was shut, and ask newly-signed creators for the
+// "Hi" that opens it (default 15 min; 0 disables). Shorter than the sweeps above
+// because what it's delivering is time-sensitive to the creator — an approval
+// they're waiting on to post — not housekeeping.
+const creatorUpdatesSweepMs = () => Number(process.env.CREATOR_UPDATES_SWEEP_MINUTES || 15) * 60 * 1000;
 
 let timer = null;
 let negRunning = false;
 let lastSegmentSweep = 0;
 let lastGraduationSweep = 0;
 let lastSourcingSweep = 0;
+let lastCreatorUpdatesSweep = 0;
 
 // Outreach and follow-up sending is now handled by Instantly.ai.
 // Reply detection arrives via the /webhook/instantly endpoint (reply_received event).
@@ -299,6 +307,24 @@ async function retryContractCopies() {
   await signedContractEmail.retryUnsentCopies();
 }
 
+// Campaign-update catch-up. Everything it does is a retry of something that
+// could not happen when it was triggered — an update queued outside the 24h
+// window, a "send us a Hi" ask that failed — so it is safe to run often and
+// cheap when there is nothing due (two indexed queries that return no rows).
+async function maybeCreatorUpdates() {
+  const everyMs = creatorUpdatesSweepMs();
+  if (!(everyMs > 0)) return; // 0 / blank disables
+  if (Date.now() - lastCreatorUpdatesSweep < everyMs) return;
+  lastCreatorUpdatesSweep = Date.now();
+  const r = await creatorUpdates.runUpdatesSweep();
+  if (r && (r.sent || r.hiRequested)) {
+    console.log(
+      `[creator-updates] sweep sent ${r.sent} update(s) to ${r.flushedCreators} creator(s); ` +
+        `${r.hiRequested} "send us a Hi" request(s)`,
+    );
+  }
+}
+
 async function tick() {
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
   await sendUsedInviteFollowups().catch((err) => console.error('used-invite follow-up tick failed:', err));
@@ -307,6 +333,7 @@ async function tick() {
   await refreshLearning().catch((err) => console.error('learning tick failed:', err));
   await maybeSegment().catch((err) => console.error('segmentation tick failed:', err));
   await maybeSourcingSweep().catch((err) => console.error('sourcing sweep tick failed:', err));
+  await maybeCreatorUpdates().catch((err) => console.error('creator-updates tick failed:', err));
 }
 
 function start() {
@@ -338,4 +365,10 @@ function start() {
   }, 5000);
 }
 
-module.exports = { start, pollNegotiations, sendUsedInviteFollowups, retryContractCopies };
+module.exports = {
+  start,
+  pollNegotiations,
+  sendUsedInviteFollowups,
+  retryContractCopies,
+  maybeCreatorUpdates,
+};

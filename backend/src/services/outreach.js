@@ -4,6 +4,7 @@ const { verifyEmail } = require('./emailVerify');
 const { formatFirstName } = require('./nameFormat');
 const instantly = require('./instantly');
 const offers = require('./offers');
+const creatorUpdates = require('./creatorUpdates');
 const { offerPortalConfigIssues } = require('./offerPortal/config');
 
 // The name that flows into Instantly's {{firstName}} merge tag for the
@@ -48,6 +49,9 @@ async function loadCreatorContext(creatorId) {
             ca.name AS campaign_name,
             ca.brand_name AS brand_name,
             ca.instantly_campaign_id AS instantly_campaign_id,
+            -- The campaign's brand/product blurb, reused verbatim as the pitch
+            -- when a still-subscribed creator is re-engaged over WhatsApp.
+            ca.messaging_brief AS messaging_brief,
             et.id AS template_id,
             et.name AS template_name
      FROM creators c
@@ -141,6 +145,43 @@ async function sendOutreach(creatorId) {
   // usable messaging channel (no phone on file / opted out / vendor
   // unconfigured), so they're never left uncontacted.
   if (creator.creator_segment === 'old') {
+    // A creator who finished a previous campaign is STILL subscribed to the
+    // campaign-update lane (see creatorUpdates.onDeliverablesComplete — the
+    // subscription deliberately outlives the campaign that created it). That
+    // makes a new campaign's first contact a message in a thread they already
+    // know, rather than another cold email to an address they may not read — the
+    // whole point of keeping them subscribed.
+    //
+    // Tried before the offer paths below because it is the channel they agreed
+    // to. startNextCampaign is deliver-or-nothing: if their WhatsApp window is
+    // shut and no template is configured it declines outright rather than
+    // queueing, so the email fallback below still runs and there is never a
+    // stale pitch waiting to fire days later.
+    const resub = await creatorUpdates.startNextCampaign(creatorId, {
+      campaignId: creator.campaign_id,
+      brandName: creator.brand_name,
+      blurb: creator.messaging_brief,
+    });
+    if (resub.sent) {
+      await db.query(
+        `UPDATE creators
+            SET status = 'outreach_sent',
+                outreach_queued_at = NOW(),
+                outreach_sent_at = NOW(),
+                outreach_message_id = $2,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [creatorId, trackingId],
+      );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, message_id, detail)
+         VALUES ($1, 'sent_outreach', $2, $3)`,
+        [creatorId, trackingId, { via: 'campaign_updates_next_campaign', channel: resub.channel }],
+      );
+      console.log(`[outreach] subscribed creator ${creatorId} re-engaged on ${resub.channel} for the next campaign`);
+      return { ok: true, trackingId, via: 'campaign_updates_next_campaign', channels: [resub.channel] };
+    }
+
     // Part 2 of the used-creator workflow: "Send email" auto-prices an offer
     // from the creator's prior CPM (Creator-DB) and sends the offer directly.
     // Clicking IS the approval — no separate offer_approved step for Used

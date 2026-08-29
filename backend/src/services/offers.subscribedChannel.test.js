@@ -1,17 +1,22 @@
 'use strict';
 
-// Guards offers.subscribedChannelFor — the decision of whether we can skip the
-// email invite and message a used creator DIRECTLY. Scoped to the CURRENT
-// campaign (only this row's established_channel counts) so a used creator pulled
-// into a NEW campaign is re-invited by email even if they've chatted with us in
-// another campaign — while opt-out stays cross-campaign for compliance.
+// Two separate questions, deliberately split:
 //
-// One exception to the same-campaign rule: if the PERSON has messaged us within
-// the last 24h on any of their rows, the conversation window is open and they are
-// waiting on the deal in that chat, so the fresh row inherits the channel rather
-// than emailing "text Hi to continue" to someone mid-conversation.
+//   subscribedChannelFor  — has this PERSON ever texted our business number?
+//     Per person, not per campaign: texting us once subscribes them for good,
+//     so a creator pulled into a new campaign months later is NOT emailed
+//     "text Hi to continue" as if we'd never spoken. Identity is the phone
+//     tail, the same rule the opt-out check and inbound sender matching use.
 //
-// The lookups (opt-out, then recent inbound) are stubbed; no real Postgres.
+//   openChannelFor        — may we actually send right now?
+//     Subscribed AND inside the provider's 24h free-form window. WhatsApp and
+//     iMessage both reject a free-form message to someone who hasn't written to
+//     us in 24h (Meta 131047/131026, Twilio 63016) — a platform rule, so a
+//     subscription alone is not permission to send. Proactive senders must use
+//     this one, or the send is rejected and the creator silently gets nothing.
+//
+// Opt-out beats both, cross-campaign, for compliance.
+// The lookups are stubbed; no real Postgres.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -20,18 +25,18 @@ const offers = require('./offers');
 
 const origOne = db.one;
 
-// optedOutAnywhere: what the cross-campaign bool_or(messaging_opted_out) query
-// returns for this person's phone.
-// recentInboundChannel: what the open-conversation lookup finds for this
-// person's phone (null = no inbound inside the window).
-function install({ optedOutAnywhere = false, recentInboundChannel = null } = {}) {
+// optedOut:        what the cross-campaign bool_or(messaging_opted_out) returns.
+// subscribedOn:    established_channel found on ANY row for this person's phone.
+// windowOpen:      whether an inbound landed inside the 24h window.
+function install({ optedOut = false, subscribedOn = null, windowOpen = false } = {}) {
   const queries = [];
   db.one = async (sql, params) => {
     queries.push({ sql, params });
-    if (/bool_or\(messaging_opted_out\)/i.test(sql)) return { opted_out: optedOutAnywhere };
-    if (/FROM offer_messages/i.test(sql)) {
-      return recentInboundChannel ? { channel: recentInboundChannel } : null;
+    if (/bool_or\(messaging_opted_out\)/i.test(sql)) return { opted_out: optedOut };
+    if (/established_channel IS NOT NULL/i.test(sql)) {
+      return subscribedOn ? { established_channel: subscribedOn } : null;
     }
+    if (/FROM offer_messages/i.test(sql)) return windowOpen ? { open: 1 } : null;
     return null;
   };
   return queries;
@@ -40,56 +45,69 @@ function restore() {
   db.one = origOne;
 }
 
-test('messaging us in THIS campaign → returns that channel (skip the email, message directly)', async () => {
-  install();
+const CONTACT = {
+  whatsapp: '+18005551234',
+  imessage: null,
+  established_channel: null,
+  messaging_opted_out: false,
+};
+
+// --- subscribedChannelFor: person-level subscription ------------------------
+
+test('this row\'s own established_channel is the answer, with no extra lookup', async () => {
+  const queries = install({ subscribedOn: 'imessage' });
   try {
-    const ch = await offers.subscribedChannelFor({
-      whatsapp: '+18005551234',
-      imessage: null,
-      established_channel: 'whatsapp',
-      messaging_opted_out: false,
-    });
+    const ch = await offers.subscribedChannelFor({ ...CONTACT, established_channel: 'whatsapp' });
     assert.strictEqual(ch, 'whatsapp');
+    assert.ok(
+      !queries.some((q) => /established_channel IS NOT NULL/i.test(q.sql)),
+      'no cross-row lookup when this row already knows',
+    );
   } finally {
     restore();
   }
 });
 
-test('a NEW campaign row with no recent inbound → null (email invite, not a cold push)', async () => {
-  // A used creator pulled into a fresh campaign has no established_channel on
-  // THIS row and no open conversation, so we return null → they get the email
-  // invite again, rather than being silently messaged off a prior campaign's
-  // thread (which would also be outside the provider's 24h window).
-  install({ optedOutAnywhere: false, recentInboundChannel: null });
+// The change: a fresh campaign row inherits the subscription instead of asking
+// the creator to introduce themselves again.
+test('a NEW campaign row inherits a subscription made on another campaign', async () => {
+  install({ subscribedOn: 'whatsapp' });
   try {
-    const ch = await offers.subscribedChannelFor({
-      whatsapp: '+18005551234',
-      imessage: null,
-      established_channel: null,
-      messaging_opted_out: false,
-    });
-    assert.strictEqual(ch, null);
+    assert.strictEqual(await offers.subscribedChannelFor(CONTACT), 'whatsapp');
   } finally {
     restore();
   }
 });
 
-test('opted out on ANY of the person\'s rows → null (compliance stays cross-campaign)', async () => {
-  install({ optedOutAnywhere: true });
+test('never subscribed anywhere → null', async () => {
+  install({ subscribedOn: null });
   try {
-    const ch = await offers.subscribedChannelFor({
-      whatsapp: '+18005551234',
-      imessage: null,
-      established_channel: 'whatsapp', // established here, but opted out elsewhere
-      messaging_opted_out: false,
-    });
-    assert.strictEqual(ch, null);
+    assert.strictEqual(await offers.subscribedChannelFor(CONTACT), null);
   } finally {
     restore();
   }
 });
 
-test('no phone on file → falls back to this row (established, not opted out)', async () => {
+test('a subscription on a channel this row has no number for → null', async () => {
+  // The message would have no destination, so the email invite is the honest path.
+  install({ subscribedOn: 'imessage' });
+  try {
+    assert.strictEqual(await offers.subscribedChannelFor(CONTACT), null);
+  } finally {
+    restore();
+  }
+});
+
+test('opted out on ANY of the person\'s rows → null, subscribed or not', async () => {
+  install({ optedOut: true, subscribedOn: 'whatsapp' });
+  try {
+    assert.strictEqual(await offers.subscribedChannelFor({ ...CONTACT, established_channel: 'whatsapp' }), null);
+  } finally {
+    restore();
+  }
+});
+
+test('no phone on file → this row only, no cross-row lookup', async () => {
   const queries = install();
   try {
     const ch = await offers.subscribedChannelFor({
@@ -99,84 +117,7 @@ test('no phone on file → falls back to this row (established, not opted out)',
       messaging_opted_out: false,
     });
     assert.strictEqual(ch, 'imessage');
-    assert.strictEqual(queries.length, 0, 'no cross-campaign query without a phone to match on');
-  } finally {
-    restore();
-  }
-});
-
-// The reported bug: the creator had been texting us minutes earlier, the admin
-// priced the offer, and it went out as an email invite because the offer hung off
-// a fresh campaign row whose established_channel was still unset.
-test('a NEW campaign row inherits the channel when the person messaged us inside the window', async () => {
-  const queries = install({ recentInboundChannel: 'whatsapp' });
-  try {
-    const ch = await offers.subscribedChannelFor({
-      whatsapp: '+18005551234',
-      imessage: null,
-      established_channel: null,
-      messaging_opted_out: false,
-    });
-    assert.strictEqual(ch, 'whatsapp');
-
-    // The stub returns a row for any offer_messages query, so a wrong column name
-    // passes here even though Postgres would throw "column m.created_at does not
-    // exist" and abort the whole offer send. offer_messages timestamps its rows
-    // as sent_at (NOT created_at), so pin the real column the query must use.
-    const inboundQuery = queries.find((q) => /FROM offer_messages/i.test(q.sql));
-    assert.ok(inboundQuery, 'the open-conversation lookup ran');
-    assert.match(inboundQuery.sql, /\bm\.sent_at\b/, 'must filter/order on offer_messages.sent_at');
-    assert.doesNotMatch(inboundQuery.sql, /\bm\.created_at\b/, 'offer_messages has no created_at column');
-  } finally {
-    restore();
-  }
-});
-
-test('an open conversation never overrides a cross-campaign opt-out', async () => {
-  install({ optedOutAnywhere: true, recentInboundChannel: 'whatsapp' });
-  try {
-    const ch = await offers.subscribedChannelFor({
-      whatsapp: '+18005551234',
-      imessage: null,
-      established_channel: null,
-      messaging_opted_out: false,
-    });
-    assert.strictEqual(ch, null);
-  } finally {
-    restore();
-  }
-});
-
-test('an open conversation on a channel this row has no number for → null', async () => {
-  // The reply would have no destination, so the email invite is the honest path.
-  install({ recentInboundChannel: 'imessage' });
-  try {
-    const ch = await offers.subscribedChannelFor({
-      whatsapp: '+18005551234',
-      imessage: null,
-      established_channel: null,
-      messaging_opted_out: false,
-    });
-    assert.strictEqual(ch, null);
-  } finally {
-    restore();
-  }
-});
-
-test('this row\'s own established_channel wins without needing the inbound lookup', async () => {
-  const queries = install({ recentInboundChannel: 'imessage' });
-  try {
-    const ch = await offers.subscribedChannelFor({
-      whatsapp: '+18005551234',
-      imessage: '+18005551234',
-      established_channel: 'whatsapp',
-      messaging_opted_out: false,
-    });
-    assert.strictEqual(ch, 'whatsapp');
-    assert.ok(
-      !queries.some((q) => /FROM offer_messages/i.test(q.sql)),
-      'no open-conversation lookup when the row is already established',
-    );
+    assert.strictEqual(queries.length, 0, 'nothing to match a person on without a phone');
   } finally {
     restore();
   }
@@ -192,6 +133,62 @@ test('no phone + opted out on this row → null', async () => {
       messaging_opted_out: true,
     });
     assert.strictEqual(ch, null);
+  } finally {
+    restore();
+  }
+});
+
+// --- openChannelFor: subscription AND an open window ------------------------
+
+test('subscribed with the window open → the channel', async () => {
+  install({ subscribedOn: 'whatsapp', windowOpen: true });
+  try {
+    assert.strictEqual(await offers.openChannelFor(CONTACT), 'whatsapp');
+  } finally {
+    restore();
+  }
+});
+
+// The reason subscription and sendability are separate: a long-subscribed
+// creator who hasn't written in a week cannot be sent a free-form message, so
+// the caller must fall back to email rather than have the provider reject it.
+test('subscribed but the window has closed → null, so the caller falls back to email', async () => {
+  install({ subscribedOn: 'whatsapp', windowOpen: false });
+  try {
+    assert.strictEqual(await offers.openChannelFor(CONTACT), null);
+  } finally {
+    restore();
+  }
+});
+
+test('an open window on its own is not a subscription', async () => {
+  install({ subscribedOn: null, windowOpen: true });
+  try {
+    assert.strictEqual(await offers.openChannelFor(CONTACT), null);
+  } finally {
+    restore();
+  }
+});
+
+test('opt-out beats both a subscription and an open window', async () => {
+  install({ optedOut: true, subscribedOn: 'whatsapp', windowOpen: true });
+  try {
+    assert.strictEqual(await offers.openChannelFor(CONTACT), null);
+  } finally {
+    restore();
+  }
+});
+
+test('the window lookup reads offer_messages.sent_at, the column that exists', async () => {
+  // offer_messages has no created_at; getting this wrong threw in Postgres and
+  // aborted the whole offer send while passing against a stub. Pin the column.
+  const queries = install({ subscribedOn: 'whatsapp', windowOpen: true });
+  try {
+    await offers.openChannelFor(CONTACT);
+    const q = queries.find((x) => /FROM offer_messages/i.test(x.sql));
+    assert.ok(q, 'the window lookup ran');
+    assert.match(q.sql, /\bm\.sent_at\b/);
+    assert.doesNotMatch(q.sql, /\bm\.created_at\b/);
   } finally {
     restore();
   }

@@ -139,6 +139,93 @@ function confirmDialog(opts = {}) {
   });
 }
 
+// Read-only "Campaign intake" popup. The intake (the brand's campaign-setup
+// submission) rides along in each campaign's `data.intake`, synced from
+// campaigns.influence.technology's bot API. Fetches the single campaign (its
+// list row omits `data`) and renders the fields as a non-editable list.
+async function showCampaignIntake(id) {
+  let intake = null;
+  try {
+    const row = await api(`/api/campaigns/${encodeURIComponent(id)}`);
+    intake = row && row.data && row.data.intake ? row.data.intake : null;
+  } catch (err) {
+    toast('Could not load the campaign intake.', 'error');
+    return;
+  }
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'confirm-modal-backdrop';
+  const dialog = document.createElement('div');
+  dialog.className = 'confirm-modal intake-modal';
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+
+  const head = document.createElement('div');
+  head.className = 'intake-head';
+  const title = document.createElement('div');
+  title.className = 'confirm-modal-title';
+  title.textContent = 'Campaign intake';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'ghost small';
+  closeBtn.textContent = 'Close';
+  head.append(title, closeBtn);
+  dialog.append(head);
+
+  const body = document.createElement('div');
+  body.className = 'intake-body';
+  if (!intake) {
+    const msg = document.createElement('div');
+    msg.className = 'confirm-modal-message';
+    msg.textContent = 'No intake was submitted for this campaign.';
+    body.append(msg);
+  } else {
+    const cpm = intake.cpmStrategy === 'cap'
+      ? `Cap at $${intake.maxCPM}`
+      : (intake.cpmStrategy === 'lowest' ? 'Lowest CPM' : (intake.cpmStrategy || ''));
+    const rows = [
+      ['Brand name', intake.brandName],
+      ['Work email', intake.workEmail],
+      ['Product name', intake.productName],
+      ['Feature / highlight', intake.featureName],
+      ['Campaign name', intake.campaignName],
+      ['Campaign narrative', intake.narrative],
+      ['Viral triggers', Array.isArray(intake.viralTriggers) ? intake.viralTriggers.join(', ') : intake.viralTriggers],
+      ['Target audience', intake.targetAudience],
+      ['Specific influencers', intake.specificInfluencers],
+      ['Showcase link', intake.showcaseLink],
+      ['Showcase instructions', intake.showcaseInstructions],
+      ['Required comment reply', intake.commentReply],
+      ['Caption', intake.caption],
+      ['Restrictions', intake.restrictions],
+      ['CPM strategy', cpm],
+      ['Total budget', intake.totalBudget ? '$' + Number(intake.totalBudget).toLocaleString() : ''],
+    ];
+    for (const [label, value] of rows) {
+      if (value === undefined || value === null || value === '') continue;
+      const field = document.createElement('div');
+      field.className = 'intake-field';
+      const l = document.createElement('div');
+      l.className = 'intake-label';
+      l.textContent = label;
+      const v = document.createElement('div');
+      v.className = 'intake-value';
+      v.textContent = String(value);
+      field.append(l, v);
+      body.append(field);
+    }
+  }
+  dialog.append(body);
+  backdrop.appendChild(dialog);
+  document.body.appendChild(backdrop);
+
+  const done = () => { document.removeEventListener('keydown', onKey); backdrop.remove(); };
+  const onKey = (ev) => { if (ev.key === 'Escape') done(); };
+  closeBtn.addEventListener('click', done);
+  backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) done(); });
+  document.addEventListener('keydown', onKey);
+}
+
 // Non-blocking notification, replacing alert(). Stacks in the corner and
 // auto-dismisses. tone: 'error' (default) | 'warn' | 'success' | 'info'.
 let _toastHost = null;
@@ -356,6 +443,9 @@ async function selectCampaign(id) {
   eyebrow.textContent = c.brand_name;
   eyebrow.hidden = false;
   el('campaign-title').textContent = c.name;
+  // Show the read-only "Campaign intake" button for the selected campaign.
+  const intakeBtn = el('intake-btn');
+  if (intakeBtn) { intakeBtn.hidden = false; intakeBtn.onclick = () => showCampaignIntake(id); }
   // Switching campaigns clears any stage filter / search query carried over
   // from the last one, so the operator lands on a clean unfiltered view.
   state.stageFilter = null;

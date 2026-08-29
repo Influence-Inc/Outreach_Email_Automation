@@ -51,9 +51,11 @@ const OFFER = {
   established_channel: null,
 };
 
-// establishedChannel: what this creator row carries. recentInbound: whether the
-// person has messaged us inside the open-conversation window.
-function install({ establishedChannel = null, recentInbound = null } = {}) {
+// establishedChannel: what this creator row carries. subscribedOn: a
+// subscription found on another campaign row for the same person. recentInbound:
+// whether the provider's 24h free-form window is currently open — a proactive
+// send needs BOTH a subscription and an open window (see openChannelFor).
+function install({ establishedChannel = null, subscribedOn = null, recentInbound = null } = {}) {
   const sent = { email: 0, whatsapp: 0, inviteEmail: 0 };
   const logged = [];
 
@@ -62,7 +64,10 @@ function install({ establishedChannel = null, recentInbound = null } = {}) {
       return { ...OFFER, established_channel: establishedChannel };
     }
     if (/bool_or\(messaging_opted_out\)/i.test(sql)) return { opted_out: false };
-    if (/FROM offer_messages/i.test(sql)) return recentInbound ? { channel: recentInbound } : null;
+    if (/established_channel IS NOT NULL/i.test(sql)) {
+      return subscribedOn ? { established_channel: subscribedOn } : null;
+    }
+    if (/FROM offer_messages/i.test(sql)) return recentInbound ? { open: 1 } : null;
     // deliverOfferOverChannel re-reads the offer joined to the creator.
     if (/FROM offers o JOIN creators c ON c\.id = o\.creator_id/i.test(sql)) return { ...OFFER };
     return null;
@@ -101,8 +106,8 @@ function restore() {
   whatsapp.sendWhatsAppLink = orig.sendWhatsAppLink;
 }
 
-test('an established channel gets the offer over BOTH WhatsApp and email', async () => {
-  const { sent } = install({ establishedChannel: 'whatsapp' });
+test('an established channel with the window open gets the offer over BOTH WhatsApp and email', async () => {
+  const { sent } = install({ establishedChannel: 'whatsapp', recentInbound: 'whatsapp' });
   try {
     await offers.sendOfferOutreach(501);
     assert.strictEqual(sent.whatsapp, 1, 'the deal goes to the chat they are in');
@@ -113,10 +118,10 @@ test('an established channel gets the offer over BOTH WhatsApp and email', async
   }
 });
 
-test('an open conversation on a fresh campaign row also gets both', async () => {
-  // The reported bug: established_channel unset on the new row while the person
-  // was mid-chat, so only the email invite went out.
-  const { sent } = install({ establishedChannel: null, recentInbound: 'whatsapp' });
+test('a fresh campaign row inherits the subscription and still gets both', async () => {
+  // A creator who subscribed on an earlier campaign is not asked to text "Hi"
+  // again just because this campaign gave them a new row.
+  const { sent } = install({ establishedChannel: null, subscribedOn: 'whatsapp', recentInbound: 'whatsapp' });
   try {
     await offers.sendOfferOutreach(501);
     assert.strictEqual(sent.whatsapp, 1);
@@ -127,8 +132,21 @@ test('an open conversation on a fresh campaign row also gets both', async () => 
   }
 });
 
-test('no open conversation → email invite only, never a cold WhatsApp push', async () => {
-  const { sent } = install({ establishedChannel: null, recentInbound: null });
+test('subscribed but the window has closed → email invite, never a rejected free-form push', async () => {
+  // The provider would reject a free-form send here, so the creator would get
+  // nothing at all — strictly worse than the invite email.
+  const { sent } = install({ establishedChannel: 'whatsapp', recentInbound: null });
+  try {
+    await offers.sendOfferOutreach(501);
+    assert.strictEqual(sent.whatsapp, 0);
+    assert.strictEqual(sent.inviteEmail, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('never subscribed → email invite only, never a cold WhatsApp push', async () => {
+  const { sent } = install({ establishedChannel: null, subscribedOn: null, recentInbound: null });
   try {
     await offers.sendOfferOutreach(501);
     assert.strictEqual(sent.whatsapp, 0, 'cold-pushing WhatsApp is never allowed');

@@ -28,6 +28,7 @@ const {
 } = require('./services/offerPortal/config');
 const offerImessage = require('./services/offerPortal/imessage');
 const { diagnoseInboundNumber } = require('./services/offerPortal/diagnose');
+const creatorUpdates = require('./services/creatorUpdates');
 const siteAuth = require('./services/siteAuth');
 const { preGateHostToken } = require('./services/hostTokens');
 
@@ -125,6 +126,26 @@ app.get('/api/debug/messaging-inbound', async (req, res) => {
   }
   try {
     res.json(await diagnoseInboundNumber(phone, channel));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Did the creator actually get their brief / approval on WhatsApp?" — the
+// campaign-update lane's state for one creator: whether they're subscribed,
+// whether their 24h free-form window is open right now, and every update sent
+// or still queued for them, with the reason each pending one hasn't gone out.
+// Reports state only; the bodies it returns are messages we sent, never creds.
+//   GET /api/debug/creator-updates?creatorId=123
+app.get('/api/debug/creator-updates', async (req, res) => {
+  const creatorId = parseInt(req.query.creatorId, 10);
+  if (!Number.isFinite(creatorId)) {
+    return res.status(400).json({ error: 'creatorId query param required, e.g. ?creatorId=123' });
+  }
+  try {
+    const status = await creatorUpdates.statusFor(creatorId);
+    if (!status) return res.status(404).json({ error: 'Creator not found' });
+    res.json(status);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

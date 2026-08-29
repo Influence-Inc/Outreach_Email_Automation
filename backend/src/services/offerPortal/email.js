@@ -478,6 +478,27 @@ async function sendSignedContractEmail({ to, firstName, brandName, campaignName,
   });
 }
 
+// Plain prose email for the campaign-update lane (services/creatorUpdates.js).
+// Unlike every render* above, the copy is passed IN rather than built here —
+// those templates each sell one specific thing and own their layout, whereas
+// this is the fallback route for a message whose real home is WhatsApp
+// (updateMessages.js writes it once, for both channels). Paragraphs are split on
+// blank lines so the plain-text body and the HTML stay the same message.
+function renderProseEmail({ subject, body }) {
+  const text = String(body || '');
+  const paragraphs = text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `    <p>${escapeHtml(p).replace(/\n/g, '<br/>')}</p>`)
+    .join('\n');
+  return { subject, text, html: shell(paragraphs) };
+}
+
+async function sendProseEmail({ to, subject, body }) {
+  return deliver({ to, ...renderProseEmail({ subject, body }) });
+}
+
 module.exports = {
   isConfigured,
   attachment,
@@ -496,4 +517,6 @@ module.exports = {
   sendBriefReadyEmail,
   renderSignedContractEmail,
   sendSignedContractEmail,
+  renderProseEmail,
+  sendProseEmail,
 };

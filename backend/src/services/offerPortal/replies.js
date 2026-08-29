@@ -76,23 +76,27 @@ function classifyInterest(body) {
 // Canonical bodies — used by both the offer response follow-up and the inbound
 // WhatsApp/iMessage handler. The acceptance message follows the approved
 // reference copy ("We'll be sharing the creative brief shortly.").
+// House style for every creator-facing message below: short sentences, one idea
+// per line, a blank line between what happened and what happens next, and at
+// most one emoji — reserved for genuine milestones (a confirmed deal), never as
+// decoration. Reads like a brand's messaging channel, not a mail merge.
 function thankYouMessage(firstName) {
-  return `Thanks for accepting, ${firstName}. We are looking forward to working with you on this one. We'll be sharing the creative brief shortly.`;
+  return `That's confirmed, ${firstName} — great to have you on board. 🎉\n\nWe'll send your content brief shortly with everything you need to get started.`;
 }
 
 function politeCloseMessage(firstName) {
-  return `No problem at all, ${firstName}. Thanks for letting us know. We will keep you in mind for future opportunities. Have a great day.`;
+  return `No problem at all, ${firstName} — thanks for letting us know.\n\nWe'll keep you in mind for future collaborations.`;
 }
 
 // Sent when a creator declines specifically because this collaboration isn't a
 // fit (decline reason "Not a fit") — a warmer, forward-looking close than the
 // generic politeCloseMessage: we'll come back when there's a better match.
 function notAFitCloseMessage(firstName) {
-  return `Totally understand, ${firstName} — thanks for taking a look. This one may not be the right match, but we'll reach out when we have a campaign that's a better fit for you.`;
+  return `Completely understand, ${firstName} — thanks for taking a look.\n\nThis one may not be the right match, but we'll be in touch when we have a campaign that suits you better.`;
 }
 
 const DEFLECTION_MESSAGE =
-  'Thanks for the message. For any questions or doubts, please contact our support team at jennifer@useinfluence.xyz and they will get back to you.';
+  "Thanks for your message — I've passed this to our team and someone will get back to you shortly.\n\nYou can also reach us any time at jennifer@useinfluence.xyz.";
 
 // Brand/product brief sent the moment a creator first replies — BEFORE the
 // actual rate/deliverables (see offers.messaging_stage). brandBlurb is already
@@ -148,7 +152,7 @@ const OFFER_FALLBACK_HINT = 'Reply Accept or Decline, or open the link above for
 // the generic DEFLECTION_MESSAGE, which points to human support and would be a
 // non-sequitur here — the creator just needs to pick Yes or No.
 function interestClarificationMessage(firstName) {
-  return `Thanks, ${firstName}! Just let us know — reply Yes if you'd like to hear the details, or No if you're not interested right now.`;
+  return `No problem, ${firstName} — just let us know.\n\nYes if you'd like to hear the details, or No if now isn't the right time.`;
 }
 
 // Sent when a creator replies to the invite email before an offer has been
@@ -157,7 +161,7 @@ function interestClarificationMessage(firstName) {
 // the generic support deflection, which would read as a brush-off to someone
 // who just reached out as asked.
 function firstContactHoldingMessage(firstName) {
-  return `Thanks ${firstName}, great to hear from you! We'll share the collaboration details with you right here shortly.`;
+  return `Great to hear from you, ${firstName}.\n\nWe're putting your collaboration details together and will share them here shortly.`;
 }
 
 // Extract a counter-rate ask from a free-text reply ("can you do $500?",

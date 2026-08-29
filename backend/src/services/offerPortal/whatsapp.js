@@ -339,6 +339,112 @@ async function sendWhatsAppLink({ to, body, buttonText, url, fallbackBody }) {
   return sendCloudLinkButton({ to, body, buttonText, url });
 }
 
+// --- Template messages (outside the 24h window) ----------------------------
+// Everything above is a FREE-FORM send, which Meta only permits inside the 24h
+// window a creator's own inbound message opens. The campaign-update lane (see
+// services/creatorUpdates.js) has to reach creators who signed a contract and
+// then went quiet for a week — a brief published on Tuesday, an approval on
+// Friday — so it needs the one thing free-form text cannot do: start a
+// conversation.
+//
+// That is what a template is: copy submitted to Meta in advance and approved by
+// them, sendable at any time. The variables are positional ({{1}}, {{2}}, …) and
+// must match the approved copy exactly — Meta rejects the send otherwise, which
+// is why the template NAMES live in env vars: the copy is registered in the
+// WhatsApp Manager, not here, and the two are matched by configuration rather
+// than by a deploy.
+//
+// Cloud API only. Twilio's equivalent (Content Templates) is deliberately not
+// used anywhere in this codebase, so under provider=twilio these skip with
+// `templatesUnsupported` and the caller leaves the update queued until the
+// creator writes in and the free-form window opens.
+
+function templateLanguage() {
+  return process.env.WHATSAPP_TEMPLATE_LANG || 'en';
+}
+
+// Whether a template send can even be attempted right now: Cloud provider with
+// send credentials. Callers check this to decide between "send it as a template"
+// and "hold it until the creator opens a window".
+function templatesAvailable() {
+  return whatsappProvider() === 'cloud' && !!cloudToken() && !!cloudPhoneNumberId();
+}
+
+// Build the `components` array for a template send. Body variables are
+// positional and go out in the order given; `buttonUrlSuffix` fills the dynamic
+// part of a URL button whose approved copy ends in {{1}} (Meta takes only the
+// SUFFIX — the fixed prefix lives in the approved template, so passing a whole
+// https:// URL here would produce a doubled link).
+function buildTemplateComponents({ bodyParams, buttonUrlSuffix }) {
+  const components = [];
+  const params = (bodyParams || []).filter((v) => v != null).map((v) => ({ type: 'text', text: String(v) }));
+  if (params.length) components.push({ type: 'body', parameters: params });
+  if (buttonUrlSuffix) {
+    components.push({
+      type: 'button',
+      sub_type: 'url',
+      index: '0',
+      parameters: [{ type: 'text', text: String(buttonUrlSuffix) }],
+    });
+  }
+  return components;
+}
+
+// Send a pre-approved template. Returns the same { sent, id?, skipped?, error? }
+// shape as every other send here, so callers never special-case it.
+async function sendWhatsAppTemplate({ to, name, languageCode, bodyParams, buttonUrlSuffix }) {
+  if (whatsappProvider() !== 'cloud') {
+    return { sent: false, skipped: true, reason: 'templates_unsupported_on_twilio' };
+  }
+  if (!cloudToken() || !cloudPhoneNumberId()) {
+    console.warn(
+      `[offer-whatsapp] WHATSAPP_CLOUD_ACCESS_TOKEN/PHONE_NUMBER_ID not set — skipping template to ${to}`,
+    );
+    return { sent: false, skipped: true, reason: 'not_configured' };
+  }
+  if (!name) return { sent: false, skipped: true, reason: 'no_template_configured' };
+  const recipient = normalizePhone(to);
+  if (!recipient) return { sent: false, error: 'invalid recipient number' };
+
+  try {
+    const res = await fetch(cloudMessagesUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cloudToken()}`,
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipient,
+        type: 'template',
+        template: {
+          name: String(name),
+          language: { code: languageCode || templateLanguage() },
+          components: buildTemplateComponents({ bodyParams, buttonUrlSuffix }),
+        },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      return { sent: true, id: extractCloudMessageId(data), template: String(name) };
+    }
+    const text = await res.text().catch(() => '');
+    // The two that actually happen in production, named rather than left as a
+    // raw 400: the template isn't approved (or the name is misspelled), and the
+    // variable count doesn't match the approved copy. Both look identical in a
+    // log otherwise, and both are fixed in the WhatsApp Manager, not in code.
+    const hint = /132001|does not exist/i.test(text)
+      ? ' — template not found/approved for this WABA; check the name and language in WhatsApp Manager'
+      : /132000|param/i.test(text)
+        ? ' — variable count does not match the approved template body'
+        : '';
+    return { sent: false, error: `${res.status} ${text.slice(0, 200)}${hint}` };
+  } catch (err) {
+    return { sent: false, error: err && err.message ? err.message : 'unknown error' };
+  }
+}
+
 // The offer-reveal message body (free-form session reply used by
 // deliverOfferOverChannel) — also stored in offer_messages so the admin can see
 // what the creator received. Points them straight at the portal link to view
@@ -352,21 +458,21 @@ async function sendWhatsAppLink({ to, body, buttonText, url, fallbackBody }) {
 // is a reply in an already-introduced thread, and reintroducing ourselves on
 // every send read like a broken mail merge.
 function renderOfferOutreachBody({ brandName, offerUrl, expiryDate }) {
-  return `Here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
+  return `Here are the details for your ${brandName} collaboration.\n\nReview the full offer and confirm here: ${offerUrl}\n\nOpen until ${expiryDate}.`;
 }
 
 // Same offer-reveal copy as renderOfferOutreachBody, but without the link
 // text — used as the body of the Cloud "View Offer" button message, where the
 // link lives on the button instead of repeated in the message.
 function renderOfferOutreachIntro({ brandName, expiryDate }) {
-  return `Here's your ${brandName} collaboration offer. Tap below to view the full details and accept (open until ${expiryDate}).`;
+  return `Here are the details for your ${brandName} collaboration.\n\nTap below to review the full offer and confirm.\n\nOpen until ${expiryDate}.`;
 }
 
 // Sent once an admin publishes the creator's personalised content brief (see
 // offers.deliverBriefToCreator) — a free-form session reply on an already-
 // established channel. No greeting — see renderOfferOutreachBody above.
 function renderContentBriefReadyBody({ brandName, briefUrl }) {
-  return `Your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
+  return `Your ${brandName} content brief is ready.\n\nEverything you need to start creating is here: ${briefUrl}`;
 }
 
 module.exports = {
@@ -376,6 +482,10 @@ module.exports = {
   businessNumber,
   sendWhatsAppText,
   sendWhatsAppChoice,
+  sendWhatsAppTemplate,
+  templatesAvailable,
+  templateLanguage,
+  buildTemplateComponents,
   sendCloudButtons,
   sendWhatsAppLink,
   sendCloudLinkButton,

@@ -29,6 +29,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const offers = require('../services/offers');
 const negotiation = require('../services/negotiation');
+const creatorUpdates = require('../services/creatorUpdates');
 const {
   classifyReply,
   classifyInterest,
@@ -557,6 +558,45 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
         [matched.id],
       );
 
+  // SCENARIO 1 of the campaign-update lane. A creator who has SIGNED and has no
+  // live offer to negotiate is not opening a deal by writing in — they are
+  // answering the "send us a Hi" ask, or chasing an update. Their inbound opens
+  // WhatsApp's 24h window, so onInboundMessage stamps it, sends the one-time
+  // intro, and flushes everything that queued up while the window was shut (a
+  // brief published on Tuesday, an approval from Friday) in event order.
+  //
+  // Checked before the offer branches below but AFTER the pending-offer lookup,
+  // because precedence only flips one way: a signed creator being re-engaged for
+  // a NEW campaign has a live pending offer, and that offer's negotiation must
+  // still win — replying "yes" to a fresh offer can't be swallowed as an
+  // update acknowledgement. With no pending offer there is nothing to swallow.
+  if (!pendingOffer) {
+    const updates = await creatorUpdates.onInboundMessage(matched.id, channel, { body: parsed.body });
+    if (updates.handled) {
+      const needsReview = !!updates.needsReview;
+      await db.query(
+        `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, needs_review, raw_payload, provider_message_id)
+         VALUES ($1, $2, 'inbound', $3, $4, $5, $6::jsonb, $7)`,
+        [
+          matched.id,
+          (fallbackOffer && fallbackOffer.id) || null,
+          channel,
+          parsed.body,
+          needsReview,
+          JSON.stringify(req.body ?? null),
+          providerMessageId,
+        ],
+      );
+      return res.json({
+        ok: true,
+        outcome: 'campaign_updates',
+        flushed: (updates.flushed && updates.flushed.sent) || 0,
+        introSent: !!updates.introSent,
+        needsReview,
+      });
+    }
+  }
+
   // No offer exists yet: the creator is engaging before an admin has priced one (a
   // USED creator who reached us on WhatsApp/iMessage — see outreach.sendOutreach).
   // On FIRST contact, open with the brand/product brief + a yes/no interest check
@@ -566,11 +606,11 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   // establish the channel and flag it for a human to price. established_channel is
   // set by this branch, so it's NULL only on the very first contact.
   if (!pendingOffer && !fallbackOffer) {
-    const firstContact = !matched.established_channel;
-    await db.query(
-      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
-      [matched.id, channel],
-    );
+    // First contact is judged PER PERSON, not per campaign row: someone who
+    // subscribed on an earlier campaign is not introduced to us again just
+    // because this campaign gave them a fresh row.
+    const firstContact = !(await offers.subscribedChannelFor(matched));
+    await offers.subscribeCreatorChannel(matched.id, channel);
     // Put the creator in front of an admin to PRICE & SEND the offer: compute
     // suggested offers from their scraped views + move to AWAITING_APPROVAL, so
     // "Decide offer" appears in Deal Studio. Without this a Used creator who
