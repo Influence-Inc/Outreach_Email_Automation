@@ -56,6 +56,31 @@ admin picks a campaign → adds creator IG URL → status: pending_extraction
   ↓ status: followup_sent
 ```
 
+## Signed contracts
+
+Whenever a creator signs, they get their executed copy by email with the PDF
+attached (`backend/src/services/signedContractEmail.js`), sent from its own
+`CONTRACT_EMAIL_FROM` sender rather than the offers@ one — a reply to a contract
+copy is a contract question. It defaults to `jennifer@useinfluence.xyz`, the
+Resend-verified sender; point it at `contracts@useinfluence.xyz` once that
+address is verified too.
+
+Both signing flows are covered:
+
+| Signed at | Document | Renderer | Filename |
+| --- | --- | --- | --- |
+| `/contract/:token` (full contract) | the same PDF the team downloads from `/api/contract-pdf/:token`, account and tax identifiers masked to their last four digits | `contractPdf.js` | `<Name>-Contract-Signed.pdf` |
+| `/o/:token` (offer-portal mini contract) | the portal's own terms, and only those (no rate — the portal's agreement block doesn't show one); a used creator's portal signature IS their contract, so this is the only copy they get | `miniContractPdf.js` | `<Name>-Agreement-Signed.pdf` |
+
+Both are framed by `pdf/agreementLayout.js` (title, execution banner, signature
+block, audit trail), so they read as one family of document, and each mirrors
+the page it was signed on — never a fuller set of terms than the creator saw.
+
+The send is best-effort: it never blocks the signature. A miss (Resend down, the
+API key added later) is picked up by the scheduler's retry sweep, which re-tries
+anything signed in the last 14 days, up to 5 attempts each. Every attempt lands
+in `email_events` as `contract_copy_emailed` (with `kind: contract | mini`), and
+a delivered copy shows on the creator's dashboard timeline.
 ## Campaign updates over WhatsApp (after signing)
 
 Everything above courts a creator up to their signature. From the signature

@@ -385,6 +385,9 @@
       <div class="check">✓</div>
       <h1>Contract signed</h1>
       <p>Thank you — we've recorded your signature and payment details. We'll share a short content brief before you start creating.</p>
+      <!-- Shown only when the signed-copy email actually went out (the submit
+           response says so) — never promise an inbox delivery that didn't happen. -->
+      <p id="done-copy" hidden>A signed copy of the contract is on its way to your inbox.</p>
 
       <!-- Revealed only when we have a WhatsApp number configured AND this
            creator hasn't already subscribed — see contract.js. -->

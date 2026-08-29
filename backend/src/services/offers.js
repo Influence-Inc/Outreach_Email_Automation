@@ -2119,15 +2119,18 @@ async function signMiniContract({ token, signature, signerName, ip }) {
   const name = String(signerName || offer.full_name || offer.first_name || '').trim() || 'Creator';
 
   const terms = miniContractTerms(offer);
-  const upd = await db.query(
+  // RETURNING the row gives the emailed copy below the stored signature and the
+  // server's own signed_at, rather than a client-side reconstruction of them.
+  const signedRow = await db.one(
     `UPDATE offers
         SET contract_signed_at = NOW(), contract_signer_name = $2,
             contract_signer_ip = $3, contract_terms = $4::jsonb,
             contract_signature = $5
-      WHERE id = $1 AND status = 'accepted' AND contract_signed_at IS NULL`,
+      WHERE id = $1 AND status = 'accepted' AND contract_signed_at IS NULL
+      RETURNING *`,
     [offer.id, name, ip || null, JSON.stringify(terms), sig],
   );
-  if (upd.rowCount === 0) return { ok: false, reason: 'already_signed' };
+  if (!signedRow) return { ok: false, reason: 'already_signed' };
 
   try {
     await db.query(`INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'signed', 'web')`, [offer.id]);
@@ -2203,7 +2206,29 @@ async function signMiniContract({ token, signature, signerName, ip }) {
     console.error('[offers] creator-updates subscribe failed', err.message);
   }
 
-  return { ok: true, signerName: name, signedAtFormatted: formatDate(new Date()) };
+  // Email the creator their executed copy with the signed PDF attached — the
+  // same courtesy the full contract flow gives (routes/contracts.js). A used
+  // creator's portal signature IS their contract, so this is the only copy they
+  // ever get. Best-effort: the signature is already saved, and the scheduler's
+  // retry sweep picks up anything that doesn't go out now.
+  let copyEmailed = false;
+  try {
+    const sendResult = await require('./signedContractEmail').sendMiniContractCopy({
+      ...signedRow,
+      // The portal query's joined columns aren't on the RETURNING row.
+      first_name: offer.first_name,
+      full_name: offer.full_name,
+      campaign_name: offer.campaign_name,
+    });
+    copyEmailed = !!sendResult.sent;
+    if (!sendResult.sent && !sendResult.skipped) {
+      console.error('[offers] mini-contract copy email failed:', sendResult.error);
+    }
+  } catch (err) {
+    console.error('[offers] mini-contract copy email threw:', err.message);
+  }
+
+  return { ok: true, signerName: name, signedAtFormatted: formatDate(new Date()), copyEmailed };
 }
 
 // Translate an admin-approved Deal Studio offer (pricing.js shape) into portal

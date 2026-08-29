@@ -15,28 +15,16 @@
 // case the team needs one — it is never the default.
 
 const { PdfDocument } = require('./pdf/document');
-const { decodeSignature } = require('./pdf/png');
 const { contractSections } = require('./contractTerms');
-
-const LABEL_WIDTH = 148;
-
-function str(value) {
-  return value == null ? '' : String(value).trim();
-}
-
-// "Signed on 4 August 2026" — a spelled-out date so there's no DD/MM vs MM/DD
-// ambiguity on a document crossing borders.
-function longDate(value) {
-  if (!value) return '';
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return str(value);
-  return d.toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
-}
+const {
+  LABEL_WIDTH,
+  str,
+  longDate,
+  nameSlug,
+  titleBlock,
+  signatureBlock,
+  addFooters,
+} = require('./pdf/agreementLayout');
 
 // Keep the last four characters of an identifier, masking the rest. Short
 // values are masked entirely rather than half-revealed.
@@ -80,18 +68,12 @@ function bankRows(bank, mask) {
   ].filter((r) => r.value);
 }
 
-// A filesystem-safe name built from the creator and campaign, e.g.
+// A filesystem-safe name built from the creator, e.g.
 // "Rachel-Ly-Contract-Signed.pdf".
 function contractFilename(row) {
   const data = (row && row.data) || {};
   const who = str(row && row.signer_name) || str(data.creatorName) || 'Creator';
-  const slug = who
-    .normalize('NFKD')
-    .replace(/[^\w\s-]/g, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .slice(0, 60);
-  return `${slug || 'Creator'}-Contract-Signed.pdf`;
+  return `${nameSlug(who) || 'Creator'}-Contract-Signed.pdf`;
 }
 
 // Build the PDF. `row` is a contracts table row (see contracts.getByToken).
@@ -109,28 +91,15 @@ function renderContractPdf(row, { unmaskBankDetails = false } = {}) {
   const doc = new PdfDocument({ title: `${creatorName || 'Creator'} — Influencer Agreement` });
 
   // ── Title block ─────────────────────────────────────────────────────────
-  doc.y -= 4;
-  doc.drawText('INFLUENCER AGREEMENT', doc.margin, doc.y, { font: 'bold', size: 19 });
-  doc.y -= 18;
-  const eyebrow = [brand, str(data.campaignName)].filter(Boolean).join(' · ');
-  if (eyebrow) {
-    doc.drawText(eyebrow, doc.margin, doc.y, { size: 10.5, gray: 0.42 });
-    doc.y -= 14;
-  }
-
-  // Execution banner — the first thing a reader should see is that this copy
-  // is the executed one, and who executed it.
   const executed = row && row.status && row.status !== 'pending';
-  const banner = executed
-    ? `Signed by ${creatorName || 'the creator'}${signedOn ? ` on ${signedOn}` : ''}.`
-    : 'This contract has not been signed yet.';
-  doc.y -= 6;
-  doc.rule({ gray: 0.82 });
-  doc.y -= 14;
-  doc.drawText(banner, doc.margin, doc.y, { font: 'bold', size: 10, gray: 0.1 });
-  doc.y -= 6;
-  doc.rule({ gray: 0.82 });
-  doc.y -= 2;
+  titleBlock(doc, {
+    title: 'INFLUENCER AGREEMENT',
+    creatorName,
+    brand,
+    campaignName: str(data.campaignName),
+    executed,
+    signedOn,
+  });
 
   // ── The agreed terms ────────────────────────────────────────────────────
   for (const section of contractSections(data)) {
@@ -177,51 +146,16 @@ function renderContractPdf(row, { unmaskBankDetails = false } = {}) {
   }
 
   // ── Signature block ─────────────────────────────────────────────────────
-  const signature = decodeSignature(fields.signatureDataUrl);
-  // Keep the whole block on one page — a signature stranded from its name is
-  // exactly the kind of thing that makes a countersigned copy look doctored.
-  doc.ensureSpace(150);
-  doc.heading('Signature', { keepWith: 110 });
+  signatureBlock(doc, {
+    signatureDataUrl: fields.signatureDataUrl,
+    creatorName,
+    signedOn,
+    executed,
+    agreedAt: submission.agreedAt,
+    signerIp: row && row.signer_ip,
+  });
 
-  doc.space(4);
-  if (signature) {
-    doc.image(signature, { boxWidth: 230, boxHeight: 62 });
-  } else {
-    // No drawn signature captured (an older submission, or an unreadable
-    // canvas) — say so plainly rather than leaving a blank space that reads
-    // like the contract was never signed.
-    doc.space(30);
-    doc.text(
-      executed ? 'Signed electronically — no drawn signature was captured.' : '',
-      { size: 9, gray: 0.5 },
-    );
-  }
-  doc.space(4);
-  doc.rule({ gray: 0.6, width: 240 });
-  doc.space(12);
-  doc.drawText(creatorName || 'Creator', doc.margin, doc.y, { font: 'bold', size: 10.5 });
-  doc.space(13);
-  if (signedOn) {
-    doc.drawText(`Date signed: ${signedOn}`, doc.margin, doc.y, { size: 9.5, gray: 0.42 });
-    doc.space(12);
-  }
-
-  // Audit trail — the electronic-signature evidence that makes the copy
-  // meaningful if it is ever questioned.
-  const agreedAt = submission.agreedAt ? new Date(submission.agreedAt) : null;
-  const auditBits = [];
-  if (agreedAt && !Number.isNaN(agreedAt.getTime())) {
-    auditBits.push(`Submitted ${agreedAt.toISOString().replace('T', ' ').slice(0, 19)} UTC`);
-  }
-  if (str(row && row.signer_ip)) auditBits.push(`IP ${str(row.signer_ip)}`);
-  if (auditBits.length) {
-    doc.space(4);
-    doc.text(auditBits.join('  ·  '), { size: 8, gray: 0.55 });
-  }
-
-  doc.addFooters(
-    [brand, creatorName, 'Influencer Agreement'].filter(Boolean).join(' — '),
-  );
+  addFooters(doc, { brand, creatorName, kind: 'Influencer Agreement' });
   return doc.end();
 }
 

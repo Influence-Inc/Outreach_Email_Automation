@@ -531,12 +531,19 @@
   }
 
   // ── States ─────────────────────────────────────────────────────────────
-  // `optIn` is the submit response's whatsappOptIn — { number, link } when the
-  // creator hasn't subscribed to our WhatsApp yet, null when they already have
-  // (or opted out, or the channel isn't configured), in which case the card
-  // stays hidden rather than inviting them to a chat they're already in.
-  function markSigned(optIn) {
+  // Takes the submit response itself, since two independent parts of the
+  // confirmation depend on it:
+  //   `whatsappOptIn` — { number, link } when the creator hasn't subscribed to
+  //     our WhatsApp yet, null when they already have (or opted out, or the
+  //     channel isn't configured), in which case the card stays hidden rather
+  //     than inviting them to a chat they're already in.
+  //   `copyEmailed` — true only when the executed PDF was actually emailed, so
+  //     the confirmation never claims an inbox copy that didn't send.
+  function markSigned(res) {
+    var r = res || {};
+    var optIn = r.whatsappOptIn;
     $('page1').hidden = true; $('page2').hidden = true; $('done').hidden = false;
+    if (r.copyEmailed) $('done-copy').hidden = false;
     if (optIn && optIn.link) {
       $('wa-link').href = optIn.link;
       $('wa-num').textContent = optIn.number || '';
@@ -820,7 +827,7 @@
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (!res.ok) throw new Error((res.j && res.j.error) || 'Something went wrong.');
-        markSigned(res.j && res.j.whatsappOptIn);
+        markSigned(res.j);
       })
       .catch(function (err) {
         errEl.textContent = err.message || 'Something went wrong. Please try again.';

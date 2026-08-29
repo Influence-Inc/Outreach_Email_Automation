@@ -7,6 +7,7 @@ const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const segmentation = require('./segmentation');
 const sourcingSweepMod = require('./sourcingSweep');
+const signedContractEmail = require('./signedContractEmail');
 const { buildConfig: buildSourcingConfig } = require('./sourcingConfig');
 
 const intervalMs = () =>
@@ -297,6 +298,15 @@ async function maybeSourcingSweep() {
   }
 }
 
+// Catch signed agreements — full contracts AND offer-portal mini contracts —
+// whose executed-copy email never made it out (Resend down at the moment of
+// signing, the API key added afterwards). The send happens inline on the signing
+// request; this only mops up the misses, so it normally matches nothing.
+// Bounded by signedContractEmail's own window + attempt cap.
+async function retryContractCopies() {
+  await signedContractEmail.retryUnsentCopies();
+}
+
 // Campaign-update catch-up. Everything it does is a retry of something that
 // could not happen when it was triggered — an update queued outside the 24h
 // window, a "send us a Hi" ask that failed — so it is safe to run often and
@@ -319,6 +329,7 @@ async function tick() {
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
   await sendUsedInviteFollowups().catch((err) => console.error('used-invite follow-up tick failed:', err));
   await maybeGraduate().catch((err) => console.error('graduation tick failed:', err));
+  await retryContractCopies().catch((err) => console.error('contract-copy retry tick failed:', err));
   await refreshLearning().catch((err) => console.error('learning tick failed:', err));
   await maybeSegment().catch((err) => console.error('segmentation tick failed:', err));
   await maybeSourcingSweep().catch((err) => console.error('sourcing sweep tick failed:', err));
@@ -354,4 +365,10 @@ function start() {
   }, 5000);
 }
 
-module.exports = { start, pollNegotiations, sendUsedInviteFollowups, maybeCreatorUpdates };
+module.exports = {
+  start,
+  pollNegotiations,
+  sendUsedInviteFollowups,
+  retryContractCopies,
+  maybeCreatorUpdates,
+};
