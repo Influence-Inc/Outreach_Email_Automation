@@ -12,8 +12,39 @@ const creatorDb = require('../services/creatorDb');
 const campaignDashboard = require('../services/campaignDashboard');
 const briefs = require('../services/briefs');
 const creatorUpdates = require('../services/creatorUpdates');
+const offerWhatsapp = require('../services/offerPortal/whatsapp');
 
 const api = express.Router();
+
+// The "message us on WhatsApp" opt-in shown under the signed confirmation.
+//
+// Subscribing is what lets us reach the creator directly from then on — for
+// their brief, their payment, and every future campaign — so the moment they've
+// just signed is when asking costs them the least. Returned only when it would
+// actually work AND they haven't already subscribed: someone we're already
+// chatting with doesn't need to be invited to start a chat, and a creator who
+// opted out must never be re-prompted. Null otherwise, and the page hides it.
+// onContractSigned above has just subscribed them to the update lane, but that
+// lane can only send free-form updates once the creator writes in — the "Hi"
+// this card asks for is what opens their 24h window. requestHi() also asks by
+// email; showing it here catches them while they're still on the page.
+//
+// The deep link comes from creatorUpdates.hiDeepLink so the prefilled text and
+// number stay identical to the emailed ask.
+function whatsappOptInFor(creator) {
+  try {
+    if (!creator || creator.messaging_opted_out) return null;
+    // Already writing to us inside the window — nothing to ask for.
+    if (creatorUpdates.windowOpen(creator)) return null;
+    const link = creatorUpdates.hiDeepLink();
+    if (!link) return null;
+    return { number: offerWhatsapp.businessNumber(), link };
+  } catch (err) {
+    // Never let this cost someone their signature confirmation.
+    console.warn('[contracts] whatsapp opt-in lookup failed:', err.message);
+    return null;
+  }
+}
 
 // GET /api/contracts/:token — the contract data the signing page renders.
 api.get('/:token', async (req, res, next) => {
@@ -129,7 +160,11 @@ api.post('/:token/submit', async (req, res, next) => {
       console.error(`[contracts] creator-updates subscribe failed for token ${token}:`, err.message);
     }
 
-    res.json({ status: synced ? 'completed' : 'signed', synced });
+    res.json({
+      status: synced ? 'completed' : 'signed',
+      synced,
+      whatsappOptIn: whatsappOptInFor(creator),
+    });
   } catch (err) {
     next(err);
   }

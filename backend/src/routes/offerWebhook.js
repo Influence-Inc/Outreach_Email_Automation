@@ -606,11 +606,11 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   // establish the channel and flag it for a human to price. established_channel is
   // set by this branch, so it's NULL only on the very first contact.
   if (!pendingOffer && !fallbackOffer) {
-    const firstContact = !matched.established_channel;
-    await db.query(
-      `UPDATE creators SET established_channel = COALESCE(established_channel, $2), updated_at = NOW() WHERE id = $1`,
-      [matched.id, channel],
-    );
+    // First contact is judged PER PERSON, not per campaign row: someone who
+    // subscribed on an earlier campaign is not introduced to us again just
+    // because this campaign gave them a fresh row.
+    const firstContact = !(await offers.subscribedChannelFor(matched));
+    await offers.subscribeCreatorChannel(matched.id, channel);
     // Put the creator in front of an admin to PRICE & SEND the offer: compute
     // suggested offers from their scraped views + move to AWAITING_APPROVAL, so
     // "Decide offer" appears in Deal Studio. Without this a Used creator who
