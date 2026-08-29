@@ -531,8 +531,17 @@
   }
 
   // ── States ─────────────────────────────────────────────────────────────
-  function markSigned() {
+  // `optIn` is the submit response's whatsappOptIn — { number, link } when the
+  // creator hasn't subscribed to our WhatsApp yet, null when they already have
+  // (or opted out, or the channel isn't configured), in which case the card
+  // stays hidden rather than inviting them to a chat they're already in.
+  function markSigned(optIn) {
     $('page1').hidden = true; $('page2').hidden = true; $('done').hidden = false;
+    if (optIn && optIn.link) {
+      $('wa-link').href = optIn.link;
+      $('wa-num').textContent = optIn.number || '';
+      $('wa-optin').hidden = false;
+    }
   }
 
   // A returning visitor whose contract is already signed sees the actual
@@ -811,7 +820,7 @@
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (!res.ok) throw new Error((res.j && res.j.error) || 'Something went wrong.');
-        markSigned();
+        markSigned(res.j && res.j.whatsappOptIn);
       })
       .catch(function (err) {
         errEl.textContent = err.message || 'Something went wrong. Please try again.';

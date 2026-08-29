@@ -458,21 +458,21 @@ async function sendWhatsAppTemplate({ to, name, languageCode, bodyParams, button
 // is a reply in an already-introduced thread, and reintroducing ourselves on
 // every send read like a broken mail merge.
 function renderOfferOutreachBody({ brandName, offerUrl, expiryDate }) {
-  return `Here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
+  return `Here are the details for your ${brandName} collaboration.\n\nReview the full offer and confirm here: ${offerUrl}\n\nOpen until ${expiryDate}.`;
 }
 
 // Same offer-reveal copy as renderOfferOutreachBody, but without the link
 // text — used as the body of the Cloud "View Offer" button message, where the
 // link lives on the button instead of repeated in the message.
 function renderOfferOutreachIntro({ brandName, expiryDate }) {
-  return `Here's your ${brandName} collaboration offer. Tap below to view the full details and accept (open until ${expiryDate}).`;
+  return `Here are the details for your ${brandName} collaboration.\n\nTap below to review the full offer and confirm.\n\nOpen until ${expiryDate}.`;
 }
 
 // Sent once an admin publishes the creator's personalised content brief (see
 // offers.deliverBriefToCreator) — a free-form session reply on an already-
 // established channel. No greeting — see renderOfferOutreachBody above.
 function renderContentBriefReadyBody({ brandName, briefUrl }) {
-  return `Your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
+  return `Your ${brandName} content brief is ready.\n\nEverything you need to start creating is here: ${briefUrl}`;
 }
 
 module.exports = {

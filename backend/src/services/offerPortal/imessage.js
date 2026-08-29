@@ -88,7 +88,7 @@ async function sendIMessageText({ to, body }) {
 // No greeting — "Hi {firstName}, this is INFLUENCE" only opens the FIRST
 // message of the conversation; this is a reply in an already-introduced thread.
 function renderOfferOutreachBody({ brandName, offerUrl, expiryDate }) {
-  return `Here's your ${brandName} collaboration offer. Tap to view the full details and accept it here: ${offerUrl} (open until ${expiryDate}).`;
+  return `Here are the details for your ${brandName} collaboration.\n\nReview the full offer and confirm here: ${offerUrl}\n\nOpen until ${expiryDate}.`;
 }
 
 async function sendOfferOutreachIMessage(params) {
@@ -100,7 +100,7 @@ async function sendOfferOutreachIMessage(params) {
 // creator gets a consistent message whichever channel reaches them. No
 // greeting — see renderOfferOutreachBody above.
 function renderContentBriefReadyBody({ brandName, briefUrl }) {
-  return `Your ${brandName} content brief is ready! Take a look here: ${briefUrl}`;
+  return `Your ${brandName} content brief is ready.\n\nEverything you need to start creating is here: ${briefUrl}`;
 }
 
 // Our own iMessage sender number, shown in the invite email so a creator knows

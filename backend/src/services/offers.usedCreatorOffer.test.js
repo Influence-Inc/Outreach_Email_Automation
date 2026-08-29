@@ -118,6 +118,7 @@ function install({
   creator,
   cpmFromCreatorDb = null,
   subscribed = null,
+  windowOpen = false,
   offerCreate = { id: 42, token: 'tok42', expires_at: new Date('2026-08-01').toISOString(), creator_id: creator ? creator.id : null },
   emailSent = { sent: true },
 } = {}) {
@@ -131,6 +132,13 @@ function install({
     }
     // subscribedChannelFor's opt-out cross-campaign query
     if (/bool_or\(messaging_opted_out\)/i.test(sql)) return { opted_out: false };
+    // Person-level subscription lookup across the creator's other campaign rows.
+    if (/established_channel IS NOT NULL/i.test(sql)) {
+      return subscribed ? { established_channel: subscribed } : null;
+    }
+    // conversationWindowOpen — a proactive DM needs the provider's 24h
+    // free-form window open, not just a subscription.
+    if (/FROM offer_messages/i.test(sql)) return windowOpen ? { open: 1 } : null;
     // deliverOfferOverChannel's fetch
     if (/FROM offers o JOIN creators c ON c\.id = o\.creator_id/i.test(sql)) {
       return {
@@ -215,10 +223,11 @@ test('sendUsedCreatorOffer auto-prices, mints an offer, and sends the offer emai
   }
 });
 
-test('sendUsedCreatorOffer sends the DM (no email) when the creator is already messaging us in this campaign', async () => {
+test('sendUsedCreatorOffer sends the DM (no email) when subscribed and the window is open', async () => {
   const { emails } = install({
     creator: { ...baseCreator, established_channel: 'imessage', imessage: '+15551234567' },
     cpmFromCreatorDb: 20,
+    windowOpen: true,
   });
   try {
     const r = await offers.sendUsedCreatorOffer(88);
