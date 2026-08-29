@@ -74,8 +74,10 @@ test('renderMiniContractPdf carries the portal terms and the execution banner', 
   assert.match(text, /2 Reels/);
   assert.match(text, /1 Story set/);
   assert.match(text, /Content to be posted around 5 September 2026/);
-  // The accepted rate, so the copy actually states what the creator is paid.
-  assert.match(text, /\$2,500/);
+  // The rate is NOT on the portal's agreement block, so it must not appear on
+  // the copy either — the document has to be the one that was signed.
+  assert.doesNotMatch(text, /2,500/);
+  assert.doesNotMatch(text, /Compensation/);
   // Electronic-signature evidence, same as the full contract's copy.
   assert.match(text, /Submitted 2026-08-25 10:15:00 UTC/);
   assert.match(text, /IP 9\.9\.9\.9/);

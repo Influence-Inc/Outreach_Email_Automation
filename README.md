@@ -53,16 +53,18 @@ admin picks a campaign → adds creator IG URL → status: pending_extraction
 ## Signed contracts
 
 Whenever a creator signs, they get their executed copy by email with the PDF
-attached (`backend/src/services/signedContractEmail.js`), sent from
-`contracts@useinfluence.xyz` (`CONTRACT_EMAIL_FROM`) rather than the offers@
-sender — a reply to a contract copy is a contract question.
+attached (`backend/src/services/signedContractEmail.js`), sent from its own
+`CONTRACT_EMAIL_FROM` sender rather than the offers@ one — a reply to a contract
+copy is a contract question. It defaults to `jennifer@useinfluence.xyz`, the
+Resend-verified sender; point it at `contracts@useinfluence.xyz` once that
+address is verified too.
 
 Both signing flows are covered:
 
 | Signed at | Document | Renderer | Filename |
 | --- | --- | --- | --- |
 | `/contract/:token` (full contract) | the same PDF the team downloads from `/api/contract-pdf/:token`, account and tax identifiers masked to their last four digits | `contractPdf.js` | `<Name>-Contract-Signed.pdf` |
-| `/o/:token` (offer-portal mini contract) | the portal's own terms — a used creator's portal signature IS their contract, so this is the only copy they get | `miniContractPdf.js` | `<Name>-Agreement-Signed.pdf` |
+| `/o/:token` (offer-portal mini contract) | the portal's own terms, and only those (no rate — the portal's agreement block doesn't show one); a used creator's portal signature IS their contract, so this is the only copy they get | `miniContractPdf.js` | `<Name>-Agreement-Signed.pdf` |
 
 Both are framed by `pdf/agreementLayout.js` (title, execution banner, signature
 block, audit trail), so they read as one family of document, and each mirrors

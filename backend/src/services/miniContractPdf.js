@@ -11,13 +11,10 @@
 // IMPORTANT: this mirrors contractTermsBlock() in public/offer.js — the terms
 // the creator actually reads and signs on the portal — the same way
 // contractTerms.js mirrors contract.js for the full contract. The rows here are
-// exactly those rows, in that order. Don't add a term the page doesn't show:
-// the copy has to be the document that was signed, not a fuller one.
-//
-// The one addition is Compensation. It isn't inside the signed snapshot, but
-// it's the rate the creator accepted one step earlier in the same flow, taken
-// from the offer's own immutable `rate` — and an agreement copy that never
-// states the fee is close to useless to the person keeping it.
+// exactly those rows, in that order, and nothing else: the copy has to be the
+// document that was signed, not a fuller one. That deliberately leaves out the
+// rate, which the portal shows on the offer view before acceptance but never
+// inside the agreement itself.
 
 const { PdfDocument } = require('./pdf/document');
 const {
@@ -29,19 +26,6 @@ const {
   signatureBlock,
   addFooters,
 } = require('./pdf/agreementLayout');
-
-function fmtMoney(amount, currency) {
-  if (amount == null || Number.isNaN(Number(amount))) return '';
-  try {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currency || 'USD',
-      maximumFractionDigits: 0,
-    }).format(Number(amount));
-  } catch {
-    return `${currency ? `${currency} ` : '$'}${Number(amount).toLocaleString('en-US')}`;
-  }
-}
 
 function list(value) {
   if (Array.isArray(value)) return value.map(str).filter(Boolean);
@@ -119,13 +103,6 @@ function renderMiniContractPdf(offer) {
   if (timeline) {
     doc.heading('Timeline');
     kv('Timeline', timeline);
-  }
-
-  const rate = fmtMoney(o.rate, o.currency);
-  if (rate) {
-    doc.heading('Compensation');
-    kv('Compensation', rate, { size: 11, valueFont: 'bold' });
-    if (str(o.currency)) kv('Currency', str(o.currency));
   }
 
   signatureBlock(doc, {

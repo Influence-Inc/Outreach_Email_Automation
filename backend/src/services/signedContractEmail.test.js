@@ -291,7 +291,7 @@ test('retryUnsentContractCopies is a no-op when Resend is not configured', async
 
 // ── The sender ─────────────────────────────────────────────────────────────
 
-test('a contract copy is sent from contracts@, not the offers@ default', async () => {
+test('a contract copy is sent from the contract sender, not the offers@ default', async () => {
   let payload = null;
   await withStubs(
     {
@@ -305,11 +305,14 @@ test('a contract copy is sent from contracts@, not the offers@ default', async (
     },
     () => sendSignedContractCopy(SIGNED_ROW, { id: 7, first_name: 'Rachel' }),
   );
-  assert.strictEqual(payload.from, 'INFLUENCE <contracts@useinfluence.xyz>');
-  assert.strictEqual(email.contractFromAddress(), 'INFLUENCE <contracts@useinfluence.xyz>');
+  // jennifer@ is the Resend-verified sender today; CONTRACT_EMAIL_FROM moves it
+  // to contracts@ once that address is verified.
+  assert.strictEqual(payload.from, 'INFLUENCE <jennifer@useinfluence.xyz>');
+  assert.strictEqual(email.contractFromAddress(), 'INFLUENCE <jennifer@useinfluence.xyz>');
+  assert.doesNotMatch(payload.from, /offers@/, 'contract copies never use the offer sender');
 });
 
-test('CONTRACT_EMAIL_FROM overrides the contracts@ default', async () => {
+test('CONTRACT_EMAIL_FROM overrides the default contract sender', async () => {
   let payload = null;
   await withStubs(
     {
@@ -349,7 +352,7 @@ test('sendMiniContractCopy attaches the portal agreement and audits it as mini',
 
   assert.strictEqual(result.sent, true);
   assert.strictEqual(result.to, 'sam@example.com');
-  assert.strictEqual(payload.from, 'INFLUENCE <contracts@useinfluence.xyz>');
+  assert.strictEqual(payload.from, 'INFLUENCE <jennifer@useinfluence.xyz>');
   assert.match(payload.subject, /signed Netflix agreement/i);
   assert.match(payload.text, /^Hi Sam,/);
   // The portal collects no bank or tax details, so the copy must not claim

@@ -14,12 +14,15 @@ function fromAddress() {
   return process.env.OFFER_EMAIL_FROM || process.env.EMAIL_FROM || 'INFLUENCE <offers@useinfluence.xyz>';
 }
 
-// Executed-agreement copies go out from contracts@, not the offers@ sender the
-// rest of this module uses: a creator replying to a contract copy ("this fee is
-// wrong", "please resend") is raising a contract question, and it should land
-// with whoever handles contracts rather than in the offer-outreach stream.
+// Executed-agreement copies get their own sender, separate from the offers@
+// address the rest of this module uses: a creator replying to a contract copy
+// ("this fee is wrong", "please resend") is raising a contract question, and it
+// should land with whoever handles contracts rather than in the offer-outreach
+// stream. The default is jennifer@ because that is the verified Resend sender
+// today — point CONTRACT_EMAIL_FROM at contracts@useinfluence.xyz once that
+// address is verified, and nothing else has to change.
 function contractFromAddress() {
-  return process.env.CONTRACT_EMAIL_FROM || 'INFLUENCE <contracts@useinfluence.xyz>';
+  return process.env.CONTRACT_EMAIL_FROM || 'INFLUENCE <jennifer@useinfluence.xyz>';
 }
 
 function baseUrl() {
