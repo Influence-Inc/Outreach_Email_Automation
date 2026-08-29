@@ -786,6 +786,16 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .btn-danger:hover { background: #9d3d1a; border-color: #9d3d1a; }
 
+/* --- Campaign header title + Intake button, and the read-only intake popup -- */
+.title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.intake-modal { width: min(560px, 100%); max-height: 82vh; display: flex; flex-direction: column; }
+.intake-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.intake-body { margin-top: 12px; overflow-y: auto; }
+.intake-field { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.intake-field:last-child { border-bottom: none; }
+.intake-label { font-size: 12px; color: var(--ink-2); margin-bottom: 3px; }
+.intake-value { font-size: 13.5px; color: var(--ink); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* --- Toasts (in-app replacement for native alert()) ----------------------- */
 .toast-host {
   position: fixed; right: 18px; bottom: 18px; z-index: 70;
