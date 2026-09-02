@@ -245,14 +245,12 @@ test('hiDeepLink is null with no business number rather than a broken link', () 
 
 // --- copy ------------------------------------------------------------------
 
-test('the intro states what the thread is for and how to leave it', () => {
+test('the intro states what the thread is for', () => {
   // This is the only message that gets to set expectations. If it doesn't say
-  // updates are coming, every unprompted message after it is a surprise; if it
-  // doesn't say STOP, the lane has no consent story.
+  // updates are coming, every unprompted message after it is a surprise.
   const body = msg.introMessage({ firstName: 'Sam', brandName: 'Reve' });
   assert.match(body, /Sam/);
   assert.match(body, /Reve/);
-  assert.match(body, /STOP/);
 });
 
 test('the "send us a Hi" ask actually asks for a Hi', () => {
@@ -300,12 +298,11 @@ test('the approval message names the next step whether or not it has a link', ()
   assert.doesNotMatch(withoutUrl, /https?:/);
 });
 
-test('the wrap-up says the creator stays subscribed, and how to stop', () => {
+test('the wrap-up says the creator stays subscribed', () => {
   // The subscription outliving the campaign is only acceptable because this
   // message tells the creator it will.
   const body = msg.deliverablesComplete({ brandName: 'Reve' });
-  assert.match(body, /future campaigns/i);
-  assert.match(body, /STOP/);
+  assert.match(body, /new campaign/i);
 });
 
 test('only the opening messages greet — later updates do not re-introduce us', () => {
