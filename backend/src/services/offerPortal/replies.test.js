@@ -129,7 +129,7 @@ test('interestClarificationMessage nudges toward Yes/No, not the generic deflect
   assert.match(msg, /Sam/);
   assert.match(msg, /Yes/);
   assert.match(msg, /No/);
-  assert.doesNotMatch(msg, /jennifer@useinfluence\.xyz/); // that's DEFLECTION_MESSAGE's job, not this one
+  assert.doesNotMatch(msg, /jennifer@useinfluence\.xyz/); // not the old support-deflection copy
 });
 
 test('firstContactHoldingMessage is warm and does not read as a support brush-off', () => {

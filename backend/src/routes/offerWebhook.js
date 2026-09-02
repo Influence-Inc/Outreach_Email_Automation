@@ -16,8 +16,8 @@
 //   4. accept/decline with a pending offer → call respondToOffer — the SAME
 //      backend path the web Accept button uses (a WhatsApp "yes" and a web
 //      Accept can never drift apart)
-//   5. anything else → send the deflection reply and flag needs_review so it
-//      surfaces for a human in the dashboard.
+//   5. anything else → no auto-reply; just flag needs_review so it surfaces
+//      for a human in the dashboard.
 // Ported originally from Influence-CDB-portal (api/webhooks/aisensy/route.ts),
 // generalised to both channels. Linq nests the reply under an event envelope
 // (message.parts[].value / sender_handle), while Twilio POSTs a flat
@@ -39,7 +39,6 @@ const {
   tooHighReply,
   interestClarificationMessage,
   firstContactHoldingMessage,
-  DEFLECTION_MESSAGE,
   OPT_OUT_CONFIRMATION,
   OPT_IN_CONFIRMATION,
 } = require('../services/offerPortal/replies');
@@ -448,9 +447,6 @@ async function sendChannelMessage(channel, creator, offerId, body) {
   }
 }
 
-const sendDeflection = (channel, creator, offerId) =>
-  sendChannelMessage(channel, creator, offerId, DEFLECTION_MESSAGE);
-
 // Shared handler for both channels. `authFn(req)` returns true when the request
 // is authentic (WhatsApp: shared secret; iMessage: Linq HMAC signature).
 async function handleInbound(channel, contactColumn, authFn, req, res) {
@@ -692,7 +688,6 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
   const decision = decideInboundAction({ intent, hasPendingOffer: !!pendingOffer, requestedRate });
 
   let needsReview = false;
-  let shouldDeflect = false;
   let outcome = 'deflected';
 
   if (decision.action === 'respond') {
@@ -706,7 +701,6 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
       outcome = 'responded'; // respondToOffer already sent the follow-up
     } else {
       needsReview = true;
-      shouldDeflect = true;
     }
   } else if (decision.action === 'negotiate') {
     // A counter-rate ask ("can you do $500?") → the SAME CPM counter engine the
@@ -728,14 +722,12 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
         tooHighReply(firstNameOf(matched), neg.originalRateFormatted),
       );
     } else {
-      // Negotiation errored → human review + deflection.
+      // Negotiation errored → human review.
       needsReview = true;
-      shouldDeflect = true;
     }
   } else {
     // Nothing actionable (unrecognised, or accept/decline with no pending offer).
     needsReview = true;
-    shouldDeflect = true;
   }
 
   // Persist the raw payload alongside the parsed body so the exact provider
@@ -745,8 +737,6 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
      VALUES ($1, $2, 'inbound', $3, $4, $5, $6::jsonb, $7)`,
     [matched.id, attachedOfferId, channel, parsed.body, needsReview, JSON.stringify(req.body ?? null), providerMessageId],
   );
-
-  if (shouldDeflect) await sendDeflection(channel, matched, attachedOfferId);
 
   return res.json({ ok: true, intent, outcome, needsReview });
 }
