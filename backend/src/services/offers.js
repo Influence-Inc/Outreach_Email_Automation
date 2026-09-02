@@ -1155,7 +1155,7 @@ async function onOfferResponded(offerId, response) {
     // contract — send them the link (accept over the web page goes straight to
     // the contract view, so this only matters for a messaged accept).
     if (response === 'accepted') {
-      body += `\n\nOne last step — review and sign your agreement here: ${offerUrl(offer.token)}`;
+      body += `\n\nOne last step — review your agreement here: ${offerUrl(offer.token)}`;
     }
     const msgChannel = offer.messaging_opted_out ? null : offer.established_channel;
     if (msgChannel === 'whatsapp') {
