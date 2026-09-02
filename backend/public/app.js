@@ -490,6 +490,7 @@ async function selectCampaign(id) {
   syncIgDmTemplateUI(c);
   syncMessagingBriefUI(c);
   syncContentBriefUI(c);
+  syncCampaignIntakeUI(c);
   syncStageFilterUI();
   await refreshCreators();
 }
@@ -572,6 +573,96 @@ function syncContentBriefUI(c) {
   el('content-brief-status').textContent = '';
   el('content-brief-hint').textContent = (cb.campaign_narrative || cb.website) ? 'configured' : 'not set';
   card.open = false;
+}
+
+// Render the per-campaign "Campaign setup details" card. The intake ships on
+// each campaign's `data.intake` field, mirrored from
+// campaigns.influence.technology; the list endpoint omits `data` to stay
+// small, so this fetches the single-campaign row on demand. Same shape as
+// the existing modal (showCampaignIntake), just laid out inline as a
+// collapsible card so it lives with the other per-campaign briefing cards
+// (IG DM template, WhatsApp brief, Content brief).
+function _campaignIntakeRows(intake) {
+  const cpm = intake.cpmStrategy === 'cap'
+    ? `Cap at $${intake.maxCPM}`
+    : (intake.cpmStrategy === 'lowest' ? 'Lowest CPM' : (intake.cpmStrategy || ''));
+  return [
+    ['Brand name', intake.brandName],
+    ['Work email', intake.workEmail],
+    ['Product name', intake.productName],
+    ['Feature / highlight', intake.featureName],
+    ['Campaign name', intake.campaignName],
+    ['Campaign narrative', intake.narrative],
+    ['Viral triggers', Array.isArray(intake.viralTriggers) ? intake.viralTriggers.join(', ') : intake.viralTriggers],
+    ['Target audience', intake.targetAudience],
+    ['Specific influencers', intake.specificInfluencers],
+    ['Showcase link', intake.showcaseLink],
+    ['Showcase instructions', intake.showcaseInstructions],
+    ['Required comment reply', intake.commentReply],
+    ['Caption', intake.caption],
+    ['Restrictions', intake.restrictions],
+    ['CPM strategy', cpm],
+    ['Total budget', intake.totalBudget ? '$' + Number(intake.totalBudget).toLocaleString() : ''],
+  ];
+}
+
+async function syncCampaignIntakeUI(c) {
+  const card = el('campaign-intake-card');
+  if (!card || !c) return;
+  const body = el('campaign-intake-body');
+  const hint = el('campaign-intake-hint');
+  // Show the card immediately with a loading state so it takes its layout
+  // slot before the fetch resolves. `open` is preserved across campaigns for
+  // consistency with the other briefing cards (defaults to closed).
+  card.hidden = false;
+  card.open = false;
+  hint.textContent = 'loading…';
+  body.innerHTML = '';
+
+  // Race-guard: switching campaigns fast shouldn't let the older fetch
+  // paint over the newer one.
+  const requestedId = c.id;
+  let row;
+  try {
+    row = await api(`/api/campaigns/${encodeURIComponent(requestedId)}`);
+  } catch (err) {
+    if (state.selectedCampaignId !== requestedId) return;
+    hint.textContent = 'could not load';
+    return;
+  }
+  if (state.selectedCampaignId !== requestedId) return;
+
+  const intake = row && row.data && row.data.intake ? row.data.intake : null;
+  if (!intake) {
+    hint.textContent = 'not submitted';
+    const msg = document.createElement('div');
+    msg.className = 'confirm-modal-message';
+    msg.textContent = 'No setup details were submitted for this campaign.';
+    body.appendChild(msg);
+    return;
+  }
+
+  // Header label identifies the section at a glance when scrolled — brand
+  // name plus campaign name, matching the request to pin the section to
+  // both.
+  const brand = intake.brandName || c.brand_name || '';
+  const camp = intake.campaignName || c.name || '';
+  const label = [brand, camp].filter(Boolean).join(' — ');
+  hint.textContent = label || 'ready';
+
+  for (const [labelText, value] of _campaignIntakeRows(intake)) {
+    if (value === undefined || value === null || value === '') continue;
+    const field = document.createElement('div');
+    field.className = 'intake-field';
+    const l = document.createElement('div');
+    l.className = 'intake-label';
+    l.textContent = labelText;
+    const v = document.createElement('div');
+    v.className = 'intake-value';
+    v.textContent = String(value);
+    field.append(l, v);
+    body.append(field);
+  }
 }
 
 // Toggle the creator table's stage filter. Clicking the active stage (or the

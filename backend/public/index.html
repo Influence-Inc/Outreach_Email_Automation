@@ -105,6 +105,26 @@
             </div>
           </form>
 
+          <!-- Campaign setup details (per campaign). The brand's original setup
+               submission on campaigns.influence.technology, mirrored here from
+               the /api/bot/campaigns feed. Read-only; a collapsible card so the
+               operator can glance at the brief right on the campaign page
+               without opening the popup. Header shows brand name + campaign
+               name so a scrolled-away section is still identifiable. -->
+          <details id="campaign-intake-card" class="card" hidden>
+            <summary class="ig-dm-summary">
+              <h2>Campaign setup details</h2>
+              <span id="campaign-intake-hint" class="hint"></span>
+            </summary>
+            <p class="hint subhead">
+              The brand's original campaign-setup submission — brand + product
+              info, campaign narrative, viral triggers, target audience, budget
+              and CPM strategy, and what to show / avoid. Read-only; edits are
+              made on the brand's Influence dashboard.
+            </p>
+            <div id="campaign-intake-body" class="intake-body"></div>
+          </details>
+
           <!-- Instagram DM template (per campaign). Rendered above the creator
                table because it gates the "Send Instagram DMs" button in the
                table header — no template = disabled button. -->
