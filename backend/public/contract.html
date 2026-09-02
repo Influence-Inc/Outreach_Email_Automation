@@ -32,8 +32,8 @@
     .wrap { max-width: 760px; margin: 0 auto; padding: 40px 22px 80px; }
 
     /* Brand bar */
-    .brandbar { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 30px; }
-    .brandbar svg { height: 20px; width: auto; fill: var(--ink); }
+    .brandbar { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 8px 0 36px; }
+    .brandbar svg { height: 24px; width: auto; display: block; fill: var(--ink); }
 
     /* Document card */
     .doc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
@@ -433,14 +433,14 @@
           <div class="step-icon is-num">2</div>
           <div class="step-body">
             <div class="step-head"><span class="step-title">Content brief</span><span class="step-tag is-next">Up next</span></div>
-            <p class="step-desc">A short brief with deliverables, dates and tone — usually within 48 hours.</p>
+            <p class="step-desc">A short brief with deliverables and dates — usually within 48 hours.</p>
           </div>
         </div>
         <div class="step">
           <div class="step-icon is-num">3</div>
           <div class="step-body">
             <div class="step-head"><span class="step-title">Start creating</span></div>
-            <p class="step-desc">Post, submit for approval, get paid.</p>
+            <p class="step-desc">Post your content, submit it for approval, then get paid.</p>
           </div>
         </div>
       </div>
@@ -462,8 +462,6 @@
     <!-- Shown only when the signed-copy email actually went out (the submit
          response says so) — never promise an inbox delivery that didn't happen. -->
     <p id="done-copy" class="foot" hidden>A copy of this agreement has been emailed to you.</p>
-
-    <p class="foot">INFLUENCE · This document is confidential and intended only for the named creator.</p>
   </div>
   <script src="/contract.js"></script>
 </body>
