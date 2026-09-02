@@ -95,9 +95,6 @@ function notAFitCloseMessage(firstName) {
   return `Completely understand, ${firstName} — thanks for taking a look.\n\nThis one may not be the right match, but we'll be in touch when we have a campaign that suits you better.`;
 }
 
-const DEFLECTION_MESSAGE =
-  "Thanks for your message — I've passed this to our team and someone will get back to you shortly.\n\nYou can also reach us any time at jennifer@useinfluence.xyz.";
-
 // Brand/product brief sent the moment a creator first replies — BEFORE the
 // actual rate/deliverables (see offers.messaging_stage). brandBlurb is already
 // resolved by the caller (the campaign's custom messaging_brief, placeholder-
@@ -148,9 +145,9 @@ const OFFER_BUTTONS = [
 const OFFER_FALLBACK_HINT = 'Reply Accept or Decline, or open the link above for the full details.';
 
 // Sent when a reply to the brief (awaiting a yes/no on INTEREST, not yet a rate
-// decision) doesn't classify as either. A stage-appropriate nudge instead of
-// the generic DEFLECTION_MESSAGE, which points to human support and would be a
-// non-sequitur here — the creator just needs to pick Yes or No.
+// decision) doesn't classify as either. A stage-appropriate nudge — the
+// creator just needs to pick Yes or No, so this is what they get instead of
+// no reply at all.
 function interestClarificationMessage(firstName) {
   return `No problem, ${firstName} — just let us know.\n\nYes if you'd like to hear the details, or No if now isn't the right time.`;
 }
@@ -256,7 +253,6 @@ module.exports = {
   INTEREST_FALLBACK_HINT,
   OFFER_BUTTONS,
   OFFER_FALLBACK_HINT,
-  DEFLECTION_MESSAGE,
   OPT_OUT_CONFIRMATION,
   OPT_IN_CONFIRMATION,
 };
