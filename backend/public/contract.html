@@ -168,23 +168,45 @@
     .spinner { width: 26px; height: 26px; border: 3px solid var(--line-2); border-top-color: var(--accent);
       border-radius: 50%; margin: 0 auto 16px; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .check { width: 54px; height: 54px; border-radius: 50%; background: var(--green-bg); color: var(--green);
-      display: flex; align-items: center; justify-content: center; margin: 0 auto 18px; font-size: 26px; }
     .foot { text-align: center; color: var(--faint-2); font-size: 12px; margin-top: 26px; }
 
-    /* WhatsApp opt-in, shown under the signed confirmation. Subscribing is a
-       one-time thing per creator, so this is hidden once they've messaged us. */
-    .wa-card { margin: 26px auto 0; max-width: 420px; text-align: left;
-      background: var(--surface-2); border: 1px solid var(--line);
-      border-radius: var(--radius-md); padding: 18px 20px; }
-    .wa-card h2 { font-size: 15px; margin: 0 0 6px; color: var(--ink); }
-    .wa-card p { font-size: 13.5px; line-height: 1.5; color: var(--ink-2); margin: 0 0 14px; }
-    .wa-btn { display: flex; align-items: center; justify-content: center; gap: 9px;
-      text-decoration: none; font-weight: 600; font-size: 14.5px; color: #fff;
-      background: var(--accent); padding: 12px 18px; border-radius: var(--radius-sm);
+    /* Confirmation — contract signed. A big checkmark + "what happens next"
+       checklist rather than a paragraph of prose, so a creator glancing at
+       their phone sees the shape of the whole process at once. */
+    .confirm { text-align: center; padding: 52px 36px 36px; }
+    .confirm-icon { width: 72px; height: 72px; border-radius: 50%; background: var(--green-bg);
+      color: var(--green); display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 22px; }
+    .confirm-icon svg { width: 30px; height: 30px; }
+    .confirm-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--green); margin-bottom: 10px; }
+    .confirm-title { font-size: 32px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 30px; }
+
+    /* Steps checklist — one completed step, one up-next, the rest to come. */
+    .steps { text-align: left; border: 1px solid var(--line); border-radius: var(--radius-md);
+      overflow: hidden; margin-bottom: 24px; }
+    .step { display: flex; gap: 14px; padding: 18px 22px; border-bottom: 1px solid var(--line-3); }
+    .step:last-child { border-bottom: 0; }
+    .step-icon { flex: none; width: 30px; height: 30px; border-radius: 50%; margin-top: 2px;
+      display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+    .step-icon.is-done { background: var(--green-bg); color: var(--green); }
+    .step-icon.is-done svg { width: 15px; height: 15px; }
+    .step-icon.is-num { border: 1.5px solid var(--line-2); color: var(--muted); }
+    .step-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 3px; flex-wrap: wrap; }
+    .step-title { font-size: 15.5px; font-weight: 700; color: var(--ink); }
+    .step-tag { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .step-tag.is-done { color: var(--green); }
+    .step-tag.is-next { color: var(--muted); }
+    .step-desc { margin: 0; font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }
+
+    /* WhatsApp CTA, shown under the checklist. Subscribing is a one-time thing
+       per creator, so this is hidden once they've already messaged us. */
+    .wa-cta-btn { display: flex; align-items: center; justify-content: center; gap: 10px;
+      width: 100%; text-decoration: none; font-weight: 700; font-size: 15.5px; color: #fff;
+      background: var(--green); padding: 15px 20px; border-radius: var(--radius-sm);
       box-shadow: var(--shadow-btn); transition: background .15s ease; }
-    .wa-btn:hover { background: var(--accent-strong); }
-    .wa-btn svg { width: 17px; height: 17px; flex: none; }
+    .wa-cta-btn:hover { background: #0f5f40; }
+    .wa-cta-btn svg { width: 19px; height: 19px; flex: none; }
     .wa-num { display: block; text-align: center; font-size: 12px; color: var(--muted);
       margin-top: 10px; }
   </style>
@@ -381,30 +403,65 @@
     </form>
 
     <!-- Confirmation -->
-    <div id="done" class="doc" hidden><div class="state">
-      <div class="check">✓</div>
-      <h1>Contract signed</h1>
-      <p>Thank you — we've recorded your signature and payment details. We'll share a short content brief before you start creating.</p>
-      <!-- Shown only when the signed-copy email actually went out (the submit
-           response says so) — never promise an inbox delivery that didn't happen. -->
-      <p id="done-copy" hidden>A signed copy of the contract is on its way to your inbox.</p>
+    <div id="done" class="doc" hidden><div class="confirm">
+      <div class="confirm-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="5 13 10 18 19 7"></polyline>
+        </svg>
+      </div>
+      <div class="confirm-eyebrow">Confirmed</div>
+      <h1 class="confirm-title">Contract signed</h1>
+
+      <!-- "What happens next" checklist, in place of a paragraph of prose — a
+           creator glancing at their phone sees the shape of the whole process
+           at once instead of having to read it. -->
+      <div class="steps">
+        <div class="step">
+          <div class="step-icon is-done">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="5 13 10 18 19 7"></polyline>
+            </svg>
+          </div>
+          <div class="step-body">
+            <div class="step-head"><span class="step-title">Contract signed</span><span class="step-tag is-done">Done</span></div>
+            <p class="step-desc">Signature and payment method verified.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-icon is-num">2</div>
+          <div class="step-body">
+            <div class="step-head"><span class="step-title">Content brief</span><span class="step-tag is-next">Up next</span></div>
+            <p class="step-desc">A short brief with deliverables, dates and tone — usually within 48 hours.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-icon is-num">3</div>
+          <div class="step-body">
+            <div class="step-head"><span class="step-title">Start creating</span></div>
+            <p class="step-desc">Post, submit for approval, get paid.</p>
+          </div>
+        </div>
+      </div>
 
       <!-- Revealed only when we have a WhatsApp number configured AND this
            creator hasn't already subscribed — see contract.js. -->
-      <div id="wa-optin" class="wa-card" hidden>
-        <h2>Get updates on WhatsApp</h2>
-        <p>Send us a quick “Hi” and we'll keep you posted on your brief, payment
-           and future collaborations — all in one chat.</p>
-        <a id="wa-link" class="wa-btn" href="#" target="_blank" rel="noopener noreferrer">
+      <div id="wa-optin" hidden>
+        <a id="wa-link" class="wa-cta-btn" href="#" target="_blank" rel="noopener noreferrer">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M17.5 14.4c-.3-.2-1.7-.9-2-1-.3-.1-.5-.1-.7.1-.2.3-.7 1-.9 1.2-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.9-.8-1.4-1.7-1.6-2-.2-.3 0-.5.1-.6l.5-.5c.1-.2.2-.3.3-.5 0-.2 0-.4 0-.5 0-.2-.7-1.6-.9-2.2-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.4s1 2.8 1.2 3c.1.2 2 3.1 5 4.3.7.3 1.2.5 1.6.6.7.2 1.3.2 1.8.1.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.2.2-1.4-.1-.1-.3-.2-.5-.3z"/>
             <path d="M12 2a10 10 0 0 0-8.6 15L2 22l5.2-1.4A10 10 0 1 0 12 2zm0 18.2c-1.6 0-3.1-.4-4.4-1.2l-.3-.2-3.1.8.8-3-.2-.3A8.2 8.2 0 1 1 12 20.2z"/>
           </svg>
-          Message us on WhatsApp
+          Get next steps on WhatsApp
         </a>
         <span id="wa-num" class="wa-num"></span>
       </div>
     </div></div>
+
+    <!-- Shown only when the signed-copy email actually went out (the submit
+         response says so) — never promise an inbox delivery that didn't happen. -->
+    <p id="done-copy" class="foot" hidden>A copy of this agreement has been emailed to you.</p>
 
     <p class="foot">INFLUENCE · This document is confidential and intended only for the named creator.</p>
   </div>
