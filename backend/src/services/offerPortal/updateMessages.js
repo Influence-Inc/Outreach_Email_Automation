@@ -21,21 +21,17 @@
 //     as a tappable button, so a link that only exists on a button would leave
 //     the history — and the Twilio path — with no link at all.
 
-const SIGNOFF = 'Jennifer from INFLUENCE';
-
 // The one-time opener. Sent when a signed creator makes first contact — usually
 // the "Hi" we asked for. It does two things and stops: says who we are, and sets
 // the expectation that this thread is where their campaign updates will arrive,
 // so the unprompted messages that follow over the coming weeks are ones they
 // agreed to receive rather than ones that appear out of nowhere.
 function introMessage({ firstName, brandName }) {
-  const brand = brandName ? ` on the ${brandName} campaign` : '';
+  const brand = brandName ? ` for the ${brandName} campaign` : '';
   return (
-    `Hi ${firstName}, ${SIGNOFF} here — great to have you on board${brand}!\n\n` +
-    `I'll keep you posted right here on WhatsApp: your content brief, updates when your ` +
-    `draft is reviewed, and anything the brand needs from you. No need to check your email ` +
-    `for any of it.\n\n` +
-    `You can reply to this chat any time if you have a question. Reply STOP to opt out.`
+    `Hi ${firstName}, great to have you onboard${brand}!\n\n` +
+    `This chat is where everything happens: your content brief, updates when your ` +
+    `draft is reviewed, and anything the brand needs from you.`
   );
 }
 
@@ -47,9 +43,9 @@ function introMessage({ firstName, brandName }) {
 function hiRequestMessage({ firstName, brandName }) {
   const brand = brandName || 'your campaign';
   return (
-    `Hi ${firstName}, ${SIGNOFF} here. Congratulations on signing for ${brand}!\n\n` +
-    `I'll be sending your brief and all your campaign updates over WhatsApp. ` +
-    `Just reply "Hi" to this message so I can start sending them through.`
+    `Hi ${firstName}, congratulations on signing for ${brand}!\n\n` +
+    `We'll be sending your brief and all your campaign updates over WhatsApp. ` +
+    `Just reply "Hi" to this message so we can start sending them through.`
   );
 }
 
@@ -58,7 +54,7 @@ function hiRequestMessage({ firstName, brandName }) {
 // the wa.me deep link so replying is one tap rather than a copied number.
 function hiRequestEmail({ firstName, brandName, whatsappLink, whatsappNumber }) {
   const brand = brandName || 'your campaign';
-  const subject = `Quick one — campaign updates for ${brand} on WhatsApp`;
+  const subject = `Quick one - campaign updates for ${brand} on WhatsApp`;
   const link = whatsappLink
     ? `\n\nTap here to open the chat: ${whatsappLink}`
     : whatsappNumber
@@ -66,11 +62,10 @@ function hiRequestEmail({ firstName, brandName, whatsappLink, whatsappNumber }) 
       : '';
   const body =
     `Hi ${firstName},\n\n` +
-    `Congratulations on signing for ${brand} — we're really glad to have you.\n\n` +
-    `From here I'll send your content brief and every campaign update (draft reviews, ` +
+    `Congratulations on signing for ${brand} - we're really glad to have you.\n\n` +
+    `From here we'll send your content brief and every campaign update (draft reviews, ` +
     `brand feedback, approvals) over WhatsApp so nothing gets lost in your inbox. ` +
-    `Send us a "Hi" on WhatsApp and I'll start sending them through.${link}\n\n` +
-    `Best,\n${SIGNOFF}`;
+    `Send us a "Hi" on WhatsApp and we'll start sending them through.${link}`;
   return { subject, body };
 }
 
@@ -89,7 +84,7 @@ function briefReady({ brandName, briefUrl }) {
 function reviewSubmitted({ brandName }) {
   return (
     `Got your draft for ${brandName} — it's with the brand for review now. ` +
-    `I'll let you know here as soon as they come back on it.`
+    `We'll let you know here as soon as they come back on it.`
   );
 }
 
@@ -98,8 +93,8 @@ function reviewSubmitted({ brandName }) {
 // have one.
 function reviewApproved({ brandName, submitPostsUrl }) {
   const next = submitPostsUrl
-    ? `\n\nOnce it's live, drop the post link here so we can track it: ${submitPostsUrl}`
-    : `\n\nOnce it's live, send us the post link so we can track it.`;
+    ? `\n\nOnce it's live, drop the post link(s) here so we can track it: ${submitPostsUrl}`
+    : `\n\nOnce it's live, send us the post link(s) so we can track it.`;
   return `Great news — your ${brandName} draft has been approved! You're clear to post.${next}`;
 }
 
@@ -126,8 +121,8 @@ function reviewFeedback({ brandName, senderName, feedback, chatUrl }) {
 function postSubmitted({ brandName, postUrl }) {
   const link = postUrl ? `\n\n${postUrl}` : '';
   return (
-    `Post link received for ${brandName} — thanks! ` +
-    `We're tracking its views from here, so there's nothing else you need to do on it.${link}`
+    `Post link received for ${brandName} - thanks! ` +
+    `We're tracking its views and engagement from here, so there's nothing else you need to do on it.${link}`
   );
 }
 
@@ -137,10 +132,10 @@ function postSubmitted({ brandName, postUrl }) {
 // that just happens to them (see creatorUpdates.onDeliverablesComplete).
 function deliverablesComplete({ brandName }) {
   return (
-    `That's a wrap on ${brandName} — all your deliverables are complete. ` +
-    `It's been a pleasure working with you, and payment will follow per your contract.\n\n` +
-    `I'll keep you on this chat for future campaigns and message you here when I have ` +
-    `one that fits you. Reply STOP any time if you'd rather not hear about them.`
+    `🎉 That's a wrap on ${brandName}! All your deliverables are marked complete.\n\n` +
+    `Payment will be processed per your contract - nothing more needed from you.\n\n` +
+    `This chat stays open: you'll hear from INFLUENCE here whenever a new campaign fits ` +
+    `your profile. Thanks for the great work! 👋`
   );
 }
 
@@ -150,7 +145,7 @@ function deliverablesComplete({ brandName }) {
 // read.
 function nextCampaignOutreach({ firstName, brandName, blurb }) {
   const pitch = String(blurb || '').trim();
-  const opener = `Hi ${firstName}, we've got a new campaign with ${brandName} coming up and thought of you.`;
+  const opener = `Hi ${firstName}, a new ${brandName} campaign just opened up - and you're a match for it.`;
   return pitch ? `${opener}\n\n${pitch}` : opener;
 }
 
@@ -165,7 +160,6 @@ function ackMessage({ firstName }) {
 }
 
 module.exports = {
-  SIGNOFF,
   introMessage,
   hiRequestMessage,
   hiRequestEmail,
