@@ -52,7 +52,11 @@ api.post('/:token/respond', async (req, res, next) => {
 api.post('/:token/counter', async (req, res, next) => {
   try {
     const requestedRate = Number((req.body || {}).requestedRate);
-    const result = await offers.negotiateBudget({ token: req.params.token, requestedRate });
+    // `channel: 'web'` tells negotiateBudget the counter came in on the offer
+    // page — so it does NOT mirror the resulting counter to WhatsApp/iMessage
+    // (the creator is already looking at it here). Messaging-originated counters
+    // come in through offerWebhook.js with channel: 'whatsapp' / 'imessage'.
+    const result = await offers.negotiateBudget({ token: req.params.token, requestedRate, channel: 'web' });
     return res.status(result.ok ? 200 : 409).json(result);
   } catch (err) {
     next(err);
@@ -65,7 +69,9 @@ api.post('/:token/counter', async (req, res, next) => {
 api.post('/:token/schedule', async (req, res, next) => {
   try {
     const availableDate = (req.body || {}).availableDate;
-    const result = await offers.negotiateSchedule({ token: req.params.token, availableDate });
+    // channel:'web' — same rule as /counter: don't mirror a web-originated
+    // re-offer to WhatsApp/iMessage.
+    const result = await offers.negotiateSchedule({ token: req.params.token, availableDate, channel: 'web' });
     return res.status(result.ok ? 200 : 409).json(result);
   } catch (err) {
     next(err);
