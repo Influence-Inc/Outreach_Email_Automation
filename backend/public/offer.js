@@ -244,9 +244,8 @@
           },
         }));
       });
-      chips.appendChild(btn('Prefer not to say', { variant: 'outline', sm: true, onClick: function () { respond('declined'); } }));
       wrap.appendChild(h('div', { class: 'btns' },
-        h('p', { class: 'ask-sub' }, 'Mind sharing why? (optional)'),
+        h('p', { class: 'ask-sub' }, 'Mind sharing why?'),
         chips,
         h('button', { class: 'linkbtn', type: 'button', onclick: function () { mode = 'cta'; render(); } }, '← Back')));
     } else if (mode === 'schedule') {
