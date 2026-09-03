@@ -2097,6 +2097,26 @@ function miniContractTerms(offer) {
   };
 }
 
+// Days-per-video the posting deadline is projected against. Overridable via
+// env so the ratio isn't hardcoded to a marketing decision. 4 days is the
+// current baseline (roughly two weeks for 3 videos).
+const POSTING_DAYS_PER_VIDEO = () => Number(process.env.POSTING_DAYS_PER_VIDEO || 4);
+
+// The posting-deadline the offer portal renders — count of videos × 4 days,
+// anchored on the creator's actual start-of-work date. `contract_signed_at`
+// wins once signed (the deadline the creator effectively committed to), else
+// we fall back to now so a pending offer previews as "if you accept today,
+// you'd have until…". Returns a Date, or null when there are no deliverables
+// to count against.
+function computePostingDeadline(offer) {
+  const deliverables = Array.isArray(offer && offer.deliverables) ? offer.deliverables : [];
+  if (!deliverables.length) return null;
+  const videos = Math.max(1, totalDeliverableUnits(deliverables));
+  const anchor = offer && offer.contract_signed_at ? new Date(offer.contract_signed_at) : new Date();
+  if (Number.isNaN(anchor.getTime())) return null;
+  return new Date(anchor.getTime() + videos * POSTING_DAYS_PER_VIDEO() * 24 * 3600 * 1000);
+}
+
 // Data the public offer page renders (mirrors o/[token]/page.tsx). Logs a view.
 async function getOfferForPage(token) {
   const offer = await db.one(
@@ -2156,6 +2176,13 @@ async function getOfferForPage(token) {
     currency: offer.currency,
     rateFormatted: formatMoney(offer.rate, offer.currency),
     expiresFormatted: formatDate(offer.expires_at),
+    // Video-count × 4 days from the creator's start-of-work date — shown in
+    // the terms footer beside the rate. Rolling projection while the offer is
+    // pending; locks to contract_signed_at once signed.
+    postingDeadlineFormatted: (function () {
+      const d = computePostingDeadline(offer);
+      return d ? formatDate(d) : null;
+    })(),
     initialState,
     // When this offer is a schedule-negotiated one, the date the creator asked
     // for (so the active view can reassure them it's on their dates), plus the
@@ -2637,6 +2664,7 @@ async function resolveNeedsReview({ messageId }) {
 module.exports = {
   generateOfferToken,
   offerUrl,
+  computePostingDeadline,
   establishedMessagingChannel,
   subscribedChannelFor,
   subscribeCreatorChannel,

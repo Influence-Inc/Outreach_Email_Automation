@@ -10,7 +10,7 @@
 
   var DECLINE_REASONS = ['Budget', 'Timing', 'Not a fit'];
 
-  var offer = null; // { token, firstName, brandName, deliverables, rate, currency, rateFormatted, expiresFormatted }
+  var offer = null; // { token, firstName, brandName, deliverables, rate, currency, rateFormatted, expiresFormatted, postingDeadlineFormatted }
   var view = 'loading'; // loading | active | options | platforms | contract | signed | declined | expired | too_high | on_hold | notfound
   // Platform picker state — the required + optional tokens the server hands us,
   // and the creator's tick-marks. Instagram is always locked on (Reels drive
@@ -220,11 +220,24 @@
     // offerPortal/whatsapp.js:renderOfferOutreachBody and offerPortal/email.js's
     // "It's open until …" copy). Keeping it off the portal too avoids double-
     // messaging a hard deadline once the creator's already sitting on the page.
+    //
+    // The posting deadline (computed videos × 4 days from acceptance) IS shown,
+    // beside the rate — the creator picks up on what they're committing to at
+    // the same time as the money.
+    var footerChildren = [
+      h('div', {}, h('div', { class: 'rate-cap' }, 'Your rate'), h('div', { class: 'rate num' }, offer.rateFormatted)),
+    ];
+    if (offer.postingDeadlineFormatted) {
+      footerChildren.push(
+        h('div', { class: 'by' },
+          h('div', { class: 'by-cap' }, 'Posting deadline'),
+          h('div', { class: 'v num' }, offer.postingDeadlineFormatted)),
+      );
+    }
     var terms = h('div', { class: 'terms' },
       h('div', { class: 'label' }, 'Deliverables'),
       pills,
-      h('div', { class: 'terms-foot' },
-        h('div', {}, h('div', { class: 'rate-cap' }, 'Your rate'), h('div', { class: 'rate num' }, offer.rateFormatted))));
+      h.apply(null, [ 'div', { class: 'terms-foot' } ].concat(footerChildren)));
     wrap.appendChild(terms);
 
     if (mode === 'cta') {
@@ -715,6 +728,7 @@
         token: data.token, firstName: data.firstName, brandName: data.brandName,
         deliverables: data.deliverables, rate: data.rate, currency: data.currency,
         rateFormatted: data.rateFormatted, expiresFormatted: data.expiresFormatted,
+        postingDeadlineFormatted: data.postingDeadlineFormatted || null,
         contract: data.contract || null,
         contractSigned: !!data.contractSigned,
         serverSignerName: data.signerName || null,
