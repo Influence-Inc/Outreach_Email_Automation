@@ -321,6 +321,13 @@ UPDATE creators SET contract_approved = TRUE
 --   required   — ad rights are always included in the contract
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS usage_rights_policy TEXT NOT NULL DEFAULT 'no_rights';
 
+-- Per-campaign posting deadline. The single "content must be posted by" calendar
+-- date that seeds the mini-contract "Deadline" row on the offer portal (and the
+-- signed contract snapshot). Nullable — when unset the contract falls back to
+-- the legacy "within 3 weeks of signing" boilerplate. Editable from the Deal
+-- Studio dashboard's creator-table settings row.
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deadline_date DATE;
+
 -- Full email conversation, one row per message, persisted as each email is sent
 -- or received. Purpose: give the contract extractor (contracts.js) the WHOLE
 -- back-and-forth — where the creator states which platforms they'll post on,

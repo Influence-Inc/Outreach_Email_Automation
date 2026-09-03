@@ -414,6 +414,11 @@ async function selectCampaign(id) {
   el('usage-rights-status').textContent = '';
   el('campaign-instantly-id').value = c.instantly_campaign_id || '';
   el('instantly-status').textContent = '';
+  // Postgres hands back a DATE as a JS Date (or ISO string) via pg — take the
+  // first 10 chars so <input type="date"> reads it in the YYYY-MM-DD shape it
+  // requires; nothing else needs to look at the deadline here.
+  el('campaign-deadline-date').value = c.deadline_date ? String(c.deadline_date).slice(0, 10) : '';
+  el('deadline-status').textContent = '';
   syncSendEmailsBtn(c);
   syncIgDmTemplateUI(c);
   syncMessagingBriefUI(c);
@@ -3548,6 +3553,27 @@ el('save-instantly-btn').addEventListener('click', async () => {
       body: JSON.stringify({ instantly_campaign_id: raw === '' ? null : raw }),
     });
     status.textContent = raw === '' ? 'Cleared — using env default.' : 'Saved.';
+    await refreshCampaigns();
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el('save-deadline-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const raw = el('campaign-deadline-date').value;
+  const status = el('deadline-status');
+  const btn = el('save-deadline-btn');
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ deadline_date: raw === '' ? null : raw }),
+    });
+    status.textContent = raw === '' ? 'Cleared — using default wording.' : 'Saved.';
     await refreshCampaigns();
   } catch (err) {
     status.textContent = `Failed: ${err.message}`;

@@ -15,6 +15,7 @@ router.get('/', async (_req, res, next) => {
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
               c.ig_dm_body, c.messaging_brief, c.content_brief, c.sourcing_defaults,
+              c.deadline_date,
               COUNT(cr.id)::int AS creator_count,
               -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
               -- creators without an email who haven't been DM'd yet AND whose
@@ -131,13 +132,14 @@ router.patch('/:id', async (req, res, next) => {
     const hasMessagingBrief = Object.prototype.hasOwnProperty.call(body, 'messaging_brief');
     const hasContentBrief = Object.prototype.hasOwnProperty.call(body, 'content_brief');
     const hasSourcingDefaults = Object.prototype.hasOwnProperty.call(body, 'sourcing_defaults');
+    const hasDeadline = Object.prototype.hasOwnProperty.call(body, 'deadline_date');
     if (
       !hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm &&
-      !hasMessagingBrief && !hasContentBrief && !hasSourcingDefaults
+      !hasMessagingBrief && !hasContentBrief && !hasSourcingDefaults && !hasDeadline
     ) {
       return res.status(400).json({
         error:
-          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body, messaging_brief, content_brief or sourcing_defaults is required',
+          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body, messaging_brief, content_brief, sourcing_defaults or deadline_date is required',
       });
     }
 
@@ -221,6 +223,23 @@ router.patch('/:id', async (req, res, next) => {
       }
       params.push(raw == null ? null : JSON.stringify(raw));
       sets.push(`sourcing_defaults = $${params.length}::jsonb`);
+    }
+
+    if (hasDeadline) {
+      const raw = body.deadline_date;
+      // Accept 'YYYY-MM-DD' (what an <input type="date"> submits) or null / empty
+      // to clear. Anything else is rejected before hitting Postgres so the error
+      // message names the field instead of surfacing a raw SQL cast error.
+      let value = null;
+      if (raw !== null && raw !== undefined && String(raw).trim() !== '') {
+        const s = String(raw).trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(new Date(s + 'T00:00:00Z').getTime())) {
+          return res.status(400).json({ error: 'deadline_date must be a YYYY-MM-DD date or null' });
+        }
+        value = s;
+      }
+      params.push(value);
+      sets.push(`deadline_date = $${params.length}::date`);
     }
 
     const row = await db.one(

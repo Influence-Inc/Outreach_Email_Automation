@@ -215,12 +215,15 @@
     // Terms
     var pills = h('div', { class: 'pill-list' });
     (offer.deliverables || []).forEach(function (d) { pills.appendChild(h('span', { class: 'pill' }, d)); });
+    // "Respond by" is shown ONLY on the outreach message + email (see
+    // offerPortal/whatsapp.js:renderOfferOutreachBody and offerPortal/email.js's
+    // "It's open until …" copy). Keeping it off the portal too avoids double-
+    // messaging a hard deadline once the creator's already sitting on the page.
     var terms = h('div', { class: 'terms' },
       h('div', { class: 'label' }, 'Deliverables'),
       pills,
       h('div', { class: 'terms-foot' },
-        h('div', {}, h('div', { class: 'rate-cap' }, 'Your rate'), h('div', { class: 'rate num' }, offer.rateFormatted)),
-        h('div', { class: 'by' }, h('div', { class: 'by-cap' }, 'Respond by'), h('div', { class: 'v num' }, offer.expiresFormatted))));
+        h('div', {}, h('div', { class: 'rate-cap' }, 'Your rate'), h('div', { class: 'rate num' }, offer.rateFormatted))));
     wrap.appendChild(terms);
 
     if (mode === 'cta') {
@@ -308,8 +311,7 @@
     });
     wrap.appendChild(grid);
 
-    wrap.appendChild(h('p', { class: 'ask-sub center' },
-      'Respond by ' + ((options && options[0]) ? options[0].expiresFormatted : offer.expiresFormatted)));
+    // Respond-by intentionally omitted here — same rule as the active view.
     wrap.appendChild(h('div', { class: 'btns' },
       h('button', { class: 'linkbtn center-link', type: 'button', onclick: function () { respond('declined', 'Budget'); } },
         'None of these work — decline')));
@@ -464,7 +466,10 @@
     if (c.campaignName) box.appendChild(contractRow('Campaign', c.campaignName));
     box.appendChild(contractPills('Deliverables', c.deliverables));
     box.appendChild(contractPills('Platforms', c.platforms));
-    box.appendChild(contractRow('Timeline', c.timeline));
+    // Prefer the accurate calendar deadline the admin set on the campaign; only
+    // fall back to the free-text `timeline` for legacy contracts (or campaigns
+    // where the admin hasn't set a date yet).
+    box.appendChild(contractRow('Deadline', c.deadline || c.timeline));
     return box;
   }
 

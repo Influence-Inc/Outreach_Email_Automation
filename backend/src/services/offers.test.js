@@ -126,9 +126,23 @@ test('miniContractTerms builds the contract from real offer data with sensible d
   assert.strictEqual(terms.campaignName, 'Spring Launch');
   assert.deepStrictEqual(terms.deliverables, ['2 Reels']);
   assert.deepStrictEqual(terms.platforms, ['Instagram']); // default
+  assert.strictEqual(terms.deadline, null); // no campaign deadline set → null, portal falls back
   assert.match(terms.timeline, /3 weeks/); // default
   // Only the agreed essentials — never contact or bank details.
   assert.ok(!('email' in terms) && !('phone' in terms) && !('bank' in terms) && !('paymentTerms' in terms));
+});
+
+test('miniContractTerms surfaces the campaign deadline as an accurate date when set', () => {
+  const terms = offers.miniContractTerms({
+    full_name: 'Sam',
+    brand_name: 'Acme',
+    campaign_deadline_date: '2026-11-15',
+  });
+  // formatDate uses en-US Sep-D-YYYY-ish output; we just check the year lands
+  // in both fields so a locale tweak doesn't false-positive the test.
+  assert.match(terms.deadline, /2026/);
+  assert.match(terms.timeline, /posted by .*2026/);
+  assert.doesNotMatch(terms.timeline, /3 weeks/);
 });
 
 test('miniContractTerms falls back to first name then "Creator", and null campaign', () => {
