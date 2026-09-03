@@ -101,7 +101,7 @@ test('renderNewCampaignOfferEmail is friendly, has the offer link, and NO chat C
   });
   assert.match(r.subject, /Netflix/);
   assert.match(r.subject, /Sam/);
-  assert.match(r.text, /^Hey Sam/);
+  assert.match(r.text, /^Hi Sam/);
   assert.match(r.text, /new Netflix campaign/i);
   assert.match(r.text, /https:\/\/portal\.example\/o\/tok123/);
   assert.match(r.text, /Aug 1/);

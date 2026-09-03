@@ -61,9 +61,9 @@ admin picks a campaign → adds creator IG URL → status: pending_extraction
 Whenever a creator signs, they get their executed copy by email with the PDF
 attached (`backend/src/services/signedContractEmail.js`), sent from its own
 `CONTRACT_EMAIL_FROM` sender rather than the offers@ one — a reply to a contract
-copy is a contract question. It defaults to `jennifer@useinfluence.xyz`, the
-Resend-verified sender; point it at `contracts@useinfluence.xyz` once that
-address is verified too.
+copy is a contract question. It defaults to `contracts@useinfluence.xyz`, the
+Resend-verified sender for signed-agreement copies; override it only if the
+address ever has to change.
 
 Both signing flows are covered:
 

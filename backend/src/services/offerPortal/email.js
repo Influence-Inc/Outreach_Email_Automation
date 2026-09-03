@@ -18,11 +18,11 @@ function fromAddress() {
 // address the rest of this module uses: a creator replying to a contract copy
 // ("this fee is wrong", "please resend") is raising a contract question, and it
 // should land with whoever handles contracts rather than in the offer-outreach
-// stream. The default is jennifer@ because that is the verified Resend sender
-// today — point CONTRACT_EMAIL_FROM at contracts@useinfluence.xyz once that
-// address is verified, and nothing else has to change.
+// stream. contracts@useinfluence.xyz is verified in Resend as its own sender,
+// so signed-agreement copies go from there; CONTRACT_EMAIL_FROM overrides the
+// default if the address ever needs to change without redeploying.
 function contractFromAddress() {
-  return process.env.CONTRACT_EMAIL_FROM || 'INFLUENCE <jennifer@useinfluence.xyz>';
+  return process.env.CONTRACT_EMAIL_FROM || 'INFLUENCE Contracts <contracts@useinfluence.xyz>';
 }
 
 function baseUrl() {
@@ -106,27 +106,26 @@ async function deliver({ to, subject, text, html, attachments, from }) {
 }
 
 // Offer outreach email — short, with the offer link as a clear CTA. The page
-// does the selling, not the email, so the copy stays brief and warm.
+// does the selling, not the email, so the copy stays brief and neutral.
 function renderOfferEmail({ firstName, brandName, offerUrl, expiryDate }) {
   const subject = `Your ${brandName} collaboration offer is ready`;
   const text = [
     `Hi ${firstName},`,
     ``,
-    `Great news — ${brandName} would love to collaborate with you again, and we've put together an offer we think you'll enjoy.`,
+    `A new collaboration offer from ${brandName} is available for you.`,
     ``,
-    `You can review the full details and terms here: ${offerUrl}`,
+    `Review the full offer here: ${offerUrl}`,
     ``,
-    `It's open until ${expiryDate}, so feel free to accept or decline directly from the page whenever you're ready.`,
+    `The offer is available until ${expiryDate}. You can accept, decline, or submit a counter offer directly from the offer page.`,
     ``,
-    `Looking forward to working with you again,`,
     `Team INFLUENCE`,
   ].join('\n');
 
   const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
-    <p>Great news &mdash; <strong>${escapeHtml(brandName)}</strong> would love to collaborate with you again, and we've put together an offer we think you'll enjoy.</p>
+    <p>A new collaboration offer from <strong>${escapeHtml(brandName)}</strong> is available for you.</p>
     <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(offerUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">View the offer</a></p>
-    <p>It's open until <strong>${escapeHtml(expiryDate)}</strong>, so feel free to accept or decline directly from the page whenever you're ready.</p>
-    <p style="margin-top:24px;">Looking forward to working with you again,<br/>Team INFLUENCE</p>`);
+    <p>The offer is available until <strong>${escapeHtml(expiryDate)}</strong>. You can accept, decline, or submit a counter offer directly from the offer page.</p>
+    <p style="margin-top:24px;">Team INFLUENCE</p>`);
 
   return { subject, text, html };
 }
@@ -225,26 +224,22 @@ function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDat
     : `A new collaboration from ${brandName} is ready for you`;
   const lead = reminder
     ? `Just a quick reminder — your ${brandName} collaboration offer is still open, and we'd love for you to take a look.`
-    : `${brandName} has a new collaboration lined up for you, and given how well our last project went, we think you'd be a great fit again.`;
+    : `Your ${brandName} collaboration offer is still open.`;
   const leadHtml = reminder
     ? `Just a quick reminder &mdash; your <strong>${escapeHtml(brandName)}</strong> collaboration offer is still open, and we'd love for you to take a look.`
-    : `<strong>${escapeHtml(brandName)}</strong> has a new collaboration lined up for you, and given how well our last project went, we think you'd be a great fit again.`;
-
-  const contactLines = [];
-  if (whatsappNumber) contactLines.push(`WhatsApp: ${whatsappNumber}`);
-  if (imessageNumber) contactLines.push(`iMessage: ${imessageNumber}`);
+    : `Your <strong>${escapeHtml(brandName)}</strong> collaboration offer is still open.`;
 
   const text = [
     `Hi ${firstName},`,
     ``,
-    `${lead} Here's the full offer: ${offerUrl}`,
+    lead,
     ``,
-    `It's open until ${expiryDate} — you're welcome to accept, decline, or send us a counter directly from the page.`,
-    ...(contactLines.length
-      ? ['', `Prefer to chat first? We're just a message away:`, ...contactLines.map((l) => `  ${l}`)]
-      : []),
+    `You can review the offer, accept, decline, or submit a counter offer here:`,
     ``,
-    `Looking forward to it,`,
+    offerUrl,
+    ``,
+    `The offer is available until ${expiryDate}.`,
+    ``,
     `Team INFLUENCE`,
   ].join('\n');
 
@@ -263,16 +258,16 @@ function renderOfferWithContactEmail({ firstName, brandName, offerUrl, expiryDat
     .filter(Boolean)
     .join('');
   const contactBlock = contactButtons
-    ? `<p style="margin:28px 0 4px;color:#525252;">Prefer to chat first? We're just a message away:</p>
-    <p style="text-align:center;margin:8px 0;">${contactButtons}</p>`
+    ? `<p style="text-align:center;margin:24px 0 0;">${contactButtons}</p>`
     : '';
 
   const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
     <p>${leadHtml}</p>
-    <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(offerUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">View the offer</a></p>
-    <p>It's open until <strong>${escapeHtml(expiryDate)}</strong> &mdash; you're welcome to accept, decline, or send us a counter directly from the page.</p>
+    <p>You can review the offer, accept, decline, or submit a counter offer here:</p>
+    <p style="text-align:center;margin:24px 0;"><a href="${escapeHtml(offerUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">View the offer</a></p>
+    <p>The offer is available until <strong>${escapeHtml(expiryDate)}</strong>.</p>
     ${contactBlock}
-    <p style="margin-top:24px;">Looking forward to it,<br/>Team INFLUENCE</p>`);
+    <p style="margin-top:24px;">Team INFLUENCE</p>`);
 
   return { subject, text, html };
 }
@@ -300,22 +295,22 @@ async function sendOfferWithContactEmail({ to, firstName, brandName, offerUrl, e
 function renderNewCampaignOfferEmail({ firstName, brandName, offerUrl, expiryDate }) {
   const subject = `A new ${brandName} collaboration for you, ${firstName}`;
   const text = [
-    `Hey ${firstName},`,
+    `Hi ${firstName},`,
     ``,
-    `We're running a new ${brandName} campaign and thought of you right away — it felt like a great fit given how our last collaboration went.`,
+    `A new ${brandName} campaign is available for you.`,
     ``,
-    `If you're up for it, the offer is ready to review: ${offerUrl}`,
-    `It's open until ${expiryDate}, and you can accept, decline, or send a counter right there.`,
+    `Review the offer and campaign details here: ${offerUrl}`,
     ``,
-    `Thank you,`,
+    `The offer is available until ${expiryDate}. You can accept, decline, or submit a counter offer directly from the offer page linked above.`,
+    ``,
     `Team INFLUENCE`,
   ].join('\n');
 
-  const html = shell(`    <p>Hey ${escapeHtml(firstName)},</p>
-    <p>We're running a new <strong>${escapeHtml(brandName)}</strong> campaign and thought of you right away &mdash; it felt like a great fit given how our last collaboration went.</p>
+  const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
+    <p>A new <strong>${escapeHtml(brandName)}</strong> campaign is available for you.</p>
     <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(offerUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">Review the offer</a></p>
-    <p>It's open until <strong>${escapeHtml(expiryDate)}</strong>, and you can accept, decline, or send a counter right there.</p>
-    <p style="margin-top:24px;">Thank you,<br/>Team INFLUENCE</p>`);
+    <p>The offer is available until <strong>${escapeHtml(expiryDate)}</strong>. You can accept, decline, or submit a counter offer directly from the offer page linked above.</p>
+    <p style="margin-top:24px;">Team INFLUENCE</p>`);
 
   return { subject, text, html };
 }
@@ -334,19 +329,15 @@ async function sendNewCampaignOfferEmail({ to, firstName, brandName, offerUrl, e
 function renderGraduationEmail({ firstName, brandName, congratsLine, whatsappNumber, imessageNumber }) {
   const subject = `Congratulations on your ${brandName} collaboration, ${firstName}! 🎉`;
 
-  const lines = [];
-  if (whatsappNumber) lines.push(`WhatsApp: ${whatsappNumber}`);
-  if (imessageNumber) lines.push(`iMessage: ${imessageNumber}`);
-
   const text = [
     `Hi ${firstName},`,
     ``,
     congratsLine,
     ``,
-    `If you'd like to hear about future collaborations, just send us a quick "Hi" and we'll share the details right there:`,
-    ...lines.map((l) => `  ${l}`),
+    `Your ${brandName} collaboration has now been completed.`,
     ``,
-    `Thank you,`,
+    `We'll be in touch when another collaboration is a good fit.`,
+    ``,
     `Team INFLUENCE`,
   ].join('\n');
 
@@ -362,14 +353,14 @@ function renderGraduationEmail({ firstName, brandName, congratsLine, whatsappNum
   ]
     .filter(Boolean)
     .join('');
-  const plainNumbers = lines.map((l) => `<p style="margin:4px 0;color:#525252;">${escapeHtml(l)}</p>`).join('');
+  const buttonBlock = buttons ? `<p style="text-align:center;margin:24px 0;">${buttons}</p>` : '';
 
   const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
     <p>${escapeHtml(congratsLine)}</p>
-    <p>If you'd like to hear about future collaborations, just send us a quick "Hi" and we'll share the details right there:</p>
-    <p style="text-align:center;margin:32px 0;">${buttons}</p>
-    ${plainNumbers}
-    <p style="margin-top:24px;">Thank you,<br/>Team INFLUENCE</p>`);
+    <p>Your <strong>${escapeHtml(brandName)}</strong> collaboration has now been completed.</p>
+    ${buttonBlock}
+    <p>We'll be in touch when another collaboration is a good fit.</p>
+    <p style="margin-top:24px;">Team INFLUENCE</p>`);
 
   return { subject, text, html };
 }
@@ -401,18 +392,20 @@ function renderBriefReadyEmail({ firstName, brandName, briefUrl }) {
   const text = [
     `Hi ${firstName},`,
     ``,
-    `Your personalised content brief for ${brandName} is ready — it has everything you need to get started.`,
+    `Your content brief for ${brandName} is ready.`,
     ``,
-    `Take a look here: ${briefUrl}`,
+    `The brief includes the campaign requirements and everything needed for you to get started.`,
     ``,
-    `Excited to see what you create,`,
+    `View your brief here: ${briefUrl}`,
+    ``,
     `Team INFLUENCE`,
   ].join('\n');
 
   const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
-    <p>Your personalised content brief for <strong>${escapeHtml(brandName)}</strong> is ready &mdash; it has everything you need to get started.</p>
+    <p>Your content brief for <strong>${escapeHtml(brandName)}</strong> is ready.</p>
+    <p>The brief includes the campaign requirements and everything needed for you to get started.</p>
     <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(briefUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">View your brief</a></p>
-    <p style="margin-top:24px;">Excited to see what you create,<br/>Team INFLUENCE</p>`);
+    <p style="margin-top:24px;">Team INFLUENCE</p>`);
 
   return { subject, text, html };
 }
@@ -426,38 +419,28 @@ async function sendBriefReadyEmail({ to, firstName, brandName, briefUrl }) {
 // executed PDF attached (services/signedContractEmail.js builds it). Creators
 // routinely ask for "a copy of what I signed" days later; this puts it in their
 // inbox before they have to ask. Short by design: the document IS the message,
-// so the email only says what's attached and how to raise a problem.
-//
-// Serves both signing flows. `masked` is true for the full contract, whose copy
-// carries partially-redacted account and tax identifiers and needs to say so;
-// the offer-portal mini contract collects no such details, so that sentence
-// would be a lie there and is dropped.
-function renderSignedContractEmail({ firstName, brandName, campaignName, masked = true }) {
+// so the email only says the agreement is complete and that a copy is attached.
+// Sent from the contracts@ sender (contractFromAddress) and signed off as
+// "INFLUENCE Contracts" so replies go to the contract team, not offers@.
+function renderSignedContractEmail({ firstName, brandName, campaignName }) {
   const brand = brandName || 'the brand';
   const forCampaign = campaignName ? ` for ${campaignName}` : '';
   const subject = `Your signed ${brand} agreement`;
-  const contents = masked
-    ? `A copy is attached for your records. It has the terms you agreed to, the details you submitted and your signature. Your account and tax identifiers are partially masked on it, so it's safe to keep or forward.`
-    : `A copy is attached for your records — the terms you agreed to and your signature, exactly as you signed them.`;
 
   const text = [
     `Hi ${firstName},`,
     ``,
-    `Thanks for signing — your agreement with ${brand}${forCampaign} is now complete.`,
+    `Your agreement with ${brand}${forCampaign} has been signed and completed.`,
     ``,
-    contents,
+    `A copy of the signed agreement is attached for your records.`,
     ``,
-    `If anything looks wrong, just reply to this email and we'll fix it.`,
-    ``,
-    `Thank you,`,
-    `Team INFLUENCE`,
+    `INFLUENCE Contracts`,
   ].join('\n');
 
   const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
-    <p>Thanks for signing &mdash; your agreement with <strong>${escapeHtml(brand)}</strong>${forCampaign ? ` for ${escapeHtml(campaignName)}` : ''} is now complete.</p>
-    <p>${escapeHtml(contents)}</p>
-    <p>If anything looks wrong, just reply to this email and we'll fix it.</p>
-    <p style="margin-top:24px;">Thank you,<br/>Team INFLUENCE</p>`);
+    <p>Your agreement with <strong>${escapeHtml(brand)}</strong>${forCampaign ? ` for ${escapeHtml(campaignName)}` : ''} has been signed and completed.</p>
+    <p>A copy of the signed agreement is attached for your records.</p>
+    <p style="margin-top:24px;">INFLUENCE Contracts</p>`);
 
   return { subject, text, html };
 }
@@ -466,8 +449,8 @@ function renderSignedContractEmail({ firstName, brandName, campaignName, masked 
 // land under in the creator's inbox — from services/contractPdf.js for the full
 // contract, services/miniContractPdf.js for the portal one. Sent from the
 // contracts@ address, not the offers@ default.
-async function sendSignedContractEmail({ to, firstName, brandName, campaignName, pdf, filename, masked = true }) {
-  const { subject, text, html } = renderSignedContractEmail({ firstName, brandName, campaignName, masked });
+async function sendSignedContractEmail({ to, firstName, brandName, campaignName, pdf, filename }) {
+  const { subject, text, html } = renderSignedContractEmail({ firstName, brandName, campaignName });
   return deliver({
     to,
     from: contractFromAddress(),
