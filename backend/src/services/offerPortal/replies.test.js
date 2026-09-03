@@ -151,3 +151,25 @@ test('notAFitCloseMessage is warm, forward-looking, and names the creator', () =
   assert.match(msg, /suits you better|better fit|better match/i);
   assert.match(msg, /be in touch|reach out/i);
 });
+
+test('acceptedAwaitingSignatureMessage points to signing, not confirming', () => {
+  const msg = replies.acceptedAwaitingSignatureMessage('Sam');
+  assert.match(msg, /Sam/);
+  assert.match(msg, /sign/i);
+  // Doesn't celebrate the deal — the sign step isn't done yet, so no confetti.
+  assert.doesNotMatch(msg, /🎉/);
+  assert.doesNotMatch(msg, /that's confirmed|confirmed/i);
+});
+
+test('offerReminderMessage names the brand, carries the link, and mentions expiry', () => {
+  const msg = replies.offerReminderMessage({
+    firstName: 'Sam',
+    brandName: 'Reve',
+    expiryFormatted: 'April 20',
+    offerUrl: 'https://deals.example.com/o/abc',
+  });
+  assert.match(msg, /Sam/);
+  assert.match(msg, /Reve/);
+  assert.match(msg, /https:\/\/deals\.example\.com\/o\/abc/);
+  assert.match(msg, /April 20/);
+});
