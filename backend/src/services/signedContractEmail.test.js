@@ -305,10 +305,10 @@ test('a contract copy is sent from the contract sender, not the offers@ default'
     },
     () => sendSignedContractCopy(SIGNED_ROW, { id: 7, first_name: 'Rachel' }),
   );
-  // jennifer@ is the Resend-verified sender today; CONTRACT_EMAIL_FROM moves it
-  // to contracts@ once that address is verified.
-  assert.strictEqual(payload.from, 'INFLUENCE <jennifer@useinfluence.xyz>');
-  assert.strictEqual(email.contractFromAddress(), 'INFLUENCE <jennifer@useinfluence.xyz>');
+  // contracts@ is the Resend-verified sender for signed-agreement copies;
+  // CONTRACT_EMAIL_FROM overrides it without a redeploy if it ever has to change.
+  assert.strictEqual(payload.from, 'INFLUENCE Contracts <contracts@useinfluence.xyz>');
+  assert.strictEqual(email.contractFromAddress(), 'INFLUENCE Contracts <contracts@useinfluence.xyz>');
   assert.doesNotMatch(payload.from, /offers@/, 'contract copies never use the offer sender');
 });
 
@@ -352,7 +352,7 @@ test('sendMiniContractCopy attaches the portal agreement and audits it as mini',
 
   assert.strictEqual(result.sent, true);
   assert.strictEqual(result.to, 'sam@example.com');
-  assert.strictEqual(payload.from, 'INFLUENCE <jennifer@useinfluence.xyz>');
+  assert.strictEqual(payload.from, 'INFLUENCE Contracts <contracts@useinfluence.xyz>');
   assert.match(payload.subject, /signed Netflix agreement/i);
   assert.match(payload.text, /^Hi Sam,/);
   // The portal collects no bank or tax details, so the copy must not claim
