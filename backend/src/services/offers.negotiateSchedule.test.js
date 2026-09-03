@@ -45,10 +45,13 @@ function install({ offer = baseOffer, latestForCreator = null } = {}) {
   const inserted = {};
 
   db.one = async (sql) => {
+    // The negotiateSchedule query joins campaigns for its deadline_date; the
+    // baseOffer fixture may or may not carry a campaign_deadline_date field.
+    if (/FROM offers o LEFT JOIN campaigns/i.test(sql)) return { ...offer };
     if (/FROM offers WHERE token/i.test(sql)) return { ...offer };
     if (/FROM offers WHERE creator_id/i.test(sql)) return latestForCreator ? { ...latestForCreator } : null;
-    // The on-hold UPDATE ... RETURNING id.
-    if (/UPDATE offers SET schedule_hold = TRUE/i.test(sql)) return { id: offer.id };
+    // Past-deadline decline UPDATE ... RETURNING id.
+    if (/UPDATE offers\s+SET status = 'declined', decline_reason = 'Timing'/i.test(sql)) return { id: offer.id };
     if (/established_channel FROM creators/i.test(sql)) return { established_channel: null };
     // Freshly-minted rescheduled offer.
     if (/SELECT \* FROM offers WHERE id = \$1/i.test(sql)) {
@@ -95,8 +98,8 @@ function restoreAll() {
   db.withTransaction = origWithTx;
 }
 
-test('availability within the window → fresh same-terms offer on their dates', async () => {
-  install();
+test('a picked date within the campaign deadline → fresh same-terms offer on their dates', async () => {
+  install({ offer: { ...baseOffer, campaign_deadline_date: daysFromNow(30) } });
   try {
     const r = await offers.negotiateSchedule({ token: 'tok', availableDate: daysFromNow(7) });
     assert.strictEqual(r.ok, true);
@@ -109,8 +112,8 @@ test('availability within the window → fresh same-terms offer on their dates',
   }
 });
 
-test('the window boundary (exactly the threshold) still accommodates', async () => {
-  install();
+test('a picked date on the campaign deadline still accommodates', async () => {
+  install({ offer: { ...baseOffer, campaign_deadline_date: daysFromNow(14) } });
   try {
     const r = await offers.negotiateSchedule({ token: 'tok', availableDate: daysFromNow(14) });
     assert.strictEqual(r.outcome, 'rescheduled');
@@ -119,18 +122,29 @@ test('the window boundary (exactly the threshold) still accommodates', async () 
   }
 });
 
-test('availability beyond the window → on hold + Deal Studio notified, deal not closed', async () => {
-  const { writes } = install();
+test('a picked date past the campaign deadline → offer is declined, no delegate hand-off', async () => {
+  const { writes } = install({ offer: { ...baseOffer, campaign_deadline_date: daysFromNow(14) } });
   try {
     const r = await offers.negotiateSchedule({ token: 'tok', availableDate: daysFromNow(30) });
     assert.strictEqual(r.ok, true);
-    assert.strictEqual(r.outcome, 'on_hold');
+    assert.strictEqual(r.outcome, 'past_deadline');
     assert.ok(r.startDateFormatted);
-    // Parked for admin follow-up (ON_HOLD), NOT closed.
-    assert.ok(writes.some((w) => /negotiation_status = 'ON_HOLD'/i.test(w.sql)));
-    assert.ok(!writes.some((w) => /'CLOSED'/i.test(w.sql)));
-    // A schedule_hold event is logged for the timeline.
-    assert.ok(writes.some((w) => /'schedule_hold'/i.test(w.sql)));
+    assert.ok(r.campaignDeadlineFormatted);
+    // Deal Studio no longer parks this as ON_HOLD — the offer is closed instead.
+    assert.ok(!writes.some((w) => /negotiation_status = 'ON_HOLD'/i.test(w.sql)));
+    assert.ok(!writes.some((w) => /'schedule_hold'/i.test(w.sql)));
+    // A regular 'declined' event goes on the offer timeline.
+    assert.ok(writes.some((w) => /'declined'/i.test(w.sql)));
+  } finally {
+    restoreAll();
+  }
+});
+
+test('no campaign deadline set → any future date accommodates (no gate)', async () => {
+  install({ offer: { ...baseOffer, campaign_deadline_date: null } });
+  try {
+    const r = await offers.negotiateSchedule({ token: 'tok', availableDate: daysFromNow(90) });
+    assert.strictEqual(r.outcome, 'rescheduled');
   } finally {
     restoreAll();
   }

@@ -1890,84 +1890,109 @@ async function mintScheduledOffer(offer, startDateIso) {
   return { raced, counterId };
 }
 
-// The creator picked "Timing" and told us when they're free. Within the
-// accommodation window → re-offer the same terms on their dates (a fresh offer
-// they can accept right on the portal). Further out → park the deal on hold and
-// flag Deal Studio so an admin can send a schedule-counter.
+// The creator picked "Timing" and told us the date they can post by. The gate
+// is now the campaign's own posting deadline (set on the Deal Studio dashboard):
+//   • date > campaign deadline  → decline the offer (there's no version of the
+//                                  deal that finishes in time, so an admin
+//                                  handshake wouldn't unblock it).
+//   • date ≤ campaign deadline  → accommodate on the same portal by minting a
+//                                  fresh same-terms offer carrying the picked
+//                                  date. No new outreach message / email — the
+//                                  creator is already on the page, and the
+//                                  frontend swaps to the new token in place.
+//   • campaign has no deadline  → accommodate as above (nothing to gate on).
+//
+// This replaces the older 14-day accommodate / delegate-on-hold split: schedule
+// requests no longer land in Deal Studio for an admin schedule-counter.
 async function negotiateSchedule({ token, availableDate, channel = 'web' }) {
   const date = parseAvailableDate(availableDate);
   if (!date) return { ok: false, reason: 'invalid_date' };
   if (daysUntil(date) < 0) return { ok: false, reason: 'invalid_date' };
 
-  const offer = await db.one(`SELECT * FROM offers WHERE token = $1`, [token]);
+  const offer = await db.one(
+    `SELECT o.*, ca.deadline_date AS campaign_deadline_date
+       FROM offers o LEFT JOIN campaigns ca ON ca.id = o.campaign_id
+      WHERE o.token = $1`,
+    [token],
+  );
   if (!offer) return { ok: false, reason: 'not_found' };
   if (offer.status !== 'pending') return { ok: false, reason: 'already_responded' };
   if (new Date(offer.expires_at).getTime() < Date.now()) return { ok: false, reason: 'expired' };
 
-  // Within the window → accommodate automatically with a fresh same-terms offer.
-  if (daysUntil(date) <= scheduleThresholdDays()) {
-    const { raced, counterId } = await mintScheduledOffer(offer, isoDate(date));
-    if (raced || !counterId) return { ok: false, reason: 'already_responded' };
-
-    // Only mirror the re-offer to WhatsApp/iMessage when the schedule request
-    // itself came in on a messaging channel. A web-originated reschedule is
-    // already on the offer page the creator is looking at, so pushing an
-    // identical link over WhatsApp double-messages them (the bug this guards).
-    if (channel !== 'web') {
-      try {
-        const msgChannel = await establishedMessagingChannel(offer.creator_id);
-        if (msgChannel) await deliverOfferOverChannel(counterId, msgChannel);
-      } catch (err) {
-        console.error('[offers] rescheduled offer delivery failed', err.message);
-      }
-    }
-
-    const counter = await db.one(`SELECT * FROM offers WHERE id = $1`, [counterId]);
-    if (!counter) return { ok: false, reason: 'already_responded' };
+  // Past the campaign's own posting deadline → decline. Nothing an admin could
+  // negotiate here would fit inside the campaign's window, so we close the
+  // deal rather than surface it as an on-hold delegate.
+  const campaignDeadline = offer.campaign_deadline_date ? new Date(offer.campaign_deadline_date) : null;
+  if (campaignDeadline && !Number.isNaN(campaignDeadline.getTime()) && date.getTime() > campaignDeadline.getTime()) {
+    const closed = await db.one(
+      `UPDATE offers
+          SET status = 'declined', decline_reason = 'Timing',
+              requested_start_date = $2, schedule_hold = FALSE
+        WHERE id = $1 AND status = 'pending'
+        RETURNING id`,
+      [offer.id, isoDate(date)],
+    );
+    if (!closed) return { ok: false, reason: 'already_responded' };
+    await db.query(
+      `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'declined', 'web')`,
+      [offer.id],
+    );
+    await db
+      .query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'schedule_past_deadline', $2)`,
+        [
+          offer.creator_id,
+          {
+            available_date: isoDate(date),
+            campaign_deadline: isoDate(campaignDeadline),
+            via: 'offer_portal',
+          },
+        ],
+      )
+      .catch(() => {});
     return {
       ok: true,
-      outcome: 'rescheduled',
-      counter: {
-        token: counter.token,
-        brandName: counter.brand_name,
-        deliverables: counter.deliverables,
-        rate: Number(counter.rate),
-        currency: counter.currency,
-        rateFormatted: formatMoney(counter.rate, counter.currency),
-        expiresFormatted: formatDate(counter.expires_at),
-        startDateFormatted: counter.requested_start_date ? formatDate(counter.requested_start_date) : null,
-      },
+      outcome: 'past_deadline',
+      startDateFormatted: formatDate(date),
+      campaignDeadlineFormatted: formatDate(campaignDeadline),
     };
   }
 
-  // Further out than the window → park on hold (NOT closed) for an admin
-  // schedule-counter, and surface it in Deal Studio.
-  const held = await db.one(
-    `UPDATE offers SET schedule_hold = TRUE, requested_start_date = $2
-     WHERE id = $1 AND status = 'pending'
-     RETURNING id`,
-    [offer.id, isoDate(date)],
-  );
-  if (!held) return { ok: false, reason: 'already_responded' };
-  await db.query(
-    `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'schedule_hold', 'web')`,
-    [offer.id],
-  );
-  // Bridge to Deal Studio: park the deal on hold (never over an ACCEPTED one).
-  try {
-    await db.query(
-      `UPDATE creators SET negotiation_status = 'ON_HOLD', updated_at = NOW()
-       WHERE id = $1 AND negotiation_status IS DISTINCT FROM 'ACCEPTED'`,
-      [offer.creator_id],
-    );
-    await db.query(
-      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'schedule_hold', $2)`,
-      [offer.creator_id, { available_date: isoDate(date), via: 'offer_portal' }],
-    );
-  } catch (err) {
-    console.error('[offers] schedule-hold bridge failed', err.message);
+  // Within the campaign's deadline (or no deadline set) → accommodate. Mints a
+  // fresh same-terms offer with the picked date and returns it, so the frontend
+  // can swap tokens without a full navigation.
+  const { raced, counterId } = await mintScheduledOffer(offer, isoDate(date));
+  if (raced || !counterId) return { ok: false, reason: 'already_responded' };
+
+  // Only mirror the re-offer to WhatsApp/iMessage when the schedule request
+  // itself came in on a messaging channel. A web-originated reschedule is
+  // already on the offer page the creator is looking at, so pushing an
+  // identical link over WhatsApp double-messages them.
+  if (channel !== 'web') {
+    try {
+      const msgChannel = await establishedMessagingChannel(offer.creator_id);
+      if (msgChannel) await deliverOfferOverChannel(counterId, msgChannel);
+    } catch (err) {
+      console.error('[offers] rescheduled offer delivery failed', err.message);
+    }
   }
-  return { ok: true, outcome: 'on_hold', startDateFormatted: formatDate(date) };
+
+  const counter = await db.one(`SELECT * FROM offers WHERE id = $1`, [counterId]);
+  if (!counter) return { ok: false, reason: 'already_responded' };
+  return {
+    ok: true,
+    outcome: 'rescheduled',
+    counter: {
+      token: counter.token,
+      brandName: counter.brand_name,
+      deliverables: counter.deliverables,
+      rate: Number(counter.rate),
+      currency: counter.currency,
+      rateFormatted: formatMoney(counter.rate, counter.currency),
+      expiresFormatted: formatDate(counter.expires_at),
+      startDateFormatted: counter.requested_start_date ? formatDate(counter.requested_start_date) : null,
+    },
+  };
 }
 
 // Admin action from Deal Studio for an on-hold (or any latest) offer: send the
