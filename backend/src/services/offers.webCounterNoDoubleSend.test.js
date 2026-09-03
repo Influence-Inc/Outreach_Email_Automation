@@ -49,6 +49,8 @@ function install({ establishedChannel = 'whatsapp' } = {}) {
 
   db.one = async (sql) => {
     if (/FROM offers WHERE token/i.test(sql)) return { ...BASE_OFFER };
+    // negotiateSchedule's join with campaigns for the deadline gate.
+    if (/FROM offers o LEFT JOIN campaigns/i.test(sql)) return { ...BASE_OFFER, campaign_deadline_date: null };
     if (/ca\.id = \$2/.test(sql) && /instagram_username/i.test(sql)) {
       return {
         email: 'sam@x.com',

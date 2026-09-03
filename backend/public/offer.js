@@ -268,8 +268,8 @@
         onkeydown: function (e) { if (e.key === 'Enter') proposeSchedule(); },
       });
       wrap.appendChild(h('div', {},
-        h('p', { class: 'ask' }, 'When are you free to start?'),
-        h('p', { class: 'ask-sub' }, "Pick the date you could begin, and we'll fit the offer around it."),
+        h('p', { class: 'ask' }, 'When can you complete the deliverables?'),
+        h('p', { class: 'ask-sub' }, "Pick the date of posting, and we'll fit the offer around it."),
         h('div', { class: 'rate-input' },
           h('div', { class: 'box' }, dateInput),
           btn(submitting ? '…' : 'Send', { onClick: proposeSchedule })),
@@ -691,7 +691,9 @@
       });
       var data = await res.json();
       if (data.ok && data.outcome === 'rescheduled') {
-        // Within the window — a fresh same-terms offer on their dates. Swap to it.
+        // Within the campaign deadline — a fresh same-terms offer on their
+        // dates. Swap to it on the same portal (no new email / WA sent for a
+        // web-originated reschedule; the backend guards that).
         var c = data.counter;
         offer = {
           token: c.token, firstName: offer.firstName, brandName: c.brandName,
@@ -702,8 +704,11 @@
         mode = 'cta'; scheduleInput = ''; view = 'active';
         // Keep the URL on the live offer so a manual reload loads it, not the old one.
         try { history.replaceState(null, '', '/o/' + encodeURIComponent(c.token)); } catch (e) {}
-      } else if (data.ok && data.outcome === 'on_hold') {
-        holdDateFormatted = data.startDateFormatted || null; scheduleInput = ''; view = 'on_hold';
+      } else if (data.ok && data.outcome === 'past_deadline') {
+        // Past the campaign's posting deadline — the offer is declined outright.
+        declinedReason = 'Timing';
+        scheduleInput = '';
+        view = 'declined';
       } else if (data.reason === 'invalid_date') { error = 'Please pick a valid date (today or later).'; }
       else if (data.reason === 'expired') { view = 'expired'; }
       else if (data.reason === 'already_responded') { return location.reload(); }
