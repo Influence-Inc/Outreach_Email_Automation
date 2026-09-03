@@ -177,6 +177,12 @@
       padding: 10px 0; min-height: 40px; }
     .sig-tools button:hover { color: var(--ink); }
 
+    /* "I understand this contract is legally binding" acknowledgement.
+       Matches the full contract's checkbox (public/contract.html .agree). */
+    .agree { display: flex; align-items: flex-start; gap: 10px; margin: 12px 0 16px; cursor: pointer; }
+    .agree input { margin-top: 2px; width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+    .agree span { font-size: 13px; color: var(--ink-2); line-height: 1.45; }
+
     /* Centered states */
     .state { text-align: center; padding: 30px 6px 14px; }
     .state .ic { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center;
