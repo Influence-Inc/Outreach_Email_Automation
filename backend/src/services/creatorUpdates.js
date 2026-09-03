@@ -114,6 +114,24 @@ const UPDATE_KINDS = {
     templateEnv: 'WHATSAPP_TEMPLATE_NEXT_CAMPAIGN',
     params: (p) => [p.firstName, p.brandName],
   },
+  // Pre-deadline reminder for a creator who hasn't posted yet. Mirrors the
+  // 3-day / 1-day reminder tiers that go out by email from influence-stats
+  // via influence_bot (scheduler_service.run_deadline_check_for). Payload
+  // carries `daysLeft` and `reminderType` ("3_days" | "1_day") so the copy
+  // can differentiate; both render through msg.deadlineReminder.
+  deadline_reminder: {
+    render: (p) => msg.deadlineReminder(p),
+    templateEnv: 'WHATSAPP_TEMPLATE_DEADLINE_REMINDER',
+    params: (p) => [p.firstName, p.brandName],
+  },
+  // Post-deadline chase rung — the creator's posting deadline has passed
+  // without all deliverables. Same source, different tone; carries
+  // `daysOverdue` so the copy can escalate (matches chase_ladder.py's rungs).
+  deadline_overdue: {
+    render: (p) => msg.deadlineOverdue(p),
+    templateEnv: 'WHATSAPP_TEMPLATE_DEADLINE_OVERDUE',
+    params: (p) => [p.firstName, p.brandName],
+  },
 };
 
 function isKnownKind(kind) {

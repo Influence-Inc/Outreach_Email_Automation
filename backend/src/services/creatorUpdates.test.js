@@ -340,3 +340,37 @@ test('the next-campaign pitch uses the campaign blurb when there is one', () => 
   assert.match(bare, /Acme/);
   assert.ok(bare.trim().length > 20);
 });
+
+test('deadlineReminder differentiates 3-day vs 1-day tiers', () => {
+  const three = msg.deadlineReminder({ firstName: 'Sam', brandName: 'Reve', reminderType: '3_days', daysLeft: 3 });
+  assert.match(three, /3 days/i);
+  assert.match(three, /Sam/);
+  assert.match(three, /Reve/);
+
+  const one = msg.deadlineReminder({ firstName: 'Sam', brandName: 'Reve', reminderType: '1_day', daysLeft: 1 });
+  assert.match(one, /TOMORROW/);
+  assert.match(one, /Sam/);
+});
+
+test('deadlineReminder falls back gracefully with an unknown tier', () => {
+  const generic = msg.deadlineReminder({ firstName: 'Sam', brandName: 'Reve', reminderType: 'weird', daysLeft: 5 });
+  assert.match(generic, /5 days/i);
+  assert.match(generic, /Sam/);
+});
+
+test('deadlineOverdue names the miss in a friendly tone', () => {
+  const msg1 = msg.deadlineOverdue({ firstName: 'Sam', brandName: 'Reve', daysOverdue: 2 });
+  assert.match(msg1, /Sam/);
+  assert.match(msg1, /passed/i);
+  assert.match(msg1, /2 days/);
+
+  // And still reads sensibly without daysOverdue.
+  const msg2 = msg.deadlineOverdue({ firstName: 'Sam', brandName: 'Reve' });
+  assert.match(msg2, /passed/i);
+});
+
+test('deadline_reminder and deadline_overdue are registered UPDATE_KINDS', () => {
+  const cu = require('./creatorUpdates');
+  assert.ok(cu.isKnownKind('deadline_reminder'));
+  assert.ok(cu.isKnownKind('deadline_overdue'));
+});
