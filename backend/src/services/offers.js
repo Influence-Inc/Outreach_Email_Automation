@@ -1672,16 +1672,19 @@ async function negotiateBudget({ token, requestedRate, channel = 'web' }) {
 
   if (raced || !counterId) return { ok: false, reason: 'already_responded' };
 
-  // Deliver the counter directly ONLY if this creator already has an
-  // established messaging channel (mid-conversation on WhatsApp/iMessage) — a
-  // web-originated counter is already shown right on the offer page the creator
-  // is looking at, so no extra send (and no cold-outreach invite email) is
-  // needed there.
-  try {
-    const channel = await establishedMessagingChannel(offer.creator_id);
-    if (channel) await deliverOfferOverChannel(counterId, channel);
-  } catch (err) {
-    console.error('[offers] counter delivery failed', err.message);
+  // Deliver the counter directly only when the counter itself came in over a
+  // messaging channel — i.e. the creator texted us a rate on WhatsApp/iMessage
+  // and expects the priced reply on that thread. A web-originated counter is
+  // already on the offer page the creator is looking at, so mirroring it to
+  // WhatsApp would double-message them (the bug this guards). Origin comes
+  // straight from the `channel` param the route passes.
+  if (channel !== 'web') {
+    try {
+      const msgChannel = await establishedMessagingChannel(offer.creator_id);
+      if (msgChannel) await deliverOfferOverChannel(counterId, msgChannel);
+    } catch (err) {
+      console.error('[offers] counter delivery failed', err.message);
+    }
   }
 
   const counter = await db.one(`SELECT * FROM offers WHERE id = $1`, [counterId]);
@@ -1891,7 +1894,7 @@ async function mintScheduledOffer(offer, startDateIso) {
 // accommodation window → re-offer the same terms on their dates (a fresh offer
 // they can accept right on the portal). Further out → park the deal on hold and
 // flag Deal Studio so an admin can send a schedule-counter.
-async function negotiateSchedule({ token, availableDate }) {
+async function negotiateSchedule({ token, availableDate, channel = 'web' }) {
   const date = parseAvailableDate(availableDate);
   if (!date) return { ok: false, reason: 'invalid_date' };
   if (daysUntil(date) < 0) return { ok: false, reason: 'invalid_date' };
@@ -1906,13 +1909,17 @@ async function negotiateSchedule({ token, availableDate }) {
     const { raced, counterId } = await mintScheduledOffer(offer, isoDate(date));
     if (raced || !counterId) return { ok: false, reason: 'already_responded' };
 
-    // Deliver directly only over an already-established messaging channel — a
-    // web-originated re-offer is already shown on the page the creator is on.
-    try {
-      const channel = await establishedMessagingChannel(offer.creator_id);
-      if (channel) await deliverOfferOverChannel(counterId, channel);
-    } catch (err) {
-      console.error('[offers] rescheduled offer delivery failed', err.message);
+    // Only mirror the re-offer to WhatsApp/iMessage when the schedule request
+    // itself came in on a messaging channel. A web-originated reschedule is
+    // already on the offer page the creator is looking at, so pushing an
+    // identical link over WhatsApp double-messages them (the bug this guards).
+    if (channel !== 'web') {
+      try {
+        const msgChannel = await establishedMessagingChannel(offer.creator_id);
+        if (msgChannel) await deliverOfferOverChannel(counterId, msgChannel);
+      } catch (err) {
+        console.error('[offers] rescheduled offer delivery failed', err.message);
+      }
     }
 
     const counter = await db.one(`SELECT * FROM offers WHERE id = $1`, [counterId]);
