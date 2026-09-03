@@ -38,7 +38,10 @@ const {
 const creatorDb = require('./creatorDb');
 const campaignDashboard = require('./campaignDashboard');
 
-const DEFAULT_EXPIRY_DAYS = Number(process.env.OFFER_EXPIRY_DAYS || 7);
+// 4-day respond-by (matches the "Respond by …" line shown only in the outreach
+// email + WhatsApp — the portal itself doesn't render it, see offer.js). Overridable
+// via OFFER_EXPIRY_DAYS if a specific campaign needs a longer / shorter window.
+const DEFAULT_EXPIRY_DAYS = Number(process.env.OFFER_EXPIRY_DAYS || 4);
 
 // Cryptographically random, unguessable, URL-safe token (~192 bits of entropy).
 function generateOfferToken() {
@@ -1964,20 +1967,37 @@ function miniContractTerms(offer) {
   // stands in so the contract preview never renders empty.
   const picked = Array.isArray(offer.contract_platforms) ? offer.contract_platforms : null;
   const platforms = picked && picked.length ? normalizeContractPlatforms(picked) : CONTRACT_PLATFORMS_DEFAULT.slice();
+  // Prefer the campaign's explicit posting deadline over the "3 weeks from
+  // signing" boilerplate — the offer portal now renders this as an accurate
+  // calendar date under a "Deadline" row instead of the vague "Timeline".
+  const deadline = offer.campaign_deadline_date
+    ? formatDate(offer.campaign_deadline_date)
+    : null;
   return {
     creatorName: creatorFullName(offer),
     brandName: offer.brand_name,
     campaignName: (offer.campaign_name && String(offer.campaign_name).trim()) || null,
     deliverables: Array.isArray(offer.deliverables) ? offer.deliverables : [],
     platforms,
-    timeline: startDate ? `Content to be posted around ${startDate}.` : CONTRACT_TIMELINE_DEFAULT,
+    // `deadline` is the accurate calendar date the portal shows verbatim;
+    // `timeline` is kept for the signed-contract snapshot fallback (and for
+    // any legacy consumer still reading the old field) so old rows still
+    // render sensibly.
+    deadline: deadline || null,
+    timeline: deadline
+      ? `Content to be posted by ${deadline}.`
+      : startDate
+        ? `Content to be posted around ${startDate}.`
+        : CONTRACT_TIMELINE_DEFAULT,
   };
 }
 
 // Data the public offer page renders (mirrors o/[token]/page.tsx). Logs a view.
 async function getOfferForPage(token) {
   const offer = await db.one(
-    `SELECT o.*, c.first_name, c.full_name, ca.name AS campaign_name
+    `SELECT o.*, c.first_name, c.full_name,
+            ca.name AS campaign_name,
+            ca.deadline_date AS campaign_deadline_date
      FROM offers o
      JOIN creators c ON c.id = o.creator_id
      LEFT JOIN campaigns ca ON ca.id = o.campaign_id
@@ -2097,7 +2117,9 @@ async function signMiniContract({ token, signature, signerName, ip }) {
   }
 
   const offer = await db.one(
-    `SELECT o.*, c.first_name, c.full_name, ca.name AS campaign_name
+    `SELECT o.*, c.first_name, c.full_name,
+            ca.name AS campaign_name,
+            ca.deadline_date AS campaign_deadline_date
      FROM offers o
      JOIN creators c ON c.id = o.creator_id
      LEFT JOIN campaigns ca ON ca.id = o.campaign_id
