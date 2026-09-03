@@ -30,28 +30,29 @@
       min-height: 100vh;
     }
     .num { font-variant-numeric: tabular-nums; }
-    .wrap { max-width: 460px; margin: 0 auto; padding: 28px 16px 48px; }
-    @media (min-width: 600px) { .wrap { max-width: 560px; padding: 48px 24px 72px; } }
-    @media (min-width: 1024px) { .wrap { max-width: 620px; padding: 64px 24px 96px; } }
+    .wrap { max-width: 460px; margin: 0 auto; padding: 24px 16px 40px; }
+    @media (min-width: 600px) { .wrap { max-width: 560px; padding: 40px 24px 64px; } }
+    @media (min-width: 1024px) { .wrap { max-width: 620px; padding: 56px 24px 88px; } }
 
     .brandbar { display: flex; align-items: center; justify-content: center;
-      margin-bottom: 28px; }
-    @media (min-width: 600px) { .brandbar { margin-bottom: 34px; } }
-    @media (min-width: 1024px) { .brandbar { margin-bottom: 40px; } }
+      margin-bottom: 20px; }
+    @media (min-width: 600px) { .brandbar { margin-bottom: 24px; } }
+    @media (min-width: 1024px) { .brandbar { margin-bottom: 28px; } }
     /* The wordmark — the same INFLUENCE SVG path shared with the Deal Studio
        dashboard. Fill inherits from the surrounding ink colour so a future
-       dark surface flips it in one place. */
-    .brandbar .wordmark { height: 26px; width: auto; fill: var(--ink); display: block; }
-    @media (min-width: 600px) { .brandbar .wordmark { height: 30px; } }
-    @media (min-width: 1024px) { .brandbar .wordmark { height: 34px; } }
+       dark surface flips it in one place. Kept modest so it reads as a
+       masthead, not a headline — the offer card is the real content. */
+    .brandbar .wordmark { height: 18px; width: auto; fill: var(--ink); display: block; }
+    @media (min-width: 600px) { .brandbar .wordmark { height: 20px; } }
+    @media (min-width: 1024px) { .brandbar .wordmark { height: 22px; } }
 
     .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
       box-shadow: var(--shadow-card); overflow: hidden; }
     .card-accent { height: 5px; background: linear-gradient(90deg, var(--ink) 0%, #b4b2ac 50%, var(--ink) 100%); }
-    .card-body { padding: 26px 22px 28px; }
-    @media (min-width: 440px) { .card-body { padding: 30px 30px 32px; } }
-    @media (min-width: 600px) { .card-body { padding: 38px 40px 40px; } }
-    @media (min-width: 1024px) { .card-body { padding: 48px 48px 50px; } }
+    .card-body { padding: 20px 18px 22px; }
+    @media (min-width: 440px) { .card-body { padding: 24px 24px 26px; } }
+    @media (min-width: 600px) { .card-body { padding: 30px 32px 32px; } }
+    @media (min-width: 1024px) { .card-body { padding: 36px 40px 38px; } }
 
     .eyebrow { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600;
       letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
