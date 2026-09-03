@@ -274,8 +274,6 @@ async function sendMiniContractCopy(offer, creator = null, { force = false } = {
     campaignName: str(row.campaign_name),
     pdf,
     filename,
-    // Nothing to redact — the portal collects no account or tax identifiers.
-    masked: false,
   });
 
   await logAttempt(offer.creator_id, offer.token, !!result.sent, {
