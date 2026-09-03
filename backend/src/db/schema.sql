@@ -417,6 +417,10 @@ ALTER TABLE offers ADD COLUMN IF NOT EXISTS contract_platforms   JSONB;
 -- the offer for an admin schedule-counter instead of closing the deal.
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS requested_start_date DATE;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS schedule_hold        BOOLEAN NOT NULL DEFAULT FALSE;
+-- Nudge sent when a pending offer has been sitting open for a while without a
+-- response, some hours before it expires. Set-once (`IS NULL` gates the sweep)
+-- so a creator can never be reminded twice about the same offer.
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS reminder_sent_at     TIMESTAMPTZ;
 
 -- Append-only audit log. INSERT only — offer history is reconstructed from here.
 CREATE TABLE IF NOT EXISTS offer_events (

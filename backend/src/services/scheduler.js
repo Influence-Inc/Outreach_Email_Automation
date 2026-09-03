@@ -26,6 +26,11 @@ const graduationSweepMs = () => Number(process.env.GRADUATION_SWEEP_MINUTES || 6
 // mark stale hosts, auto-enqueue runs for enabled campaigns (TTL-gated, default
 // 10 min; 0 disables the sweep entirely).
 const sourcingSweepMs = () => Number(process.env.SOURCING_SWEEP_MINUTES || 10) * 60 * 1000;
+// How often the offer-reminder sweep checks for pending offers that need a
+// nudge. TTL-gated, default hourly; 0 disables the sweep. The per-offer
+// timing (how long an offer must have been open before a reminder, and how
+// close to expiry we stop nudging) lives on offers.js itself.
+const offerRemindersSweepMs = () => Number(process.env.OFFER_REMINDERS_SWEEP_MINUTES || 60) * 60 * 1000;
 // How often the campaign-update lane catches up: flush updates that queued while
 // a creator's WhatsApp window was shut, and ask newly-signed creators for the
 // "Hi" that opens it (default 15 min; 0 disables). Shorter than the sweeps above
@@ -39,6 +44,7 @@ let lastSegmentSweep = 0;
 let lastGraduationSweep = 0;
 let lastSourcingSweep = 0;
 let lastCreatorUpdatesSweep = 0;
+let lastOfferRemindersSweep = 0;
 
 // Outreach and follow-up sending is now handled by Instantly.ai.
 // Reply detection arrives via the /webhook/instantly endpoint (reply_received event).
@@ -325,6 +331,20 @@ async function maybeCreatorUpdates() {
   }
 }
 
+// Nudge sweep: pending offers that have been open a while without a response
+// get one reminder, well before expiry (see runOfferRemindersSweep for the
+// per-offer timing rules).
+async function maybeOfferReminders() {
+  const everyMs = offerRemindersSweepMs();
+  if (!(everyMs > 0)) return; // 0 / blank disables
+  if (Date.now() - lastOfferRemindersSweep < everyMs) return;
+  lastOfferRemindersSweep = Date.now();
+  const r = await offers.runOfferRemindersSweep();
+  if (r && r.sent) {
+    console.log(`[offers] reminder sweep sent ${r.sent} nudge(s) (${r.considered} considered)`);
+  }
+}
+
 async function tick() {
   await pollNegotiations().catch((err) => console.error('negotiation tick failed:', err));
   await sendUsedInviteFollowups().catch((err) => console.error('used-invite follow-up tick failed:', err));
@@ -334,6 +354,7 @@ async function tick() {
   await maybeSegment().catch((err) => console.error('segmentation tick failed:', err));
   await maybeSourcingSweep().catch((err) => console.error('sourcing sweep tick failed:', err));
   await maybeCreatorUpdates().catch((err) => console.error('creator-updates tick failed:', err));
+  await maybeOfferReminders().catch((err) => console.error('offer-reminders tick failed:', err));
 }
 
 function start() {
@@ -371,4 +392,5 @@ module.exports = {
   sendUsedInviteFollowups,
   retryContractCopies,
   maybeCreatorUpdates,
+  maybeOfferReminders,
 };
