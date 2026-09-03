@@ -27,6 +27,7 @@ const whatsapp = require('./offerPortal/whatsapp');
 const imessage = require('./offerPortal/imessage');
 const { offerPortalConfig } = require('./offerPortal/config');
 const {
+  acceptedAwaitingSignatureMessage,
   thankYouMessage,
   politeCloseMessage,
   notAFitCloseMessage,
@@ -1096,6 +1097,105 @@ async function sendUsedCreatorInviteFollowup(creatorId) {
   return { sent: true };
 }
 
+// One-time reminder for a pending offer that's been sitting open. Sends over
+// the creator's established messaging channel (WhatsApp/iMessage) — the same
+// channel the offer link went out on originally. Marks reminder_sent_at so a
+// creator is never nudged twice about the same offer. Best-effort: a provider
+// failure leaves the row unmarked so the next sweep can retry.
+//
+// The reminder deliberately doesn't include the rate or expiry countdown —
+// this is a "still interested?" tap, not a new offer, and re-quoting the terms
+// invites a re-negotiation on a link they've already seen.
+async function sendOfferReminder(offerId) {
+  const { offerReminderMessage } = require('./offerPortal/replies');
+  const offer = await db.one(
+    `SELECT o.id, o.token, o.status, o.brand_name, o.expires_at, o.reminder_sent_at,
+            o.creator_id, c.first_name, c.full_name, c.whatsapp, c.imessage,
+            c.messaging_opted_out, c.established_channel
+     FROM offers o JOIN creators c ON c.id = o.creator_id
+     WHERE o.id = $1`,
+    [offerId],
+  );
+  if (!offer) return { sent: false, reason: 'not_found' };
+  if (offer.reminder_sent_at) return { sent: false, reason: 'already_reminded' };
+  if (offer.status !== 'pending') return { sent: false, reason: `not_pending:${offer.status}` };
+  if (new Date(offer.expires_at).getTime() < Date.now()) return { sent: false, reason: 'expired' };
+  if (offer.messaging_opted_out) return { sent: false, reason: 'opted_out' };
+
+  const channel = offer.established_channel;
+  const to = channel === 'imessage' ? offer.imessage : channel === 'whatsapp' ? offer.whatsapp : null;
+  if (!channel || !to) return { sent: false, reason: 'no_messaging_channel' };
+
+  const body = offerReminderMessage({
+    firstName: firstNameOf(offer),
+    brandName: offer.brand_name,
+    expiryFormatted: formatDate(offer.expires_at),
+    offerUrl: offerUrl(offer.token),
+  });
+
+  try {
+    const send = channel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
+    const res = await send({ to, body });
+    if (!res.sent) return { sent: false, reason: res.error || res.reason || 'send_failed' };
+    // Stamp + log the send. Atomic on reminder_sent_at (`IS NULL` guard) so a
+    // concurrent tick can never send two reminders for the same offer.
+    const marked = await db.query(
+      `UPDATE offers SET reminder_sent_at = NOW()
+        WHERE id = $1 AND reminder_sent_at IS NULL`,
+      [offer.id],
+    );
+    if (marked.rowCount === 0) return { sent: false, reason: 'raced' };
+    await db.query(
+      `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+       VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+      [offer.creator_id, offer.id, channel, body, res.id || null],
+    );
+    return { sent: true, channel };
+  } catch (err) {
+    console.error('[offers] reminder send failed', err.message);
+    return { sent: false, reason: err.message };
+  }
+}
+
+// Scheduled sweep: find pending offers that have been open for at least
+// OFFER_REMINDER_AFTER_HOURS and still have at least
+// OFFER_REMINDER_MIN_EXPIRY_MARGIN_HOURS to run before expiry, and send one
+// reminder each. The min-margin guards against reminding at the last minute
+// when the creator no longer has time to react — that's a bad experience worse
+// than no reminder.
+async function runOfferRemindersSweep({ limit = 25 } = {}) {
+  const afterHours = Number(process.env.OFFER_REMINDER_AFTER_HOURS || 24);
+  const marginHours = Number(process.env.OFFER_REMINDER_MIN_EXPIRY_MARGIN_HOURS || 6);
+  if (!(afterHours > 0)) return { sent: 0, considered: 0 };
+
+  const due = await db.many(
+    `SELECT o.id
+       FROM offers o
+       JOIN creators c ON c.id = o.creator_id
+      WHERE o.status = 'pending'
+        AND o.reminder_sent_at IS NULL
+        AND c.messaging_opted_out = FALSE
+        AND c.established_channel IN ('whatsapp', 'imessage')
+        AND o.created_at <= NOW() - ($1 || ' hours')::interval
+        AND o.expires_at  >= NOW() + ($2 || ' hours')::interval
+      ORDER BY o.created_at ASC
+      LIMIT $3`,
+    [afterHours, marginHours, limit],
+  );
+
+  let sent = 0;
+  for (const row of due) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await sendOfferReminder(row.id);
+      if (r.sent) sent += 1;
+    } catch (err) {
+      console.error(`[offers] reminder for offer ${row.id} failed:`, err.message);
+    }
+  }
+  return { sent, considered: due.length };
+}
+
 // Follow-up dispatch on accept / decline. Best-effort across all channels.
 //   accept  → email confirmation + WhatsApp/iMessage thank-you
 //   decline → WhatsApp/iMessage polite close
@@ -1141,24 +1241,22 @@ async function onOfferResponded(offerId, response) {
     // their personalised brief link) starts immediately on the same portal
     // page — an extra inbox email would set the wrong expectation.
 
-    // WhatsApp / iMessage thank-you / polite-close (both accept and decline) —
-    // only over an ALREADY-established channel. A web response with no prior
-    // messaging contact has nowhere to send this (nothing to establish it with
-    // — the email confirmation above already covers the accept case).
+    // WhatsApp / iMessage nudge / polite-close — only over an ALREADY-
+    // established channel. A web response has nowhere to send this and doesn't
+    // need to: accepting on the page advances straight to the sign view.
+    //
+    // Accept: the deal isn't confirmed until the mini contract is signed, so the
+    // celebratory confirmation copy is DEFERRED to signMiniContract. Here we
+    // just send the sign link so a messaged accept has a way to reach the page.
+    // Decline: the polite-close copy stands as before.
     let body;
     if (response === 'accepted') {
-      body = thankYouMessage(firstName);
+      body = `${acceptedAwaitingSignatureMessage(firstName)}\n\n${offerUrl(offer.token)}`;
     } else if (offer.decline_reason === 'Not a fit') {
       // "Not a fit" gets the warmer, forward-looking close (see notAFitCloseMessage).
       body = notAFitCloseMessage(firstName);
     } else {
       body = politeCloseMessage(firstName);
-    }
-    // A creator who accepted by text still needs to review + sign the mini
-    // contract — send them the link (accept over the web page goes straight to
-    // the contract view, so this only matters for a messaged accept).
-    if (response === 'accepted') {
-      body += `\n\nOne last step — review your agreement here: ${offerUrl(offer.token)}`;
     }
     const msgChannel = offer.messaging_opted_out ? null : offer.established_channel;
     if (msgChannel === 'whatsapp') {
@@ -2250,6 +2348,34 @@ async function signMiniContract({ token, signature, signerName, ip }) {
     console.error('[offers] mini-contract copy email threw:', err.message);
   }
 
+  // WhatsApp / iMessage confirmation — the deal is now truly confirmed, and
+  // this is the message where the "🎉" earns its place. Sent only over an
+  // ALREADY-established channel, same rule as respondToOffer, and carrying a
+  // link back to the (now-signed) portal so they can pull up the agreement.
+  // Best-effort: the signature is already saved, so a send failure here never
+  // undoes anything.
+  const msgChannel = offer.messaging_opted_out ? null : offer.established_channel;
+  if (msgChannel === 'whatsapp' || msgChannel === 'imessage') {
+    const firstName = firstNameOf(offer);
+    const body = `${thankYouMessage(firstName)}\n\nView your agreement here: ${offerUrl(offer.token)}`;
+    const to = msgChannel === 'imessage' ? offer.imessage : offer.whatsapp;
+    if (to) {
+      try {
+        const send = msgChannel === 'imessage' ? imessage.sendIMessageText : whatsapp.sendWhatsAppText;
+        const res = await send({ to, body });
+        if (res.sent) {
+          await db.query(
+            `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body, provider_message_id)
+             VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+            [offer.creator_id, offer.id, msgChannel, body, res.id || null],
+          );
+        }
+      } catch (err) {
+        console.error('[offers] sign-confirmation message failed', err.message);
+      }
+    }
+  }
+
   return { ok: true, signerName: name, signedAtFormatted: formatDate(new Date()), copyEmailed };
 }
 
@@ -2516,6 +2642,8 @@ module.exports = {
   resolvePriorCpm,
   computeAutoOffer,
   sendUsedCreatorInviteFollowup,
+  sendOfferReminder,
+  runOfferRemindersSweep,
   sendUsedCreatorBrief,
   sendOfferBriefing,
   deliverOfferOverChannel,

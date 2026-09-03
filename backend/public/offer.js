@@ -32,6 +32,7 @@
   var signatureDataUrl = null; // the creator's drawn signature (data:image/png URL)
   var sigPad = null; // the active signature-pad controller (see initSigPad)
   var signBtnRef = null; // the "Sign & agree" button, toggled as the pad fills
+  var legallyBindingAcked = false; // creator ticked "I understand this is legally binding"
 
   // Tiny DOM helper. h('div', {class:'x', onclick:fn}, child, child…)
   function h(tag, props) {
@@ -149,7 +150,7 @@
     if (!canvas) { sigPad = null; return; }
     sigPad = initSigPad(canvas, function () {
       signatureDataUrl = sigPad.toDataUrl();
-      if (signBtnRef) signBtnRef.disabled = submitting || !signatureDataUrl;
+      if (signBtnRef) signBtnRef.disabled = submitting || !signatureDataUrl || !legallyBindingAcked;
     });
     if (signatureDataUrl) sigPad.load(signatureDataUrl);
   }
@@ -493,7 +494,21 @@
         if (signBtnRef) signBtnRef.disabled = true;
       },
     }, 'Clear');
-    signBtnRef = btn('Sign & agree', { onClick: signContract, disabled: !signatureDataUrl });
+    signBtnRef = btn('Sign & agree', { onClick: signContract, disabled: !signatureDataUrl || !legallyBindingAcked });
+
+    // The "legally binding" acknowledgement — required tick between the
+    // signature pad and the sign button. Same rule as the full contract
+    // (public/contract.html): a drawn signature isn't enough on its own.
+    var bindingCheckbox = h('input', { type: 'checkbox', id: 'binding-ack' });
+    if (legallyBindingAcked) bindingCheckbox.checked = true;
+    bindingCheckbox.addEventListener('change', function () {
+      legallyBindingAcked = !!bindingCheckbox.checked;
+      if (signBtnRef) signBtnRef.disabled = submitting || !signatureDataUrl || !legallyBindingAcked;
+    });
+    var bindingLabel = h('label', { class: 'agree', for: 'binding-ack' },
+      bindingCheckbox,
+      h('span', {}, 'I understand that this contract is legally binding.'));
+
     wrap.appendChild(h('div', {},
       h('p', { class: 'ask' }, 'Sign to agree'),
       h('p', { class: 'ask-sub' }, 'Draw your signature below to confirm you agree to the terms above.'),
@@ -504,6 +519,7 @@
       h('div', { class: 'sig-tools' },
         h('span', {}, 'Draw with your mouse or finger'),
         clearBtn),
+      bindingLabel,
       signBtnRef));
 
     var e = errNode();
@@ -530,6 +546,11 @@
   async function signContract() {
     var sig = signatureDataUrl || (sigPad && sigPad.toDataUrl());
     if (!sig) { error = 'Please draw your signature to sign.'; render(); return; }
+    if (!legallyBindingAcked) {
+      error = 'Please tick the box confirming you understand this contract is legally binding.';
+      render();
+      return;
+    }
     setSubmitting(true);
     error = null;
     try {

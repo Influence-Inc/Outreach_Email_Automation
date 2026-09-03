@@ -80,6 +80,28 @@ function classifyInterest(body) {
 // per line, a blank line between what happened and what happens next, and at
 // most one emoji — reserved for genuine milestones (a confirmed deal), never as
 // decoration. Reads like a brand's messaging channel, not a mail merge.
+
+// Sent on ACCEPT (before signing), only to a creator who accepted via WhatsApp
+// or iMessage: they need the link to sign, but the deal isn't confirmed yet.
+// A web accept never hits this — the browser advances to the sign page in place.
+function acceptedAwaitingSignatureMessage(firstName) {
+  return `Thanks ${firstName} — please review and sign your contract to lock this in.`;
+}
+
+// One-time nudge for an offer that's been sitting open for a while without a
+// response, sent before it expires. Deliberately light — this is a "still
+// interested?" tap, not a hard-sell — with the same portal link and expiry
+// wording the original message used, so it doesn't read like a new offer.
+function offerReminderMessage({ firstName, brandName, expiryFormatted, offerUrl }) {
+  const brand = brandName ? `your ${brandName} collaboration` : 'your collaboration';
+  const closes = expiryFormatted ? `\n\nOpen until ${expiryFormatted}.` : '';
+  return `Hi ${firstName} — just a quick nudge on ${brand}. Have a look here when you get a chance: ${offerUrl}${closes}`;
+}
+
+// Sent on SIGN (once the mini-contract is signed), regardless of channel the
+// accept came through: this is where the deal is actually confirmed and the
+// celebratory copy earns its emoji. The agreement link goes back to the same
+// portal URL, which now renders in "signed" state.
 function thankYouMessage(firstName) {
   return `That's confirmed, ${firstName} — great to have you on board. 🎉\n\nWe'll send your content brief shortly with everything you need to get started.`;
 }
@@ -240,6 +262,8 @@ module.exports = {
   parseRequestedRate,
   isOptOut,
   isOptIn,
+  acceptedAwaitingSignatureMessage,
+  offerReminderMessage,
   thankYouMessage,
   politeCloseMessage,
   notAFitCloseMessage,

@@ -159,6 +159,49 @@ function ackMessage({ firstName }) {
   );
 }
 
+// Pre-deadline reminder. The WhatsApp equivalent of the same reminder
+// influence-stats sends by email — softer copy that suits chat, and shorter
+// so it reads at a glance. `reminderType` is either "3_days" or "1_day"
+// (matches influence_bot's chase_ladder tiers); `daysLeft` is the raw
+// number for a fallback line when the tier is unknown.
+function deadlineReminder({ firstName, brandName, reminderType, daysLeft, deadline }) {
+  const brand = brandName ? ` for ${brandName}` : '';
+  const dl = deadline ? ` (${deadline})` : '';
+  if (reminderType === '1_day') {
+    return (
+      `Hi ${firstName} — a quick heads-up: your posting deadline${brand} is TOMORROW${dl}. ` +
+      `Let us know if there's anything holding you up on the post going live.`
+    );
+  }
+  if (reminderType === '3_days') {
+    return (
+      `Hi ${firstName} — just a friendly nudge: you have 3 days left to post${brand}${dl}. ` +
+      `Reply here if you need anything to get the post over the line.`
+    );
+  }
+  // Generic fallback for any tier we don't have a specialised body for.
+  const left = Number.isFinite(Number(daysLeft)) ? Number(daysLeft) : null;
+  const window = left != null ? `${left} day${left === 1 ? '' : 's'} left` : 'coming up';
+  return (
+    `Hi ${firstName} — a nudge on your posting deadline${brand}${dl}: ${window}. ` +
+    `Let us know if you need anything to get the post live in time.`
+  );
+}
+
+// Post-deadline chase. The deadline has already passed — copy stays friendly
+// but names the miss. `daysOverdue` lets the copy escalate; the actual rung
+// selection (when to send, how far apart) lives on influence_bot's chase
+// ladder, not here — we only render what we're told to send.
+function deadlineOverdue({ firstName, brandName, daysOverdue }) {
+  const brand = brandName ? ` for ${brandName}` : '';
+  const n = Number(daysOverdue);
+  const overdue = Number.isFinite(n) && n > 0 ? ` (${n} day${n === 1 ? '' : 's'} past)` : '';
+  return (
+    `Hi ${firstName} — your posting deadline${brand} passed${overdue}. ` +
+    `Reply here if anything's blocking you and we'll sort it out together.`
+  );
+}
+
 module.exports = {
   introMessage,
   hiRequestMessage,
@@ -171,4 +214,6 @@ module.exports = {
   deliverablesComplete,
   nextCampaignOutreach,
   ackMessage,
+  deadlineReminder,
+  deadlineOverdue,
 };
