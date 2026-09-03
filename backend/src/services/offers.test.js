@@ -189,3 +189,58 @@ test('normalizeContractPlatforms deduplicates repeated tokens', () => {
     ['Instagram', 'TikTok'],
   );
 });
+
+// --- computePostingDeadline ------------------------------------------------
+
+test('computePostingDeadline returns 4 days per video from acceptance date', () => {
+  const signed = new Date('2026-01-01T00:00:00Z');
+  // 3 videos → 12 days out from signing
+  const three = offers.computePostingDeadline({
+    deliverables: ['3 Reels'],
+    contract_signed_at: signed,
+  });
+  assert.strictEqual(three.toISOString().slice(0, 10), '2026-01-13');
+
+  // 5 videos → 20 days out
+  const five = offers.computePostingDeadline({
+    deliverables: ['5 Reels'],
+    contract_signed_at: signed,
+  });
+  assert.strictEqual(five.toISOString().slice(0, 10), '2026-01-21');
+});
+
+test('computePostingDeadline sums a multi-line deliverables list', () => {
+  const signed = new Date('2026-01-01T00:00:00Z');
+  // 2 Reels + 1 Story = 3 units → 12 days out
+  const combined = offers.computePostingDeadline({
+    deliverables: ['2 Reels', '1 Story'],
+    contract_signed_at: signed,
+  });
+  assert.strictEqual(combined.toISOString().slice(0, 10), '2026-01-13');
+});
+
+test('computePostingDeadline falls back to today for a pending offer', () => {
+  const before = Date.now();
+  const d = offers.computePostingDeadline({ deliverables: ['3 Reels'] });
+  const after = Date.now();
+  // 3 videos × 4 days = 12 days; deadline must sit inside [now+12d, now+12d+ε].
+  const twelveDays = 12 * 24 * 3600 * 1000;
+  assert.ok(d.getTime() >= before + twelveDays);
+  assert.ok(d.getTime() <= after + twelveDays + 100);
+});
+
+test('computePostingDeadline returns null when there are no deliverables', () => {
+  assert.strictEqual(offers.computePostingDeadline({ deliverables: [] }), null);
+  assert.strictEqual(offers.computePostingDeadline({}), null);
+});
+
+test('computePostingDeadline treats an unparseable deliverables list as 1 line = 1 unit', () => {
+  // Free-text deliverables that don't start with "<n> " fall back to
+  // deliverables.length as the count — one line = one video.
+  const signed = new Date('2026-01-01T00:00:00Z');
+  const d = offers.computePostingDeadline({
+    deliverables: ['One long-form video with a hook'],
+    contract_signed_at: signed,
+  });
+  assert.strictEqual(d.toISOString().slice(0, 10), '2026-01-05');
+});
