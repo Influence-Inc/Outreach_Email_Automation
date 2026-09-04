@@ -1891,6 +1891,28 @@ async function sendContractOnAcceptance(creator, ctx, result) {
   }
 }
 
+// Is this creator's deal being run on the offer portal? A used creator accepts
+// on the page and then draws their signature on the mini contract there — that
+// signature IS their contract (see offers.signMiniContract), so no full contract
+// is ever generated or emailed for them. Both contract-send entry points below
+// check this: without it, signMiniContract's contract_approved = TRUE (set only
+// to skip the "Approve deal" delegate) makes the scheduler backfill mint a
+// redundant contract, and an admin clicking "Approve deal" between the portal
+// accept and the signature does the same. Either one drops a contracts row on
+// the creator, which flips Deal Studio's status pill onto the full-contract
+// ladder ("contract sent" → "contract signed") for a deal the creator has not
+// signed yet.
+async function hasPortalDeal(creatorId) {
+  const hit = await db.one(
+    `SELECT 1 FROM offers
+      WHERE creator_id = $1
+        AND (contract_signed_at IS NOT NULL OR status = 'accepted')
+      LIMIT 1`,
+    [creatorId],
+  );
+  return !!hit;
+}
+
 // Backfill entry point for the scheduler: generate + email the contract for an
 // approved ACCEPTED creator that doesn't have one yet (e.g. the send at
 // approval time errored). Idempotent — contracts.createContractForCreator
@@ -1902,6 +1924,9 @@ async function ensureContractSent(creatorId) {
   const creator = await loadCreator(creatorId);
   if (!creator) return { skipped: 'no creator' };
   if (!creator.contract_approved) return { skipped: 'not approved' };
+  // The scheduler query already excludes portal deals; re-checked here so every
+  // caller of this entry point is covered.
+  if (await hasPortalDeal(creatorId)) return { skipped: 'portal_deal' };
   await sendContractOnAcceptance(creator, ctxFor(creator), { send_now: true });
   return { ok: true };
 }
@@ -1952,6 +1977,18 @@ async function approveContract(creatorId) {
           ? creator.negotiation_status.replace(/_/g, ' ').toLowerCase()
           : 'no reply yet'
       }).`,
+    );
+    err.status = 409;
+    throw err;
+  }
+  // A portal deal has nothing to approve or email — the creator signs the mini
+  // contract on the offer page itself. Approving here would mint a second,
+  // redundant contract and make the row read "contract sent" before the creator
+  // has signed anything. The dashboard hides the button for these rows
+  // (isContractApprovalPending); this is the server-side backstop.
+  if (await hasPortalDeal(creator.id)) {
+    const err = new Error(
+      'This creator accepted on the offer portal and signs the mini contract there — no contract is generated or emailed for them.',
     );
     err.status = 409;
     throw err;
