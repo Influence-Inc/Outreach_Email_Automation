@@ -897,17 +897,38 @@ function renderCategoryBadge(r) {
   return el;
 }
 
+// A used creator whose deal runs on the offer portal: they accept on the page
+// and then draw a signature on the mini contract there, so there is no contract
+// to approve or email — and "signed" is earned by that signature alone.
+function isPortalDeal(r) {
+  const p = r.portal_offer;
+  return !!p && (p.signed || p.status === 'accepted');
+}
+
 // Status pill class + label. An accepted negotiation is surfaced as its own
 // pill even though the outreach status stays 'replied'.
 function statusPillFor(r) {
+  const contractStatus = (r.contract && r.contract.status) || null;
+  const contractSigned = contractStatus === 'signed' || contractStatus === 'completed';
+  // Offer-portal deals carry their own contract stage, so they're read BEFORE
+  // the full-contract ladder below: accepting the offer is not signing it, and
+  // only portal_offer.signed (offers.contract_signed_at) earns "contract
+  // signed". A portal creator should never have a generated contract at all —
+  // where a stray one exists on a pre-fix row, the portal state is still the
+  // truthful one unless that contract was itself signed.
+  if (isPortalDeal(r) && !contractSigned) {
+    return r.portal_offer.signed
+      ? { cls: 'accepted', text: 'contract signed' }
+      : { cls: 'accepted', text: 'awaiting signature' };
+  }
   // Once a contract exists the pill continues the SAME status flow into the
   // contract stages (no separate column) — contract sent → signed → completed.
-  if (r.contract && r.contract.status) {
+  if (contractStatus) {
     const contractPill = {
       pending: { cls: 'accepted', text: 'contract sent' },
       signed: { cls: 'accepted', text: 'contract signed' },
       completed: { cls: 'accepted', text: 'completed' },
-    }[r.contract.status];
+    }[contractStatus];
     if (contractPill) return contractPill;
   }
   if (r.negotiation_status === 'ACCEPTED') {
@@ -4642,7 +4663,12 @@ function isContractApprovalPending(r) {
   return (
     r.negotiation_status === 'ACCEPTED' &&
     !r.contract_approved &&
-    !(r.contract && r.contract.status)
+    !(r.contract && r.contract.status) &&
+    // A portal deal has nothing to approve: the creator signs the mini contract
+    // on the offer page. Showing "Approve deal" here would mint and email a
+    // redundant contract (negotiation.approveContract now refuses it outright)
+    // and make the row read "contract sent" before they've signed.
+    !isPortalDeal(r)
   );
 }
 

@@ -44,14 +44,17 @@ const baseCreator = {
 
 // claimable: whether the atomic contract_approved claim matches a row (i.e. the
 // deal was still unapproved). hasContract: whether a contract row already
-// exists for the creator (the duplicate-click lookup).
-function install(creator, { claimable = true, hasContract = false } = {}) {
+// exists for the creator (the duplicate-click lookup). portalDeal: whether the
+// creator has an accepted/signed offer-portal offer — those creators sign the
+// mini contract on the page, so no full contract may be generated for them.
+function install(creator, { claimable = true, hasContract = false, portalDeal = false } = {}) {
   const writes = [];
   db.one = async (sql) => {
     if (/UPDATE creators/i.test(sql) && /contract_approved\s*=\s*TRUE/i.test(sql)) {
       return claimable ? { id: creator.id } : null;
     }
     if (/SELECT id FROM contracts/i.test(sql)) return hasContract ? { id: 7 } : null;
+    if (/FROM offers/i.test(sql)) return portalDeal ? { '?column?': 1 } : null;
     if (/FROM creators c JOIN campaigns/i.test(sql)) return { ...creator };
     return null; // app_settings, latest message lookups, etc.
   };
@@ -121,6 +124,42 @@ test('a duplicate approval does not re-send the signing email', async () => {
     assert.strictEqual(res.already, true, 'reported as already approved');
     assert.ok(!findEvent(writes, 'contract_approved'), 'the approval is not logged twice');
     assert.ok(!findEvent(writes, 'contract_sent'), 'the signing email is not re-sent');
+  } finally {
+    process.env.DRY_RUN = prevDryRun;
+    restore();
+  }
+});
+
+// A used creator runs their whole deal on the offer portal: they accept on the
+// page, then draw a signature on the mini contract there. No full contract is
+// ever generated for them — one would be a second, redundant agreement, and the
+// contracts row it leaves behind makes Deal Studio's status pill read "contract
+// sent" / "contract signed" for a deal the creator has not signed.
+test('approving a deal the creator accepted on the offer portal is rejected (409)', async () => {
+  const writes = install(baseCreator, { portalDeal: true });
+  try {
+    await assert.rejects(
+      () => negotiation.approveContract(42),
+      (err) => err.status === 409 && /offer portal/i.test(err.message),
+    );
+    assert.ok(!findEvent(writes, 'contract_approved'), 'no approval is logged');
+    assert.ok(!findEvent(writes, 'contract_sent'), 'no second contract goes out');
+  } finally {
+    restore();
+  }
+});
+
+// signMiniContract sets contract_approved = TRUE purely to skip the "Approve
+// deal" delegate, which would otherwise match the scheduler's "approved with no
+// contract" backfill on every portal signer.
+test('ensureContractSent skips a portal deal even once it is approved', async () => {
+  const prevDryRun = process.env.DRY_RUN;
+  process.env.DRY_RUN = '1';
+  const writes = install({ ...baseCreator, contract_approved: true }, { portalDeal: true });
+  try {
+    const res = await negotiation.ensureContractSent(42);
+    assert.deepStrictEqual(res, { skipped: 'portal_deal' });
+    assert.ok(!findEvent(writes, 'contract_sent'), 'the backfill mints no contract for a portal signer');
   } finally {
     process.env.DRY_RUN = prevDryRun;
     restore();

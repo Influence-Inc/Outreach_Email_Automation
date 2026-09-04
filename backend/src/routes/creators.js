@@ -87,6 +87,7 @@ const RATE_LOG_TYPES = [
   'contract_approved',
   'contract_sent',
   'contract_signed',
+  'mini_contract_signed',
   'contract_copy_emailed',
   'contract_synced',
   'outreach_stopped',
@@ -319,6 +320,11 @@ function rateLogEntry(type, detail, msg, summary) {
     case 'contract_sent':
       return { text: 'Contract sent', tone: 'active' };
     case 'contract_signed':
+      return { text: 'Contract signed ✓', tone: 'success' };
+    case 'mini_contract_signed':
+      // The offer-portal mini contract. A used creator's drawn signature on the
+      // page IS their contract, so it earns the same milestone step as the full
+      // contract's signature — and, like that one, only once they've signed.
       return { text: 'Contract signed ✓', tone: 'success' };
     case 'contract_copy_emailed':
       // Only a delivered copy earns a step; a failed attempt stays quiet (the

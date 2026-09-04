@@ -153,12 +153,23 @@ async function pollNegotiations() {
     //    contract is ever generated or emailed before the go-ahead.
     //    ensureContractSent is idempotent, so this safely retries generation +
     //    the signing email once per creator.
+    //    Offer-portal deals are excluded too: a used creator signs the mini
+    //    contract on the page, and signMiniContract sets contract_approved only
+    //    to skip the "Approve deal" delegate — without this clause every one of
+    //    them matches "approved with no contract" and gets a redundant contract
+    //    emailed, which also flips their Deal Studio pill onto the full-contract
+    //    ladder ("contract sent" → "contract signed").
     const acceptedNoContract = await db.many(
       `SELECT id FROM creators
        WHERE negotiation_status = 'ACCEPTED'
          AND contract_approved
          AND status <> 'stopped'
-         AND NOT EXISTS (SELECT 1 FROM contracts ct WHERE ct.creator_id = creators.id)`,
+         AND NOT EXISTS (SELECT 1 FROM contracts ct WHERE ct.creator_id = creators.id)
+         AND NOT EXISTS (
+           SELECT 1 FROM offers o
+            WHERE o.creator_id = creators.id
+              AND (o.contract_signed_at IS NOT NULL OR o.status = 'accepted')
+         )`,
     );
     for (const c of acceptedNoContract) {
       try {
