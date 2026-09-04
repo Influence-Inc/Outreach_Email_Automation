@@ -185,9 +185,10 @@ async function sendOutreach(creatorId) {
     // Part 2 of the used-creator workflow: "Send email" auto-prices an offer
     // from the creator's prior CPM (Creator-DB) and sends the offer directly.
     // Clicking IS the approval — no separate offer_approved step for Used
-    // creators. Delivery: DM if they're already messaging us in this campaign,
-    // else the friendly new-campaign offer email (offer link only, no "text Hi"
-    // buttons — the graduation email is the one-time connect invite).
+    // creators. Delivery: the friendly new-campaign offer email (offer link
+    // only, no "text Hi" buttons — the graduation email is the one-time connect
+    // invite), PLUS a DM carrying the same link when they're already messaging
+    // us. `via` names the lead channel; handled.channels lists them all.
     let handled = await offers.sendUsedCreatorOffer(creatorId);
     let via = handled.via === 'messaging' ? 'used_creator_offer_messaging' : 'used_creator_offer_email';
 

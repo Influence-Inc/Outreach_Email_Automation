@@ -10,8 +10,32 @@ const RESEND_API_URL = process.env.RESEND_API_URL || 'https://api.resend.com/ema
 function apiKey() {
   return process.env.RESEND_API_KEY || '';
 }
+// Resend takes the sender as one raw RFC-5322 string, so a BARE address in
+// OFFER_EMAIL_FROM / EMAIL_FROM (e.g. "offers@useinfluence.xyz") arrives in the
+// creator's inbox showing the address itself — no name, which reads like a
+// machine and buries who it's from. The code default here always carried the
+// display name, but any env value silently replaced it, so a deployment
+// configured with a bare address sent unbranded mail with nothing in the code
+// to show why. Whatever the env supplies now, the mail goes out under the
+// brand: a value that already carries a display name is used verbatim, a bare
+// address gets the name put in front of it.
+const DEFAULT_FROM_NAME = 'INFLUENCE';
+const CONTRACT_FROM_NAME = 'INFLUENCE Contracts';
+
+function withDisplayName(value, name) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  // Already in "Name <addr>" (or bare "<addr>") form — the operator's own
+  // choice of name wins, including a deliberately different one.
+  if (raw.includes('<')) return raw;
+  return `${name} <${raw}>`;
+}
+
 function fromAddress() {
-  return process.env.OFFER_EMAIL_FROM || process.env.EMAIL_FROM || 'INFLUENCE <offers@useinfluence.xyz>';
+  return withDisplayName(
+    process.env.OFFER_EMAIL_FROM || process.env.EMAIL_FROM || 'offers@useinfluence.xyz',
+    DEFAULT_FROM_NAME,
+  );
 }
 
 // Executed-agreement copies get their own sender, separate from the offers@
@@ -22,7 +46,7 @@ function fromAddress() {
 // so signed-agreement copies go from there; CONTRACT_EMAIL_FROM overrides the
 // default if the address ever needs to change without redeploying.
 function contractFromAddress() {
-  return process.env.CONTRACT_EMAIL_FROM || 'INFLUENCE Contracts <contracts@useinfluence.xyz>';
+  return withDisplayName(process.env.CONTRACT_EMAIL_FROM || 'contracts@useinfluence.xyz', CONTRACT_FROM_NAME);
 }
 
 function baseUrl() {
@@ -156,13 +180,41 @@ async function sendOfferEmail({ to, firstName, brandName, offerUrl, expiryDate }
 // each channel that's actually usable for this creator — either may be null.
 // `reminder` softens the subject + opening for the 32h nudge to a creator who
 // went quiet after the first invite (see offers.sendUsedCreatorInviteFollowup).
-function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessageNumber, reminder = false }) {
+//
+// `established` names the channel ('whatsapp' | 'imessage') the same note has
+// just gone out on, for the creator who is ALREADY in the chat with us. They
+// get this email too — the inbox is what survives a scrolled-past conversation
+// — but it must not ask them to text "Hi": they already did, months ago, and
+// asking someone mid-conversation to re-introduce themselves is exactly the
+// thing the subscription is meant to stop. So the CTA becomes a pointer to the
+// chat that's already open, and the "Hi" buttons are dropped.
+function renderPortalInviteEmail({
+  firstName,
+  brandName,
+  whatsappNumber,
+  imessageNumber,
+  reminder = false,
+  established = null,
+}) {
   const subject = reminder
     ? `Reminder: your ${brandName} opportunity is still waiting`
     : `${brandName} has a new opportunity for you`;
   const opener = reminder
     ? `Just following up on the ${brandName} opportunity we mentioned — we'd still love to have you on board.`
     : `We're kicking off a new collaboration with ${brandName}, and after how well things went last time, we'd love to have you on board again.`;
+
+  if (established) {
+    const channelName = established === 'imessage' ? 'iMessage' : 'WhatsApp';
+    const cta = `We've just sent you the details on ${channelName} — reply there whenever you're ready, or simply reply to this email.`;
+    return {
+      subject,
+      text: [`Hi ${firstName},`, ``, opener, ``, cta, ``, `Talk soon,`, `Team INFLUENCE`].join('\n'),
+      html: shell(`    <p>Hi ${escapeHtml(firstName)},</p>
+    <p>${escapeHtml(opener)}</p>
+    <p>${escapeHtml(cta)}</p>
+    <p style="margin-top:24px;">Talk soon,<br/>Team INFLUENCE</p>`),
+    };
+  }
 
   const lines = [];
   if (whatsappNumber) lines.push(`WhatsApp: ${whatsappNumber}`);
@@ -210,13 +262,22 @@ function renderPortalInviteEmail({ firstName, brandName, whatsappNumber, imessag
   return { subject, text, html };
 }
 
-async function sendPortalInviteEmail({ to, firstName, brandName, whatsappNumber, imessageNumber, reminder = false }) {
+async function sendPortalInviteEmail({
+  to,
+  firstName,
+  brandName,
+  whatsappNumber,
+  imessageNumber,
+  reminder = false,
+  established = null,
+}) {
   const { subject, text, html } = renderPortalInviteEmail({
     firstName,
     brandName,
     whatsappNumber,
     imessageNumber,
     reminder,
+    established,
   });
   return deliver({ to, subject, text, html });
 }
@@ -496,6 +557,7 @@ async function sendProseEmail({ to, subject, body }) {
 module.exports = {
   isConfigured,
   attachment,
+  fromAddress,
   contractFromAddress,
   renderOfferEmail,
   sendOfferEmail,

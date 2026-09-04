@@ -223,8 +223,12 @@ test('sendUsedCreatorOffer auto-prices, mints an offer, and sends the offer emai
   }
 });
 
-test('sendUsedCreatorOffer sends the DM (no email) when subscribed and the window is open', async () => {
-  const { emails } = install({
+// Subscribed used to mean the offer went ONLY to the chat. It doesn't any more:
+// a creator reachable on WhatsApp/iMessage gets the offer in both places. The
+// chat is where they are right now; the inbox is what survives a scrolled-past
+// conversation, and both carry the same link.
+test('sendUsedCreatorOffer sends the DM AND the email when subscribed and the window is open', async () => {
+  const { emails, writes } = install({
     creator: { ...baseCreator, established_channel: 'imessage', imessage: '+15551234567' },
     cpmFromCreatorDb: 20,
     windowOpen: true,
@@ -233,8 +237,46 @@ test('sendUsedCreatorOffer sends the DM (no email) when subscribed and the windo
     const r = await offers.sendUsedCreatorOffer(88);
     assert.strictEqual(r.sent, true);
     assert.strictEqual(r.via, 'messaging');
+    assert.deepStrictEqual(r.channels, ['iMessage', 'Email']);
+    assert.strictEqual(emails.length, 1, 'the offer is mirrored to the inbox');
+    assert.strictEqual(emails[0].to, 'sam@x.com');
+    assert.match(emails[0].offerUrl, /\/o\/tok42/, 'the same link as the DM, not a second offer');
+    // Logged like any other send, so the dashboard's per-channel activity shows it.
+    assert.ok(writes.some((w) => /offer_messages/i.test(w.sql) && /'email'/i.test(w.sql)));
+    assert.ok(writes.some((w) => /offer_events/i.test(w.sql) && /'sent'/i.test(w.sql)));
+  } finally {
+    restoreAll();
+  }
+});
+
+test('a failing mirror email never costs the subscribed creator the DM', async () => {
+  const { emails } = install({
+    creator: { ...baseCreator, established_channel: 'imessage', imessage: '+15551234567' },
+    cpmFromCreatorDb: 20,
+    windowOpen: true,
+    emailSent: { sent: false, error: 'resend exploded' },
+  });
+  try {
+    const r = await offers.sendUsedCreatorOffer(88);
+    assert.strictEqual(r.sent, true, 'the DM still counts as delivered');
+    assert.deepStrictEqual(r.channels, ['iMessage'], 'Email is only claimed when it actually sent');
+    assert.strictEqual(emails.length, 1, 'but it was attempted');
+  } finally {
+    restoreAll();
+  }
+});
+
+test('a subscribed creator with no email on file still gets the DM', async () => {
+  const { emails } = install({
+    creator: { ...baseCreator, email: null, established_channel: 'imessage', imessage: '+15551234567' },
+    cpmFromCreatorDb: 20,
+    windowOpen: true,
+  });
+  try {
+    const r = await offers.sendUsedCreatorOffer(88);
+    assert.strictEqual(r.sent, true);
     assert.deepStrictEqual(r.channels, ['iMessage']);
-    assert.strictEqual(emails.length, 0, 'no email when we DM the offer directly');
+    assert.strictEqual(emails.length, 0, 'nothing to mirror to');
   } finally {
     restoreAll();
   }

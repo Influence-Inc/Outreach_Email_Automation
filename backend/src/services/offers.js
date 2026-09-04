@@ -775,10 +775,11 @@ async function sendOfferOutreach(offerId) {
 // Send the standalone messaging invite to a USED creator at INITIAL outreach,
 // before any offer has been priced. Two paths:
 //   • established_channel set (they've already messaged us — subscribed): reach
-//     out DIRECTLY on that channel with a proactive interest message; no "text
-//     Hi" email, no re-trigger from them. No priced offer exists yet, so this is
-//     a brand/interest note — the approved offer is delivered over the same
-//     channel once the admin prices it (see sendOfferOutreach).
+//     out DIRECTLY on that channel with a proactive interest message, no "text
+//     Hi" re-trigger from them, AND mirror the same note to their inbox. No
+//     priced offer exists yet, so this is a brand/interest note — the approved
+//     offer is delivered over the same channel once the admin prices it (see
+//     sendOfferOutreach).
 //   • otherwise: the "text Hi on WhatsApp / iMessage to continue" invite email.
 // Returns { sent, reason?, channels? }; the caller (outreach.sendOutreach) falls
 // back to the normal email-outreach path when sent is false, so a used creator
@@ -818,7 +819,38 @@ async function sendUsedCreatorInvite(creatorId) {
       if (result.sent) {
         // Establish this campaign's row too, so a reply here is handled in context.
         await subscribeCreatorChannel(creator.id, channel);
-        return { sent: true, channels: [channel === 'imessage' ? 'iMessage' : 'WhatsApp'] };
+        // …and mirror it to the inbox. Being subscribed is not a reason to skip
+        // the email: the chat is where they are right now, but the inbox is what
+        // survives a scrolled-past conversation, and a creator should never have
+        // to work out which of the two is authoritative. Sent in `established`
+        // mode so it points at the chat we just opened instead of asking someone
+        // already talking to us to text "Hi". Best-effort and isolated — a failed
+        // email never costs them the message that did land.
+        const chatChannels = [channel === 'imessage' ? 'iMessage' : 'WhatsApp'];
+        let emailed = false;
+        if (creator.email) {
+          try {
+            const mirror = await email.sendPortalInviteEmail({
+              to: creator.email,
+              firstName,
+              brandName: creator.brand_name || 'INFLUENCE',
+              established: channel,
+            });
+            emailed = !!mirror.sent;
+            if (mirror.sent) {
+              await db.query(
+                `INSERT INTO offer_messages (creator_id, direction, channel, body)
+                 VALUES ($1, 'outbound', 'email', $2)`,
+                [creator.id, `Used-creator invite email alongside ${chatChannels[0]}`],
+              );
+            } else if (!mirror.skipped) {
+              console.error('[offers] used-creator invite email alongside the chat failed:', mirror.error);
+            }
+          } catch (err) {
+            console.error('[offers] used-creator invite email alongside the chat threw:', err.message);
+          }
+        }
+        return { sent: true, channels: emailed ? [...chatChannels, 'Email'] : chatChannels };
       }
       // Channel send failed — fall through to the email invite below.
     }
@@ -967,7 +999,11 @@ async function sendUsedCreatorOffer(creatorId) {
   const url = offerUrl(offer.token);
   const expiry = formatDate(offer.expires_at);
 
-  // Subscribed and the window is open → DM the offer directly, no email.
+  // Subscribed and the window is open → DM the offer directly AND email it, the
+  // same both-channels rule sendOfferOutreach follows for an admin-priced offer.
+  // Being reachable on WhatsApp is not a reason to withhold the offer from the
+  // inbox: the chat scrolls away, the email doesn't, and both carry the same
+  // link so there's no question of which one is authoritative.
   const subscribedChannel = await openChannelFor(creator);
   if (subscribedChannel) {
     try {
@@ -975,7 +1011,36 @@ async function sendUsedCreatorOffer(creatorId) {
     } catch (err) {
       console.error('[offers] used-creator direct offer delivery failed', err.message);
     }
-    return { sent: true, via: 'messaging', channels: [subscribedChannel === 'imessage' ? 'iMessage' : 'WhatsApp'], offerId: offer.id, token: offer.token, url };
+    const channels = [subscribedChannel === 'imessage' ? 'iMessage' : 'WhatsApp'];
+    // Best-effort and isolated: a failed email never costs them the chat message.
+    if (creator.email) {
+      try {
+        const mirror = await email.sendNewCampaignOfferEmail({
+          to: creator.email,
+          firstName,
+          brandName,
+          offerUrl: url,
+          expiryDate: expiry,
+        });
+        if (mirror.sent) {
+          channels.push('Email');
+          await db.query(
+            `INSERT INTO offer_messages (creator_id, offer_id, direction, channel, body)
+             VALUES ($1, $2, 'outbound', 'email', $3)`,
+            [creatorId, offer.id, `New-campaign offer email — link (${url})`],
+          );
+          await db.query(
+            `INSERT INTO offer_events (offer_id, event, channel) VALUES ($1, 'sent', 'email')`,
+            [offer.id],
+          );
+        } else if (!mirror.skipped) {
+          console.error('[offers] used-creator offer email alongside the chat failed:', mirror.error);
+        }
+      } catch (err) {
+        console.error('[offers] used-creator offer email alongside the chat threw:', err.message);
+      }
+    }
+    return { sent: true, via: 'messaging', channels, offerId: offer.id, token: offer.token, url };
   }
 
   // Not messaging us yet → friendly offer-link email (no chat CTAs — Used
