@@ -43,6 +43,7 @@ function install({ offer, priorCpm }) {
         rate: inserted.rate,
         currency: offer.currency,
         expected_impressions: inserted.impressions,
+        requested_start_date: inserted.startDate || null,
         expires_at: FUTURE,
         parent_offer_id: offer.id,
       };
@@ -62,6 +63,7 @@ function install({ offer, priorCpm }) {
           inserted.deliverables = JSON.parse(params[4]);
           inserted.rate = params[5];
           inserted.impressions = params[7];
+          inserted.startDate = params[9];
           return { rows: [{ id: 999 }], rowCount: 1 };
         }
         return { rows: [], rowCount: 1 };
@@ -188,4 +190,31 @@ test('a small ask over an offer we priced high is never rejected as too-high', a
 test('rejects a non-positive requested rate before touching the DB', async () => {
   const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 0 });
   assert.deepStrictEqual(r, { ok: false, reason: 'invalid_rate' });
+});
+
+test('a rate counter keeps a posting date the creator already agreed to', async () => {
+  // The creator went through "Timing" first (their offer carries the posting
+  // date they picked), then countered on rate. Only the money moves — the
+  // counter is minted on the same date and hands it back so the portal can keep
+  // showing it beside the rate.
+  const dated = { ...baseOffer, requested_start_date: '2026-09-14' };
+  install({ offer: dated, priorCpm: 15 });
+  try {
+    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 1600 });
+    assert.strictEqual(r.outcome, 'countered');
+    assert.ok(r.counter.startDateFormatted, 'the agreed posting date survives the counter');
+  } finally {
+    restoreAll();
+  }
+});
+
+test('a counter on an offer with no agreed posting date carries none', async () => {
+  install({ offer: { ...baseOffer }, priorCpm: 15 });
+  try {
+    const r = await offers.negotiateBudget({ token: 'tok', requestedRate: 1600 });
+    assert.strictEqual(r.outcome, 'countered');
+    assert.strictEqual(r.counter.startDateFormatted, null);
+  } finally {
+    restoreAll();
+  }
 });

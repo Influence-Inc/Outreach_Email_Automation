@@ -1639,8 +1639,8 @@ async function negotiateBudget({ token, requestedRate, channel = 'web' }) {
         );
         const { rows } = await client.query(
           `INSERT INTO offers
-             (creator_id, campaign_id, token, brand_name, deliverables, rate, currency, expected_impressions, parent_offer_id, expires_at)
-           VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10)
+             (creator_id, campaign_id, token, brand_name, deliverables, rate, currency, expected_impressions, parent_offer_id, requested_start_date, expires_at)
+           VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
            RETURNING id`,
           [
             offer.creator_id,
@@ -1652,6 +1652,9 @@ async function negotiateBudget({ token, requestedRate, channel = 'web' }) {
             offer.currency,
             counterImpressions != null ? counterImpressions : null,
             offer.id,
+            // A rate counter only moves the money — if the creator already told
+            // us their posting date, the counter is built around that same date.
+            offer.requested_start_date || null,
             new Date(Date.now() + DEFAULT_EXPIRY_DAYS * 86400000),
           ],
         );
@@ -1701,6 +1704,7 @@ async function negotiateBudget({ token, requestedRate, channel = 'web' }) {
       currency: counter.currency,
       rateFormatted: formatMoney(counter.rate, counter.currency),
       expiresFormatted: formatDate(counter.expires_at),
+      startDateFormatted: counter.requested_start_date ? formatDate(counter.requested_start_date) : null,
       deliverablesChanged: plan.kind === 'expand_deliverables',
       addedLabel: plan.kind === 'expand_deliverables' ? plan.addedLabel : null,
     },
@@ -1737,8 +1741,8 @@ async function mintCounterOptions(offer, requestedRate, options) {
           // eslint-disable-next-line no-await-in-loop
           const { rows } = await client.query(
             `INSERT INTO offers
-               (creator_id, campaign_id, token, brand_name, deliverables, rate, currency, expected_impressions, parent_offer_id, expires_at)
-             VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10)
+               (creator_id, campaign_id, token, brand_name, deliverables, rate, currency, expected_impressions, parent_offer_id, requested_start_date, expires_at)
+             VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
              RETURNING id`,
             [
               offer.creator_id,
@@ -1750,6 +1754,8 @@ async function mintCounterOptions(offer, requestedRate, options) {
               offer.currency,
               opt.expectedImpressions != null ? opt.expectedImpressions : null,
               offer.id,
+              // Carried for the same reason as the single-counter mint above.
+              offer.requested_start_date || null,
               expiresAt,
             ],
           );

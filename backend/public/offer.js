@@ -10,7 +10,7 @@
 
   var DECLINE_REASONS = ['Budget', 'Timing', 'Not a fit'];
 
-  var offer = null; // { token, firstName, brandName, deliverables, rate, currency, rateFormatted, expiresFormatted, postingDeadlineFormatted }
+  var offer = null; // { token, firstName, brandName, deliverables, rate, currency, rateFormatted, expiresFormatted, postingDeadlineFormatted, postingDateFormatted }
   var view = 'loading'; // loading | active | options | platforms | contract | signed | declined | expired | too_high | on_hold | notfound
   // Platform picker state — the required + optional tokens the server hands us,
   // and the creator's tick-marks. Instagram is always locked on (Reels drive
@@ -21,7 +21,7 @@
   var countered = false;
   var options = null; // the two typed counter deals (view-based + video-based) to choose between
   var addedLabel = null;
-  var rescheduledDate = null; // set when a "Timing" re-offer switched us to a fresh offer on the creator's dates
+  var rescheduledDate = null; // the posting date the creator picked, when a "Timing" re-offer switched us to a fresh offer built around it
   var holdDateFormatted = null; // the date shown on the on-hold "we'll be in touch" view
   var scheduleInput = ''; // the date the creator typed in the schedule step
   var tooHighRequested = null;
@@ -199,7 +199,7 @@
     if (countered) {
       var noteMsg;
       if (rescheduledDate) {
-        noteMsg = "Great — we've set this to start around " + rescheduledDate + '. Have another look.';
+        noteMsg = "Great — we've set the posting date to " + rescheduledDate + '. Have another look.';
       } else if (addedLabel) {
         noteMsg = "Good news — we've added " + addedLabel + ' and matched your rate. Have another look.';
       } else {
@@ -221,13 +221,21 @@
     // "It's open until …" copy). Keeping it off the portal too avoids double-
     // messaging a hard deadline once the creator's already sitting on the page.
     //
-    // The posting deadline (computed videos × 4 days from acceptance) IS shown,
-    // beside the rate — the creator picks up on what they're committing to at
-    // the same time as the money.
+    // A date IS shown beside the rate — the creator picks up on what they're
+    // committing to at the same time as the money. Once they've named a posting
+    // date in the "Timing" step we show that agreed date, since it's the one
+    // they chose and the offer was rebuilt around; the rolling deadline
+    // projection (videos × 4 days from acceptance) stands in until then.
     var footerChildren = [
       h('div', {}, h('div', { class: 'rate-cap' }, 'Your rate'), h('div', { class: 'rate num' }, offer.rateFormatted)),
     ];
-    if (offer.postingDeadlineFormatted) {
+    if (offer.postingDateFormatted) {
+      footerChildren.push(
+        h('div', { class: 'by' },
+          h('div', { class: 'by-cap' }, 'Posting date'),
+          h('div', { class: 'v num' }, offer.postingDateFormatted)),
+      );
+    } else if (offer.postingDeadlineFormatted) {
       footerChildren.push(
         h('div', { class: 'by' },
           h('div', { class: 'by-cap' }, 'Posting deadline'),
@@ -361,7 +369,7 @@
   // an admin will follow up with a schedule that works (their deal isn't closed).
   function renderOnHold() {
     return centered('neutral', '🗓️', 'Thanks — we\'ll be in touch',
-      'Got it, ' + offer.firstName + (holdDateFormatted ? ' — noted that you\'re free from ' + holdDateFormatted + '.' : '.') +
+      'Got it, ' + offer.firstName + (holdDateFormatted ? ' — noted that you\'d post on ' + holdDateFormatted + '.' : '.') +
       ' That\'s a little further out than this brief\'s window, so your INFLUENCE contact will follow up shortly with a schedule that works for you.');
   }
 
@@ -648,6 +656,7 @@
           token: c.token, firstName: offer.firstName, brandName: c.brandName,
           deliverables: c.deliverables, rate: c.rate, currency: c.currency,
           rateFormatted: c.rateFormatted, expiresFormatted: c.expiresFormatted,
+          postingDateFormatted: c.startDateFormatted || offer.postingDateFormatted || null,
         };
         countered = true;
         addedLabel = c.deliverablesChanged ? c.addedLabel : null;
@@ -699,6 +708,7 @@
           token: c.token, firstName: offer.firstName, brandName: c.brandName,
           deliverables: c.deliverables, rate: c.rate, currency: c.currency,
           rateFormatted: c.rateFormatted, expiresFormatted: c.expiresFormatted,
+          postingDateFormatted: c.startDateFormatted || null,
         };
         countered = true; addedLabel = null; rescheduledDate = c.startDateFormatted;
         mode = 'cta'; scheduleInput = ''; view = 'active';
@@ -733,6 +743,9 @@
         deliverables: data.deliverables, rate: data.rate, currency: data.currency,
         rateFormatted: data.rateFormatted, expiresFormatted: data.expiresFormatted,
         postingDeadlineFormatted: data.postingDeadlineFormatted || null,
+        // Set once the creator has named a posting date in the "Timing" step —
+        // it wins over the rolling deadline projection in the terms footer.
+        postingDateFormatted: data.startDateFormatted || null,
         contract: data.contract || null,
         contractSigned: !!data.contractSigned,
         serverSignerName: data.signerName || null,
