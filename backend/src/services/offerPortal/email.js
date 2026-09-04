@@ -49,12 +49,23 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+// The wordmark image lives under public/assets and is served by the express
+// static mount in server.js (see PUBLIC_BASE_URL). Rendered at 1200×106 with a
+// transparent background so the same PNG lands cleanly on light AND dark email
+// backgrounds. When PUBLIC_BASE_URL is unset (e.g. a local dev run without env
+// configured), the logo is omitted rather than embedding a broken URL.
+function wordmarkImg() {
+  const base = baseUrl();
+  if (!base) return '';
+  const src = `${base}/assets/influence-wordmark.png`;
+  return `    <p style="text-align:center;margin:0 0 24px;"><img src="${src}" alt="INFLUENCE" width="180" style="width:180px;max-width:60%;height:auto;display:inline-block;" /></p>\n`;
+}
+
 function shell(inner) {
   return `<!doctype html><html><body style="margin:0;background:#f5f5f5;padding:24px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#171717;">
   <div style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #e5e5e5;border-radius:16px;padding:32px;font-size:15px;line-height:1.6;">
-${inner}
+${wordmarkImg()}${inner}
   </div>
-  <p style="max-width:480px;margin:16px auto 0;text-align:center;color:#a3a3a3;font-size:12px;letter-spacing:0.08em;">INFLUENCE</p>
 </body></html>`;
 }
 
