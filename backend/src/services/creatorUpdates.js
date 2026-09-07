@@ -149,18 +149,64 @@ const firstNameOf = (c) =>
 
 // Everything a send decision needs, in one row: contact details, subscription
 // state, opt-out, and the campaign name for the copy.
+//
+// updates_last_inbound_at is resolved as the LATER of the stamped column and
+// this creator's newest inbound in offer_messages. The column is the fast path
+// (stampInbound writes it on every inbound), but it only started being written
+// for every inbound recently — and it is never written at all for a creator who
+// messaged us before this lane existed. Reading the message log as well means a
+// creator whose window is genuinely open is recognised as such without a
+// backfill, which is what keeps us off the PAID template path when the free
+// one is available. GREATEST ignores NULLs and is NULL only when both are.
 async function loadCreator(creatorId) {
   return db.one(
     `SELECT c.id, c.first_name, c.full_name, c.email, c.whatsapp, c.imessage,
             c.established_channel, c.messaging_opted_out,
             c.updates_subscribed_at, c.updates_hi_requested_at,
-            c.updates_intro_sent_at, c.updates_last_inbound_at, c.updates_campaign_id,
+            c.updates_intro_sent_at, c.updates_campaign_id,
+            GREATEST(
+              c.updates_last_inbound_at,
+              (SELECT MAX(m.sent_at) FROM offer_messages m
+                WHERE m.creator_id = c.id AND m.direction = 'inbound')
+            ) AS updates_last_inbound_at,
             c.campaign_id, ca.brand_name, ca.name AS campaign_name
        FROM creators c
        LEFT JOIN campaigns ca ON ca.id = COALESCE(c.updates_campaign_id, c.campaign_id)
       WHERE c.id = $1`,
     [creatorId],
   );
+}
+
+// Record that this PERSON just messaged us, which is what opens WhatsApp's 24h
+// free-form window.
+//
+// Written for EVERY inbound, not just those from creators already on the update
+// lane. The window is Meta's rule about a phone number, so it applies from a
+// creator's very first message — long before they sign a contract and get
+// subscribed here. Stamping it only for subscribed creators (the old behaviour)
+// left the lane blind to every message sent during offer negotiation, so a
+// creator we were actively chatting with looked unreachable: requestHi() asked
+// someone mid-conversation to "send us a Hi", and deliverPending() spent a paid
+// template where a free message would have gone through.
+//
+// Propagated across every row sharing the phone number, the same identity rule
+// subscribeCreatorChannel and the opt-out check already use — one person can
+// hold several per-campaign creators rows, and the window belongs to the person.
+async function stampInbound(creatorId, channel) {
+  const norm = `right(regexp_replace(coalesce(whatsapp, imessage, ''), '[^0-9]', '', 'g'), 10)`;
+  const res = await db.query(
+    `UPDATE creators
+        SET updates_last_inbound_at = NOW(),
+            established_channel = COALESCE(established_channel, $2),
+            updated_at = NOW()
+      WHERE id = $1
+         OR (
+           ${norm} <> ''
+           AND ${norm} = (SELECT ${norm} FROM creators WHERE id = $1)
+         )`,
+    [creatorId, channel || null],
+  );
+  return (res && res.rowCount) || 0;
 }
 
 // Resolve a creator from what the Influence bot knows about them: an Instagram
@@ -601,16 +647,17 @@ async function flushCreator(creatorId, { limit = 20 } = {}) {
 // lane at all, which tells the webhook to fall through to the offer flow.
 async function onInboundMessage(creatorId, channel, { body } = {}) {
   const c = await loadCreator(creatorId);
-  if (!c || !c.updates_subscribed_at) return { handled: false };
+  if (!c) return { handled: false };
 
-  await db.query(
-    `UPDATE creators
-        SET updates_last_inbound_at = NOW(),
-            established_channel = COALESCE(established_channel, $2),
-            updated_at = NOW()
-      WHERE id = $1`,
-    [creatorId, channel],
-  );
+  // Stamp the window BEFORE the subscription gate: an inbound opens the 24h
+  // window whether or not this creator is on the update lane yet, and the stamp
+  // is what stops a later send from paying for a template it didn't need. The
+  // webhook also calls stampInbound directly for the branches that never reach
+  // here (an inbound mid-negotiation), so this is belt-and-braces for the paths
+  // that do.
+  await stampInbound(creatorId, channel);
+
+  if (!c.updates_subscribed_at) return { handled: false };
 
   // Re-load so windowOpen() sees the stamp we just wrote.
   const fresh = await loadCreator(creatorId);
@@ -809,6 +856,7 @@ module.exports = {
   resolveCreator,
   onContractSigned,
   requestHi,
+  stampInbound,
   notify,
   deliverPending,
   flushCreator,
