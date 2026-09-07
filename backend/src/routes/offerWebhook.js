@@ -509,6 +509,21 @@ async function handleInbound(channel, contactColumn, authFn, req, res) {
     }
   }
 
+  // Every inbound — whatever it turns out to be about — opens WhatsApp's 24h
+  // free-form window for that phone number. Stamped here, once, before the
+  // branching below, because most branches (an offer accept, a counter, a
+  // question mid-negotiation) return without ever calling
+  // creatorUpdates.onInboundMessage, and a window we failed to notice costs a
+  // paid template later for a message that could have gone free. Placed after
+  // the dedupe guard so a replayed webhook doesn't extend the window; failure
+  // is non-fatal, since dropping the inbound over a bookkeeping write would be
+  // strictly worse than a stale timestamp.
+  try {
+    await creatorUpdates.stampInbound(matched.id, channel);
+  } catch (err) {
+    console.error('[offer-webhook] inbound window stamp failed', err.message);
+  }
+
   // Compliance: STOP/UNSUBSCRIBE opt-out (and START opt-in). Handled before any
   // offer logic — an opt-out must suppress future automated sends regardless of
   // offer state. The single confirmation is sent directly (it isn't gated by the
