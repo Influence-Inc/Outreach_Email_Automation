@@ -61,11 +61,89 @@ const CONTENT_FORMATS = new Set([
 ]);
 const BRAND_SAFETY = new Set(['safe', 'caution', 'unsafe']);
 
+// Anchored levels for the craft fields, in place of a free 0-10 integer.
+//
+// LLM judges are well documented to be poorly calibrated on open numeric
+// scales — high run-to-run variance and central-tendency compression, scores
+// clustering near the scale's midpoint. A small set of NAMED levels turns the
+// task into classification, which the same model does reliably, the same way
+// anchored examples stabilise a human rater. Combined with PROFILE_RESPONSE_SCHEMA
+// below, this is enforced at the API's decoding layer, not just suggested by
+// the prompt text.
+const CRAFT_LEVELS = ['derivative', 'competent', 'distinctive', 'exceptional'];
+
+// Spread across the useful range rather than packed around the middle, so the
+// four levels stay distinguishable after creatorScore.js normalises them.
+const CRAFT_LEVEL_VALUE = {
+  derivative: 2, competent: 5, distinctive: 8, exceptional: 10,
+};
+
 function scale10(v) {
+  // Explicit null (a schema-nullable field the model was never asked about, per
+  // PROFILE_RESPONSE_SCHEMA's brand_fit) means "unmeasured", same as the field
+  // being absent — Number(null) is 0, which is finite, so without this check an
+  // unasked question would silently score as the worst possible answer.
+  if (v == null) return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   return Math.min(10, Math.max(1, Math.round(n)));
 }
+
+// Accepts either an anchored level name (the schema-constrained profile prompt)
+// or a raw number (the legacy per-clip prompt, which still asks for 0-10), so
+// one parser serves both without either path noticing the other exists.
+function scaleLevel(v) {
+  if (typeof v === 'string') {
+    const level = v.trim().toLowerCase();
+    if (CRAFT_LEVEL_VALUE[level] != null) return CRAFT_LEVEL_VALUE[level];
+  }
+  return scale10(v);
+}
+
+// The Gemini-side twin of the schema literal in buildProfilePrompt: every field
+// that literal promises, typed so the model's JSON is validated at generation
+// time instead of merely requested in prose. `brand_fit` / `brand_fit_reason`
+// are deliberately NOT in `required` — the prompt only asks that question when
+// the campaign configured a brandProduct, and creatorScore.js reads a missing
+// brand_fit as "not judged", never as a fit of zero; requiring it here would
+// force a guess on every campaign that never asked the question.
+const PROFILE_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    niche_score: { type: 'number' },
+    audience_match: { type: 'number' },
+    genre: { type: 'string' },
+    language: { type: 'string' },
+    spoken_topic: { type: 'string' },
+    confidence: { type: 'number' },
+    reason: { type: 'string' },
+    niche: { type: 'string' },
+    sub_niche: { type: 'string' },
+    content_format: { type: 'string', enum: [...CONTENT_FORMATS] },
+    production_quality: { type: 'string', enum: CRAFT_LEVELS },
+    creativity: { type: 'string', enum: CRAFT_LEVELS },
+    hook_strength: { type: 'string', enum: CRAFT_LEVELS },
+    brand_safety: { type: 'string', enum: [...BRAND_SAFETY] },
+    is_original_creator: { type: 'boolean' },
+    spoken_language: { type: 'string' },
+    on_screen_products: { type: 'array', items: { type: 'string' } },
+    ugc_ad_fit: { type: 'number' },
+    brand_fit: { type: 'string', enum: CRAFT_LEVELS, nullable: true },
+    brand_fit_reason: { type: 'string', nullable: true },
+    reasoning: { type: 'string' },
+    primary_niche: { type: 'string' },
+    consistency_of_niche: { type: 'string', enum: CRAFT_LEVELS },
+    audience_guess: { type: 'string' },
+    fit_score: { type: 'number' },
+    reject_reason: { type: 'string', nullable: true },
+    recommended_campaign_types: { type: 'array', items: { type: 'string' } },
+  },
+  required: [
+    'niche_score', 'genre', 'reason', 'niche', 'content_format',
+    'production_quality', 'creativity', 'hook_strength', 'brand_safety',
+    'consistency_of_niche', 'fit_score',
+  ],
+};
 
 function str(v) {
   return typeof v === 'string' && v.trim() ? v.trim() : '';
@@ -86,9 +164,9 @@ function parseClipAnalysis(raw) {
     niche: str(raw.niche),
     sub_niche: str(raw.sub_niche),
     content_format: CONTENT_FORMATS.has(format) ? format : 'other',
-    production_quality: scale10(raw.production_quality),
-    creativity: scale10(raw.creativity),
-    hook_strength: scale10(raw.hook_strength),
+    production_quality: scaleLevel(raw.production_quality),
+    creativity: scaleLevel(raw.creativity),
+    hook_strength: scaleLevel(raw.hook_strength),
     brand_safety: BRAND_SAFETY.has(safety) ? safety : 'caution',
     // Only a real boolean counts. Absent means "not judged", which the scorer
     // treats as no vote either way rather than as a repost.
@@ -100,7 +178,7 @@ function parseClipAnalysis(raw) {
     ugc_ad_fit: scale10(raw.ugc_ad_fit),
     // Null when the model was never asked (no brandProduct configured) — the
     // scorer treats that as "not judged", never as a fit of zero.
-    brand_fit: scale10(raw.brand_fit),
+    brand_fit: scaleLevel(raw.brand_fit),
     brand_fit_reason: str(raw.brand_fit_reason),
     reasoning: str(raw.reasoning),
   };
@@ -112,7 +190,7 @@ function parseCreatorAnalysis(raw) {
   const fit = Number(raw.fit_score);
   return {
     primary_niche: str(raw.primary_niche),
-    consistency_of_niche: scale10(raw.consistency_of_niche),
+    consistency_of_niche: scaleLevel(raw.consistency_of_niche),
     audience_guess: str(raw.audience_guess),
     fit_score: Number.isFinite(fit) ? Math.min(100, Math.max(0, Math.round(fit))) : null,
     // Null unless the creator should actually be dropped — an empty string from
@@ -198,10 +276,14 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     (config.calibration && config.calibration.text) || '',
     '',
     'Respond with ONLY a JSON object of exactly this shape, no prose and no',
-    'markdown fences. Scores marked 0-10 are integers; niche_score, audience_match',
-    'and confidence are 0-1. is_original_creator is false for repost pages, meme',
-    'aggregators and clip farms. reject_reason is null unless the creator should be',
-    'dropped outright. fit_score is 0-100.',
+    'markdown fences. production_quality, creativity, hook_strength, brand_fit and',
+    'consistency_of_niche are each exactly one of: "derivative", "competent",',
+    '"distinctive", "exceptional" — derivative = generic/templated, competent =',
+    'solid but ordinary, distinctive = memorable and above the norm for this niche,',
+    'exceptional = the best you would expect to see in this niche. niche_score,',
+    'audience_match and confidence are 0-1. is_original_creator is false for repost',
+    'pages, meme aggregators and clip farms. reject_reason is null unless the',
+    'creator should be dropped outright. fit_score is 0-100.',
     '{',
     '  "niche_score": 0.0,',
     '  "audience_match": 0.0,',
@@ -213,19 +295,19 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     '  "niche": "",',
     '  "sub_niche": "",',
     '  "content_format": "talking_head | vlog | skit | tutorial | review | ugc_ad | compilation | other",',
-    '  "production_quality": 0,',
-    '  "creativity": 0,',
-    '  "hook_strength": 0,',
+    '  "production_quality": "competent",',
+    '  "creativity": "competent",',
+    '  "hook_strength": "competent",',
     '  "brand_safety": "safe | caution | unsafe",',
     '  "is_original_creator": true,',
     '  "spoken_language": "",',
     '  "on_screen_products": [],',
     '  "ugc_ad_fit": 0,',
-    '  "brand_fit": 0,',
+    '  "brand_fit": "competent",',
     '  "brand_fit_reason": "",',
     '  "reasoning": "",',
     '  "primary_niche": "",',
-    '  "consistency_of_niche": 0,',
+    '  "consistency_of_niche": "competent",',
     '  "audience_guess": "",',
     '  "fit_score": 0,',
     '  "reject_reason": null,',
@@ -257,6 +339,7 @@ async function classifyProfile(candidate, config, deps = {}) {
     promptText: buildProfilePrompt(candidate, config, shots),
     label: `profile @${candidate.username || '?'}`,
     maxOutputTokens: 800,
+    responseSchema: PROFILE_RESPONSE_SCHEMA,
   });
   if (!parsed || typeof parsed.niche_score !== 'number') return null;
 
@@ -499,4 +582,7 @@ module.exports = {
   parseCreatorAnalysis,
   CLIP_SCHEMA,
   CREATOR_SCHEMA,
+  CRAFT_LEVELS,
+  PROFILE_RESPONSE_SCHEMA,
+  scaleLevel,
 };
