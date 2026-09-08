@@ -20,6 +20,7 @@ const { jitteredDelay, jitterTap } = require('./humanize');
 const { normalizeTerms } = require('./searchTerms');
 const { prefilter } = require('./sourcingFilters');
 const { makePrescreen } = require('./nichePrescreen');
+const { tryDeviceHint } = require('./deviceNicheHint');
 const {
   clearDialogs, arriveAt, createStallGuard, recoverFromStall, createProfileCap,
 } = require('./sourcingResilience');
@@ -92,6 +93,44 @@ async function tapTargetSoft({ driver, view, name, pacingMs, jitterPx = 0 }) {
   if (!t) return false;
   await humanTap(driver, { x: t.x, y: t.y }, jitterPx, pacingMs);
   return true;
+}
+
+/**
+ * Tap a target, then verify the screen actually changed the way it should have
+ * — retrying once before giving up.
+ *
+ * Most of the navigator's state-changing taps already get this for free from
+ * arriveAt (services/sourcingResilience.js), which checks the resulting
+ * `screen` label. That check doesn't fit every case, though: switching a
+ * profile onto its Reels sub-tab does not reliably change `screen` at all
+ * (classifyScreen in screenVision.js keeps a header-bearing page classified as
+ * 'profile' whichever sub-tab is active), so "did it work" has to be answered
+ * from the content of the reading instead — this is that version of the same
+ * idea, taking an arbitrary `expect(view)` predicate rather than a fixed list
+ * of screen names.
+ *
+ * Never fatal: a tap that still doesn't verify after a retry returns
+ * `ok:false` with whatever is actually on screen, so the caller can log it and
+ * carry on with the real reading rather than one more way a run can throw.
+ */
+async function tapAndVerify({
+  driver, target, expect, read, pacingMs, jitterPx = 0, log = () => {}, what = 'tap', attempts = 2,
+}) {
+  let view = null;
+  for (let i = 1; i <= attempts; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await humanTap(driver, target, jitterPx, pacingMs);
+    // eslint-disable-next-line no-await-in-loop
+    view = await read(driver);
+    if (view.dialog) {
+      // eslint-disable-next-line no-await-in-loop
+      view = (await clearDialogs({ driver, read, view, pacingMs, jitterPx, log })).view;
+    }
+    if (expect(view)) return { ok: true, view };
+    if (i < attempts) log(`[sourcing] ${what}: did not land as expected — retrying`);
+  }
+  log(`[sourcing] ${what}: still not as expected after ${attempts} taps — continuing with what's on screen`);
+  return { ok: false, view };
 }
 
 // Screens a keyword loop can continue from — where the next result is reachable.
@@ -197,6 +236,13 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   // "off" and "said yes" stay distinguishable further down.
   const prescreen = config.prescreenNiche
     ? (deps.prescreen !== undefined ? deps.prescreen : makePrescreen({ logger: { log } }))
+    : null;
+
+  // The free look tried before the prescreen's paid one — see
+  // services/deviceNicheHint.js. Same opt-in flag as prescreen: this is the
+  // cheaper first pass of the same feature, not a separate one to configure.
+  const deviceHint = config.prescreenNiche
+    ? (deps.deviceHint !== undefined ? deps.deviceHint : tryDeviceHint)
     : null;
 
   await driver.openApp(IG_ANDROID_PACKAGE);
@@ -327,7 +373,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     if (view.screen === 'reels_feed') {
       for await (const profile of scoutReelFeed({
         driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
-        remaining: max - emitted, seen: seenCreators, stall, cap, log, config, prescreen,
+        remaining: max - emitted, seen: seenCreators, stall, cap, log, config, prescreen, deviceHint,
       })) {
         yield tag(profile);
         emitted += 1;
@@ -359,7 +405,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       if (cap.spent()) return; // the run has looked at enough profiles
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
-        reelsWindow, clipsWanted, log, config, prescreen, seen: seenCreators, cap, term,
+        reelsWindow, clipsWanted, log, config, prescreen, deviceHint, seen: seenCreators, cap, term,
       });
       // A grid card gives no handle until the reel is open — but once it IS open
       // the handle is known, and captureViaReel drops a creator we have already
@@ -389,7 +435,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         seenCreators.add(String(handle).toLowerCase());
         const profile = await openAndCaptureProfile({
           driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
-          clipsWanted, log, config, prescreen,
+          clipsWanted, log, config, prescreen, deviceHint,
         });
         if (profile) {
           yield tag(profile);
@@ -429,47 +475,87 @@ function hasResults(v) {
   );
 }
 
+// What a visible card SAYS, not where it sits — the UI tree carries no thumbnail
+// pixels to hash, so this is a content fingerprint rather than a true image
+// perceptual hash, but it plays the same role: recognising "I have seen this
+// screen before" even when the exact page-level string does not repeat, because
+// a swipe that only reshuffles the same handful of cards is still nowhere new.
+function cardSignatures(v) {
+  const reel = Array.isArray(v && v.reelResults) ? v.reelResults : [];
+  if (reel.length) {
+    return reel.map((r) => String((r && r.label) || '').trim().toLowerCase()).filter(Boolean);
+  }
+  const acc = Array.isArray(v && v.results) ? v.results : [];
+  return acc.map((h) => String(h || '').trim().toLowerCase()).filter(Boolean);
+}
+
+// How much two screens' cards overlap, 0-1, order-blind — a scroll that
+// reshuffles the same cards into a new order is still the same screen for our
+// purposes. Two screens with nothing listed on either (a genuinely empty
+// results page) count as a full match: that is the same "stuck" signal an exact
+// string match would have caught, and there is no card content left to compare.
+function overlapRatio(a, b) {
+  if (!a.length && !b.length) return 1;
+  if (!a.length || !b.length) return 0;
+  const setB = new Set(b);
+  const shared = a.filter((x) => setB.has(x)).length;
+  return shared / Math.max(a.length, b.length);
+}
+
+// This much of a screen's cards already seen counts as "going nowhere".
+const LOOP_OVERLAP = 0.75;
+
 /**
  * Scroll a results page down by whole screens, to reach cards an earlier visit
  * already worked through.
  *
- * `atEnd` reports that the page stopped moving — the same content came back
- * after a swipe, so there is nothing below this. That is what tells the caller a
+ * `atEnd` reports that the page stopped moving — the same cards came back after
+ * a swipe, so there is nothing below this. That is what tells the caller a
  * keyword is genuinely finished rather than merely barren at this depth, and it
  * stops the run scrolling at the bottom of a short results page forever.
+ *
+ * A near-match (mostly the same cards, reshuffled) gets ONE bigger swipe before
+ * that verdict — trying something different rather than repeating the exact
+ * gesture that produced no progress, instead of settling for the first sign of
+ * a loop.
  *
  * @returns {Promise<{view:(object|null), atEnd:boolean}>}
  */
 async function scrollResults({ driver, read, pacingMs, screen, screens = 1 }) {
   const size = screen || { width: 1080, height: 2400 };
-  const fingerprint = (v) => [
-    (v && v.results) ? v.results.join(',') : '',
-    (v && v.reelResults) ? v.reelResults.map((r) => r && r.label).join(',') : '',
-  ].join('|');
-
-  let view = null;
-  let atEnd = false;
-  for (let i = 0; i < screens; i += 1) {
-    const before = fingerprint(view);
-    // eslint-disable-next-line no-await-in-loop
+  const swipeOnce = async (fromFrac) => {
     await driver.swipe({
       x1: Math.round(size.width / 2),
-      y1: Math.round(size.height * 0.8),
+      y1: Math.round(size.height * fromFrac),
       x2: Math.round(size.width / 2),
       y2: Math.round(size.height * 0.2),
       durationMs: 320,
     });
-    // eslint-disable-next-line no-await-in-loop
     await sleep(jitteredDelay(pacingMs));
+    return read(driver);
+  };
+
+  let view = null;
+  let atEnd = false;
+  let prevCards = [];
+  for (let i = 0; i < screens; i += 1) {
+    const before = prevCards;
     // eslint-disable-next-line no-await-in-loop
-    view = await read(driver);
+    view = await swipeOnce(0.8);
+    let cards = cardSignatures(view);
 
     // Only meaningful from the second swipe on, when there is a previous
     // reading to compare against.
-    if (i > 0 && fingerprint(view) === before) {
-      atEnd = true;
-      break;
+    if (i > 0 && overlapRatio(cards, before) >= LOOP_OVERLAP) {
+      // eslint-disable-next-line no-await-in-loop
+      view = await swipeOnce(0.95);
+      cards = cardSignatures(view);
+      if (overlapRatio(cards, before) >= LOOP_OVERLAP) {
+        atEnd = true;
+        break;
+      }
     }
+    prevCards = cards;
   }
   return { view, atEnd };
 }
@@ -490,7 +576,7 @@ async function* scoutReelFeed({
   driver, read = readView, pacingMs, jitterPx = 0, screen,
   clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
   reelsWindow = REELS_PER_PROFILE, clipsWanted = CLIPS_PER_PROFILE,
-  stall = null, cap = null, log = () => {}, config = {}, prescreen = null,
+  stall = null, cap = null, log = () => {}, config = {}, prescreen = null, deviceHint = null,
 }) {
   const size = screen || { width: 1080, height: 2400 };
   let produced = 0;
@@ -547,7 +633,7 @@ async function* scoutReelFeed({
             source: 'backend-navigator:feed-scroll',
             screens: ['reels_feed', 'profile', 'reels_tab'],
             view: arrived.view,
-            config, prescreen,
+            config, prescreen, deviceHint,
           });
           if (profile) {
             yield profile;
@@ -583,7 +669,7 @@ async function* scoutReelFeed({
 async function captureViaReel({
   driver, reelIndex, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
-  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null,
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null, deviceHint = null,
   seen = null, cap = null, term = null,
 }) {
   const serp = await read(driver);
@@ -640,7 +726,7 @@ async function captureViaReel({
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
     view: arrived.view,
-    config, prescreen,
+    config, prescreen, deviceHint,
     sourceTerm: term,
   });
 }
@@ -657,7 +743,7 @@ async function analyseProfile({
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
   reelsWindow = REELS_PER_PROFILE, recordClip = true, clipsWanted = CLIPS_PER_PROFILE,
   view: arrivedOn = null, sourceClip = null, sourceTerm = null,
-  config = {}, prescreen = null, log = () => {},
+  config = {}, prescreen = null, deviceHint = null, log = () => {},
 }) {
   // The caller that verified we reached this profile already read the screen;
   // reading it again is a round-trip to the phone for a picture we have.
@@ -668,11 +754,24 @@ async function analyseProfile({
 
   // Switch to Reels unless we are already there (IG sometimes opens a profile
   // on the Reels sub-tab, in which case reel overlays are already present).
+  //
+  // Verified, not just trusted: a tap that lands on a sheet or during a
+  // re-layout used to be assumed to have worked, and the grid read that
+  // followed could silently still be the Posts tab — no view counts, the exact
+  // shape of the bug that used to slip creators past the reach gate on stale
+  // data. One retry covers the common case (a sheet arriving on top of the
+  // tap); giving up after that still leaves `view` as whatever is really on
+  // screen, so nothing downstream is fed a stale reading.
   let view = header;
   const onReels = Array.isArray(header.reels) && header.reels.length;
   if (!onReels && header.targets && header.targets.reelsTab) {
-    await humanTap(driver, header.targets.reelsTab, jitterPx, pacingMs);
-    view = await read(driver);
+    const switched = await tapAndVerify({
+      driver, read, pacingMs, jitterPx, log,
+      target: header.targets.reelsTab,
+      expect: (v) => Array.isArray(v.reels) && v.reels.length > 0,
+      what: `@${header.username || fallbackUsername || '?'}: reels tab`,
+    });
+    view = switched.view;
   }
 
   // The grid at its top — the creator's most recent work, as a picture. Taken
@@ -703,11 +802,21 @@ async function analyseProfile({
   const pre = prefilter({ reels: window, followers: header.followers }, config);
   let skipReason = pre.pass ? null : pre.rejectReason;
 
+  // A free look, on the phone itself, tried before the paid one below — see
+  // services/deviceNicheHint.js. Non-null only when it corroborates a pass
+  // confidently enough to skip the cloud call entirely; anything else (no
+  // AICore support on this phone, an agent build too old for the op, an
+  // inconclusive caption) leaves `hint` null and changes nothing below.
+  let hint = null;
+  if (!skipReason && deviceHint && shotsSoFar(bioShot, gridShot).length) {
+    hint = await deviceHint({ driver, kind: 'reels_grid', config, log });
+  }
+
   // A second, cheaper-than-video gate: the pictures we already took. Answers
   // "is this creator even in the right line of work" from the bio and the grid
   // — a question a thumbnail grid settles far better than bio text, and for a
   // fraction of what watching a reel costs. Opt-in, and never fatal.
-  if (!skipReason && prescreen && shotsSoFar(bioShot, gridShot).length) {
+  if (!skipReason && !hint && prescreen && shotsSoFar(bioShot, gridShot).length) {
     const verdict = await prescreen({
       candidate: { username: header.username || fallbackUsername, bio: header.bio, reels: window },
       shots: shotsSoFar(bioShot, gridShot),
@@ -1026,7 +1135,7 @@ async function captureReelClips({
 async function openAndCaptureProfile({
   driver, handle, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
-  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null,
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null, deviceHint = null,
 }) {
   // Open the profile from the results list.
   const results = await read(driver);
@@ -1049,7 +1158,7 @@ async function openAndCaptureProfile({
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
     view: arrived.view,
-    config, prescreen,
+    config, prescreen, deviceHint,
   });
   return { ...profile, username: handle };
 }
@@ -1131,6 +1240,7 @@ module.exports = {
   analyseProfile,
   backTo,
   pickClipTargets,
+  scrollResults,
   REELS_PER_PROFILE,
   CLIPS_PER_PROFILE,
 };

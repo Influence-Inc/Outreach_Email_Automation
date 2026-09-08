@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { scout } = require('./sourcingNavigator');
+const { scout, scrollResults } = require('./sourcingNavigator');
 
 function fakeDriver() {
   const ops = [];
@@ -235,6 +235,33 @@ test('opens the reels tab and scrolls the grid for more reels', async () => {
   assert.ok(driver.ops.some((o) => o[0] === 'swipe'), 'scrolled the reels grid');
   assert.deepStrictEqual(out[0].reels.map((r) => r.views), [1, 2, 3, 4]);
   assert.strictEqual(out[0].evidence.reelsRead, 4);
+});
+
+// A tap that lands on a sheet, or during a re-layout, used to be trusted
+// blindly — the grid read that followed could silently still be the Posts tab.
+// The switch is now verified and retried once before the caller is handed
+// whatever is really on screen.
+test('a reels-tab tap that misses the first time is retried, not trusted blindly', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 50000, targets: { reelsTab: { x: 400, y: 500 }, back: BACK } },
+    // First tap lands on a sheet — still the Posts tab, no reels yet.
+    { screen: 'profile', followers: 50000, targets: { reelsTab: { x: 400, y: 500 }, back: BACK } },
+    // Retry lands correctly.
+    { screen: 'reels_tab', reels: [{ views: 1 }, { views: 2 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 1 }, { views: 2 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+  ];
+  const gen = scout({ driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views) });
+  const out = [];
+  for await (const c of gen) out.push(c);
+
+  const tabTaps = driver.ops.filter((o) => o[0] === 'tap' && o[1] === 400 && o[2] === 500).length;
+  assert.strictEqual(tabTaps, 2, 'retried the tap once after the first miss');
+  assert.deepStrictEqual(out[0].reels.map((r) => r.views), [1, 2], 'still read the grid once it actually landed');
 });
 
 test('scrolling stops as soon as the grid yields nothing new', async () => {
@@ -1262,6 +1289,41 @@ test('a single-screen results page still retires', async () => {
   assert.strictEqual(out.length, 0, 'terminated instead of spinning');
 });
 
+// ── scrollResults' loop breaker ──────────────────────────────────────────────
+//
+// The old check compared the page as an exact string, so a swipe that only
+// reshuffled the same handful of cards into a new order looked like fresh
+// content and the run kept scrolling forever. Mostly-the-same-cards now counts
+// as a loop too, tried once with a bigger swipe before giving up.
+
+test('a page that only reshuffles the same cards is still a loop, not fresh content', async () => {
+  const shuffled = [
+    { screen: 'search_results', results: ['alpha', 'beta', 'gamma', 'delta'] },
+    { screen: 'search_results', results: ['delta', 'gamma', 'beta', 'alpha'] }, // same 4, reordered
+    { screen: 'search_results', results: ['delta', 'gamma', 'beta', 'alpha'] }, // the bigger-swipe retry
+  ];
+  let i = 0;
+  const driver = { swipe: async () => {} };
+  const read = async () => shuffled[Math.min(i++, shuffled.length - 1)];
+
+  const { atEnd } = await scrollResults({ driver, read, pacingMs: 0, screens: 2 });
+  assert.strictEqual(atEnd, true, 'an exact-string check would have missed this — the cards only reordered');
+});
+
+test('genuinely new cards each swipe are never mistaken for a loop', async () => {
+  const pages = [
+    { screen: 'search_results', results: ['alpha', 'beta'] },
+    { screen: 'search_results', results: ['gamma', 'delta'] },
+    { screen: 'search_results', results: ['epsilon', 'zeta'] },
+  ];
+  let i = 0;
+  const driver = { swipe: async () => {} };
+  const read = async () => pages[Math.min(i++, pages.length - 1)];
+
+  const { atEnd } = await scrollResults({ driver, read, pacingMs: 0, screens: 3 });
+  assert.strictEqual(atEnd, false, 'every screen brought genuinely new cards');
+});
+
 // A control permanently missing must not spin the pass loop forever — the skip
 // path used to bypass the retirement bookkeeping entirely.
 test('a keyword that can never be typed is retired, not retried forever', async () => {
@@ -1429,7 +1491,7 @@ test('profile screenshots are requested downscaled', async () => {
 
 // ── the screenshot prescreen (Tier 1) ───────────────────────────────────────
 
-function profileRun({ prescreen, config = {}, driver }) {
+function profileRun({ prescreen, deviceHint, config = {}, driver }) {
   return scout({
     driver,
     config: { pacingMs: 0, prescreenNiche: true, ...config },
@@ -1445,7 +1507,7 @@ function profileRun({ prescreen, config = {}, driver }) {
       { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
       ...Array(8).fill({ screen: 'search_results', targets: { back: BACK } }),
     ]),
-    deps: { getClip: async () => ({ dataBase64: 'AAAA', mimeType: 'video/mp4' }), prescreen },
+    deps: { getClip: async () => ({ dataBase64: 'AAAA', mimeType: 'video/mp4' }), prescreen, deviceHint },
   });
 }
 
@@ -1487,4 +1549,38 @@ test('the prescreen does not run unless the campaign asks for it', async () => {
 
   assert.strictEqual(called, 0, 'never consulted');
   assert.ok(driver.ops.filter((o) => o[0] === 'recordClip').length >= 1, 'recorded as normal');
+});
+
+// ── the on-device hint (Tier 0, ahead of the prescreen) ─────────────────────
+
+test('a corroborating on-device hint skips the cloud prescreen call', async () => {
+  const driver = driverWithSearch();
+  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
+  let prescreenCalled = 0;
+  const out = [];
+  for await (const c of profileRun({
+    driver,
+    deviceHint: async () => ({ pass: true, source: 'on-device' }),
+    prescreen: async () => { prescreenCalled += 1; return { pass: false, reason: 'should never run' }; },
+  })) out.push(c);
+
+  assert.strictEqual(prescreenCalled, 0, 'the free look already corroborated a pass');
+  assert.ok(driver.ops.filter((o) => o[0] === 'recordClip').length >= 1, 'recorded as usual');
+});
+
+// The device hint may only ever SAVE a cloud call, never decide on its own — an
+// inconclusive on-device look must fall through to the existing cloud prescreen
+// exactly as if the device tier were absent.
+test('an inconclusive on-device hint still lets the cloud prescreen decide', async () => {
+  const driver = driverWithSearch();
+  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
+  const out = [];
+  for await (const c of profileRun({
+    driver,
+    deviceHint: async () => null,
+    prescreen: async () => ({ pass: false, reason: 'off-niche on the profile screenshots' }),
+  })) out.push(c);
+
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0, 'the cloud verdict still applied');
+  assert.match(out[0].evidence.notRecorded, /off-niche/);
 });

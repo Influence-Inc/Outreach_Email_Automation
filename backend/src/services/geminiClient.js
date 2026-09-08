@@ -101,6 +101,7 @@ async function generate({
   images = [],
   maxOutputTokens = 500,
   label = 'judge',
+  responseSchema,
   fetchImpl = globalThis.fetch,
 } = {}) {
   const key = apiKey();
@@ -130,6 +131,12 @@ async function generate({
     const generationConfig = { temperature: 0, maxOutputTokens, responseMimeType: 'application/json' };
     const res = withMediaRes ? mediaResolution() : null;
     if (res) generationConfig.mediaResolution = res;
+    // A structural constraint enforced in the decoding loop itself, not a
+    // prompt instruction the model can drift from — this is what lets a judging
+    // field be an enum of named levels instead of a free integer the model is
+    // merely asked (not required) to keep between 0 and 10. See reelJudge.js's
+    // PROFILE_RESPONSE_SCHEMA for why that distinction matters.
+    if (responseSchema) generationConfig.responseSchema = responseSchema;
     return JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig });
   };
   // A bounded call. Without this a Gemini request that never answers blocks the

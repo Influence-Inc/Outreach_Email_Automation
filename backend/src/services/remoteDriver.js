@@ -54,6 +54,16 @@ function makeRemoteDriver({ hostId, channel = commands, timeoutMs } = {}) {
     getWindowSize: () => call('getWindowSize', {}),
     keepAwake: () => call('keepAwake', {}),
     wake: () => call('wake', {}),
+    // On-device niche hint (services/deviceNicheHint.js) — describes a
+    // screenshot using the phone's own on-device model (Gemini Nano via ML
+    // Kit's GenAI Image Description API on AICore-capable hardware), with no
+    // network round-trip and no per-call cost. Returns { description,
+    // available }. No shipped agent build implements this op yet, so this call
+    // rejects with "unknown command op" today — deviceNicheHint catches that
+    // and treats it exactly as if the tier did not exist. Scaffolding: the gain
+    // lands the moment an agent build adds the op, with no further backend
+    // change needed.
+    describeImage: (args = {}) => call('describeImage', args, { timeoutMs: timeoutMs || 20_000 }),
     // Record a reel clip (video+audio) on the host; returns { clipId } once the
     // agent has uploaded the mp4. Longer timeout to cover the recording window.
     recordClip: (seconds = 12) =>
