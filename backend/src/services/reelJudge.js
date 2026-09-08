@@ -14,6 +14,7 @@
 // is returned as `evidence` so the orchestrator can persist WHY a creator matched.
 
 const geminiClientDefault = require('./geminiClient');
+const { statedTaste } = require('./nicheCalibration');
 const { defaultClassify, clamp01, round3 } = require('./sourcingFilters');
 const { reelStats } = require('./creatorScore');
 
@@ -274,6 +275,9 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     // the call that produces fit_score, so it is where taste has to land — see
     // services/nicheCalibration.js.
     (config.calibration && config.calibration.text) || '',
+    // Taste the brand stated up front. Matters most on a new campaign, which has
+    // no approve/reject history to learn from yet — see nicheCalibration.statedTaste.
+    statedTaste(config),
     '',
     'Respond with ONLY a JSON object of exactly this shape, no prose and no',
     'markdown fences. production_quality, creativity, hook_strength, brand_fit and',
@@ -398,6 +402,9 @@ function buildCreatorPrompt({ candidate = {}, clips = [], stats = {} } = {}, con
     // calibration costs a third as much exactly where it matters most.
     // See services/nicheCalibration.js.
     (config.calibration && config.calibration.text) || '',
+    // Taste the brand stated up front. Matters most on a new campaign, which has
+    // no approve/reject history to learn from yet — see nicheCalibration.statedTaste.
+    statedTaste(config),
     '',
     'reject_reason must be null unless this creator should be dropped, in which',
     'case give the reason in a few words. fit_score is 0-100.',

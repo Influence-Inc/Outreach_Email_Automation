@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { scoreCreator, reelStats, DEFAULT_PASS_THRESHOLD } = require('./creatorScore');
+const { scoreCreator, reelStats, engagementRate, DEFAULT_PASS_THRESHOLD } = require('./creatorScore');
 
 // A creator the model likes, whose reels back it up.
 function strong(over = {}) {
@@ -15,6 +15,9 @@ function strong(over = {}) {
     ],
     reels: over.reels || [{ views: 50000 }, { views: 55000 }, { views: 48000 }, { views: 52000 }],
     followers: over.followers != null ? over.followers : 90000,
+    // Absent by default, so every pre-existing case stays "engagement was never
+    // measured" rather than silently acquiring a rate.
+    engagement: over.engagement || null,
   };
 }
 
@@ -377,4 +380,55 @@ test('a creator with nothing measurable at all scores zero rather than dividing 
   const r = scoreCreator({}, {});
   assert.strictEqual(r.score, 0);
   assert.strictEqual(r.pass, false);
+});
+
+// ── engagement: a real audience vs a bought one ─────────────────────────────
+
+// Reach alone cannot tell these apart — views can be bought, and a repost farm's
+// numbers look like a creator's until you ask how many people reacted.
+test('a creator with followers but almost no reactions is rejected', () => {
+  const r = scoreCreator(strong({
+    followers: 500000,
+    engagement: { likes: 200, comments: 5 },   // 0.04%
+  }), {});
+  assert.strictEqual(r.pass, false);
+  assert.match(r.rejectReason, /engagement 0\.04% of followers/);
+});
+
+test('a normal engagement rate passes and is reported', () => {
+  const r = scoreCreator(strong({
+    followers: 100000,
+    engagement: { likes: 4000, comments: 120 },  // 4.12%
+  }), {});
+  assert.strictEqual(r.pass, true);
+  assert.strictEqual(r.stats.engagementRate, 0.041);
+});
+
+// The trap this whole file is built to avoid: Number(null) is 0, and 0 is
+// finite, so reading an absent like count through Number() first would turn
+// "never measured" into "nobody engaged" and reject every creator whose counts
+// we simply could not read.
+test('an unread engagement count is unmeasured, not zero', () => {
+  assert.strictEqual(engagementRate({ engagement: null, followers: 90000 }), null);
+  assert.strictEqual(engagementRate({ engagement: {}, followers: 90000 }), null);
+  assert.strictEqual(engagementRate({ engagement: { likes: 10 }, followers: 0 }), null);
+  assert.strictEqual(engagementRate({ engagement: { likes: 10 }, followers: null }), null);
+  // A creator with no engagement data still gets judged on everything else.
+  const r = scoreCreator(strong({ followers: 90000 }), {});
+  assert.strictEqual(r.pass, true);
+  assert.strictEqual(r.stats.engagementRate, null);
+});
+
+test('comments alone still measure engagement', () => {
+  assert.strictEqual(engagementRate({ engagement: { comments: 500 }, followers: 10000 }), 0.05);
+});
+
+test('the engagement floor is tunable, and 0 turns it off', () => {
+  const thin = strong({ followers: 500000, engagement: { likes: 200, comments: 5 } });
+  assert.match(scoreCreator(thin, {}).rejectReason, /engagement/);
+  assert.ok(!/engagement/.test(String(scoreCreator(thin, { minEngagementRate: 0 }).rejectReason)));
+  // And a stricter brand can demand more than the forgiving default.
+  const ok = strong({ followers: 100000, engagement: { likes: 1500, comments: 0 } }); // 1.5%
+  assert.strictEqual(scoreCreator(ok, {}).pass, true);
+  assert.match(scoreCreator(ok, { minEngagementRate: 0.05 }).rejectReason, /engagement 1\.50%/);
 });

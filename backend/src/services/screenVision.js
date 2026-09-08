@@ -577,6 +577,30 @@ function extractResults(elements) {
 // Full-screen reel player: the reel's author handle, caption, and whether it's
 // already liked/saved (so engagement never toggles the wrong way).
 // eslint-disable-next-line max-statements
+// The one screen that carries likes and comments.
+//
+// They live ONLY on the reel player: the grid carries view counts and the
+// profile carries followers, so this is the only place the engagement half of
+// "100k views, 200 likes" can be read at all. Real IG descs read
+// "Like number is42943. View likes" and "Comment number is505. View comments".
+const COUNT_IN_DESC = /number\s*is\s*(\d[\d,]*(?:\.\d+)?\s*[kmb]?)/i;
+
+function countFromRid(elements, names) {
+  const el = findByRid(elements, names);
+  if (!el) return null;
+  const m = String(el.desc || '').match(COUNT_IN_DESC);
+  if (m) {
+    const v = parseCount(m[1]);
+    if (Number.isFinite(v)) return v;
+  }
+  // Some builds put the bare number in .text instead of describing it.
+  if (looksLikeCount(el.text)) {
+    const v = parseCount(el.text);
+    if (Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
 function extractFeed(elements) {
   // Priority match: try the specific author-username rid FIRST so a container
   // like `clips_author_info_component` (empty text, matches broader 'author')
@@ -612,7 +636,21 @@ function extractFeed(elements) {
   const alreadyLiked = elements.some((e) => labelOf(e) === 'unlike');
   const alreadySaved = elements.some((e) => labelOf(e) === 'remove' || ridLocal(e.rid).includes('saved'));
 
-  return { author, caption, alreadyLiked, alreadySaved, authorPoint, sponsored: isSponsored(elements) };
+  // Null, never 0, when the counts are not on screen — an unread number must not
+  // reach the scorer as "this reel got no likes".
+  const likes = countFromRid(elements, ['like_count']);
+  const comments = countFromRid(elements, ['comment_count']);
+
+  return {
+    author,
+    caption,
+    alreadyLiked,
+    alreadySaved,
+    authorPoint,
+    likes,
+    comments,
+    sponsored: isSponsored(elements),
+  };
 }
 
 // An ad, not a creator. The account behind a "Sponsored" reel is a brand buying
@@ -837,6 +875,10 @@ function readScreen(input = {}) {
     reading.alreadyLiked = feed.alreadyLiked;
     reading.alreadySaved = feed.alreadySaved;
     reading.sponsored = feed.sponsored;
+    // The engagement half of "100k views, 200 likes". Null (not 0) when the
+    // counts are not on screen, so an unread number never scores as no likes.
+    reading.likes = feed.likes;
+    reading.comments = feed.comments;
     add('like', SIGNALS.like);
     add('save', SIGNALS.save);
     add('share', SIGNALS.share);

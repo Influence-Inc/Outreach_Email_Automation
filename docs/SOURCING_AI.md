@@ -134,6 +134,65 @@ found this creator unremarkable" — so throttling silently dropped creators to
 keyword scoring. Reels mode judges a batch at a time, so throttling arrives in
 bursts and takes several creators with it.
 
+### Measuring whether any of this works
+
+Every threshold, weight and prompt here was tuned against an intuition about
+quality that nothing measured. `GET /api/sourcing/metrics?campaignId=…` is the
+measurement — the funnel is already in the database, it had just never been read
+end to end:
+
+| Number | What it means |
+| --- | --- |
+| `yieldRate` | of everything scanned, how much was worth contacting |
+| `contactRate` / `replyRate` | how far the added creators actually got |
+| `overturnRate` | of the creators the **rules** added alone, how many a human then rejected — the false-positive rate, and the number to drive down |
+| `reviewApprovalRate` | how often the human agreed with the review queue. **Not "higher is better"**: near 100% means the queue is asking about creators the rules should have added themselves; near 0% means ones they should have rejected. Either way the human is doing the gate's work. |
+| `keywords[]` | per-keyword added / contacted / replied, ranked by replies — a keyword that sources twenty creators nobody answers is worse than one that sources three who do |
+
+### The golden set
+
+`services/goldenSet.js` replays hand-labelled creators through the real gate
+offline — no phone, no Instagram, no Gemini, no database, because `scoreCreator`
+is a pure function of numbers already gathered. 20–30 labelled creators per
+campaign is what stops a change that fixes one brand from quietly ruining
+another.
+
+`caseFromCandidate(row, 'add' | 'reject')` builds a case straight off a stored
+candidate, so a set costs nothing but the labelling. `runGoldenSet` reports
+**false adds and false rejects separately** — they cost differently (a false add
+wastes an outreach; a false reject is a creator silently never seen again), and a
+single accuracy number would hide the trade. `compareConfigs(cases, before, after)`
+answers the question a tuning session is really asking: is this better, and which
+creators did it cost.
+
+### Engagement: a real audience vs a bought one
+
+Reach alone cannot tell these apart — views can be bought, and a repost farm's
+numbers look like a creator's until you ask how many people reacted. Likes and
+comments are read off the **reel player** (the only screen that carries them; the
+grid carries views, the profile carries followers) and scored as
+`(likes + comments) / followers`.
+
+`minEngagementRate` defaults to **1%**, deliberately forgiving: genuine large
+accounts sit at 1–3%, and this is a hard reject on a creator we may never look at
+again, so it is set to catch the obviously-bought rather than to sort average
+from good. An unread count is **unmeasured, not zero** — a creator whose counts
+we could not read is judged on everything else.
+
+### Taste a brand can state up front
+
+`nicheCalibration` learns from approve/reject history — which a brand-new
+campaign does not have, and its first runs are exactly the ones whose output
+trains everything after them. So a campaign can also just say it:
+
+```json
+{ "idealExamples": ["home-gym coaches who film themselves mid-set"],
+  "avoidExamples": ["gym meme repost pages", "supplement affiliate spammers"] }
+```
+
+Free text on purpose: these describe a *kind* of creator, which is what a
+threshold cannot express. Additive to the learned examples, never a replacement.
+
 ### Never scouting the same creator twice
 
 A creator this campaign has already looked at — added, rejected, in review, or

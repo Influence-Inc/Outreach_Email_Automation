@@ -96,6 +96,13 @@ function buildConfig(defaults = {}, override = {}) {
     minCreativity: num(merged.minCreativity),
     // A hard floor on brand fit, same shape. 0 disables it.
     minBrandFit: num(merged.minBrandFit),
+    // (likes + comments) / followers. Catches bought reach and repost farms,
+    // which reach alone cannot distinguish from a real audience. 0 disables it.
+    minEngagementRate: num(merged.minEngagementRate),
+    // Free-text taste, stated up front rather than learned from decisions that
+    // do not exist yet on a new campaign. See nicheCalibration.statedTaste.
+    idealExamples: toKeywordList(merged.idealExamples),
+    avoidExamples: toKeywordList(merged.avoidExamples),
     // Look at the profile screenshots before recording any video, and skip a
     // creator the pictures say is plainly in another line of work. Costs one
     // small image call; saves a recording, an upload and a video call every time
