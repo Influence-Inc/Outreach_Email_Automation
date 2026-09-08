@@ -224,6 +224,16 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const clipsWanted = config.clipsPerProfile != null ? config.clipsPerProfile : CLIPS_PER_PROFILE;
   const getClip = deps.getClip || (async () => null);
   const log = deps.log || (() => {});
+  // Say "still working" even when nothing is being produced.
+  //
+  // The run's freshness is measured by updated_at, which only moves when a
+  // candidate is YIELDED — and a re-run of a mature campaign legitimately yields
+  // nothing for a long stretch, because cross-run dedupe skips everyone it has
+  // already scouted. Each skip is only a few seconds, so a few hundred of them
+  // in a row is fifteen minutes of correct work with no yields, which is exactly
+  // the sweeper's definition of a dead run. Without this a healthy run gets
+  // reaped for doing its job well.
+  const heartbeat = deps.heartbeat || (() => {});
 
   // A long run against a real app gets interrupted, stuck, and occasionally lost.
   // See services/sourcingResilience.js — these are shared with the reels-feed
@@ -276,7 +286,13 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   // A keyword is only retired once its results will not scroll any further AND
   // that deepest look produced nobody new. The run ends when the target is met,
   // the profile cap is spent, or every keyword has been retired.
-  const depthOf = new Map(terms.map((t) => [t, 0]));
+  // Seeded from what this CAMPAIGN has already read, not from zero. A results
+  // page opens on the same popular accounts every time and dedupe now skips all
+  // of them, so starting at 0 spent the opening minutes of every re-run
+  // re-walking ground already covered before reaching anyone new.
+  const startDepth = opts.keywordDepth || {};
+  const depthOf = new Map(terms.map((t) => [t, Number(startDepth[t]) || 0]));
+  const saveDepth = deps.saveDepth || (async () => {});
   const exhausted = new Set();
   // Consecutive times a keyword could not even be typed. A transient missing
   // control must not retire a keyword, but a permanent one must not spin the
@@ -401,6 +417,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
 
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
+      await heartbeat();
       if (emitted >= max) return;
       if (cap.spent()) return; // the run has looked at enough profiles
       const profile = await captureViaReel({
@@ -430,7 +447,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         if (emitted >= max) return;
         // Here the handle is known before we move, so a creator already analysed
         // costs nothing at all to skip.
-        if (seenCreators.has(String(handle).toLowerCase())) continue;
+        if (seenCreators.has(String(handle).toLowerCase())) { await heartbeat(); continue; }
         if (!cap.take()) return;
         seenCreators.add(String(handle).toLowerCase());
         const profile = await openAndCaptureProfile({
@@ -447,6 +464,10 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
 
     // Next time this keyword comes round, start one screen deeper.
     depthOf.set(term, depth + 1);
+    // Persisted per keyword so the NEXT run starts here too, not just the next
+    // pass of this one. Best-effort: a failed write only costs re-reading a
+    // screen we have already read.
+    try { await saveDepth(term, depth + 1); } catch (_) { /* depth is an optimisation */ }
 
     // Retire the keyword only when BOTH are true: its results would not scroll
     // any further, and that deepest look found nobody new. Either alone is not

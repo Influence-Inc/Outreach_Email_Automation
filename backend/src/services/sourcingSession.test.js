@@ -131,3 +131,86 @@ test('a failed history read still lets the run go ahead', async () => {
   await session.start({ hostId: 1, run: { id: 4, campaign_id: 'c', config: {} }, deps }).promise;
   assert.strictEqual(opts.alreadyScouted, undefined, 'dedupes within the run as it always did');
 });
+
+// A run's freshness is measured by updated_at, which only moves when a candidate
+// is YIELDED — and a re-run of a mature campaign legitimately yields nothing for
+// a long stretch, because dedupe skips everyone it already scouted. A few
+// hundred cheap skips is fifteen minutes of correct work with no writes, which
+// is exactly sourcingSweep's definition of a dead run.
+test('the navigator can prove a run is alive while it is only skipping', async () => {
+  const touched = [];
+  let heartbeat;
+  const deps = {
+    ...baseDeps(),
+    touchRun: async (id) => { touched.push(id); },
+    scout: (args) => { heartbeat = args.deps.heartbeat; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 12, campaign_id: 'c', config: {} }, deps }).promise;
+
+  assert.strictEqual(typeof heartbeat, 'function', 'the navigator is given one');
+  await heartbeat();
+  assert.deepStrictEqual(touched, [12], 'the run row is touched');
+});
+
+test('heartbeats are throttled, not one write per creator considered', async () => {
+  const touched = [];
+  let heartbeat;
+  const deps = {
+    ...baseDeps(),
+    touchRun: async (id) => { touched.push(id); },
+    scout: (args) => { heartbeat = args.deps.heartbeat; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 13, campaign_id: 'c', config: {} }, deps }).promise;
+
+  for (let i = 0; i < 50; i += 1) await heartbeat();
+  assert.strictEqual(touched.length, 1, '50 skips in a row cost one write');
+});
+
+test('a failed heartbeat does not take the run down with it', async () => {
+  let heartbeat;
+  const deps = {
+    ...baseDeps(),
+    touchRun: async () => { throw new Error('db down'); },
+    scout: (args) => { heartbeat = args.deps.heartbeat; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 14, campaign_id: 'c', config: {} }, deps }).promise;
+  await heartbeat(); // must not throw
+});
+
+test('keyword depth is loaded for the campaign and handed to the navigator', async () => {
+  let opts = null;
+  const deps = {
+    ...baseDeps(),
+    keywordDepths: async ({ campaignId }) => {
+      assert.strictEqual(campaignId, 'camp-7');
+      return { homegym: 3, protein: 1 };
+    },
+    scout: (args) => { opts = args.opts; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 15, campaign_id: 'camp-7', config: {} }, deps }).promise;
+  assert.deepStrictEqual(opts.keywordDepth, { homegym: 3, protein: 1 });
+});
+
+test('advancing a keyword persists its depth for the NEXT run', async () => {
+  const saved = [];
+  let saveDepth;
+  const deps = {
+    ...baseDeps(),
+    saveKeywordDepth: async (row) => { saved.push(row); },
+    scout: (args) => { saveDepth = args.deps.saveDepth; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 16, campaign_id: 'camp-7', config: {} }, deps }).promise;
+  await saveDepth('homegym', 4);
+  assert.deepStrictEqual(saved, [{ campaignId: 'camp-7', term: 'homegym', depth: 4 }]);
+});
+
+test('a campaign with no depth history behaves exactly as before', async () => {
+  let opts = null;
+  const deps = {
+    ...baseDeps(),
+    keywordDepths: async () => ({}),
+    scout: (args) => { opts = args.opts; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 17, campaign_id: 'c', config: {} }, deps }).promise;
+  assert.strictEqual(opts.keywordDepth, undefined, 'no seed means start at the top');
+});

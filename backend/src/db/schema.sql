@@ -666,6 +666,21 @@ CREATE INDEX IF NOT EXISTS idx_sourced_candidates_decision ON sourced_candidates
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sourced_candidates_campaign_username
   ON sourced_candidates(campaign_id, LOWER(username));
 
+-- How far down a keyword's results this campaign has already scouted.
+--
+-- A results page opens on the same popular accounts every time, and cross-run
+-- dedupe now skips all of them — so a re-run that always started at depth 0 spent
+-- its opening minutes re-walking ground it had already covered before reaching
+-- anyone new. Depth is per (campaign, term) because it is a property of how far
+-- THIS campaign has read THAT search, not of any one run.
+CREATE TABLE IF NOT EXISTS sourcing_keyword_depth (
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  term        TEXT NOT NULL,
+  depth       INTEGER NOT NULL DEFAULT 0,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (campaign_id, term)
+);
+
 -- Provenance for creators the scout added: which mode found them (reels feed vs
 -- keyword search), which keyword and genre it was following, and the scores that
 -- passed them. Without it a campaign's creator list gives no way to tell which

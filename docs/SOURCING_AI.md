@@ -104,6 +104,36 @@ There is **no follower band**. Reach is what a campaign buys and `floor` /
 `ceiling` gate on it directly; a band on followers only ever rejected creators
 whose reach we had already measured and liked.
 
+### Surviving a deploy, and a long skip streak
+
+The command channel is **in-memory**, so every backend restart empties it. A pull
+for a host with no session state therefore reports `done: true` — there is no
+session, which is exactly what `done` means. Reporting `done: false` wedged the
+agent permanently: it stayed inside `serveSession` pulling against a backend that
+had forgotten it, never returned to claim the next run, and the phone polled into
+the void until someone reopened the app. This fired on **every deploy**.
+
+A run's freshness is `updated_at`, which only moves when a candidate is *yielded*.
+Dedupe means a re-run can legitimately yield nothing for a long stretch, and a few
+hundred cheap skips is fifteen minutes of correct work — the sweeper's definition
+of a dead run. The navigator now calls a throttled `heartbeat` (at most once a
+minute, via `sourcingStore.touchRun`, scoped to `status = 'running'` so it can
+never resurrect a stopped run) while it skips.
+
+Keyword depth is persisted per `(campaign, term)` in `sourcing_keyword_depth`, so
+a re-run resumes where the last one stopped instead of re-reading the top of every
+results page — which, with dedupe on, is the part guaranteed to yield nobody.
+
+### Rate limits
+
+`429`/`500`/`502`/`503`/`504` are retried with exponential backoff and jitter,
+honouring `Retry-After` when Google sends it (`GEMINI_MAX_ATTEMPTS`, default 3).
+A `400` is *our* request being wrong and is never retried. Without this a quota
+blip returned `null`, and null is indistinguishable downstream from "the model
+found this creator unremarkable" — so throttling silently dropped creators to
+keyword scoring. Reels mode judges a batch at a time, so throttling arrives in
+bursts and takes several creators with it.
+
 ### Never scouting the same creator twice
 
 A creator this campaign has already looked at — added, rejected, in review, or

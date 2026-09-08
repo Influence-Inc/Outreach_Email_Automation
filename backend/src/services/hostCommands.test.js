@@ -55,3 +55,33 @@ test('enqueue rejects an op-less command and enforces the queue cap', () => {
   for (let i = 0; i < hc.MAX_QUEUE; i += 1) hc.enqueue(2, { op: 'tap' });
   assert.throws(() => hc.enqueue(2, { op: 'tap' }), /queue full/);
 });
+
+// The channel is in-memory, so every backend restart — i.e. every deploy —
+// empties it. An agent already inside serveSession then pulls against a backend
+// that has forgotten it, and `done:false` meant it pulled FOREVER: no commands,
+// never done, so it never returned to claim the next run. The phone polled into
+// the void until someone reopened the app.
+test('a host with no session is told the session is over, not to keep waiting', () => {
+  assert.deepStrictEqual(hc.pull(42), { commands: [], done: true });
+});
+
+test('a restart mid-session releases the agent instead of wedging it', async () => {
+  hc.beginSession(1);
+  const { promise } = hc.enqueue(1, { op: 'dumpUi' });
+  promise.catch(() => {}); // the restart abandons this awaiter
+  assert.strictEqual(hc.pull(1).done, false, 'a live session keeps the agent serving');
+
+  hc._reset(); // the deploy
+
+  assert.deepStrictEqual(hc.pull(1), { commands: [], done: true }, 'agent is freed to re-claim');
+});
+
+// The claim response is only sent after beginSession has run (it happens before
+// runSession's first await), so "no state" can never mean "a session is about to
+// start" — which is what makes done:true safe rather than a race.
+test('a session opened after a reset reports not-done again', () => {
+  hc._reset();
+  assert.strictEqual(hc.pull(7).done, true);
+  hc.beginSession(7);
+  assert.strictEqual(hc.pull(7).done, false);
+});
