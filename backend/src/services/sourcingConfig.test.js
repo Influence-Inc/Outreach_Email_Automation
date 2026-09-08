@@ -144,3 +144,23 @@ test('every component the scorer weighs can be tuned per campaign', () => {
     Object.keys(DEFAULT_WEIGHTS).sort(),
   );
 });
+
+// buildConfig is a whitelist: a field the dashboard sends but this does not name
+// is silently dropped, which is how three knobs and a follower band were quietly
+// dead. The brand brief is the field the whole brand-fit judgement rests on.
+test('the brand brief survives the config whitelist', () => {
+  const cfg = buildConfig({
+    brandName: '  Velo Running  ',
+    brandProduct: '  a carbon-plate racing shoe  ',
+    brandBrief: '  A GBP 280 shoe for sub-4 marathoners.  ',
+  }, {});
+  assert.strictEqual(cfg.brandName, 'Velo Running');
+  assert.strictEqual(cfg.brandProduct, 'a carbon-plate racing shoe');
+  assert.strictEqual(cfg.brandBrief, 'A GBP 280 shoe for sub-4 marathoners.');
+});
+
+test('an unfilled brand brief is empty, not undefined', () => {
+  const cfg = buildConfig({}, {});
+  assert.strictEqual(cfg.brandName, '');
+  assert.strictEqual(cfg.brandBrief, '');
+});

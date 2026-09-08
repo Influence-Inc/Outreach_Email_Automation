@@ -92,6 +92,11 @@ function readForm() {
     minCreativity: numOrUndef('minCreativity'),
     minBrandFit: numOrUndef('minBrandFit'),
     brandProduct: el('brandProduct').value.trim(),
+    brandName: el('brandName').value.trim(),
+    // The judge is briefed on the brand BEFORE it sees the creator, so this is
+    // the field that decides whether "could they feature this without it looking
+    // like an ad" has anything concrete to measure against.
+    brandBrief: el('brandBrief').value.trim(),
     discovery: el('discovery').value,
     reviewBorderline: el('reviewBorderline').checked,
     prescreenNiche: el('prescreenNiche').checked,
@@ -114,6 +119,8 @@ function fillForm(cfg) {
   el('minCreativity').value = cfg.minCreativity ?? 5;
   el('minBrandFit').value = cfg.minBrandFit ?? 4;
   el('brandProduct').value = cfg.brandProduct || '';
+  el('brandName').value = cfg.brandName || '';
+  el('brandBrief').value = cfg.brandBrief || '';
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
   el('reviewBorderline').checked = !!cfg.reviewBorderline;
   el('prescreenNiche').checked = !!cfg.prescreenNiche;

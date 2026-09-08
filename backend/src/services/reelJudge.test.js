@@ -331,6 +331,57 @@ test('calibration does not ride on the per-clip prompt', () => {
   assert.ok(!p.includes('CALIBRATION'));
 });
 
+// ── the brand brief ─────────────────────────────────────────────────────────
+
+// Order is the point. Asked "does this creator fit?" with the brand described
+// afterwards, a model reasons from the creator outwards and finds a way to make
+// almost anyone fit; given the brand FIRST it has something to measure against,
+// and "no" becomes an available answer.
+test('the brand is briefed before anything about the creator', () => {
+  const p = reelJudge.buildProfilePrompt(profileCandidate, {
+    brandName: 'Velo Running',
+    brandProduct: 'a carbon-plate racing shoe',
+    brandBrief: 'A GBP 280 shoe from a small running label. Buyers chase a sub-4 marathon.',
+    targetAudience: 'amateur marathoners 25-40',
+  }, profileCandidate.shots);
+
+  assert.match(p, /── THE BRAND/);
+  assert.match(p, /Brand: Velo Running/);
+  assert.match(p, /What they sell: a carbon-plate racing shoe/);
+  assert.match(p, /A GBP 280 shoe from a small running label/);
+  assert.match(p, /Who they want to reach: amateur marathoners 25-40/);
+  assert.ok(p.indexOf('── THE BRAND') < p.indexOf('Creator @'), 'brand first, creator second');
+  // And the question that decides an outreach is asked against it.
+  assert.match(p, /look native rather than a paid\nread/);
+});
+
+test('brand fit is asked whenever there is ANY brand context, not just a product line', () => {
+  const briefOnly = reelJudge.buildProfilePrompt(profileCandidate, {
+    brandBrief: 'A small-batch hot sauce sold at farmers markets.',
+  }, profileCandidate.shots);
+  assert.match(briefOnly, /BRAND FIT/);
+  assert.strictEqual(reelJudge.hasBrandContext({ brandBrief: 'x' }), true);
+  assert.strictEqual(reelJudge.hasBrandContext({ brandName: 'x' }), true);
+  assert.strictEqual(reelJudge.hasBrandContext({ brandProduct: 'x' }), true);
+});
+
+// A campaign that said nothing about itself must not be handed a block of
+// "(unspecified)" to reason from — that is worse than silence.
+test('a campaign with no brand details sends no brand block and no fit question', () => {
+  assert.strictEqual(reelJudge.brandBrief({}), '');
+  assert.strictEqual(reelJudge.hasBrandContext({}), false);
+  const p = reelJudge.buildProfilePrompt(profileCandidate, { niche: 'fitness' }, profileCandidate.shots);
+  assert.ok(!/── THE BRAND/.test(p));
+  assert.ok(!/BRAND FIT/.test(p), 'nothing to judge fit against');
+});
+
+test('the brief includes only the parts that were filled in', () => {
+  const partial = reelJudge.brandBrief({ brandProduct: 'a racing shoe' });
+  assert.match(partial, /What they sell: a racing shoe/);
+  assert.ok(!/Brand:/.test(partial), 'no empty "Brand:" line');
+  assert.ok(!/Who they want to reach/.test(partial));
+});
+
 // The prompt is where taste has to land — a config field nothing reads is worse
 // than no field at all, because it looks configured.
 test('what a brand says it does NOT want reaches the profile prompt', () => {

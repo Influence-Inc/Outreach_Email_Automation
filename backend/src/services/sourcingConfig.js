@@ -58,6 +58,15 @@ function buildConfig(defaults = {}, override = {}) {
     // and have it look native" — a different question from "are they in the right
     // niche", and the one that decides whether an outreach is worth sending.
     brandProduct: merged.brandProduct ? String(merged.brandProduct).trim() : '',
+    // Who the brand IS. "A carbon-plate racing shoe" and "a £280 carbon-plate
+    // racing shoe from a niche running label" call for different creators, and
+    // only the second says which.
+    brandName: merged.brandName ? String(merged.brandName).trim() : '',
+    // Room to actually describe the brand and product — positioning, price tier,
+    // who it is for, and what a natural mention would look like. The one-line
+    // product field cannot carry any of that, and "could this look native rather
+    // than bought" is exactly the judgement that needs it.
+    brandBrief: merged.brandBrief ? String(merged.brandBrief).trim() : '',
     // Optional allow-list of genres the reel judge should treat as on-brand.
     genres: toKeywordList(merged.genres),
     floor: num(merged.floor),
