@@ -24,6 +24,10 @@ const nicheCalibration = require('./nicheCalibration');
 
 const DEFAULT_PACING_MS = 1800; // human-like pacing between IG actions (anti-flag)
 const DEFAULT_CAPTURE_CAP = 500; // safety cap on captures per run
+// Comfortably inside sourcingSweep's 15-minute stale-run window, and rare
+// enough that a long skip streak costs a handful of writes rather than one per
+// creator considered.
+const HEARTBEAT_MS = 60_000;
 
 const active = new Map(); // hostId -> { runId, promise }
 
@@ -151,6 +155,41 @@ async function runSession({ hostId, run, deps }) {
     }
   }
 
+  // Where this campaign's keywords were last read to, so a re-run resumes rather
+  // than restarting at the top of every results page. Best-effort in both
+  // directions — no history means depth 0, which is the old behaviour exactly.
+  try {
+    const depths = await (deps.keywordDepths || store.keywordDepths)({ campaignId: run.campaign_id });
+    if (depths && Object.keys(depths).length) {
+      opts.keywordDepth = depths;
+      log(`[sourcing-session] run #${run.id}: resuming ${Object.keys(depths).length} keywords at their last depth`);
+    }
+  } catch (err) {
+    log(`[sourcing-session] could not load keyword depth: ${(err && err.message) || err}`);
+  }
+
+  const saveDepth = (term, depth) => (deps.saveKeywordDepth || store.saveKeywordDepth)({
+    campaignId: run.campaign_id, term, depth,
+  });
+
+  // Proof of life for a run that is working but not yielding — see the heartbeat
+  // note in sourcingNavigator.scout. Throttled hard: the point is to stay inside
+  // the sweeper's window, not to write a row per skipped creator.
+  const touchRun = deps.touchRun || store.touchRun;
+  let lastBeat = 0;
+  const heartbeat = async () => {
+    const now = Date.now();
+    if (now - lastBeat < HEARTBEAT_MS) return;
+    lastBeat = now;
+    try {
+      await touchRun(run.id);
+    } catch (err) {
+      // Losing a heartbeat is not worth losing the run over; the worst case is
+      // the sweeper reaping it, which is what happened before this existed.
+      log(`[sourcing-session] heartbeat failed: ${(err && err.message) || err}`);
+    }
+  };
+
   // `discovery: 'reels'` drives the explore/scroll reel-feed flow (watch + hear +
   // judge + occasionally engage); otherwise the search->profile flow.
   let gen;
@@ -206,7 +245,7 @@ async function runSession({ hostId, run, deps }) {
         maxProfiles: config.maxProfiles,
       },
       opts,
-      deps: { getClip: deps.getClip || clipStore.take },
+      deps: { getClip: deps.getClip || clipStore.take, heartbeat, saveDepth },
     });
   }
 

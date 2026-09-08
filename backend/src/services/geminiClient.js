@@ -57,6 +57,34 @@ function timeoutMs() {
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_TIMEOUT_MS;
 }
 
+// Transient server-side conditions, as opposed to "this request is wrong".
+// A 429 is the one that matters in practice: reels mode judges a batch of
+// creators through analysisQueue, so calls arrive in bursts and a quota blip
+// rejects several at once.
+const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_MAX_ATTEMPTS = 3;
+
+function maxAttempts() {
+  const n = Number(clean(process.env.GEMINI_MAX_ATTEMPTS));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 6) : DEFAULT_MAX_ATTEMPTS;
+}
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// Google says when to come back on a 429; honour that over our own guess, and
+// fall back to exponential backoff with jitter so a burst of judgements that all
+// got throttled together does not march back in lockstep.
+function retryDelayMs(res, attempt) {
+  const header = res && res.headers && typeof res.headers.get === 'function'
+    ? res.headers.get('retry-after')
+    : null;
+  if (header != null) {
+    const secs = Number(header);
+    if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, 30_000);
+  }
+  return Math.min(500 * (2 ** (attempt - 1)), 8000) + Math.floor(Math.random() * 250);
+}
+
 function mediaResolution() {
   const r = (clean(process.env.GEMINI_MEDIA_RESOLUTION) || 'low').toLowerCase();
   if (r === 'off' || r === 'none') return null; // never send the field
@@ -103,6 +131,7 @@ async function generate({
   label = 'judge',
   responseSchema,
   fetchImpl = globalThis.fetch,
+  sleepFn = sleep,
 } = {}) {
   const key = apiKey();
   if (!key) return null;
@@ -163,6 +192,28 @@ async function generate({
     }).finally(() => clearTimeout(timer));
   };
 
+  // One call, retried while the failure is the server's rather than ours. A
+  // throttled or briefly-unavailable judgement used to return null and silently
+  // drop the creator to keyword scoring — indistinguishable, downstream, from a
+  // creator the model genuinely found unremarkable.
+  const attempts = maxAttempts();
+  const postWithRetry = async (withMediaRes) => {
+    let res;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      res = await post(withMediaRes);
+      if (!res || !TRANSIENT_STATUSES.has(res.status)) return res;
+      if (attempt === attempts) break; // leave the final body intact for the caller
+      const wait = retryDelayMs(res, attempt);
+      console.warn(`[gemini] ${label}: ${res.status} — retrying in ${wait}ms (attempt ${attempt}/${attempts})`);
+      // eslint-disable-next-line no-await-in-loop
+      await res.text().catch(() => {}); // drain so the socket can be reused
+      // eslint-disable-next-line no-await-in-loop
+      await sleepFn(wait);
+    }
+    return res;
+  };
+
   console.log(
     `[gemini] -> ${label} model=${mdl} video=${videoBytes ? kb(videoBytes) : 'none'} `
     + `images=${imgList.length}${imageBytes ? ` (${kb(imageBytes)})` : ''} prompt=${(promptText || '').length}ch`,
@@ -172,7 +223,7 @@ async function generate({
   let res;
   let usedMediaRes = mediaResolutionSupported;
   try {
-    res = await post(usedMediaRes);
+    res = await postWithRetry(usedMediaRes);
     // A 400 with the field is the signature of a model that doesn't take it.
     // Retry once without it: if that works, the field was the whole problem, so
     // stop sending it rather than failing every remaining judgement identically.
@@ -183,7 +234,7 @@ async function generate({
         + `First error: ${String(first).slice(0, 300)}`,
       );
       usedMediaRes = false;
-      res = await post(false);
+      res = await postWithRetry(false);
       if (res && res.ok) {
         mediaResolutionSupported = false;
         console.warn(

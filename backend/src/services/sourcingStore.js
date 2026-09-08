@@ -100,6 +100,54 @@ async function getCandidate(id) {
 
 const RUN_COLS = { found_count: '', status: '', stats: '::jsonb', error: '', host_id: '' };
 
+/**
+ * Mark a run as still alive, without changing anything about it.
+ *
+ * `updateRun` with an empty patch deliberately does nothing — it short-circuits
+ * to a read — so it cannot serve as a heartbeat. The sweeper reaps `running`
+ * runs by `updated_at`, and a scout skipping creators it has already scouted is
+ * working correctly while producing nothing to write, so it needs a way to say
+ * so out loud.
+ *
+ * Scoped to `status = 'running'` so a heartbeat can never resurrect a run an
+ * admin just stopped, or one the sweeper already reaped.
+ */
+async function touchRun(id) {
+  return db.query(
+    `UPDATE sourcing_runs SET updated_at = NOW() WHERE id = $1 AND status = 'running'`,
+    [id],
+  );
+}
+
+/**
+ * How far down each keyword's results this campaign has already scouted.
+ *
+ * Returns a plain { term: depth } map. Empty on any failure — a run that cannot
+ * read its history simply starts at the top, which is what it always did.
+ */
+async function keywordDepths({ campaignId }) {
+  if (!campaignId) return {};
+  const rows = await db.many(
+    `SELECT term, depth FROM sourcing_keyword_depth WHERE campaign_id = $1`,
+    [campaignId],
+  );
+  const out = {};
+  for (const r of rows || []) out[r.term] = Number(r.depth) || 0;
+  return out;
+}
+
+/** Remember that a keyword has now been read to `depth` screens. */
+async function saveKeywordDepth({ campaignId, term, depth }) {
+  if (!campaignId || !term) return;
+  await db.query(
+    `INSERT INTO sourcing_keyword_depth (campaign_id, term, depth, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (campaign_id, term)
+     DO UPDATE SET depth = EXCLUDED.depth, updated_at = NOW()`,
+    [campaignId, term, Math.max(0, Number(depth) || 0)],
+  );
+}
+
 async function updateRun(id, patch) {
   const sets = [];
   const params = [id];
@@ -241,6 +289,9 @@ module.exports = {
   rejectCandidate,
   getCandidate,
   updateRun,
+  touchRun,
+  keywordDepths,
+  saveKeywordDepth,
   approvedHandles,
   scoutedHandles,
   makeDeps,

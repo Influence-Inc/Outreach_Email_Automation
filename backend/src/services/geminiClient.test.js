@@ -289,3 +289,74 @@ test('a bounded call still passes a signal through', async () => {
   await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'judge', fetchImpl });
   assert.ok(fetchImpl.calls[0].opts.signal, 'the default timeout is in force');
 });
+
+// A 429 used to return null, and null is indistinguishable downstream from "the
+// model found this creator unremarkable" — so a quota blip silently dropped
+// creators to keyword scoring. Reels mode judges a batch at a time, so throttling
+// arrives in bursts and takes several creators with it.
+function fetchFailingThenOk(failStatus, failTimes, json, headers = {}) {
+  let n = 0;
+  const calls = [];
+  const fn = async (url, opts) => {
+    calls.push({ url, opts });
+    n += 1;
+    if (n <= failTimes) {
+      return {
+        ok: false,
+        status: failStatus,
+        headers: { get: (k) => headers[String(k).toLowerCase()] ?? null },
+        async text() { return `{"error":{"code":${failStatus}}}`; },
+        async json() { return {}; },
+      };
+    }
+    return { ok: true, status: 200, headers: { get: () => null }, async json() { return json; }, async text() { return ''; } };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('a 429 is retried and the verdict still comes back', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const waits = [];
+  const fetchImpl = fetchFailingThenOk(429, 1, verdictResponse({ niche_score: 0.8 }));
+  const out = await gc.classifyReelVideo({
+    videoBase64: 'AAAA', promptText: 'x', fetchImpl, sleepFn: async (ms) => { waits.push(ms); },
+  });
+  assert.deepStrictEqual(out, { niche_score: 0.8 });
+  assert.strictEqual(fetchImpl.calls.length, 2, 'retried once');
+  assert.strictEqual(waits.length, 1, 'waited before retrying');
+});
+
+test('a 503 is retried too, and gives up after the attempt cap', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  process.env.GEMINI_MAX_ATTEMPTS = '3';
+  const fetchImpl = fetchFailingThenOk(503, 99, verdictResponse({ niche_score: 1 }));
+  const out = await gc.classifyReelVideo({
+    videoBase64: 'AAAA', promptText: 'x', fetchImpl, sleepFn: async () => {},
+  });
+  assert.strictEqual(out, null, 'still degrades gracefully once retries are spent');
+  assert.strictEqual(fetchImpl.calls.length, 3, 'bounded, not infinite');
+  delete process.env.GEMINI_MAX_ATTEMPTS;
+});
+
+test('Retry-After is honoured over our own backoff', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const waits = [];
+  const fetchImpl = fetchFailingThenOk(429, 1, verdictResponse({ niche_score: 0.5 }), { 'retry-after': '2' });
+  await gc.classifyReelVideo({
+    videoBase64: 'AAAA', promptText: 'x', fetchImpl, sleepFn: async (ms) => { waits.push(ms); },
+  });
+  assert.deepStrictEqual(waits, [2000], 'waited exactly what the server asked for');
+});
+
+// A 400 is OUR request being wrong; retrying it identically would just burn quota.
+test('a 400 is not retried as though it were transient', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  process.env.GEMINI_MEDIA_RESOLUTION = 'off'; // skip the mediaResolution probe path
+  const fetchImpl = fetchFailingThenOk(400, 99, verdictResponse({ niche_score: 1 }));
+  assert.strictEqual(
+    await gc.classifyReelVideo({ videoBase64: 'AAAA', promptText: 'x', fetchImpl, sleepFn: async () => {} }),
+    null,
+  );
+  assert.strictEqual(fetchImpl.calls.length, 1, 'asked once and stopped');
+});

@@ -80,7 +80,15 @@ function enqueue(hostId, { op, args = {} } = {}, { timeoutMs = DEFAULT_TIMEOUT_M
 // the backend has finished this run's session (no more commands are coming).
 function pull(hostId) {
   const s = HOSTS.get(hostId);
-  if (!s) return { commands: [], done: false };
+  // No session state for this host means there is no session — which is exactly
+  // what `done` reports. Saying `done:false` instead used to WEDGE THE AGENT
+  // PERMANENTLY: this channel is in-memory, so every backend restart (i.e. every
+  // deploy) empties it, and an agent already inside serveSession would pull
+  // forever against a backend that had forgotten it — no commands, never done,
+  // so it never returned to claim the next run. The phone polled into the void
+  // until someone reopened the app, while the sweeper quietly reaped the run it
+  // had been serving.
+  if (!s) return { commands: [], done: true };
   const commands = s.queue;
   s.queue = [];
   return { commands, done: !!s.done };

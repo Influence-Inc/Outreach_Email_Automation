@@ -1584,3 +1584,54 @@ test('an inconclusive on-device hint still lets the cloud prescreen decide', asy
   assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0, 'the cloud verdict still applied');
   assert.match(out[0].evidence.notRecorded, /off-niche/);
 });
+
+// ── a re-run resumes instead of re-walking ─────────────────────────────────
+
+test('a keyword resumes at the depth the last run reached', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
+    // scrollResults reads once per screen it scrolls past.
+    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
+    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
+    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
+  ];
+  const saved = [];
+  const out = [];
+  for await (const c of scout({
+    driver,
+    config: { pacingMs: 0 },
+    read: scriptedRead(views),
+    opts: { keywords: ['homegym'], max: 1, keywordDepth: { homegym: 2 } },
+    deps: { saveDepth: async (term, depth) => saved.push([term, depth]) },
+  })) out.push(c);
+
+  // Seeded at 2, so it scrolls before scouting rather than starting at the top.
+  assert.ok(driver.ops.filter((o) => o[0] === 'swipe').length >= 2, 'scrolled to the depth already read');
+  // And it records where it got to, for the run after this one.
+  assert.ok(saved.some(([t, d]) => t === 'homegym' && d === 3), `depth advanced: ${JSON.stringify(saved)}`);
+});
+
+test('skipping known creators still reports the run as alive', async () => {
+  const driver = driverWithSearch();
+  let beats = 0;
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', activeTab: 'for you', reelResults: [{ index: 0, label: 'a' }], targets: { 'reelResult:0': { x: 5, y: 5 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'for you', reelResults: [{ index: 0, label: 'a' }], targets: { 'reelResult:0': { x: 5, y: 5 }, back: BACK } },
+    { screen: 'reels_feed', author: 'AlreadySeen', targets: { authorProfile: { x: 7, y: 7 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
+  ];
+  const out = [];
+  for await (const c of scout({
+    driver,
+    config: { pacingMs: 0 },
+    read: scriptedRead(views),
+    opts: { keywords: ['homegym'], max: 5, alreadyScouted: ['alreadyseen'] },
+    deps: { heartbeat: async () => { beats += 1; } },
+  })) out.push(c);
+
+  assert.strictEqual(out.length, 0, 'nothing yielded — the sweeper would have seen silence');
+  assert.ok(beats >= 1, 'but the run said it was still working');
+});
