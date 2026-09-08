@@ -152,6 +152,10 @@ async function processCandidate(run, config, candidate, deps) {
       creator: creatorAnalysis || {},
       clips: clipAnalyses,
       reels: candidate.reels || [],
+      // Read off the reel player; paired with followers this is what separates a
+      // real audience from a bought one.
+      engagement: candidate.engagement || null,
+      followers: candidate.followers ?? null,
     }, config)
     : null;
 

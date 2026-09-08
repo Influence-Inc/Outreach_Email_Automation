@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  collectExamples, renderCalibration, loadCalibration, summarise,
+  collectExamples, renderCalibration, loadCalibration, summarise, statedTaste,
 } = require('./nicheCalibration');
 
 // A stored candidate row, as the DB holds it.
@@ -153,4 +153,31 @@ test('a database failure degrades to no calibration', async () => {
   const c = await loadCalibration({ db, logger: { warn: (...a) => logged.push(a.join(' ')) } });
   assert.strictEqual(c, null);
   assert.match(logged.join(' '), /calibration/i);
+});
+
+// loadCalibration teaches from history a NEW campaign does not have — and its
+// first runs are exactly the ones whose output trains everything after them.
+test('statedTaste turns what a brand says into prompt guidance', () => {
+  const text = statedTaste({
+    idealExamples: ['home-gym coaches who film themselves mid-set'],
+    avoidExamples: ['gym meme repost pages', 'supplement affiliate spammers'],
+  });
+  assert.match(text, /GOOD — creators like these:/);
+  assert.match(text, /home-gym coaches who film themselves mid-set/);
+  assert.match(text, /BAD — creators like these are wrong for us:/);
+  assert.match(text, /supplement affiliate spammers/);
+});
+
+test('either side alone is enough, and neither costs anything', () => {
+  assert.match(statedTaste({ avoidExamples: ['repost pages'] }), /BAD/);
+  assert.ok(!/GOOD/.test(statedTaste({ avoidExamples: ['repost pages'] })));
+  assert.strictEqual(statedTaste({}), '', 'silent when nothing was stated');
+  assert.strictEqual(statedTaste(), '');
+  assert.strictEqual(statedTaste({ idealExamples: ['  ', ''] }), '', 'blank entries are not taste');
+});
+
+test('stated taste is bounded so it cannot crowd out the candidate', () => {
+  const many = Array.from({ length: 30 }, (_, i) => `avoid kind ${i}`);
+  const text = statedTaste({ avoidExamples: many });
+  assert.strictEqual(text.match(/avoid kind/g).length, 8);
 });

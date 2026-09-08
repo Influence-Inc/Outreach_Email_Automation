@@ -26,6 +26,7 @@ const sourcingSession = require('../services/sourcingSession');
 const clipStore = require('../services/clipStore');
 const humanize = require('../services/humanize');
 const geminiClient = require('../services/geminiClient');
+const sourcingMetrics = require('../services/sourcingMetrics');
 const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
@@ -60,6 +61,22 @@ function nextRunStatus(currentStatus, done) {
 router.get('/gemini/health', async (_req, res, next) => {
   try {
     res.json(await geminiClient.ping());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/sourcing/metrics?campaignId=… — did the scout find good creators?
+//
+// Every threshold, weight and prompt in this pipeline is tuned against an
+// intuition about quality that nothing measured. This is the measurement: the
+// funnel from scanned to replied, how often a human overturned the rules, and
+// which keywords produced creators who actually answered. Admin-only via the
+// top-level siteAuth gate.
+router.get('/metrics', async (req, res, next) => {
+  try {
+    const campaignId = req.query.campaignId || req.query.campaign || null;
+    res.json(await sourcingMetrics.campaignReport({ db, campaignId }));
   } catch (err) {
     next(err);
   }

@@ -573,3 +573,33 @@ test('the older "Top" label is treated as For you', () => {
   );
   assert.ok(el);
 });
+
+// The reel player is the ONLY screen carrying likes and comments — the grid has
+// views, the profile has followers. Without these the pipeline scored purely on
+// reach, so a reel with 100k views and 200 likes (bought reach, or a repost
+// farm) scored identically to a genuine one.
+test('reads likes and comments off the real reel player', () => {
+  const view = sv.readScreen({ elements: FIX('screen4-reel-feed.xml') });
+  assert.strictEqual(view.screen, 'reels_feed');
+  assert.strictEqual(view.likes, 42943, 'from "Like number is42943. View likes"');
+  assert.strictEqual(view.comments, 505, 'from "Comment number is505. View comments"');
+});
+
+// An unread count must never reach the scorer as "this reel got no likes".
+test('missing engagement counts read as null, not zero', () => {
+  // The real player, with only the two count nodes taken away — so this still
+  // classifies as a reel player and exercises the same branch.
+  const elements = FIX('screen4-reel-feed.xml')
+    .filter((e) => !/like_count|comment_count/.test(String(e.rid)));
+  const view = sv.readScreen({ elements });
+  assert.strictEqual(view.screen, 'reels_feed');
+  assert.strictEqual(view.likes, null);
+  assert.strictEqual(view.comments, null);
+});
+
+// The view-count regex was written to REJECT "42943. View likes"; reading likes
+// properly must not undo that.
+test('a like count is still never mistaken for a view count', () => {
+  const view = sv.readScreen({ elements: FIX('screen4-reel-feed.xml') });
+  assert.ok(!(view.reels || []).some((r) => r.views === 42943), 'likes did not leak into reels');
+});

@@ -381,3 +381,21 @@ test('the brief includes only the parts that were filled in', () => {
   assert.ok(!/Brand:/.test(partial), 'no empty "Brand:" line');
   assert.ok(!/Who they want to reach/.test(partial));
 });
+
+// The prompt is where taste has to land — a config field nothing reads is worse
+// than no field at all, because it looks configured.
+test('what a brand says it does NOT want reaches the profile prompt', () => {
+  const p = reelJudge.buildProfilePrompt(profileCandidate, {
+    niche: 'fitness',
+    avoidExamples: ['gym meme repost pages'],
+    idealExamples: ['coaches who film themselves mid-set'],
+  }, profileCandidate.shots);
+  assert.match(p, /BAD — creators like these are wrong for us:/);
+  assert.match(p, /gym meme repost pages/);
+  assert.match(p, /coaches who film themselves mid-set/);
+});
+
+test('a campaign that stated no taste sends no taste section', () => {
+  const p = reelJudge.buildProfilePrompt(profileCandidate, { niche: 'fitness' }, profileCandidate.shots);
+  assert.ok(!/creators like these/.test(p));
+});

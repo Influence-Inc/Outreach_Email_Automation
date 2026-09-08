@@ -73,6 +73,43 @@ const DEFAULT_MIN_CREATIVITY = 5;
 // practice. 0 disables it.
 const DEFAULT_MIN_BRAND_FIT = 4;
 
+// Engagement floor, as a share of the creator's own following.
+//
+// Reach alone cannot tell a real audience from a bought one: views can be paid
+// for, and a repost farm's numbers look identical to a creator's until you ask
+// how many people actually reacted. (likes + comments) / followers is the
+// standard vetting ratio and, crucially, both halves are read exactly — likes
+// and comments off the reel player, followers off the profile header.
+//
+// 1% is deliberately forgiving. Genuine large accounts routinely sit at 1-3%,
+// and this is a HARD reject on a creator we may never look at again, so it is
+// set to catch the obviously-bought (0.1% and below) rather than to sort the
+// merely-average from the good. 0 disables it.
+const DEFAULT_MIN_ENGAGEMENT_RATE = 0.01;
+
+/**
+ * (likes + comments) / followers, or null when either half is unknown.
+ *
+ * Null rather than 0 throughout: a creator whose counts we could not read is
+ * unmeasured, not unengaging — the same principle the craft components follow.
+ */
+function engagementRate({ engagement, followers } = {}) {
+  const f = Number(followers);
+  if (!Number.isFinite(f) || f <= 0) return null;
+  // Number(null) is 0, and 0 is finite — so reading these through Number() first
+  // turns "we never read a like count" into "this reel got no likes", which is
+  // the precise trap the null-not-zero rule above exists to avoid. Check for the
+  // absent value BEFORE coercing.
+  const rawLikes = engagement ? engagement.likes : null;
+  const rawComments = engagement ? engagement.comments : null;
+  const likes = rawLikes == null ? null : Number(rawLikes);
+  const comments = rawComments == null ? null : Number(rawComments);
+  const haveLikes = Number.isFinite(likes);
+  const haveComments = Number.isFinite(comments);
+  if (!haveLikes && !haveComments) return null;
+  return ((haveLikes ? likes : 0) + (haveComments ? comments : 0)) / f;
+}
+
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -119,7 +156,7 @@ function reelStats(reels) {
  *            components:object, stats:object}}
  *          `score` is 0–1 and is only meaningful when nothing hard-rejected.
  */
-function scoreCreator({ creator = {}, clips = [], reels = [] } = {}, config = {}) {
+function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null, followers = null } = {}, config = {}) {
   const weights = { ...DEFAULT_WEIGHTS, ...(config.creatorWeights || {}) };
   const threshold = config.creatorPassThreshold != null
     ? config.creatorPassThreshold
@@ -129,8 +166,13 @@ function scoreCreator({ creator = {}, clips = [], reels = [] } = {}, config = {}
     ? config.minCreativity
     : DEFAULT_MIN_CREATIVITY;
   const minBrandFit = config.minBrandFit != null ? config.minBrandFit : DEFAULT_MIN_BRAND_FIT;
+  const minEngagement = config.minEngagementRate != null
+    ? config.minEngagementRate
+    : DEFAULT_MIN_ENGAGEMENT_RATE;
 
   const stats = reelStats(reels);
+  const measuredRate = engagementRate({ engagement, followers });
+  stats.engagementRate = measuredRate == null ? null : round3(measuredRate);
   const clipList = Array.isArray(clips) ? clips.filter(Boolean) : [];
 
   // A component is null when it could not be measured — NOT zero. Treating
@@ -182,6 +224,16 @@ function scoreCreator({ creator = {}, clips = [], reels = [] } = {}, config = {}
     return reject(`brand fit ${round3(brandFit)} below ${minBrandFit}`);
   }
 
+  // Bought reach and repost farms: plenty of followers, almost no one reacting.
+  // Only ever applied when BOTH halves were actually read — an unread like count
+  // is not evidence of an unengaged audience.
+  const engRate = engagementRate({ engagement, followers });
+  if (minEngagement > 0 && engRate != null && engRate < minEngagement) {
+    return reject(
+      `engagement ${(engRate * 100).toFixed(2)}% of followers, below ${(minEngagement * 100).toFixed(2)}%`,
+    );
+  }
+
   // No follower-band reject. Follower count is a vanity number that reach
   // already answers better: what a campaign buys is views, and `floor` /
   // `ceiling` gate on those directly. A band on followers only ever rejected
@@ -218,10 +270,12 @@ function scoreCreator({ creator = {}, clips = [], reels = [] } = {}, config = {}
 
 module.exports = {
   scoreCreator,
+  engagementRate,
   reelStats,
   DEFAULT_WEIGHTS,
   DEFAULT_PASS_THRESHOLD,
   DEFAULT_MAX_SPIKE,
   DEFAULT_MIN_CREATIVITY,
+  DEFAULT_MIN_ENGAGEMENT_RATE,
   DEFAULT_MIN_BRAND_FIT,
 };
