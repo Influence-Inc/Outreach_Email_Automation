@@ -184,7 +184,16 @@ async function collectBatch({
       warn('[reels] recordClip failed:', err.message);
     }
 
-    const entry = { username: view.author, caption: view.caption || null, clip };
+    // Likes and comments live only on this screen, so they are read here or not
+    // at all. Paired with the follower count the profile visit reads, they are
+    // what tells a real audience from a bought one.
+    const entry = {
+      username: view.author,
+      caption: view.caption || null,
+      clip,
+      likes: view.likes ?? null,
+      comments: view.comments ?? null,
+    };
     if (clip) {
       queue.submit(key, () => judge({ username: entry.username, caption: entry.caption, clip }, config));
     }
@@ -251,6 +260,9 @@ async function handleCreator({
   const candidate = {
     username: entry.username,
     reels: entry.caption ? [{ caption: entry.caption }] : [],
+    engagement: (entry.likes != null || entry.comments != null)
+      ? { likes: entry.likes, comments: entry.comments }
+      : undefined,
     evidence: { capturedAt: new Date().toISOString(), source: 'reels-feed' },
   };
   if (entry.clip) candidate.clip = entry.clip;

@@ -169,7 +169,42 @@ async function loadCalibration({ db, campaignId, perSide, logger = console } = {
   }
 }
 
+/**
+ * Taste the admin can state UP FRONT, before any decision exists to learn from.
+ *
+ * loadCalibration teaches from history, which a brand-new campaign does not
+ * have — its first runs are judged with no taste signal at all, and those are
+ * exactly the runs whose output trains everything after them. A cold start is
+ * where guidance is worth the most and where there is least of it.
+ *
+ * So a campaign can also just SAY what it wants and what it does not:
+ *
+ *   idealExamples: ["home-gym coaches who film themselves mid-set"]
+ *   avoidExamples: ["gym meme repost pages", "supplement affiliate spammers"]
+ *
+ * Free text on purpose. These describe a KIND of creator, which is the thing a
+ * threshold cannot express and a handle would not generalise from. They are
+ * additive to the learned examples, never a replacement: once real approve and
+ * reject calls exist, both ride in the same prompt.
+ */
+function statedTaste({ idealExamples = [], avoidExamples = [] } = {}) {
+  const clean = (list) => (Array.isArray(list) ? list : [String(list || '')])
+    .map((v) => String(v || '').trim())
+    .filter(Boolean)
+    .slice(0, 8); // enough to draw a line; not enough to crowd out the candidate
+
+  const ideal = clean(idealExamples);
+  const avoid = clean(avoidExamples);
+  if (!ideal.length && !avoid.length) return '';
+
+  const lines = ['', 'What this brand is looking for, in their own words:'];
+  if (ideal.length) lines.push('GOOD — creators like these:', ...ideal.map((t) => `  - ${t}`));
+  if (avoid.length) lines.push('BAD — creators like these are wrong for us:', ...avoid.map((t) => `  - ${t}`));
+  return lines.join('\n');
+}
+
 module.exports = {
+  statedTaste,
   collectExamples,
   renderCalibration,
   loadCalibration,
