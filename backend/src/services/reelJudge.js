@@ -203,6 +203,33 @@ function parseCreatorAnalysis(raw) {
 }
 
 /**
+ * The brand, as a brief — everything about WHO is buying, before anything about
+ * who might sell for them.
+ *
+ * Order is the point. Asked "does this creator fit?" with the brand described
+ * afterwards, a model reasons from the creator outwards and finds a way to make
+ * almost anyone fit. Given the brand first, it has something concrete to measure
+ * against, and "no" becomes an available answer.
+ *
+ * Returns '' when the campaign said nothing about itself, so a campaign that
+ * never filled this in is not handed a block of "(unspecified)" to reason from.
+ */
+function brandBrief(config = {}) {
+  const lines = [];
+  if (config.brandName) lines.push(`Brand: ${config.brandName}`);
+  if (config.brandProduct) lines.push(`What they sell: ${config.brandProduct}`);
+  if (config.brandBrief) lines.push('About the brand and product:', config.brandBrief);
+  if (config.targetAudience) lines.push(`Who they want to reach: ${config.targetAudience}`);
+  if (!lines.length) return '';
+  return ['── THE BRAND ─────────────────────────────', ...lines, ''].join('\n');
+}
+
+/** Is there enough brand context to ask the brand-fit question at all? */
+function hasBrandContext(config = {}) {
+  return !!(config.brandProduct || config.brandBrief || config.brandName);
+}
+
+/**
  * The profile prompt: what the creator's bio and grid LOOK like, what their
  * captions say, their reach, and one reel — the one our keyword actually
  * surfaced — watched and heard in full.
@@ -247,15 +274,14 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     `Target niche/genre: ${config.niche || '(unspecified)'}`,
     `Campaign keywords: ${(config.keywords || []).join(', ') || '(none)'}`,
     `Allowed genres: ${(config.genres || []).join(', ') || '(any)'}`,
-    `Brand target audience: ${config.targetAudience || '(unspecified)'}`,
-    `What the brand sells: ${config.brandProduct || '(unspecified)'}`,
     '',
+    brandBrief(config),
     // The question that actually decides whether an outreach is worth sending.
     // "Are they in the right niche" and "could they hold this product in a reel
     // without it looking bought" are different questions, and only the second
     // predicts whether a collaboration works. Asked only when the campaign said
     // what it sells — there is nothing to judge fit against otherwise.
-    ...(config.brandProduct ? [
+    ...(hasBrandContext(config) ? [
       'BRAND FIT — judge this specifically: could THIS creator feature the product',
       'above in one of their own reels and have it look native rather than a paid',
       'read? Consider what they already make, who watches them, and whether the',
@@ -572,6 +598,8 @@ function makeClassifier(deps = {}) {
 
 module.exports = {
   buildPrompt,
+  brandBrief,
+  hasBrandContext,
   buildCreatorPrompt,
   buildProfilePrompt,
   classifyWithGemini,

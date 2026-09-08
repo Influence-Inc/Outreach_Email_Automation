@@ -18,10 +18,15 @@
     .scout-wrap { max-width: 1040px; margin: 0 auto; padding: 24px 20px 64px; }
     .scout-grid { display: grid; grid-template-columns: 140px 1fr; gap: 12px 16px; align-items: center; }
     .scout-grid label { font-weight: 600; font-size: 13px; }
-    .scout-grid input, .scout-grid select, .scout-select {
+    .scout-grid input, .scout-grid select, .scout-grid textarea, .scout-select {
       width: 100%; padding: 8px 10px; border: 1px solid var(--border, #d9dbe0);
       border-radius: 8px; font: inherit; background: var(--card-bg, #fff); color: inherit;
     }
+    /* Only the multi-line field is tall, so it aligns to the top of its row
+       instead of floating centred against its label. */
+    .scout-grid textarea { resize: vertical; min-height: 76px; line-height: 1.45; }
+    .scout-grid textarea, .scout-grid label:has(+ textarea) { align-self: start; }
+    .scout-grid label:has(+ textarea) { padding-top: 9px; }
     .scout-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
     .scout-hint { color: #6b7280; font-size: 12px; margin: 4px 0 0; }
     .scout-status { margin: 12px 0; font-size: 13px; min-height: 18px; }
@@ -84,8 +89,15 @@
         <label for="ceiling">Max of range (ceiling)</label>
         <input id="ceiling" type="number" min="0" step="1000" placeholder="500000" />
 
+        <label for="brandName">Brand name</label>
+        <input id="brandName" type="text" placeholder="e.g. Velo Running" />
+
         <label for="brandProduct">What you're selling</label>
         <input id="brandProduct" type="text" placeholder="e.g. a carbon-plate racing shoe for sub-4 marathoners" />
+
+        <label for="brandBrief">Brand &amp; product details</label>
+        <textarea id="brandBrief" rows="4"
+          placeholder="Positioning, price, who it's for, and what a natural mention looks like &mdash; e.g. &quot;A GBP 280 carbon-plate shoe from a small running label. Buyers are amateur marathoners chasing a sub-4 time who train 5x a week. It fits naturally in a training-block vlog or a race recap; it would look bought in a generic gym-gear haul.&quot;"></textarea>
 
         <label for="risk">Risk level</label>
         <select id="risk">

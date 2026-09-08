@@ -167,6 +167,52 @@ both were:
   re-made downstream from the whole bundle, and the feed-reel verdict is kept
   alongside as `evidence.feedReelVerdict`.
 
+### Briefing the judge on the brand, before it sees the creator
+
+The question that decides whether an outreach is worth sending is not "is this
+creator in the right niche" — it is **"could this creator put this product in one
+of their own reels and have it look native rather than bought"**. Those are
+different questions, and only the second predicts whether a collaboration works.
+
+Order matters, so the brand goes in as a labelled brief **ahead of anything about
+the creator**. Asked "does this creator fit?" with the brand described afterwards,
+a model reasons outwards from the creator and finds a way to make almost anyone
+fit; given the brand first, it has something concrete to measure against and
+"no" becomes an available answer.
+
+Three fields on the Scout Creators page feed it:
+
+| Field | What it is for |
+| --- | --- |
+| **Brand name** | Who is buying. |
+| **What you're selling** | The product, in one line. |
+| **Brand & product details** | The room to say what a one-liner cannot: positioning, price tier, who it is for, what a natural mention looks like, and what would read as an ad. |
+
+It renders as:
+
+```
+── THE BRAND ─────────────────────────────
+Brand: Velo Running
+What they sell: a carbon-plate racing shoe
+About the brand and product:
+A GBP 280 shoe from a small running label. Buyers are amateur marathoners
+chasing a sub-4 time. It fits a training-block vlog or a race recap; it would
+look bought in a generic gym-gear haul.
+Who they want to reach: amateur marathoners 25-40
+
+BRAND FIT — could THIS creator feature the product above in one of their own
+reels and have it look native rather than a paid read? …
+```
+
+The answer lands in `brand_fit`, which carries the **largest single weight** in
+`creatorScore`, plus a `brand_fit_reason` you can read in the review queue. A
+creator in the right niche who could not plausibly hold the product scores low —
+which is the whole point.
+
+A campaign that filled none of this in sends **no brand block and no fit
+question** rather than a block of "(unspecified)": nothing to measure against is
+better handled by silence than by asking the model to guess.
+
 ### What the judge actually sees
 
 A creator is judged from an **evidence bundle**, in one multimodal call:
