@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { scout, scrollResults } = require('./sourcingNavigator');
+const { scout, scrollResults, MAX_KEYWORD_DEPTH } = require('./sourcingNavigator');
 
 function fakeDriver() {
   const ops = [];
@@ -1589,14 +1589,12 @@ test('an inconclusive on-device hint still lets the cloud prescreen decide', asy
 
 test('a keyword resumes at the depth the last run reached', async () => {
   const driver = driverWithSearch();
-  const views = [
-    ...OPEN_SEARCH,
-    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
-    // scrollResults reads once per screen it scrolls past.
-    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
-    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
-    { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } },
-  ];
+  // Each screen differs, so the page keeps moving and `atEnd` never fires.
+  const results = (n) => ({
+    screen: 'search_results', activeTab: 'for you',
+    results: [`row${n}`], targets: { back: BACK },
+  });
+  const views = [...OPEN_SEARCH, results(1), results(2), results(3), results(4), results(5)];
   const saved = [];
   const out = [];
   for await (const c of scout({
@@ -1607,10 +1605,68 @@ test('a keyword resumes at the depth the last run reached', async () => {
     deps: { saveDepth: async (term, depth) => saved.push([term, depth]) },
   })) out.push(c);
 
-  // Seeded at 2, so it scrolls before scouting rather than starting at the top.
+  // Seeded at 2, so it scrolls to the depth already read before scouting.
   assert.ok(driver.ops.filter((o) => o[0] === 'swipe').length >= 2, 'scrolled to the depth already read');
-  // And it records where it got to, for the run after this one.
   assert.ok(saved.some(([t, d]) => t === 'homegym' && d === 3), `depth advanced: ${JSON.stringify(saved)}`);
+});
+
+// The bug this cap exists for: depth grew on EVERY visit of every run and was
+// persisted, so run 20 opened by swiping twenty screens per keyword before it
+// scouted anybody, and eventually a whole run was spent scrolling.
+test('stored depth never grows past the ceiling', async () => {
+  const driver = driverWithSearch();
+  const results = (n) => ({
+    screen: 'search_results', activeTab: 'for you',
+    results: [`row${n}`], targets: { back: BACK },
+  });
+  const views = [...OPEN_SEARCH, ...Array.from({ length: 14 }, (_, i) => results(i))];
+  const saved = [];
+  for await (const c of scout({
+    driver,
+    config: { pacingMs: 0 },
+    read: scriptedRead(views),
+    // Already at the ceiling: the next value must wrap to the top, not become 9.
+    opts: { keywords: ['homegym'], max: 1, keywordDepth: { homegym: MAX_KEYWORD_DEPTH - 1 } },
+    deps: { saveDepth: async (term, depth) => saved.push([term, depth]) },
+  })) { /* drain */ }
+
+  assert.ok(saved.length, 'depth was written');
+  for (const [, d] of saved) assert.ok(d <= MAX_KEYWORD_DEPTH, `depth ${d} exceeded the ceiling`);
+  assert.ok(saved.some(([, d]) => d === 0), `wrapped to the top: ${JSON.stringify(saved)}`);
+});
+
+// A stored value written before the ceiling existed must not survive it.
+test('a depth stored above the ceiling is clamped on the way in', async () => {
+  const driver = driverWithSearch();
+  const views = [...OPEN_SEARCH, { screen: 'search_results', activeTab: 'for you', targets: { back: BACK } }];
+  for await (const c of scout({
+    driver,
+    config: { pacingMs: 0 },
+    read: scriptedRead(views),
+    opts: { keywords: ['homegym'], max: 1, keywordDepth: { homegym: 500 } },
+  })) { /* drain */ }
+  // 500 screens would be minutes of swiping; the ceiling bounds it.
+  assert.ok(
+    driver.ops.filter((o) => o[0] === 'swipe').length <= MAX_KEYWORD_DEPTH,
+    'a runaway stored depth cannot make the run scroll forever',
+  );
+});
+
+// Nothing below this page, so a deeper start next run would scroll to the same
+// bottom and find the same nobody.
+test('a keyword that hits the end of its results starts from the top next run', async () => {
+  const driver = driverWithSearch();
+  const same = { screen: 'search_results', activeTab: 'for you', results: ['row1'], targets: { back: BACK } };
+  const views = [...OPEN_SEARCH, same, same, same, same];
+  const saved = [];
+  for await (const c of scout({
+    driver,
+    config: { pacingMs: 0 },
+    read: scriptedRead(views),
+    opts: { keywords: ['homegym'], max: 1, keywordDepth: { homegym: 3 } },
+    deps: { saveDepth: async (term, depth) => saved.push([term, depth]) },
+  })) { /* drain */ }
+  assert.deepStrictEqual(saved.at(-1), ['homegym', 0], 'reset rather than pushed deeper');
 });
 
 test('skipping known creators still reports the run as alive', async () => {

@@ -111,6 +111,10 @@ function scaleLevel(v) {
 const PROFILE_RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
+    // Asked for FIRST so the model states what the reel IS before scoring it,
+    // and kept on the verdict so a reviewer can see what the judgement was
+    // actually looking at rather than only the number it produced.
+    video_description: { type: 'string' },
     niche_score: { type: 'number' },
     audience_match: { type: 'number' },
     genre: { type: 'string' },
@@ -140,7 +144,7 @@ const PROFILE_RESPONSE_SCHEMA = {
     recommended_campaign_types: { type: 'array', items: { type: 'string' } },
   },
   required: [
-    'niche_score', 'genre', 'reason', 'niche', 'content_format',
+    'video_description', 'niche_score', 'genre', 'reason', 'niche', 'content_format',
     'production_quality', 'creativity', 'hook_strength', 'brand_safety',
     'consistency_of_niche', 'fit_score',
   ],
@@ -267,9 +271,17 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     'You are given, in this order:',
     ...(media.length ? media : ['(no media — judge from the text below alone)']),
     '',
-    'Judge the CREATOR, not just the one reel: use the grid screenshot to see',
-    'whether the reel is typical of them or an outlier, and the bio screenshot to',
-    'see how they present themselves. Watch AND listen to the video — spoken topic,',
+    'FIRST, watch the video the whole way through and describe it: what happens',
+    'on screen, what is being said, the setting, and anything held or worn that a',
+    'brand could sit alongside. Put that in video_description BEFORE you score',
+    'anything. Describing it first is not busywork — a judgement made without',
+    'having said what the reel actually IS tends to fall back on the caption and',
+    'the handle, which is the mistake this whole pipeline exists to avoid.',
+    '',
+    'THEN judge the CREATOR, not just this one reel: use the grid screenshot to',
+    'see whether the reel is typical of them or an outlier, and the bio screenshot',
+    'to see how they present themselves. Weigh the video, the bio and the captions',
+    'TOGETHER against the brand and the target niche below — spoken topic,',
     'language and music matter as much as the visuals.',
     '',
     `Target niche/genre: ${config.niche || '(unspecified)'}`,
@@ -315,6 +327,7 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     'pages, meme aggregators and clip farms. reject_reason is null unless the',
     'creator should be dropped outright. fit_score is 0-100.',
     '{',
+    '  "video_description": "",',
     '  "niche_score": 0.0,',
     '  "audience_match": 0.0,',
     '  "genre": "",',
@@ -384,6 +397,10 @@ async function classifyProfile(candidate, config, deps = {}) {
     creatorAnalysis: creator,
     evidence: {
       source: 'gemini-profile',
+      // What the model said the reel actually was, before it scored
+      // anything. Kept so a reviewer can check the verdict against the
+      // video rather than taking the number on trust.
+      videoDescription: str(parsed.video_description) || null,
       genre: parsed.genre || clipAnalysis?.niche || null,
       audienceMatch: typeof parsed.audience_match === 'number' ? clamp01(parsed.audience_match) : null,
       language: parsed.language || clipAnalysis?.spoken_language || null,

@@ -45,6 +45,23 @@ function weightsOf(v) {
   return Object.keys(out).length ? out : undefined;
 }
 
+// How long the judge actually gets to watch.
+//
+// The reel is the strongest single signal about what a creator makes, and 12
+// seconds at 1 fps is twelve frames plus the audio — enough to see the subject,
+// hear the delivery, and read the room. Shorter than this and the judge is
+// guessing from a thumbnail with a soundtrack, which is the failure it exists to
+// avoid, so a too-small configured value is raised rather than honoured.
+const MIN_CLIP_SECONDS = 12;
+const MAX_CLIP_SECONDS = 60; // the recorder's own ceiling
+const DEFAULT_CLIP_SECONDS = 12;
+
+function clipSecondsOf(v) {
+  const n = num(v);
+  if (n == null) return DEFAULT_CLIP_SECONDS;
+  return Math.min(MAX_CLIP_SECONDS, Math.max(MIN_CLIP_SECONDS, Math.round(n)));
+}
+
 function buildConfig(defaults = {}, override = {}) {
   const merged = { ...(defaults || {}), ...(override || {}) };
   return {
@@ -87,7 +104,7 @@ function buildConfig(defaults = {}, override = {}) {
     reviewBand: num(merged.reviewBand),
     // 'reels' = explore/scroll reel-feed flow (watch+hear); else search→profile.
     discovery: merged.discovery === 'reels' ? 'reels' : '',
-    clipSeconds: num(merged.clipSeconds),
+    clipSeconds: clipSecondsOf(merged.clipSeconds),
     // How many of the creator's reels to actually WATCH (record + judge). This
     // config is a whitelist, so a knob missing here is silently dropped no matter
     // what the dashboard sends — which is exactly what happened to these three.
@@ -133,4 +150,7 @@ function buildConfig(defaults = {}, override = {}) {
   };
 }
 
-module.exports = { buildConfig, toKeywordList, weightsOf, RISKS, WEIGHT_KEYS };
+module.exports = {
+  buildConfig, toKeywordList, weightsOf, clipSecondsOf,
+  RISKS, WEIGHT_KEYS, MIN_CLIP_SECONDS, DEFAULT_CLIP_SECONDS,
+};

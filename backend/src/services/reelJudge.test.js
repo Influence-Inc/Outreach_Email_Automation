@@ -399,3 +399,37 @@ test('a campaign that stated no taste sends no taste section', () => {
   const p = reelJudge.buildProfilePrompt(profileCandidate, { niche: 'fitness' }, profileCandidate.shots);
   assert.ok(!/creators like these/.test(p));
 });
+
+// A judgement made without first saying what the reel IS tends to fall back on
+// the caption and the handle — which is the mistake the whole video pipeline
+// exists to avoid. So the description is asked for first, and required.
+test('the judge must describe the video before it scores anything', () => {
+  const p = reelJudge.buildProfilePrompt(profileCandidate, { niche: 'fitness' }, profileCandidate.shots);
+  assert.match(p, /FIRST, watch the video the whole way through and describe it/);
+  assert.match(p, /"video_description"/);
+  assert.ok(
+    p.indexOf('video_description') < p.indexOf('niche_score'),
+    'described before scored, in the schema the model fills in',
+  );
+  // And the campaign's own rules are what it weighs the description against.
+  assert.match(p, /TOGETHER against the brand and the target niche below/);
+});
+
+test('the description is kept on the verdict for review', async () => {
+  const gemini = {
+    available: () => true,
+    classifyReelVideo: async () => ({
+      ...profileVerdict,
+      video_description: 'A woman demonstrates three resistance-band exercises in a home garage, talking to camera.',
+    }),
+  };
+  const r = await reelJudge.classifyProfile(profileCandidate, { niche: 'fitness' }, { gemini });
+  assert.match(r.evidence.videoDescription, /resistance-band exercises in a home garage/);
+});
+
+test('a verdict with no description still scores, it just has none to show', async () => {
+  const gemini = { available: () => true, classifyReelVideo: async () => profileVerdict };
+  const r = await reelJudge.classifyProfile(profileCandidate, {}, { gemini });
+  assert.strictEqual(r.evidence.videoDescription, null);
+  assert.strictEqual(r.score, 0.86);
+});
