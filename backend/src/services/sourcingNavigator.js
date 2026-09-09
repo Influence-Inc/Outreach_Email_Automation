@@ -147,6 +147,17 @@ const REELS_PER_PROFILE = 12;
 // each costs a recording plus a Gemini call, so it does not grow past that.
 const CLIPS_PER_PROFILE = 3;
 
+// How far a keyword's stored depth may grow.
+//
+// Depth persists per (campaign, keyword) so a re-run resumes instead of
+// re-reading the top of a results page it has already worked. Unbounded, that
+// compounds: the number grows on EVERY visit of every run, so run 20 opens by
+// swiping twenty screens per keyword before it scouts anybody, and eventually a
+// whole run is spent scrolling. Past this many screens a results page has
+// nothing more to give a campaign anyway — start again from the top, where
+// Instagram has since put fresh content.
+const MAX_KEYWORD_DEPTH = 8;
+
 // Safety bound on the scroll loop — a grid that stops yielding new reels exits
 // earlier, this only caps a creator with a very long back catalogue.
 const MAX_REEL_SCROLLS = 6;
@@ -291,7 +302,12 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   // of them, so starting at 0 spent the opening minutes of every re-run
   // re-walking ground already covered before reaching anyone new.
   const startDepth = opts.keywordDepth || {};
-  const depthOf = new Map(terms.map((t) => [t, Number(startDepth[t]) || 0]));
+  const depthOf = new Map(terms.map((t) => {
+    // Clamp on the way IN as well: a campaign that ran before the ceiling
+    // existed can have a stored depth of 30 sitting in the table.
+    const stored = Number(startDepth[t]) || 0;
+    return [t, Math.min(Math.max(0, stored), MAX_KEYWORD_DEPTH)];
+  }));
   const saveDepth = deps.saveDepth || (async () => {});
   const exhausted = new Set();
   // Consecutive times a keyword could not even be typed. A transient missing
@@ -462,12 +478,22 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       }
     }
 
-    // Next time this keyword comes round, start one screen deeper.
-    depthOf.set(term, depth + 1);
+    // Next time this keyword comes round, start one screen deeper — but wrap
+    // back to the top rather than growing forever.
+    //
+    // `atEnd` means the page stopped moving: there is nothing below this, so a
+    // deeper start next run would scroll to the same bottom and find the same
+    // nobody. Both that and the ceiling reset to 0, because the top of a results
+    // page a week later is genuinely different content.
+    const nextDepth = (atEnd || depth + 1 >= MAX_KEYWORD_DEPTH) ? 0 : depth + 1;
+    if (nextDepth === 0 && depth > 0) {
+      log(`[sourcing] "${term}" reached ${atEnd ? 'the end of its results' : `the depth ceiling (${MAX_KEYWORD_DEPTH})`} — next run starts from the top`);
+    }
+    depthOf.set(term, nextDepth);
     // Persisted per keyword so the NEXT run starts here too, not just the next
     // pass of this one. Best-effort: a failed write only costs re-reading a
     // screen we have already read.
-    try { await saveDepth(term, depth + 1); } catch (_) { /* depth is an optimisation */ }
+    try { await saveDepth(term, nextDepth); } catch (_) { /* depth is an optimisation */ }
 
     // Retire the keyword only when BOTH are true: its results would not scroll
     // any further, and that deepest look found nobody new. Either alone is not
@@ -866,7 +892,7 @@ async function analyseProfile({
   } else if (recordClip) {
     clips = await captureReelClips({
       driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip,
-      reels, want: clipsWanted, view: gridView,
+      reels, want: clipsWanted, view: gridView, log,
     });
   } else {
     clips = [];
@@ -1040,6 +1066,7 @@ async function grabShot({ driver, kind }) {
 // recording must never cost the reach data we already have.
 async function recordAt({
   driver, point, pacingMs, jitterPx = 0, read = readView, clipSeconds = 12, getClip,
+  log = () => {},
 }) {
   if (!driver.recordClip || !point) return { clip: null, view: null };
 
@@ -1062,8 +1089,13 @@ async function recordAt({
     } else if (stored && stored.dataBase64) {
       clip = stored;
     }
-  } catch (_) {
-    /* recording is enrichment, never a reason to drop the candidate */
+  } catch (err) {
+    // Still not fatal — but no longer silent. A recorder that fails EVERY time
+    // (screen capture not granted on the phone is the usual cause) is
+    // indistinguishable, from the outside, from a scout that simply never
+    // watches anything: the candidate is judged on bio text and the reel appears
+    // to have been skipped. Say so, once per attempt.
+    log(`[sourcing] recording failed — judging without video: ${(err && err.message) || err}`);
   }
   // Back to the grid — but only as far as the grid, so a recording that never
   // opened the player does not press back out of the profile. The view it lands
@@ -1091,7 +1123,7 @@ async function recordAt({
  */
 async function captureReelClips({
   driver, read = readView, pacingMs, jitterPx = 0, screen, view: startView = null,
-  clipSeconds = 12, getClip, reels = [], want = CLIPS_PER_PROFILE,
+  clipSeconds = 12, getClip, reels = [], want = CLIPS_PER_PROFILE, log = () => {},
 }) {
   if (!driver.recordClip) return [];
   const wanted = new Map(pickClipTargets(reels, want).map((r) => [reelKey(r), r]));
@@ -1119,7 +1151,7 @@ async function captureReelClips({
       wanted.delete(reelKey(onScreen)); // consumed whether or not it records
       // eslint-disable-next-line no-await-in-loop
       const rec = await recordAt({
-        driver, point: onScreen.point, pacingMs, jitterPx, read, clipSeconds, getClip,
+        driver, point: onScreen.point, pacingMs, jitterPx, read, clipSeconds, getClip, log,
       });
       if (rec.clip) clips.push({ ...rec.clip, views: onScreen.views });
       if (rec.view) view = rec.view;
@@ -1264,4 +1296,5 @@ module.exports = {
   scrollResults,
   REELS_PER_PROFILE,
   CLIPS_PER_PROFILE,
+  MAX_KEYWORD_DEPTH,
 };

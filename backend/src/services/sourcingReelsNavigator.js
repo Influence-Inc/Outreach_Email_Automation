@@ -181,7 +181,10 @@ async function collectBatch({
         clip = stored;
       }
     } catch (err) {
-      warn('[reels] recordClip failed:', err.message);
+      // The usual cause is screen capture not being granted on the phone, which
+      // fails instantly and every time — so the scout looks like it is scrolling
+      // past reels without watching them, and every creator is judged on text.
+      warn(`[reels] recording failed — judging without video: ${err.message}`);
     }
 
     // Likes and comments live only on this screen, so they are read here or not

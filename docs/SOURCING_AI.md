@@ -272,6 +272,41 @@ A campaign that filled none of this in sends **no brand block and no fit
 question** rather than a block of "(unspecified)": nothing to measure against is
 better handled by silence than by asking the model to guess.
 
+### How long the judge watches, and what it does with it
+
+`clipSeconds` defaults to **12** and is **floored at 12** — a smaller configured
+value is raised rather than honoured. Twelve seconds at 1 fps is twelve frames
+plus the audio track: enough to see the subject, hear the delivery and read the
+room. Below that the judge is guessing from a thumbnail with a soundtrack, which
+is the failure the video exists to prevent. The recorder's own ceiling is 60s.
+
+The judge is asked to **describe the reel before it scores anything** —
+`video_description` is the first field in the schema and is required. A
+judgement made without first saying what the reel actually *is* tends to fall
+back on the caption and the handle, which is the mistake the whole video pipeline
+exists to avoid. The description is kept on the verdict
+(`evidence.videoDescription`) so a reviewer can check the score against the video
+rather than taking the number on trust.
+
+Only then does it weigh the **video, the bio screenshot and the captions
+together** against the campaign's brand brief, product, keywords and niche.
+
+> **If reels seem to flash past unwatched**, the recording is failing rather than
+> running short — most often screen capture not granted on the phone, which fails
+> instantly and every time. That used to be swallowed silently, leaving every
+> creator judged on bio text while looking like a scout that never watches
+> anything. Both paths now log
+> `recording failed — judging without video: <cause>`.
+
+### Keyword depth is bounded
+
+Depth persists per `(campaign, term)` so a re-run resumes instead of re-reading
+the top of a results page. It is capped at **8 screens**, and resets to 0 when a
+keyword reaches the end of its results. Unbounded it compounded — the number grew
+on every visit of every run, so run 20 opened by swiping twenty screens per
+keyword before scouting anybody, and eventually a whole run was spent scrolling.
+A value stored before the cap existed is clamped on the way in.
+
 ### What the judge actually sees
 
 A creator is judged from an **evidence bundle**, in one multimodal call:

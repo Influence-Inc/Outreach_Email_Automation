@@ -164,3 +164,18 @@ test('an unfilled brand brief is empty, not undefined', () => {
   assert.strictEqual(cfg.brandName, '');
   assert.strictEqual(cfg.brandBrief, '');
 });
+
+// Twelve seconds at 1 fps is twelve frames plus audio — enough to see the
+// subject and hear the delivery. Below that the judge is guessing from a
+// thumbnail with a soundtrack, which is the failure the video exists to avoid.
+test('a too-short clip length is raised to the minimum, not honoured', () => {
+  assert.strictEqual(buildConfig({}, {}).clipSeconds, 12, 'unset means 12');
+  assert.strictEqual(buildConfig({ clipSeconds: 3 }, {}).clipSeconds, 12);
+  assert.strictEqual(buildConfig({ clipSeconds: 0 }, {}).clipSeconds, 12);
+  assert.strictEqual(buildConfig({ clipSeconds: '' }, {}).clipSeconds, 12, 'a blank field is not zero seconds');
+});
+
+test('a longer clip is honoured, up to the recorder ceiling', () => {
+  assert.strictEqual(buildConfig({ clipSeconds: 20 }, {}).clipSeconds, 20);
+  assert.strictEqual(buildConfig({ clipSeconds: 999 }, {}).clipSeconds, 60, 'the recorder itself caps at 60');
+});
