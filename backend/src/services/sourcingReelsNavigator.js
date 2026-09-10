@@ -228,6 +228,10 @@ async function collectBatch({
       clip,
       likes: view.likes ?? null,
       comments: view.comments ?? null,
+      // The view count off the SAME screen as the likes. Without it the two
+      // cannot be compared, and "half a million views, 150 likes" reads as a
+      // hit rather than as bought reach.
+      views: view.views ?? null,
     };
     if (clip) {
       queue.submit(key, () => judge({ username: entry.username, caption: entry.caption, clip }, config));
@@ -295,8 +299,8 @@ async function handleCreator({
   const candidate = {
     username: entry.username,
     reels: entry.caption ? [{ caption: entry.caption }] : [],
-    engagement: (entry.likes != null || entry.comments != null)
-      ? { likes: entry.likes, comments: entry.comments }
+    engagement: (entry.likes != null || entry.comments != null || entry.views != null)
+      ? { likes: entry.likes, comments: entry.comments, views: entry.views }
       : undefined,
     evidence: { capturedAt: new Date().toISOString(), source: 'reels-feed' },
   };

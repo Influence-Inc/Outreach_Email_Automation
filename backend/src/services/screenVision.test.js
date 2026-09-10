@@ -603,3 +603,39 @@ test('a like count is still never mistaken for a view count', () => {
   const view = sv.readScreen({ elements: FIX('screen4-reel-feed.xml') });
   assert.ok(!(view.reels || []).some((r) => r.views === 42943), 'likes did not leak into reels');
 });
+
+// ── the view count on the player, for the bought-views ratio ────────────────
+
+// THE DANGEROUS MISREAD. "Like number is42943. View likes" contains a number
+// followed by the word "View" — read as a view count it would make a creator's
+// likes and their "views" the same number, i.e. a perfect 100% engagement
+// ratio, and the bought-views check would never fire on anyone.
+test('"View likes" is never mistaken for a view count', () => {
+  const view = sv.readScreen({ elements: FIX('screen4-reel-feed.xml') });
+  assert.strictEqual(view.screen, 'reels_feed');
+  assert.strictEqual(view.likes, 42943);
+  assert.strictEqual(
+    view.views, null,
+    'this build exposes no view count on the player — null, never the like count',
+  );
+});
+
+// Builds differ on whether the player carries a play count at all. When one
+// does, it is read; when it does not, search mode pairs the player's likes with
+// the view count the GRID already gave for that same reel.
+test('a play count on the player is read when the build exposes one', () => {
+  const elements = [
+    ...FIX('screen4-reel-feed.xml'),
+    { rid: 'com.instagram.android:id/video_view_count', text: '512K', desc: '', bounds: { x: 10, y: 10, w: 50, h: 20 } },
+  ];
+  const view = sv.readScreen({ elements });
+  assert.strictEqual(view.views, 512000);
+});
+
+test('a described play count is read too', () => {
+  const elements = [
+    ...FIX('screen4-reel-feed.xml'),
+    { rid: 'com.instagram.android:id/some_overlay', text: '', desc: 'View Count 1.2M', bounds: { x: 10, y: 10, w: 50, h: 20 } },
+  ];
+  assert.strictEqual(sv.readScreen({ elements }).views, 1200000);
+});
