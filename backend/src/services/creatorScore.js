@@ -90,6 +90,49 @@ const DEFAULT_MIN_BRAND_FIT = 4;
 // merely-average from the good. 0 disables it.
 const DEFAULT_MIN_ENGAGEMENT_RATE = 0.01;
 
+// Reaction floor as a share of the reel's own VIEWS — the bought-views check.
+//
+// A different question from the follower ratio above, and the one that actually
+// catches paid reach. Views are the cheapest thing on the platform to buy and
+// the reactions to them are not, so a reel with half a million views and 150
+// likes is not a popular reel: it is a bought number sitting on top of a small
+// real audience. Crucially, that creator can sail through the FOLLOWER ratio —
+// 150 likes against 10k real followers is a healthy-looking 1.5% — which is
+// exactly why reach fraud needs its own denominator.
+//
+// Published Reels medians put likes alone near 3.3% of views (about one like per
+// thirty). 0.5% is therefore very forgiving — roughly a sixth of typical — because
+// this is a HARD reject on a creator we may never look at again. It is set to
+// catch the indefensible (the example above lands at 0.03%, sixteen times under
+// this floor) rather than to sort the average from the good. 0 disables it.
+const DEFAULT_MIN_VIEW_ENGAGEMENT = 0.005;
+
+/**
+ * (likes + comments) / views for the reel we actually watched, or null when
+ * either half is unknown.
+ *
+ * Deliberately strict about what counts as measured: a missing view count makes
+ * this null rather than infinite, and a missing like count makes it null rather
+ * than zero. Guessing in either direction here rejects real creators.
+ */
+function viewEngagementRate({ engagement } = {}) {
+  const rawViews = engagement ? engagement.views : null;
+  if (rawViews == null) return null;
+  const views = Number(rawViews);
+  if (!Number.isFinite(views) || views <= 0) return null;
+
+  const rawLikes = engagement ? engagement.likes : null;
+  const rawComments = engagement ? engagement.comments : null;
+  const likes = rawLikes == null ? null : Number(rawLikes);
+  const comments = rawComments == null ? null : Number(rawComments);
+  const haveLikes = Number.isFinite(likes);
+  const haveComments = Number.isFinite(comments);
+  // A view count on its own says nothing about authenticity — the reactions are
+  // the whole signal, so without at least one of them there is no ratio to take.
+  if (!haveLikes && !haveComments) return null;
+  return ((haveLikes ? likes : 0) + (haveComments ? comments : 0)) / views;
+}
+
 /**
  * (likes + comments) / followers, or null when either half is unknown.
  *
@@ -169,6 +212,9 @@ function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null,
     ? config.minCreativity
     : DEFAULT_MIN_CREATIVITY;
   const minBrandFit = config.minBrandFit != null ? config.minBrandFit : DEFAULT_MIN_BRAND_FIT;
+  const minViewEngagement = config.minViewEngagementRate != null
+    ? config.minViewEngagementRate
+    : DEFAULT_MIN_VIEW_ENGAGEMENT;
   const minEngagement = config.minEngagementRate != null
     ? config.minEngagementRate
     : DEFAULT_MIN_ENGAGEMENT_RATE;
@@ -176,6 +222,10 @@ function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null,
   const stats = reelStats(reels);
   const measuredRate = engagementRate({ engagement, followers });
   stats.engagementRate = measuredRate == null ? null : round3(measuredRate);
+  // Reported whether or not it rejects, so a reviewer can see the ratio that a
+  // borderline creator was let through on.
+  const measuredViewRate = viewEngagementRate({ engagement });
+  stats.viewEngagementRate = measuredViewRate == null ? null : round3(measuredViewRate);
   const clipList = Array.isArray(clips) ? clips.filter(Boolean) : [];
 
   // A component is null when it could not be measured — NOT zero. Treating
@@ -229,6 +279,23 @@ function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null,
     return reject(`brand fit ${round3(brandFit)} below ${minBrandFit}`);
   }
 
+  // BOUGHT VIEWS: a reach number nobody reacted to.
+  //
+  // Checked before the follower ratio because it catches what that one cannot.
+  // A creator with 10k real followers, 500k bought views and 150 likes reads as
+  // a perfectly healthy 1.5% against their following, and as 0.03% against the
+  // views they are actually being sold on. The second number is the true one,
+  // and it is the number a campaign pays for.
+  //
+  // Only ever applied when the views AND at least one reaction count were really
+  // read — a missing view count is not evidence of anything.
+  if (minViewEngagement > 0 && measuredViewRate != null && measuredViewRate < minViewEngagement) {
+    return reject(
+      `${(measuredViewRate * 100).toFixed(3)}% of viewers reacted, below `
+      + `${(minViewEngagement * 100).toFixed(2)}% — views look bought`,
+    );
+  }
+
   // Bought reach and repost farms: plenty of followers, almost no one reacting.
   // Only ever applied when BOTH halves were actually read — an unread like count
   // is not evidence of an unengaged audience.
@@ -276,6 +343,8 @@ function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null,
 module.exports = {
   scoreCreator,
   engagementRate,
+  viewEngagementRate,
+  DEFAULT_MIN_VIEW_ENGAGEMENT,
   reelStats,
   DEFAULT_WEIGHTS,
   DEFAULT_PASS_THRESHOLD,

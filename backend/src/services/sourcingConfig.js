@@ -125,6 +125,12 @@ function buildConfig(defaults = {}, override = {}) {
     // (likes + comments) / followers. Catches bought reach and repost farms,
     // which reach alone cannot distinguish from a real audience. 0 disables it.
     minEngagementRate: num(merged.minEngagementRate),
+    // (likes + comments) / VIEWS — the bought-views check, and a different
+    // question from the ratio above. A creator with a small real following and a
+    // large purchased view count passes the follower ratio comfortably and fails
+    // this one, which is the number a campaign is actually paying for.
+    // 0 disables it. See creatorScore.DEFAULT_MIN_VIEW_ENGAGEMENT.
+    minViewEngagementRate: num(merged.minViewEngagementRate),
     // Free-text taste, stated up front rather than learned from decisions that
     // do not exist yet on a new campaign. See nicheCalibration.statedTaste.
     idealExamples: toKeywordList(merged.idealExamples),

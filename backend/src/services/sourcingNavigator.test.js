@@ -1901,3 +1901,76 @@ test('a recording that yields no bytes is logged, not swallowed', async () => {
   );
   assert.ok(out.length, 'the creator is still yielded — no video is not fatal');
 });
+
+// ── engagement capture in SEARCH mode ───────────────────────────────────────
+//
+// The grid carries view counts and the reel player carries likes and comments,
+// and until the player was read while we stood on it for the recording, search
+// mode set no engagement at all — so every fraud check that needs it was inert
+// on the default discovery path.
+
+test('search mode pairs the grid view count with the player likes', async () => {
+  const { analyseProfile } = require('./sourcingNavigator');
+  const driver = driverWithSearch();
+  const player = {
+    screen: 'reels_feed',
+    likes: 150,
+    comments: 35,
+    views: null, // this IG build exposes no play count on the player
+    targets: { back: BACK },
+  };
+  const views = [
+    { screen: 'profile', followers: 10000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 150, y: 700 }, 500000), targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 150, y: 700 }, 500000), targets: { back: BACK } },
+    player,
+    { screen: 'reels_tab', reels: gridOf({ x: 150, y: 700 }, 500000), targets: { back: BACK } },
+    ...Array(12).fill({ screen: 'reels_tab', reels: gridOf({ x: 150, y: 700 }, 500000), targets: { back: BACK } }),
+  ];
+  const profile = await analyseProfile({
+    driver,
+    pacingMs: 0,
+    read: scriptedRead(views),
+    screen: { width: 1080, height: 2400 },
+    clipsWanted: 1,
+    getClip: async () => ({ dataBase64: 'AAAA', mimeType: 'video/mp4' }),
+  });
+
+  assert.ok(profile.engagement, 'search mode now carries engagement at all');
+  assert.strictEqual(profile.engagement.likes, 150);
+  assert.strictEqual(profile.engagement.comments, 35);
+  assert.strictEqual(
+    profile.engagement.views, 500000,
+    'the player gave no view count, so the grid\'s number for that same reel was used',
+  );
+});
+
+// A reel whose VIEW count was never read cannot take part in a views-based
+// ratio — letting its likes into the numerator with no views in the denominator
+// would invent engagement that is not there.
+test('a reel with no readable view count contributes nothing to the ratio', async () => {
+  const { analyseProfile } = require('./sourcingNavigator');
+  const driver = driverWithSearch();
+  // A grid whose reels carry tap points but no view counts at all.
+  const grid = {
+    screen: 'reels_tab',
+    reels: Array.from({ length: 8 }, (_, i) => ({ point: { x: 150, y: 700 + i } })),
+    targets: { back: BACK },
+  };
+  const views = [
+    { screen: 'profile', followers: 10000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    grid, grid,
+    { screen: 'reels_feed', likes: 150, comments: 35, views: null, targets: { back: BACK } },
+    ...Array(12).fill(grid),
+  ];
+  const profile = await analyseProfile({
+    driver,
+    pacingMs: 0,
+    read: scriptedRead(views),
+    screen: { width: 1080, height: 2400 },
+    clipsWanted: 1,
+    getClip: async () => ({ dataBase64: 'AAAA', mimeType: 'video/mp4' }),
+  });
+
+  assert.strictEqual(profile.engagement, undefined, 'unmeasured, rather than a ratio built on a guess');
+});

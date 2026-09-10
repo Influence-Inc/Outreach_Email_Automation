@@ -641,6 +641,20 @@ function extractFeed(elements) {
   const likes = countFromRid(elements, ['like_count']);
   const comments = countFromRid(elements, ['comment_count']);
 
+  // Views, on the SAME screen as the likes — which is the whole point.
+  //
+  // The grid carries view counts and the player carries likes, so until this
+  // existed the two halves of "half a million views and 150 likes" were never on
+  // the same object and the ratio between them could not be taken. That ratio is
+  // the one thing that separates bought views from a real audience: views can be
+  // purchased cheaply, the reactions to them cannot.
+  //
+  // Read by rid first, falling back to the same "View Count 1.2M" / "1.2M views"
+  // desc shapes the grid parser matches, because builds differ on which of the
+  // two they expose here.
+  const views = countFromRid(elements, ['video_view_count', 'play_count', 'view_count'])
+    ?? viewsFromDescs(elements);
+
   return {
     author,
     caption,
@@ -649,8 +663,26 @@ function extractFeed(elements) {
     authorPoint,
     likes,
     comments,
+    views,
     sponsored: isSponsored(elements),
   };
+}
+
+// "View Count 1.2M" / "1.2M views" anywhere on the player, for builds that do
+// not expose a countable view rid. Null when nothing matches — an unread view
+// count must never reach the scorer as zero views, which would make every
+// creator look fraudulent.
+function viewsFromDescs(elements) {
+  const RE = /view\s*count[^\d]{0,3}(\d[\d,]*(?:\.\d+)?\s*[kmb]?)\b|(\d[\d,]*(?:\.\d+)?\s*[kmb]?)\s+views?\b/i;
+  for (const e of elements || []) {
+    const hay = `${(e && e.desc) || ''} ${(e && e.text) || ''}`.trim();
+    if (!hay) continue;
+    const m = hay.match(RE);
+    if (!m) continue;
+    const v = parseCount(m[1] || m[2]);
+    if (Number.isFinite(v)) return v;
+  }
+  return null;
 }
 
 // An ad, not a creator. The account behind a "Sponsored" reel is a brand buying
@@ -875,10 +907,13 @@ function readScreen(input = {}) {
     reading.alreadyLiked = feed.alreadyLiked;
     reading.alreadySaved = feed.alreadySaved;
     reading.sponsored = feed.sponsored;
-    // The engagement half of "100k views, 200 likes". Null (not 0) when the
-    // counts are not on screen, so an unread number never scores as no likes.
+    // Both halves of "100k views, 200 likes", read off the same screen so the
+    // ratio between them can actually be taken. Null (not 0) throughout, so an
+    // unread number never scores as no likes — or, worse, as no views, which
+    // would make every creator look like they had bought their reach.
     reading.likes = feed.likes;
     reading.comments = feed.comments;
+    reading.views = feed.views;
     add('like', SIGNALS.like);
     add('save', SIGNALS.save);
     add('share', SIGNALS.share);
