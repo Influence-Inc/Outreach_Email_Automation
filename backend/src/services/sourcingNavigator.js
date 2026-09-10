@@ -968,6 +968,7 @@ async function analyseProfile({
   // calls per creator to answer a question the search itself already answered,
   // and every one of them was another stretch of the phone being driven.
   let clips;
+  let engagements = [];
   if (sourceClip) {
     // A clip the caller already recorded. The gate exists to avoid SPENDING, not
     // to discard what has already been spent — throwing this away would lose the
@@ -976,10 +977,12 @@ async function analyseProfile({
   } else if (skipReason) {
     clips = [];
   } else if (recordClip) {
-    clips = await captureReelClips({
+    const captured = await captureReelClips({
       driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip,
       reels, want: clipsWanted, view: gridView, log,
     });
+    clips = captured.clips;
+    engagements = captured.engagements;
   } else {
     clips = [];
   }
@@ -1003,6 +1006,11 @@ async function analyseProfile({
     // Pixels of the bio and the reels grid. The judge reads these alongside the
     // captions and the example reel (services/reelJudge.js).
     shots: shots.length ? shots : undefined,
+    // Likes, comments and views totalled across the reels we actually opened —
+    // the numbers creatorScore compares to catch bought reach. Search mode never
+    // carried these before, so every engagement check was inert on the default
+    // discovery path.
+    engagement: totalEngagement(engagements) || undefined,
     evidence: {
       capturedAt: new Date().toISOString(),
       screens,
@@ -1129,6 +1137,42 @@ function shotsSoFar(...shots) {
 }
 
 /**
+ * Total the per-reel engagement readings into one set of counts.
+ *
+ * Summing rather than averaging, because the ratio taken from the totals is
+ * naturally weighted by reach — the reels with the most views dominate it, and
+ * those are exactly the ones bought views show up on. Averaging per-reel ratios
+ * would let a healthy 400-view reel cancel out a bought 500,000-view one.
+ *
+ * Only reels whose VIEW count was actually read contribute: a reel with likes
+ * but no view count cannot take part in a views-based ratio, and letting its
+ * likes into the numerator while its views stayed out of the denominator would
+ * invent engagement that is not there. Returns null when nothing qualified, so
+ * the checks downstream see "unmeasured" rather than a zero.
+ */
+function totalEngagement(readings) {
+  const usable = (readings || []).filter((e) => {
+    const v = Number(e && e.views);
+    return Number.isFinite(v) && v > 0;
+  });
+  if (!usable.length) return null;
+
+  let views = 0;
+  let likes = null;
+  let comments = null;
+  for (const e of usable) {
+    views += Number(e.views);
+    if (e.likes != null && Number.isFinite(Number(e.likes))) likes = (likes || 0) + Number(e.likes);
+    if (e.comments != null && Number.isFinite(Number(e.comments))) {
+      comments = (comments || 0) + Number(e.comments);
+    }
+  }
+  // Views alone prove nothing about authenticity — the reactions are the signal.
+  if (likes == null && comments == null) return null;
+  return { likes, comments, views };
+}
+
+/**
  * Can this creator already be ruled out from the reels visible right now?
  *
  * The view floor is normally ABSOLUTE — `floorTolerance` defaults to 0, so one
@@ -1190,6 +1234,30 @@ async function recordAt({
   if (!driver.recordClip || !point) return { clip: null, view: null };
 
   await humanTap(driver, point, jitterPx, pacingMs);
+
+  // The player is open, which is the ONLY screen carrying likes and comments —
+  // the grid has view counts and nothing else. Reading it here is what gives
+  // search mode an engagement signal at all; before this, candidate.engagement
+  // was never set outside reels mode, so every fraud check that depends on it
+  // was silently inert on the default discovery path.
+  //
+  // One extra screen read per recorded reel, on a screen we are standing on
+  // anyway, and entirely best-effort: a failed read leaves the counts null,
+  // which every downstream check reads as "unmeasured" rather than as zero.
+  let engagement = null;
+  try {
+    const player = await read(driver);
+    if (player && (player.likes != null || player.comments != null || player.views != null)) {
+      engagement = {
+        likes: player.likes ?? null,
+        comments: player.comments ?? null,
+        views: player.views ?? null,
+      };
+    }
+  } catch (_) {
+    /* enrichment only — never a reason to lose the recording */
+  }
+
   let clip = null;
   try {
     const rec = await driver.recordClip(clipSeconds);
@@ -1225,7 +1293,7 @@ async function recordAt({
     wanted: ['reels_tab', 'profile'],
     maxHops: 2,
   });
-  return { clip, view };
+  return { clip, view, engagement };
 }
 
 /**
@@ -1244,18 +1312,23 @@ async function captureReelClips({
   driver, read = readView, pacingMs, jitterPx = 0, screen, view: startView = null,
   clipSeconds = 12, getClip, reels = [], want = CLIPS_PER_PROFILE, log = () => {},
 }) {
-  if (!driver.recordClip) return [];
+  const nothing = { clips: [], engagements: [] };
+  if (!driver.recordClip) return nothing;
   const wanted = new Map(pickClipTargets(reels, want).map((r) => [reelKey(r), r]));
-  if (!wanted.size) return [];
+  if (!wanted.size) return nothing;
 
   const size = screen || { width: 1080, height: 2400 };
   const clips = [];
+  // The like / comment / view counts each opened player showed, one per reel we
+  // went into. Collected here because the player is the only screen that has
+  // them and we are already standing on it.
+  const engagements = [];
   let view = startView || await read(driver);
 
   // A reader that gives no tap points on a populated grid will not start giving
   // them out after a swipe, so scrolling to hunt for one is pure waste.
   const hasPoints = (v) => (Array.isArray(v && v.reels) ? v.reels : []).some((r) => r && r.point);
-  if (!hasPoints(view)) return [];
+  if (!hasPoints(view)) return nothing;
 
   let lastSeen = '';
   for (let i = 0; i <= MAX_REEL_SCROLLS && wanted.size; i += 1) {
@@ -1273,6 +1346,20 @@ async function captureReelClips({
         driver, point: onScreen.point, pacingMs, jitterPx, read, clipSeconds, getClip, log,
       });
       if (rec.clip) clips.push({ ...rec.clip, views: onScreen.views });
+      // Whatever the player showed for this reel. Kept even when the recording
+      // itself failed: the counts are the fraud signal and they cost nothing
+      // extra, so losing them because the recorder was unavailable would throw
+      // away the cheaper half of the evidence.
+      //
+      // The grid's OWN view count wins when the player did not report one —
+      // that is the same reel either way, and it is the number the reach gates
+      // already ran on.
+      if (rec.engagement) {
+        engagements.push({
+          ...rec.engagement,
+          views: rec.engagement.views ?? onScreen.views ?? null,
+        });
+      }
       if (rec.view) view = rec.view;
     }
     if (!wanted.size) break;
@@ -1301,7 +1388,10 @@ async function captureReelClips({
 
   // Best first, so `clip` (what everything predating multi-clip capture reads)
   // is the creator at their strongest.
-  return clips.sort((a, b) => (b.views || 0) - (a.views || 0));
+  return {
+    clips: clips.sort((a, b) => (b.views || 0) - (a.views || 0)),
+    engagements,
+  };
 }
 
 async function openAndCaptureProfile({

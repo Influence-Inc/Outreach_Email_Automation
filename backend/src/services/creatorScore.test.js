@@ -3,7 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { scoreCreator, reelStats, engagementRate, DEFAULT_PASS_THRESHOLD } = require('./creatorScore');
+const {
+  scoreCreator, reelStats, engagementRate, viewEngagementRate, DEFAULT_PASS_THRESHOLD,
+} = require('./creatorScore');
 
 // A creator the model likes, whose reels back it up.
 function strong(over = {}) {
@@ -429,4 +431,85 @@ test('the engagement floor is tunable, and 0 turns it off', () => {
   const ok = strong({ followers: 100000, engagement: { likes: 1500, comments: 0 } }); // 1.5%
   assert.strictEqual(scoreCreator(ok, {}).pass, true);
   assert.match(scoreCreator(ok, { minEngagementRate: 0.05 }).rejectReason, /engagement 1\.50%/);
+});
+
+// ── bought views ────────────────────────────────────────────────────────────
+//
+// Views are the cheapest thing on Instagram to buy and the reactions to them are
+// not, so the ratio between them is what separates a real hit from a purchased
+// number. This is a DIFFERENT question from the follower ratio: a creator with a
+// small genuine following and a large bought view count passes that one
+// comfortably, because their real followers really did react.
+
+test('half a million views with a couple of hundred likes is rejected', () => {
+  const r = scoreCreator(strong({
+    followers: 10000,
+    engagement: { views: 500000, likes: 150, comments: 35 },
+  }), {});
+  assert.strictEqual(r.pass, false);
+  assert.match(r.rejectReason, /views look bought/);
+});
+
+// The case the follower ratio cannot see, and the reason this check exists.
+test('bought views hide behind a healthy-looking follower ratio', () => {
+  const bought = { followers: 10000, engagement: { views: 500000, likes: 150, comments: 35 } };
+
+  // Against followers this creator looks fine — 185 reactions on 10k followers.
+  assert.ok(engagementRate(bought) >= 0.01, 'passes the follower ratio');
+  // Against the views they are actually sold on, they do not.
+  assert.ok(viewEngagementRate(bought) < 0.005, 'fails the view ratio');
+  assert.match(scoreCreator(strong(bought), {}).rejectReason, /views look bought/);
+});
+
+test('a normal creator is not touched by it', () => {
+  // ~4% of viewers reacting, around the published Reels median.
+  const r = scoreCreator(strong({
+    followers: 20000,
+    engagement: { views: 50000, likes: 1800, comments: 200 },
+  }), {});
+  assert.strictEqual(r.pass, true);
+  assert.strictEqual(r.rejectReason, null);
+});
+
+// The floor is deliberately forgiving — six times under the median still passes.
+// It exists to catch the indefensible, not to sort the average from the good.
+test('a quiet but plausible audience still passes', () => {
+  const r = scoreCreator(strong({
+    followers: 20000,
+    engagement: { views: 100000, likes: 700, comments: 40 },
+  }), {});
+  assert.strictEqual(r.pass, true, '0.74% of viewers reacted — low, but not fabricated');
+});
+
+// Same principle as every other gate here: silence is not an accusation.
+test('an unread view count is unmeasured, not fraudulent', () => {
+  assert.strictEqual(viewEngagementRate({ engagement: { likes: 150, comments: 35 } }), null);
+  assert.strictEqual(viewEngagementRate({ engagement: { views: null, likes: 150 } }), null);
+  const r = scoreCreator(strong({ engagement: { likes: 150, comments: 35 } }), {});
+  assert.ok(!/views look bought/.test(String(r.rejectReason)));
+});
+
+// Views with no reactions read at all is not evidence either — that is a failed
+// read of the like count, not a creator nobody reacted to.
+test('views with no reaction counts read at all is unmeasured', () => {
+  assert.strictEqual(viewEngagementRate({ engagement: { views: 500000 } }), null);
+  const r = scoreCreator(strong({ engagement: { views: 500000 } }), {});
+  assert.ok(!/views look bought/.test(String(r.rejectReason)));
+});
+
+test('the view-engagement floor is tunable, and 0 disables it', () => {
+  const bought = strong({ engagement: { views: 500000, likes: 150, comments: 35 } });
+  assert.match(scoreCreator(bought, {}).rejectReason, /views look bought/, 'on by default');
+  assert.ok(!/views look bought/.test(String(scoreCreator(bought, { minViewEngagementRate: 0 }).rejectReason)));
+  // A campaign that wants a stricter bar than the default can have one.
+  const quiet = strong({ engagement: { views: 100000, likes: 700, comments: 40 } });
+  assert.match(scoreCreator(quiet, { minViewEngagementRate: 0.02 }).rejectReason, /views look bought/);
+});
+
+test('the measured ratio is reported whether or not it rejects', () => {
+  const r = scoreCreator(strong({
+    followers: 20000,
+    engagement: { views: 50000, likes: 1800, comments: 200 },
+  }), {});
+  assert.strictEqual(r.stats.viewEngagementRate, 0.04);
 });
