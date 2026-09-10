@@ -483,9 +483,14 @@ test('an unasked brand fit has no level rather than a flattering default', () =>
   assert.strictEqual(reelJudge.parseClipAnalysis({ brand_fit: null }).brand_fit_level, null);
 });
 
-// Handles, links and free text the admin typed reach the judge BEFORE it sees a
-// candidate, so it knows what is wanted rather than inferring it from keywords.
-test('the admin\'s example creators reach the prompt on both sides', () => {
+// Handles, links and free text reach the judge BEFORE it sees a candidate, so
+// it knows what is wanted rather than inferring it from keywords.
+//
+// Both sides are still understood here even though the scouting page only asks
+// for the wanted one — a campaign configured through the API can still name an
+// avoid-list, and dropping support for it because one form stopped collecting
+// it would be removing a working capability for a UI change.
+test('example creators reach the prompt on both sides', () => {
   const p = reelJudge.buildProfilePrompt({ username: 'x' }, {
     niche: 'running',
     idealExamples: ['@marathonhandbook', 'coaches who film their own training, no studio lighting'],
@@ -501,4 +506,17 @@ test('the admin\'s example creators reach the prompt on both sides', () => {
 test('a campaign that named no examples is not handed an empty block to reason from', () => {
   const p = reelJudge.buildProfilePrompt({ username: 'x' }, { niche: 'running' }, []);
   assert.ok(!/GOOD — creators like these/.test(p));
+});
+
+// The common case now that the page only collects the wanted side: a GOOD list
+// and nothing else. The judge must not be handed a dangling "BAD" heading with
+// no entries under it.
+test('a wanted list with no avoid list produces only the GOOD block', () => {
+  const p = reelJudge.buildProfilePrompt({ username: 'x' }, {
+    niche: 'running',
+    idealExamples: ['@marathonhandbook', 'coaches who film their own training'],
+  }, []);
+  assert.match(p, /GOOD — creators like these/);
+  assert.match(p, /@marathonhandbook/);
+  assert.ok(!/BAD —/.test(p), 'no empty avoid heading');
 });

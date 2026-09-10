@@ -97,8 +97,12 @@ function readForm() {
     creatorPassThreshold: numOrUndef('creatorPassThreshold'),
     // The example creators, as typed. Newline-separated so a handle, a link and
     // a sentence can all sit on their own line; sourcingConfig splits them.
+    //
+    // Only the wanted side is asked for. The judge still understands an
+    // avoid-list (sourcingConfig and nicheCalibration both take one), it is
+    // simply not something this page collects — so nothing sets it, and the
+    // saved config stops carrying one the moment defaults are saved from here.
     idealExamples: el('idealExamples').value.trim(),
-    avoidExamples: el('avoidExamples').value.trim(),
     brandProduct: el('brandProduct').value.trim(),
     brandName: el('brandName').value.trim(),
     // The judge is briefed on the brand BEFORE it sees the creator, so this is
@@ -127,7 +131,6 @@ function fillForm(cfg) {
   el('maxProfiles').value = cfg.maxProfiles ?? '';
   el('creatorPassThreshold').value = cfg.creatorPassThreshold ?? 0.72;
   el('idealExamples').value = asLines(cfg.idealExamples);
-  el('avoidExamples').value = asLines(cfg.avoidExamples);
   el('brandProduct').value = cfg.brandProduct || '';
   el('brandName').value = cfg.brandName || '';
   el('brandBrief').value = cfg.brandBrief || '';
