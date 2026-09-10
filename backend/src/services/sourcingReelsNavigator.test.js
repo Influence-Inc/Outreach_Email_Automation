@@ -656,3 +656,88 @@ test('the skip can be turned off for a campaign that wants everything looked at'
 
   assert.deepStrictEqual(out.map((c) => c.username), ['chef']);
 });
+
+// ── the bought-views ratio in FEED mode ─────────────────────────────────────
+//
+// Feed mode records on the feed, so the profile visit never opened a reel from
+// the grid — leaving the grid's view counts with no reactions to be weighed
+// against, and the bought-views check inert on exactly the mode that most needs
+// it. One reel is now opened purely to read its counts.
+
+function gridOf(views, point = { x: 150, y: 700 }) {
+  return views.map((v, i) => ({ views: v, point: { x: point.x, y: point.y + i } }));
+}
+
+test('feed mode opens one grid reel to pair its likes with its view count', async () => {
+  const driver = fakeDriver();
+  driver.openProfile = async () => {};
+  const grid = { screen: 'reels_tab', reels: gridOf([500000, 480000, 520000, 510000, 495000, 505000, 490000]), targets: { back: { x: 3, y: 3 } } };
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    // The feed reel: likes and comments, but no view count on this build.
+    { screen: 'reels_feed', author: 'mia', caption: 'gym', likes: 150, comments: 35, views: null, targets: { like: { x: 9, y: 9 } } },
+    // The profile visit.
+    { screen: 'profile', followers: 10000, targets: { reelsTab: { x: 4, y: 5 }, back: { x: 3, y: 3 } } },
+    grid, grid,
+    // The sampled reel's player — same reel, so its grid view count pairs up.
+    { screen: 'reels_feed', likes: 150, comments: 35, views: null, targets: { back: { x: 3, y: 3 } } },
+    ...Array(10).fill(grid),
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver,
+    config: { pacingMs: 0, clipSeconds: 12 },
+    opts: { max: 1 },
+    read: scriptedRead(views),
+    deps: { getClip: async () => null },
+  })) out.push(c);
+
+  assert.strictEqual(out.length, 1);
+  assert.ok(out[0].engagement, 'feed mode now carries a complete set of counts');
+  assert.strictEqual(out[0].engagement.likes, 150);
+  assert.strictEqual(
+    out[0].engagement.views, 500000,
+    'the median grid reel\'s view count, paired with the likes read off that same reel',
+  );
+});
+
+// The whole point, end to end: those numbers are a rejection.
+test('a feed-mode creator with bought views is now caught', () => {
+  const { scoreCreator } = require('./creatorScore');
+  const r = scoreCreator({
+    creator: { fit_score: 85, consistency_of_niche: 9 },
+    clips: [{ creativity: 8, hook_strength: 8, is_original_creator: true, brand_safety: 'safe' }],
+    reels: [{ views: 500000 }, { views: 480000 }, { views: 520000 }],
+    followers: 10000,
+    engagement: { likes: 150, comments: 35, views: 500000 },
+  }, {});
+  assert.strictEqual(r.pass, false);
+  assert.match(r.rejectReason, /views look bought/);
+});
+
+// Turning the check off turns off its cost — no point spending a tap, a read
+// and a back press per creator to compute a ratio nothing will look at.
+test('disabling the check skips the extra reel open entirely', async () => {
+  const driver = fakeDriver();
+  driver.openProfile = async () => {};
+  const grid = { screen: 'reels_tab', reels: gridOf([500000, 480000, 520000, 510000, 495000, 505000, 490000]), targets: { back: { x: 3, y: 3 } } };
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    { screen: 'reels_feed', author: 'mia', caption: 'gym', likes: 150, comments: 35, views: null, targets: { like: { x: 9, y: 9 } } },
+    { screen: 'profile', followers: 10000, targets: { reelsTab: { x: 4, y: 5 }, back: { x: 3, y: 3 } } },
+    grid, grid,
+    ...Array(10).fill(grid),
+  ];
+  for await (const _c of scoutReels({
+    driver,
+    config: { pacingMs: 0, clipSeconds: 12, minViewEngagementRate: 0 },
+    opts: { max: 1 },
+    read: scriptedRead(views),
+    deps: { getClip: async () => null },
+  })) { /* drain */ }
+
+  assert.strictEqual(
+    driver.ops.filter((o) => o[0] === 'tap' && o[1] === 150).length, 0,
+    'no grid reel was opened',
+  );
+});
