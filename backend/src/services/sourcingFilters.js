@@ -216,6 +216,38 @@ function keywordNicheScore(candidate, config) {
   return round3(Math.min(1, 0.4 + 0.6 * (hits / kws.length)));
 }
 
+// A caption has to say THIS much before its silence about our keywords means
+// anything. "day 47 🔥" is a perfectly on-niche fitness caption that mentions no
+// keyword at all; a full paragraph about something else is a different matter.
+const OFF_NICHE_MIN_CAPTION_CHARS = 40;
+
+/**
+ * Is this reel CLEARLY about something else?
+ *
+ * Used on the reels FEED, where the caption is the only thing readable before a
+ * clip is recorded, to skip reels that plainly have nothing to do with the
+ * campaign — an ad-free feed still serves plenty of cooking to a running
+ * campaign, and each one costs a 12-second recording and a multimodal call to
+ * discover that.
+ *
+ * Deliberately timid, in the same spirit as nichePrescreen: it answers "clearly
+ * not" or "no opinion", never "probably not".
+ *   - no keywords configured  -> no opinion (nothing to compare against)
+ *   - short or absent caption -> no opinion (silence is not evidence)
+ *   - a substantial caption that mentions not one of our terms -> off-niche
+ *
+ * The caller must NOT mark a creator handled on the back of this. A skip here
+ * costs one swipe and the creator gets another chance the next time one of
+ * their reels comes round, which on a warmed feed is constantly.
+ */
+function looksOffNiche(caption, config = {}) {
+  const terms = normalizeKeywords(config);
+  if (!terms.length) return false;
+  const text = String(caption || '').trim().toLowerCase();
+  if (text.length < OFF_NICHE_MIN_CAPTION_CHARS) return false;
+  return !terms.some((t) => text.includes(t));
+}
+
 // AI niche classifier. Sends bio + recent captions (and reel thumbnails as images
 // when present) to Claude and asks for a 0–1 fit score. Returns null when Claude
 // is unavailable (no key / SDK / failure), so callers fall back to keywords.
@@ -419,6 +451,8 @@ module.exports = {
   matchesRisk,
   normalizeKeywords,
   keywordNicheScore,
+  looksOffNiche,
+  OFF_NICHE_MIN_CAPTION_CHARS,
   nicheMatch,
   defaultClassify,
   decide,

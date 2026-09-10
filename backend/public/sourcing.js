@@ -100,6 +100,8 @@ function readForm() {
     discovery: el('discovery').value,
     reviewBorderline: el('reviewBorderline').checked,
     prescreenNiche: el('prescreenNiche').checked,
+    skipOffNicheReels: el('skipOffNicheReels').checked,
+    warmFeed: el('warmFeed').checked,
   };
 }
 
@@ -124,6 +126,10 @@ function fillForm(cfg) {
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
   el('reviewBorderline').checked = !!cfg.reviewBorderline;
   el('prescreenNiche').checked = !!cfg.prescreenNiche;
+  // Defaults differ: skipping off-niche reels is on unless a campaign turned it
+  // off, warming the feed is off unless a campaign asked for it.
+  el('skipOffNicheReels').checked = cfg.skipOffNicheReels !== false;
+  el('warmFeed').checked = !!cfg.warmFeed;
 }
 
 function campaignId() { return el('campaign').value; }
@@ -170,7 +176,14 @@ async function startRun() {
     setStatus('Starting run…');
     const run = await api('/api/sourcing/runs', {
       method: 'POST',
-      body: JSON.stringify({ campaign_id: campaignId(), config: readForm() }),
+      body: JSON.stringify({
+        campaign_id: campaignId(),
+        // Empty means "any available device" — the run stays unpinned and the
+        // first phone to ask for work takes it, which is how every run behaved
+        // before the picker existed.
+        host_id: el('runHost').value || null,
+        config: readForm(),
+      }),
     });
     currentRun = run;
     setStatus(`Run #${run.id} started.`, 'ok');
@@ -337,6 +350,7 @@ async function loadHosts() {
     const rows = await api('/api/sourcing/hosts');
     latestHosts = rows;
     populateWatchHosts(rows);
+    populateRunHosts(rows);
     const tb = el('hosts-rows');
     tb.innerHTML = '';
     for (const h of rows) {
@@ -429,6 +443,34 @@ let watchDims = { width: 0, height: 0 };
 function setWatchStatus(msg, kind) {
   const s = el('watch-status');
   if (s) { s.textContent = msg || ''; s.className = 'scout-status' + (kind ? ' ' + kind : ''); }
+}
+
+/**
+ * The "scout on device" picker.
+ *
+ * Only active hosts are offered — a revoked or stale one cannot pick up work,
+ * and the backend refuses a run pinned to it anyway. A device already scouting
+ * is still listed but labelled, because the run just queues behind the one it
+ * is on rather than being rejected.
+ */
+function populateRunHosts(rows) {
+  const sel = el('runHost');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const any = document.createElement('option');
+  any.value = ''; any.textContent = 'Any available device';
+  sel.appendChild(any);
+  for (const h of rows.filter((r) => r.status === 'active')) {
+    const o = document.createElement('option');
+    o.value = String(h.id);
+    o.textContent = `#${h.id} ${h.label}${h.sessionActive ? ' · busy' : ''}`;
+    sel.appendChild(o);
+  }
+  // Keep the admin's choice across the 10s host refresh, unless that device has
+  // gone away — in which case fall back to "any" rather than silently holding a
+  // selection that is no longer on the list.
+  sel.value = prev && [...sel.options].some((o) => o.value === prev) ? prev : '';
 }
 
 function populateWatchHosts(rows) {

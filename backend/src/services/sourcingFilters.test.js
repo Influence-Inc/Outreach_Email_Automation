@@ -256,3 +256,43 @@ test("risk 'all' is case-insensitive and still gates the other levels", () => {
   assert.strictEqual(F.matchesRisk('high', 'low'), false, 'low is still strict');
   assert.strictEqual(F.matchesRisk('low', 'low'), true);
 });
+
+// ── looksOffNiche: the feed's cheapest possible rejection ────────────────────
+//
+// Used before a clip is recorded, from the caption alone. It answers "clearly
+// not" or "no opinion" — never "probably not" — because the caller skips the
+// reel on the back of it.
+
+const OFF_NICHE_CONFIG = { niche: 'running', keywords: ['marathon', '5k'] };
+
+test('a substantial caption that mentions none of our terms is off-niche', () => {
+  const caption = 'Slow-braised short rib with a red wine reduction, the recipe '
+    + 'that took me three years to get right in my own kitchen.';
+  assert.strictEqual(F.looksOffNiche(caption, OFF_NICHE_CONFIG), true);
+});
+
+test('a substantial caption that mentions any term is not off-niche', () => {
+  const caption = 'Everything I ate the week before my first marathon, including '
+    + 'the meal I regret the most the night before the start line.';
+  assert.strictEqual(F.looksOffNiche(caption, OFF_NICHE_CONFIG), false);
+});
+
+// Silence is not evidence. "day 47 🔥" is a perfectly on-niche fitness caption
+// that mentions no keyword at all, and skipping it would lose a real creator.
+test('a short caption is never enough to skip a reel', () => {
+  assert.strictEqual(F.looksOffNiche('day 47 🔥', OFF_NICHE_CONFIG), false);
+  assert.strictEqual(F.looksOffNiche('', OFF_NICHE_CONFIG), false);
+  assert.strictEqual(F.looksOffNiche(null, OFF_NICHE_CONFIG), false);
+  assert.strictEqual(F.looksOffNiche(undefined, OFF_NICHE_CONFIG), false);
+});
+
+test('with no niche or keywords configured there is nothing to compare against', () => {
+  const caption = 'Slow-braised short rib with a red wine reduction, three years in the making.';
+  assert.strictEqual(F.looksOffNiche(caption, {}), false);
+});
+
+test('matching is case-insensitive', () => {
+  const caption = 'The MARATHON build-up block that finally worked for me after '
+    + 'several years of getting this exact thing wrong.';
+  assert.strictEqual(F.looksOffNiche(caption, OFF_NICHE_CONFIG), false);
+});

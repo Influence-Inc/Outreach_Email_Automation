@@ -575,10 +575,71 @@ test('analyseProfile photographs the bio and the reels grid', async () => {
     recordClip: false,
   });
 
-  // One of the bio (before leaving the header) and one of the grid (at its top).
+  // One of the bio and one of the grid (at its top).
   assert.deepStrictEqual(profile.shots.map((s) => s.kind), ['bio', 'reels_grid']);
-  assert.deepStrictEqual(profile.shots.map((s) => s.dataBase64), ['SHOT1', 'SHOT2']);
   assert.deepStrictEqual(profile.evidence.shotsCaptured, ['bio', 'reels_grid']);
+  // The GRID is photographed first, whatever order the bundle is assembled in:
+  // reach is the one thing on this screen that is free to read and fatal to
+  // fail, so it is looked at before another round-trip is spent on the bio.
+  assert.deepStrictEqual(
+    profile.shots.map((s) => s.dataBase64), ['SHOT2', 'SHOT1'],
+    'the reels grid was captured before the bio',
+  );
+});
+
+// The floor is absolute by default, so one below-floor reel on the FIRST screen
+// of the grid is already the whole answer — scrolling the rest of the window and
+// photographing the bio are spent proving something already settled.
+test('a creator under the floor on the first screen costs no bio shot and no grid scroll', async () => {
+  const { analyseProfile } = require('./sourcingNavigator');
+  const driver = driverWithSearch();
+  const kinds = [];
+  driver.screenshot = async () => { kinds.push('shot'); return { mediaType: 'image/png', dataBase64: 'SHOT' }; };
+  const views = [
+    { screen: 'profile', bio: 'chef', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 10 }, { views: 20 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 10 }, { views: 20 }], targets: { back: BACK } },
+  ];
+  const profile = await analyseProfile({
+    driver,
+    pacingMs: 0,
+    read: scriptedRead(views),
+    screen: { width: 1080, height: 2400 },
+    config: { floor: 50000 },
+    recordClip: false,
+  });
+
+  assert.strictEqual(kinds.length, 1, 'only the grid was photographed — no bio round-trip');
+  assert.deepStrictEqual(profile.evidence.shotsCaptured, ['reels_grid']);
+  assert.match(profile.evidence.notRecorded, /below floor/);
+  assert.strictEqual(
+    driver.ops.filter((o) => o[0] === 'swipe').length, 0,
+    'the rest of the grid was never scrolled',
+  );
+});
+
+// A campaign that bought itself slack is saying some reels MAY sit under the
+// floor — which cannot be judged until the whole window is in.
+test('a floorTolerance disables the first-screen shortcut', async () => {
+  const { analyseProfile } = require('./sourcingNavigator');
+  const driver = driverWithSearch();
+  let shots = 0;
+  driver.screenshot = async () => { shots += 1; return { mediaType: 'image/png', dataBase64: 'SHOT' }; };
+  const views = [
+    { screen: 'profile', bio: 'chef', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 10 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 10 }], targets: { back: BACK } },
+  ];
+  await analyseProfile({
+    driver,
+    pacingMs: 0,
+    read: scriptedRead(views),
+    screen: { width: 1080, height: 2400 },
+    config: { floor: 50000, floorTolerance: 2 },
+    recordClip: false,
+  });
+
+  assert.strictEqual(shots, 2, 'both pictures were taken — the window still had to be read');
 });
 
 test('a host too old to take screenshots still yields a candidate', async () => {
@@ -1690,4 +1751,77 @@ test('skipping known creators still reports the run as alive', async () => {
 
   assert.strictEqual(out.length, 0, 'nothing yielded — the sweeper would have seen silence');
   assert.ok(beats >= 1, 'but the run said it was still working');
+});
+
+// ── not re-opening cards this run already went into ─────────────────────────
+//
+// A grid card carries no handle, so "have we been here before" can only be
+// asked of the card. Opening one costs a tap, a read, a hop into the player and
+// a press back — all of it wasted when it turns out to be a creator this run
+// already scouted.
+
+test('a page whose cards were all opened already is scrolled past, not re-tapped', async () => {
+  const driver = driverWithSearch();
+  // Both visits show the SAME single card. The first visit opens it; the second
+  // must scroll rather than tap it again.
+  const card = {
+    screen: 'search_results',
+    activeTab: 'for you',
+    reelResults: [{ index: 0, label: 'alpha' }],
+    targets: { searchTab: { x: 1, y: 1 }, searchBox: { x: 1, y: 1 }, 'reelResult:0': { x: 5, y: 5 }, back: BACK },
+  };
+  // A fresh card only reachable by scrolling, so the run has somewhere to go.
+  const deeper = {
+    screen: 'search_results',
+    activeTab: 'for you',
+    reelResults: [{ index: 0, label: 'beta' }],
+    targets: { searchTab: { x: 1, y: 1 }, searchBox: { x: 1, y: 1 }, 'reelResult:0': { x: 5, y: 5 }, back: BACK },
+  };
+  const views = [
+    ...OPEN_SEARCH, card,
+    { screen: 'reels_feed', author: 'one', targets: { authorProfile: { x: 7, y: 7 }, back: BACK } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+    { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+    ...Array(40).fill(deeper),
+  ];
+  const out = [];
+  for await (const c of scout({
+    driver, config: { pacingMs: 0, maxProfiles: 3 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  })) out.push(c);
+
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'swipe' && o[1].y1 > o[1].y2),
+    'scrolled the results rather than re-opening a card it had already been into',
+  );
+});
+
+// The rule is ALL cards, not "the first couple": a page whose first card is
+// spent but whose second is new still has something worth having.
+test('a page with one new card among opened ones is still worked, not skipped', async () => {
+  const driver = driverWithSearch();
+  const mixed = {
+    screen: 'search_results',
+    activeTab: 'for you',
+    reelResults: [{ index: 0, label: 'alpha' }, { index: 1, label: 'gamma' }],
+    targets: {
+      searchTab: { x: 1, y: 1 },
+      searchBox: { x: 1, y: 1 },
+      'reelResult:0': { x: 5, y: 5 },
+      'reelResult:1': { x: 6, y: 6 },
+      back: BACK,
+    },
+  };
+  const views = [...OPEN_SEARCH, ...Array(40).fill(mixed)];
+  const out = [];
+  for await (const c of scout({
+    driver, config: { pacingMs: 0, maxProfiles: 2 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  })) out.push(c);
+
+  // Both tiles were opened on the first visit — the page was never skipped past
+  // on the strength of the first one alone.
+  assert.ok(
+    driver.ops.some((o) => o[0] === 'tap' && o[1] === 6 && o[2] === 6),
+    'the second, unopened card was still tapped',
+  );
 });
