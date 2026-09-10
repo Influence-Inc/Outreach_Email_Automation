@@ -192,11 +192,12 @@ test('components are reported so a decision can be explained', () => {
 
 // ── the craft floor ─────────────────────────────────────────────────────────
 
-// Creativity + hook are only 25% of the weighting between them, so a creator the
-// model loves on FIT clears the bar on fit + consistency + steadiness alone. That
-// is the "right keywords, low-quality content" case a weighted average cannot
-// express, and a floor can.
-test('poor craft is rejected however strong the fit', () => {
+// There is no craft floor by default any more. A plainly-shot creator who fits
+// the brand is a real option — plenty of useful UGC is plainly shot — and a hard
+// floor removed them from the shortlist before anyone could weigh that up.
+// Creativity still carries 20% of the blend, so weak craft costs a creator
+// score; it just no longer deletes them.
+test('low creativity is not rejected by default — it only costs score', () => {
   const r = scoreCreator(strong({
     creator: { fit_score: 100, consistency_of_niche: 10 },
     clips: [
@@ -204,27 +205,24 @@ test('poor craft is rejected however strong the fit', () => {
       { creativity: 4, hook_strength: 4, is_original_creator: true },
     ],
   }), {});
-  assert.strictEqual(r.pass, false);
-  assert.match(r.rejectReason, /creativity 3\.5 below 5/);
+  assert.ok(
+    !/creativity/.test(String(r.rejectReason)),
+    'no longer rejected for craft alone',
+  );
+  // And the number is still reported, so the shortlist can say how creative
+  // they were rather than silently dropping them.
+  assert.strictEqual(r.components.creativity, 0.35);
 });
 
-test('the craft floor is a floor, not a rounding of the blend', () => {
-  // Mean creativity 5 exactly — at the floor, so it survives and is judged on
-  // the weighted score like anything else.
-  const at = scoreCreator(strong({
-    clips: [{ creativity: 5, hook_strength: 8, is_original_creator: true }],
-  }), {});
-  assert.ok(!/creativity/.test(String(at.rejectReason)), 'exactly at the floor is not rejected by it');
-});
-
-test('the craft floor is tunable, and 0 disables it', () => {
+test('the craft floor is opt-in, and still works when a run asks for one', () => {
   const weak = strong({
     creator: { fit_score: 100, consistency_of_niche: 10 },
     clips: [{ creativity: 2, hook_strength: 9, is_original_creator: true }],
   });
-  assert.match(scoreCreator(weak, {}).rejectReason, /creativity/, 'rejected by default');
+  assert.ok(!/creativity/.test(String(scoreCreator(weak, {}).rejectReason)), 'off by default');
   assert.ok(!/creativity/.test(String(scoreCreator(weak, { minCreativity: 0 }).rejectReason)));
   assert.match(scoreCreator(weak, { minCreativity: 9 }).rejectReason, /below 9/);
+  assert.match(scoreCreator(weak, { minCreativity: 5 }).rejectReason, /creativity 2 below 5/);
 });
 
 // Same principle as the originality flag: silence is not an accusation.

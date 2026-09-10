@@ -118,7 +118,7 @@ function fillForm(cfg) {
   el('clipsPerProfile').value = cfg.clipsPerProfile ?? 3;
   el('maxProfiles').value = cfg.maxProfiles ?? '';
   el('creatorPassThreshold').value = cfg.creatorPassThreshold ?? 0.72;
-  el('minCreativity').value = cfg.minCreativity ?? 5;
+  el('minCreativity').value = cfg.minCreativity ?? 0;
   el('minBrandFit').value = cfg.minBrandFit ?? 4;
   el('brandProduct').value = cfg.brandProduct || '';
   el('brandName').value = cfg.brandName || '';
@@ -240,6 +240,26 @@ function viewRange(reels) {
   return `${fmt(Math.min(...vs))}–${fmt(Math.max(...vs))}`;
 }
 
+/**
+ * The judge's creativity verdict, as the word it used.
+ *
+ * Nothing is rejected for low craft, so plainly-shot creators reach this table
+ * on purpose — and the level is what makes that legible rather than confusing.
+ * Dug out of the evidence bundle, which is where the per-clip analysis lands;
+ * a candidate rejected before it was ever judged simply has none.
+ */
+function creativityOf(c) {
+  const ev = (c && c.evidence) || null;
+  if (!ev) return '—';
+  const clip = (ev.niche && ev.niche.clip)
+    || (ev.niche && Array.isArray(ev.niche.clipAnalyses) && ev.niche.clipAnalyses[0])
+    || ev.clip
+    || null;
+  if (!clip) return '—';
+  if (clip.creativity_level) return escapeHtml(clip.creativity_level);
+  return clip.creativity == null ? '—' : escapeHtml(String(clip.creativity));
+}
+
 function renderCandidates(rows) {
   const tb = el('cand-rows');
   tb.innerHTML = '';
@@ -249,12 +269,12 @@ function renderCandidates(rows) {
     const risk = c.risk_profile || '—';
     tr.innerHTML = `
       <td>${handleLink(c.username)}</td>
-      <td>${fmt(c.followers)}</td>
       <td>${viewRange(c.reels)}</td>
       <td>${niche}</td>
+      <td>${creativityOf(c)}</td>
       <td>${risk === '—' ? '—' : `<span class="pill ${risk}">${risk}</span>`}</td>
       <td><span class="pill ${c.decision}">${c.decision}</span></td>
-      <td>${c.reject_reason || ''}</td>`;
+      <td>${escapeHtml(c.reject_reason || '')}</td>`;
     tb.appendChild(tr);
   }
 }

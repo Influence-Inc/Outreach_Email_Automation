@@ -433,3 +433,37 @@ test('a verdict with no description still scores, it just has none to show', asy
   assert.strictEqual(r.evidence.videoDescription, null);
   assert.strictEqual(r.score, 0.86);
 });
+
+// ── the creativity LEVEL, reported alongside the number ─────────────────────
+//
+// Nothing is rejected for low craft any more, so plainly-shot creators reach the
+// shortlist on purpose. The level in words is what makes that legible — "2" next
+// to a score says nothing a reviewer can act on; "derivative" does.
+
+test('the model\'s own creativity word is carried through as creativity_level', () => {
+  const clip = reelJudge.parseClipAnalysis({
+    niche: 'running', creativity: 'derivative', hook_strength: 'competent',
+  });
+  assert.strictEqual(clip.creativity_level, 'derivative');
+  assert.strictEqual(clip.creativity, 2, 'and still scores as a number for the gate');
+});
+
+test('a numeric score still reports the nearest level, so both prompts report one', () => {
+  assert.strictEqual(reelJudge.parseClipAnalysis({ creativity: 10 }).creativity_level, 'exceptional');
+  assert.strictEqual(reelJudge.parseClipAnalysis({ creativity: 8 }).creativity_level, 'distinctive');
+  assert.strictEqual(reelJudge.parseClipAnalysis({ creativity: 5 }).creativity_level, 'competent');
+  assert.strictEqual(reelJudge.parseClipAnalysis({ creativity: 1 }).creativity_level, 'derivative');
+});
+
+test('an unjudged creativity has no level rather than a flattering default', () => {
+  assert.strictEqual(reelJudge.parseClipAnalysis({ niche: 'running' }).creativity_level, null);
+  assert.strictEqual(reelJudge.parseClipAnalysis({ creativity: null }).creativity_level, null);
+});
+
+// The instruction has to carry the "low is a real answer" rule too, not just the
+// code around it — a judge that softens every verdict makes the level useless.
+test('the prompt tells the judge that low creativity is a legitimate answer', () => {
+  const p = reelJudge.buildProfilePrompt({ username: 'x' }, { niche: 'running' }, []);
+  assert.match(p, /not a bar to clear/i);
+  assert.match(p, /is not dropped for it/i);
+});

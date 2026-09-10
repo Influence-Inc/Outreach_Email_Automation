@@ -56,16 +56,19 @@ const DEFAULT_PASS_THRESHOLD = 0.72;
 // single outlier rather than a real audience.
 const DEFAULT_MAX_SPIKE = 12;
 
-// Craft has a floor, checked separately from the weighted score.
+// Craft has no floor by default.
 //
-// Creativity and hook together carry only 25% of the weighting, so a creator the
-// model rates highly on FIT but poorly on craft still clears the threshold on
-// fit + consistency + steadiness alone — which is exactly the "right keywords,
-// low-quality content" case that kept getting through. A weighted average cannot
-// express "no amount of topical fit rescues bad content"; a floor can.
+// It used to sit at 5, on the reasoning that no amount of topical fit should
+// rescue bad content. That was the wrong instrument: a low-creativity creator
+// who fits the brand is a real, sometimes preferable option — plenty of
+// genuinely useful UGC is plainly shot — and a hard floor removed them from the
+// shortlist before anyone could weigh that up. The creativity SCORE still
+// carries 20% of the weighted blend and is reported on every candidate, so a
+// low-craft creator surfaces WITH their level stated rather than disappearing.
 //
-// 0 disables it, for a run that would rather judge on the blend alone.
-const DEFAULT_MIN_CREATIVITY = 5;
+// Set a value per-run to bring the floor back for a campaign that genuinely
+// cannot use plain content.
+const DEFAULT_MIN_CREATIVITY = 0;
 
 // Brand fit is a new judgement and its calibration is unproven, so the default
 // floor rejects only a clearly implausible pairing rather than trying to be
@@ -207,9 +210,11 @@ function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null,
 
   if (clipList.some((c) => c.brand_safety === 'unsafe')) return reject('brand unsafe');
 
-  // A craft floor, independent of the blend. Only applied when the analysis
-  // actually scored creativity — an unjudged creator is not accused of being
-  // uncreative, same principle as the originality flag above.
+  // An OPT-IN craft floor, independent of the blend. Off by default: a
+  // low-creativity creator who fits the brand belongs on the shortlist with
+  // their level stated, not removed from it. Only applied when a run asked for
+  // a floor AND the analysis actually scored creativity — an unjudged creator
+  // is not accused of being uncreative, same principle as the originality flag.
   const creativity = meanOf(clipList, 'creativity');
   if (minCreativity > 0 && creativity != null && creativity < minCreativity) {
     return reject(`creativity ${round3(creativity)} below ${minCreativity}`);

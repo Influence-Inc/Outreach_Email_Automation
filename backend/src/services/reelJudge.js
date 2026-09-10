@@ -101,6 +101,31 @@ function scaleLevel(v) {
   return scale10(v);
 }
 
+/**
+ * The LEVEL as a word, for reporting rather than scoring.
+ *
+ * Nothing is rejected for low craft any more (see creatorScore.js), so a plainly
+ * shot creator reaches the shortlist — and the only thing that makes that useful
+ * rather than confusing is being able to see, at a glance, that the pipeline
+ * knows they are plainly shot. "derivative" says that; a 2 next to a 0.31 does
+ * not.
+ *
+ * Prefers the model's own word. Falls back to the nearest level when a numeric
+ * score came back instead, which is what the legacy per-clip prompt still asks
+ * for, so both paths report a level either way.
+ */
+function levelName(v) {
+  if (typeof v === 'string') {
+    const level = v.trim().toLowerCase();
+    if (CRAFT_LEVEL_VALUE[level] != null) return level;
+  }
+  const n = scale10(v);
+  if (n == null) return null;
+  return CRAFT_LEVELS.reduce((best, name) => (
+    Math.abs(CRAFT_LEVEL_VALUE[name] - n) < Math.abs(CRAFT_LEVEL_VALUE[best] - n) ? name : best
+  ), CRAFT_LEVELS[0]);
+}
+
 // The Gemini-side twin of the schema literal in buildProfilePrompt: every field
 // that literal promises, typed so the model's JSON is validated at generation
 // time instead of merely requested in prose. `brand_fit` / `brand_fit_reason`
@@ -171,6 +196,10 @@ function parseClipAnalysis(raw) {
     content_format: CONTENT_FORMATS.has(format) ? format : 'other',
     production_quality: scaleLevel(raw.production_quality),
     creativity: scaleLevel(raw.creativity),
+    // The same judgement as a word, carried alongside the number it scores as.
+    // Nothing is rejected for low craft, so this is what makes a plainly-shot
+    // creator legible on the shortlist instead of just a low number.
+    creativity_level: levelName(raw.creativity),
     hook_strength: scaleLevel(raw.hook_strength),
     brand_safety: BRAND_SAFETY.has(safety) ? safety : 'caution',
     // Only a real boolean counts. Absent means "not judged", which the scorer
@@ -316,6 +345,14 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     // Taste the brand stated up front. Matters most on a new campaign, which has
     // no approve/reject history to learn from yet — see nicheCalibration.statedTaste.
     statedTaste(config),
+    '',
+    // Nothing is rejected for low craft (see creatorScore.js), so the model has
+    // no reason to soften this one — and every reason not to. A "competent" put
+    // on genuinely derivative work is the reading that makes the shortlist
+    // useless, because it is indistinguishable from real competence.
+    'creativity is a DESCRIPTION, not a bar to clear. A plainly-shot creator is',
+    'still a usable one and is not dropped for it, so say "derivative" when the',
+    'work is derivative — grading it kindly only hides what it is.',
     '',
     'Respond with ONLY a JSON object of exactly this shape, no prose and no',
     'markdown fences. production_quality, creativity, hook_strength, brand_fit and',
