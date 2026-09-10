@@ -222,7 +222,7 @@ router.post('/candidates/:id/reject', async (req, res, next) => {
 // run so later edits to the campaign defaults never change an in-flight run.
 router.post('/runs', async (req, res, next) => {
   try {
-    const { campaign_id, config: override } = req.body || {};
+    const { campaign_id, host_id, config: override } = req.body || {};
     if (!campaign_id) return res.status(400).json({ error: 'campaign_id is required' });
     const campaign = await db.one(`SELECT id, sourcing_defaults FROM campaigns WHERE id = $1`, [
       campaign_id,
@@ -239,11 +239,34 @@ router.post('/runs', async (req, res, next) => {
       return res.status(400).json({ error: 'a niche or at least one keyword is required' });
     }
 
+    // Which phone should scout this run. Optional: a run left unpinned is
+    // claimed by whichever paired device asks for work first, which is what
+    // every run did before this existed. Pinning one is what lets an admin
+    // send a campaign to a specific handset — the account signed into it is
+    // the account whose feed gets warmed, so for feed-mode runs it is not an
+    // interchangeable choice.
+    let hostId = null;
+    if (host_id != null && host_id !== '') {
+      const n = Number(host_id);
+      if (!Number.isInteger(n) || n <= 0) {
+        return res.status(400).json({ error: 'host_id must be the id of a paired device' });
+      }
+      const host = await db.one(
+        `SELECT id FROM sourcing_hosts WHERE id = $1 AND status <> 'revoked'`,
+        [n],
+      );
+      if (!host) {
+        return res.status(400).json({ error: 'that device is not paired, or its token was revoked' });
+      }
+      hostId = n;
+    }
+
     const run = await store.createRun({
       campaignId: campaign_id,
       config,
       targetCount: config.targetCount,
       createdBy: (req.session && req.session.email) || null,
+      hostId,
     });
     res.status(201).json(run);
   } catch (err) {
@@ -254,25 +277,31 @@ router.post('/runs', async (req, res, next) => {
 // Runner in RUNNER_RUN_ID=auto mode polls this endpoint for the newest queued
 // run and takes ownership by flipping status to 'running'. Registered BEFORE
 // /runs/:id so the literal segment isn't parsed as an id.
-router.get('/runs/next', requireHostOrSlack, async (_req, res, next) => {
+router.get('/runs/next', requireHostOrSlack, async (req, res, next) => {
   try {
+    // Which phone is asking. Set by requireHostOrSlack for a per-host token;
+    // undefined for a signed-in dashboard caller, which then only ever sees
+    // unpinned runs — it is not a device and cannot scout one.
+    const askingHostId = req.sourcingHostId ?? null;
     // FOR UPDATE SKIP LOCKED so two runners polling at the same time each claim
     // a distinct run instead of racing.
     const run = await db.withTransaction(async (client) => {
       const picked = await client.query(
         `SELECT id FROM sourcing_runs
           WHERE status = 'queued'
+            AND (host_id IS NULL OR host_id = $1)
           ORDER BY created_at ASC
           LIMIT 1
           FOR UPDATE SKIP LOCKED`,
+        [askingHostId],
       );
       if (!picked.rows.length) return null;
       const r = await client.query(
         `UPDATE sourcing_runs
-            SET status = 'running', updated_at = NOW()
+            SET status = 'running', host_id = COALESCE(host_id, $2), updated_at = NOW()
           WHERE id = $1
           RETURNING *`,
-        [picked.rows[0].id],
+        [picked.rows[0].id, askingHostId],
       );
       return r.rows[0];
     });
@@ -399,9 +428,11 @@ router.post('/hosts/:id/session/claim', requireRemoteControl, requireHostOrSlack
       const picked = await client.query(
         `SELECT id FROM sourcing_runs
           WHERE status = 'queued'
+            AND (host_id IS NULL OR host_id = $1)
           ORDER BY created_at ASC
           LIMIT 1
           FOR UPDATE SKIP LOCKED`,
+        [hostId],
       );
       if (!picked.rows.length) return null;
       const r = await client.query(

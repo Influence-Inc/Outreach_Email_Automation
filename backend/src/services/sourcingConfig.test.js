@@ -179,3 +179,22 @@ test('a longer clip is honoured, up to the recorder ceiling', () => {
   assert.strictEqual(buildConfig({ clipSeconds: 20 }, {}).clipSeconds, 20);
   assert.strictEqual(buildConfig({ clipSeconds: 999 }, {}).clipSeconds, 60, 'the recorder itself caps at 60');
 });
+
+// ── the two feed-workflow knobs ─────────────────────────────────────────────
+//
+// Different defaults on purpose: skipping plainly off-niche reels only ever
+// costs a swipe and the creator comes round again, while liking is automated
+// engagement and stays a deliberate per-run choice.
+
+test('off-niche reel skipping is on unless a campaign turns it off', () => {
+  assert.strictEqual(buildConfig({}, {}).skipOffNicheReels, true);
+  assert.strictEqual(buildConfig({ skipOffNicheReels: false }, {}).skipOffNicheReels, false);
+  assert.strictEqual(buildConfig({ skipOffNicheReels: 'false' }, {}).skipOffNicheReels, false);
+});
+
+test('feed warming is off unless a campaign asks for it', () => {
+  assert.strictEqual(buildConfig({}, {}).warmFeed, false);
+  assert.strictEqual(buildConfig({ warmFeed: true }, {}).warmFeed, true);
+  assert.strictEqual(buildConfig({ warmFeed: 'true' }, {}).warmFeed, true);
+  assert.strictEqual(buildConfig({ warmFeed: 'yes' }, {}).warmFeed, false, 'only a real yes counts');
+});

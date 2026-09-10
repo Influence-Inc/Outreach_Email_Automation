@@ -582,3 +582,77 @@ test('the profile screenshots survive onto the candidate', async () => {
   assert.ok(out[0].clip.dataBase64);
   assert.strictEqual(out[0].followers, 84000);
 });
+
+// ── skipping reels that are plainly about something else ────────────────────
+
+const LONG_OFF = 'Slow-braised short rib with a red wine reduction, the recipe that '
+  + 'took me three years to get right in my own kitchen.';
+const LONG_ON = 'Everything I ate the week before my first marathon, including the '
+  + 'meal I regret the most the night before the start line.';
+
+test('a plainly off-niche reel is scrolled past before a clip is recorded', async () => {
+  const driver = fakeDriver();
+  // fakeDriver's recordClip does not log to ops, so count the calls directly —
+  // "was a recording spent" is the whole point of this test.
+  const recorded = [];
+  driver.recordClip = async (seconds) => { recorded.push(seconds); return { clipId: `clip_${seconds}` }; };
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    { screen: 'reels_feed', author: 'chef', caption: LONG_OFF, targets: { like: { x: 9, y: 9 } } },
+    { screen: 'reels_feed', author: 'runner', caption: LONG_ON, targets: { like: { x: 9, y: 9 } } },
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver,
+    config: { pacingMs: 0, clipSeconds: 12, niche: 'running', keywords: ['marathon'] },
+    opts: { max: 1 },
+    read: scriptedRead(views),
+    deps: { getClip: async () => null },
+  })) out.push(c);
+
+  assert.deepStrictEqual(out.map((c) => c.username), ['runner'], 'only the on-niche creator was collected');
+  assert.strictEqual(recorded.length, 1, 'exactly one recording — the off-niche reel cost none');
+});
+
+// A creator skipped on one caption must get another chance — on a warmed feed
+// the same creators come round constantly, and a single unlucky caption is not
+// grounds for never looking at them again.
+test('a creator skipped for an off-niche caption is not marked handled', async () => {
+  const driver = fakeDriver();
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    // Same creator twice: first with an off-niche caption, then an on-niche one.
+    { screen: 'reels_feed', author: 'mia', caption: LONG_OFF, targets: { like: { x: 9, y: 9 } } },
+    { screen: 'reels_feed', author: 'mia', caption: LONG_ON, targets: { like: { x: 9, y: 9 } } },
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver,
+    config: { pacingMs: 0, clipSeconds: 12, niche: 'running', keywords: ['marathon'] },
+    opts: { max: 1 },
+    read: scriptedRead(views),
+    deps: { getClip: async () => null },
+  })) out.push(c);
+
+  assert.deepStrictEqual(out.map((c) => c.username), ['mia'], 'came round again and was taken');
+});
+
+test('the skip can be turned off for a campaign that wants everything looked at', async () => {
+  const driver = fakeDriver();
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    { screen: 'reels_feed', author: 'chef', caption: LONG_OFF, targets: { like: { x: 9, y: 9 } } },
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver,
+    config: {
+      pacingMs: 0, clipSeconds: 12, niche: 'running', keywords: ['marathon'], skipOffNicheReels: false,
+    },
+    opts: { max: 1 },
+    read: scriptedRead(views),
+    deps: { getClip: async () => null },
+  })) out.push(c);
+
+  assert.deepStrictEqual(out.map((c) => c.username), ['chef']);
+});

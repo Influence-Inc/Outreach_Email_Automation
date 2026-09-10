@@ -134,6 +134,18 @@ function buildConfig(defaults = {}, override = {}) {
     // small image call; saves a recording, an upload and a video call every time
     // it fires. See services/nichePrescreen.js.
     prescreenNiche: merged.prescreenNiche === true || merged.prescreenNiche === 'true',
+    // Feed mode: skip a reel whose caption plainly has nothing to do with the
+    // campaign, before a clip is recorded for it. On unless explicitly turned
+    // off — the test is deliberately timid (a short caption is never evidence)
+    // and a skipped creator is NOT marked handled, so a warmed feed brings them
+    // back round. See sourcingFilters.looksOffNiche.
+    skipOffNicheReels: merged.skipOffNicheReels !== false && merged.skipOffNicheReels !== 'false',
+    // Feed mode: like the clearly on-brand reels as we go, to steer this
+    // account's Reels ranking toward the niche we are sourcing for. OFF unless
+    // asked for — automated engagement is what IG's anti-bot systems look for,
+    // so it stays a deliberate choice per run. Every safety rail (min score,
+    // per-reel probability, per-session caps) is env-tuned, not set from here.
+    warmFeed: merged.warmFeed === true || merged.warmFeed === 'true',
     // How sure the prescreen must be before it drops a creator. A skipped
     // creator is never looked at again, so this is deliberately high.
     prescreenMinConfidence: num(merged.prescreenMinConfidence),

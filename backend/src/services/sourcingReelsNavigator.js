@@ -32,6 +32,7 @@ const {
   readView, IG_ANDROID_PACKAGE, analyseProfile, REELS_PER_PROFILE,
 } = require('./sourcingNavigator');
 const engagementPolicy = require('./engagementPolicy');
+const { looksOffNiche } = require('./sourcingFilters');
 const { jitteredDelay, jitterTap } = require('./humanize');
 const { createAnalysisQueue } = require('./analysisQueue');
 const {
@@ -69,6 +70,20 @@ async function enterReelsFeed({ driver, read, pacingMs }) {
   // Older builds put the reel feed behind the same bottom-bar slot the reader
   // reports as reelsTab when nothing more specific matched.
   await softTap({ driver, view, name: 'reelsTab', pacingMs });
+}
+
+/**
+ * Per-run overrides for the engagement policy.
+ *
+ * Only ever `enabled`. The rails that make automated engagement survivable —
+ * the min-score gate, the per-reel probability, the per-session caps — stay
+ * where they are, tuned by env for the deployment rather than by whoever is
+ * filling in a campaign form. An absent `warmFeed` leaves the env in charge.
+ */
+function warmFeedOverrides(config = {}) {
+  if (config.warmFeed === true) return { enabled: true };
+  if (config.warmFeed === false) return { enabled: false };
+  return {};
 }
 
 // How many consecutive reels may be unreadable before we accept the feed is not
@@ -146,6 +161,23 @@ async function collectBatch({
     // anything is recorded, and NOT marked handled — a real creator whose reel
     // was mislabelled deserves another chance when they come round again.
     if (view.sponsored) {
+      // eslint-disable-next-line no-await-in-loop
+      await scrollToNextReel({ driver, size, jitterPx, pacingMs });
+      continue;
+    }
+
+    // Plainly about something else. A feed still serves a running campaign
+    // plenty of cooking, and each one otherwise costs a 12-second recording and
+    // a multimodal call to discover that. Judged from the caption alone, which
+    // is the only thing readable before the clip is spent — so the test is
+    // deliberately timid (see sourcingFilters.looksOffNiche): a short or absent
+    // caption is never evidence.
+    //
+    // NOT marked handled, exactly like the sponsored skip above: a creator
+    // whose caption happened to say nothing about our niche deserves another
+    // chance when their next reel comes round, and on a warmed feed it will.
+    if (config.skipOffNicheReels !== false && looksOffNiche(view.caption, config)) {
+      warn(`[reels] skipping an off-niche reel by @${view.author}`);
       // eslint-disable-next-line no-await-in-loop
       await scrollToNextReel({ driver, size, jitterPx, pacingMs });
       continue;
@@ -353,8 +385,15 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
   const batchSize = Math.max(1, Number(config.batchSize) || DEFAULT_BATCH_SIZE);
   const judge = deps.judge || (async () => null);
   const getClip = deps.getClip || (async () => null);
+  // Warming the feed is a per-RUN decision now, not just a deploy-wide env var.
+  // The campaign is what knows whether it wants its account's Reels ranking
+  // steered toward this niche, and that answer differs run to run.
+  //
+  // The env stays the base, so SOURCING_ENGAGEMENT=on still works and every
+  // existing rail (min score, per-reel probability, per-session caps, the
+  // action-blocked stop) is untouched — `warmFeed` only ever flips `enabled`.
   const engagement = deps.engagement || {
-    policy: engagementPolicy.loadPolicy(),
+    policy: engagementPolicy.loadPolicy(process.env, warmFeedOverrides(config)),
     decide: engagementPolicy.decide,
   };
   const rng = deps.rng || Math.random;

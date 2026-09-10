@@ -18,7 +18,7 @@
 const { readScreen } = require('./screenVision');
 const { jitteredDelay, jitterTap } = require('./humanize');
 const { normalizeTerms } = require('./searchTerms');
-const { prefilter } = require('./sourcingFilters');
+const { prefilter, reelViews } = require('./sourcingFilters');
 const { makePrescreen } = require('./nichePrescreen');
 const { tryDeviceHint } = require('./deviceNicheHint');
 const {
@@ -284,6 +284,15 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   );
   if (seenCreators.size) log(`[sourcing] starting with ${seenCreators.size} creators already scouted for this campaign`);
 
+  // Results CARDS this run has already opened, across every keyword and pass.
+  // Distinct from seenCreators: that is who we have scouted, this is which grid
+  // tiles we have been into — the only thing knowable about a card before it is
+  // tapped, and what lets a revisit scroll past a screenful it has already
+  // worked through instead of re-opening every tile to rediscover the same
+  // creators. Run-scoped, because a card's label is only meaningful against the
+  // page as it stands today.
+  const openedCards = new Set();
+
   // One pass over the keywords used to be the whole run, so a run whose target
   // was 6 reported "done" after finding 1 — it had simply run out of keywords,
   // never out of creators or out of its profile budget.
@@ -431,11 +440,31 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       if (hasResults(deeper.view)) view = deeper.view;
     }
 
+    // The top of a results page is the same cards on every visit. Opening one
+    // costs a tap, a screen read, a hop into the player and a press back — and
+    // when it turns out to be a creator this campaign already scouted, all of
+    // that bought nothing. A grid card carries no handle, so "have we been here
+    // before" can only be asked of the CARD; when every card in reach is one we
+    // have already opened, there is provably nothing new on this screen, so
+    // scroll past it instead of tapping through it.
+    //
+    // Bounded, and it stops the moment a scroll stops producing new cards — a
+    // short results page must not turn this into a scrolling loop.
+    for (let skips = 0; skips < MAX_SKIP_SCROLLS && everyCardOpened(view, openedCards); skips += 1) {
+      log(`[sourcing] "${term}": every reel in reach was already opened — scrolling for new ones`);
+      // eslint-disable-next-line no-await-in-loop
+      const past = await scrollResults({ driver, read, pacingMs, screen, screens: 1 });
+      if (!hasResults(past.view)) break;
+      view = past.view;
+    }
+
     const reelResults = Array.isArray(view.reelResults) ? view.reelResults : [];
     for (const rr of reelResults) {
       await heartbeat();
       if (emitted >= max) return;
       if (cap.spent()) return; // the run has looked at enough profiles
+      const key = cardKey(rr);
+      if (key) openedCards.add(key);
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
         reelsWindow, clipsWanted, log, config, prescreen, deviceHint, seen: seenCreators, cap, term,
@@ -551,6 +580,35 @@ function overlapRatio(a, b) {
 
 // This much of a screen's cards already seen counts as "going nowhere".
 const LOOP_OVERLAP = 0.75;
+
+// How many times a visit may scroll past a screenful of already-opened cards
+// before it just works with what is in front of it.
+const MAX_SKIP_SCROLLS = 3;
+
+// What a results CARD says, as its identity. A grid card exposes no handle
+// until it is opened, so this is the only way to recognise one we have already
+// been into.
+function cardKey(rr) {
+  return String((rr && rr.label) || '').trim().toLowerCase();
+}
+
+/**
+ * Is every card currently in reach one we have already opened?
+ *
+ * Deliberately ALL, not "the first couple": a page whose first two cards are
+ * spent but whose third is new still has something worth having, and scrolling
+ * past it would skip a creator we have never seen. An unlabelled card counts as
+ * unknown — and therefore as not-yet-opened — so a reading the parser could not
+ * make sense of never triggers a skip.
+ */
+function everyCardOpened(view, openedCards) {
+  const cards = Array.isArray(view && view.reelResults) ? view.reelResults : [];
+  if (!cards.length) return false;
+  return cards.every((rr) => {
+    const key = cardKey(rr);
+    return key && openedCards.has(key);
+  });
+}
 
 /**
  * Scroll a results page down by whole screens, to reach cards an earlier visit
@@ -796,9 +854,6 @@ async function analyseProfile({
   // reading it again is a round-trip to the phone for a picture we have.
   const header = arrivedOn || await read(driver);
 
-  // What the bio actually looks like, before we navigate away from it.
-  const bioShot = await grabShot({ driver, kind: 'bio' });
-
   // Switch to Reels unless we are already there (IG sometimes opens a profile
   // on the Reels sub-tab, in which case reel overlays are already present).
   //
@@ -824,15 +879,43 @@ async function analyseProfile({
   // The grid at its top — the creator's most recent work, as a picture. Taken
   // before the scroll, so it frames what they post now rather than wherever the
   // reach window happened to stop.
+  //
+  // The VIEWS come first, and everything else waits on them. A creator's reach
+  // is the one thing on this screen that is free to read and fatal to fail, so
+  // it is read and judged before a single further round-trip is spent.
   const gridShot = await grabShot({ driver, kind: 'reels_grid' });
 
-  // Read the whole reach window FIRST. Which reels are worth watching is a
-  // question about the window as a whole — the best performer and the typical
-  // one are only knowable once every view count is in — so recording has to come
-  // after the scroll, not before it.
-  const { reels, view: gridView } = await collectReels({
-    driver, read, view, pacingMs, jitterPx, screen, want: reelsWindow,
-  });
+  // ── the first look at reach, on what is visible right now ─────────────────
+  //
+  // The floor is normally absolute (floorTolerance 0), which means ONE reel
+  // below it disqualifies the creator — and if a reel on the very first screen
+  // is already under, no amount of scrolling can rescue them. Checking here
+  // skips the rest of the grid scroll, the bio screenshot, the prescreen call,
+  // the recording and the judgement, for a creator who was never eligible.
+  //
+  // Deliberately only when the floor really is absolute: a campaign that set a
+  // tolerance is saying some reels MAY sit below, and that question can only be
+  // answered once the whole window is in.
+  const topReels = (Array.isArray(view.reels) ? view.reels : [])
+    .map(({ point, ...r }) => r); // eslint-disable-line no-unused-vars
+  const earlyReason = earlyFloorReject(topReels, config);
+
+  // What the bio actually looks like. Taken AFTER the reach check, so a creator
+  // whose views already disqualified them never costs this round-trip — the
+  // grid is still at its top here, where the profile header is on screen.
+  const bioShot = earlyReason ? null : await grabShot({ driver, kind: 'bio' });
+
+  // Read the whole reach window. Which reels are worth watching is a question
+  // about the window as a whole — the best performer and the typical one are
+  // only knowable once every view count is in — so recording has to come after
+  // the scroll, not before it. Skipped entirely when the first screen already
+  // settled it.
+  const collected = earlyReason
+    ? { reels: topReels, view }
+    : await collectReels({
+      driver, read, view, pacingMs, jitterPx, screen, want: reelsWindow,
+    });
+  const { reels, view: gridView } = collected;
 
   // ── the gate, before anything expensive ───────────────────────────────────
   //
@@ -846,8 +929,11 @@ async function analyseProfile({
   // recorded. The backend still re-runs it and does the bookkeeping; this just
   // means it reaches that point with nothing costly attached.
   const window = reels.map(({ point, ...r }) => r); // eslint-disable-line no-unused-vars
-  const pre = prefilter({ reels: window, followers: header.followers }, config);
-  let skipReason = pre.pass ? null : pre.rejectReason;
+  let skipReason = earlyReason;
+  if (!skipReason) {
+    const pre = prefilter({ reels: window, followers: header.followers }, config);
+    skipReason = pre.pass ? null : pre.rejectReason;
+  }
 
   // A free look, on the phone itself, tried before the paid one below — see
   // services/deviceNicheHint.js. Non-null only when it corroborates a pass
@@ -1040,6 +1126,39 @@ const SHOT_ARGS = { format: 'jpeg', maxWidth: 720, quality: 70 };
 /** The shots taken so far, for a gate that runs before the final list is built. */
 function shotsSoFar(...shots) {
   return shots.filter(Boolean);
+}
+
+/**
+ * Can this creator already be ruled out from the reels visible right now?
+ *
+ * The view floor is normally ABSOLUTE — `floorTolerance` defaults to 0, so one
+ * reel below the floor disqualifies the creator outright. When that is the
+ * rule, a below-floor reel on the very first screen of the grid is already the
+ * whole answer, and scrolling the rest of the window, screenshotting the bio,
+ * calling the prescreen and recording a clip are all spent proving something
+ * settled several round-trips ago.
+ *
+ * Returns a reject reason, or null to carry on reading the full window.
+ *
+ * Deliberately narrow. It only fires when:
+ *   - a floor is actually configured, and
+ *   - the campaign did NOT buy itself slack with a floorTolerance (any
+ *     tolerance means some reels are allowed under, which cannot be judged
+ *     until the whole window is in), and
+ *   - at least one view count was actually read (an empty or unreadable first
+ *     screen is not evidence of anything).
+ */
+function earlyFloorReject(reels, config = {}) {
+  const floor = Number(config.floor);
+  if (!Number.isFinite(floor) || floor <= 0) return null;
+  if (Number(config.floorTolerance) > 0) return null;
+
+  const views = reelViews(reels);
+  if (!views.length) return null;
+
+  const below = views.filter((v) => v < floor).length;
+  if (!below) return null;
+  return `${below} of the first ${views.length} reels below floor ${floor}`;
 }
 
 async function grabShot({ driver, kind }) {
