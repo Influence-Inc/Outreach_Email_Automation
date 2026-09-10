@@ -542,3 +542,41 @@ test('a duplicate handle rejected on views is skipped, not double-inserted', asy
   assert.strictEqual(second.decision, 'skipped');
   assert.strictEqual(candidates.length, 1);
 });
+
+// ── how many verdicts actually had a reel to watch ──────────────────────────
+//
+// The pipeline could judge every creator on bio text alone — screen capture
+// stopped on the phone, a clip lost between upload and lookup — and report a
+// completely normal-looking run. These two numbers are the difference between
+// "the scout is working" and "the scout is watching nothing".
+test('the run counts judgements made with and without video', async () => {
+  const { deps } = memStore();
+  const source = arraySource([
+    { username: 'coachA', bio: 'fitness', reels: fitReels(), clip: { dataBase64: 'AAAA', mimeType: 'video/mp4' } },
+    { username: 'coachB', bio: 'fitness', reels: fitReels() },
+    { username: 'coachC', bio: 'fitness', reels: fitReels(), clips: [{ dataBase64: 'BBBB', mimeType: 'video/mp4' }] },
+  ]);
+
+  const { stats } = await runWithSource(run, goodCfg, source, deps);
+
+  assert.strictEqual(stats.withVideo, 2, 'coachA by clip, coachC by clips');
+  assert.strictEqual(stats.withoutVideo, 1, 'coachB was judged on text alone');
+  assert.strictEqual(stats.withVideo + stats.withoutVideo, stats.scanned);
+});
+
+// A creator rejected on reach is never recorded ON PURPOSE — the gate exists to
+// avoid spending a recording. Counting them as "judged without video" would put
+// a healthy run's withoutVideo through the roof and make the number useless.
+test('creators rejected before the judge are counted in neither column', async () => {
+  const { deps } = memStore();
+  const source = arraySource([
+    { username: 'tinyA', bio: 'fitness', reels: Array(12).fill({ views: 10, caption: 'gym day' }) },
+    { username: 'coachA', bio: 'fitness', reels: fitReels(), clip: { dataBase64: 'AAAA', mimeType: 'video/mp4' } },
+  ]);
+
+  const { stats } = await runWithSource(run, goodCfg, source, deps);
+
+  assert.strictEqual(stats.scanned, 2);
+  assert.strictEqual(stats.withVideo, 1);
+  assert.strictEqual(stats.withoutVideo, 0, 'the reach rejection never reached the judge');
+});

@@ -292,11 +292,50 @@ Only then does it weigh the **video, the bio screenshot and the captions
 together** against the campaign's brand brief, product, keywords and niche.
 
 > **If reels seem to flash past unwatched**, the recording is failing rather than
-> running short — most often screen capture not granted on the phone, which fails
-> instantly and every time. That used to be swallowed silently, leaving every
-> creator judged on bio text while looking like a scout that never watches
-> anything. Both paths now log
+> running short. Both paths log
 > `recording failed — judging without video: <cause>`.
+
+### Knowing whether the judge ever saw a video
+
+A run can judge every creator on bio text alone and still look completely normal
+from the outside. Four separate things had to be fixed before that was visible:
+
+1. **`log` never reached `analyseProfile`.** All three call sites left it
+   defaulted to a no-op, so in profiles mode the recording-failure line — and the
+   `not recording` line before it — went nowhere. The log was silent no matter
+   what the phone did.
+2. **A recording could come back empty without throwing.** The agent's
+   `uploadClip` ends in `optString("clipId", "")`, so a failed upload returned an
+   empty id; the backend's `rec.clipId || rec` then looked the whole *result
+   object* up in the clip store, missed, and judged without video in silence.
+   `resolveClip` now returns a reason for every no-video outcome, and the agent
+   refuses to report success for an upload that produced no id.
+3. **Nothing counted it.** `evidence.clipCaptured` was written and never read.
+   The run summary now ends with
+   `judged=<n> withVideo=<n> withoutVideo=<n>`, counting only creators who
+   actually reached the model — a creator rejected on reach was never recorded
+   *by design*, so counting them would make a healthy run look broken.
+4. **Screen capture is not a permission that stays granted.** MediaProjection is
+   a per-session consent; Android ends it when the cast notification is
+   dismissed or the service is restarted, and `onStop()` then nulls the recorder.
+   A phone whose operator correctly remembers granting it reported itself as
+   never granted. The agent now distinguishes the two:
+   *"screen capture was granted but Android has since stopped it"* means re-grant
+   it; *"has not been granted"* means grant it for the first time.
+
+**`withVideo=0` on a run that judged anyone at all** means no recording reached
+the judge, whatever the phone appeared to be doing on screen.
+
+### The navigator gets the whole campaign config
+
+Profiles mode used to forward seven mechanical knobs (pacing, jitter, clip
+length…) and nothing else, because the orchestrator does the judging. The
+navigator has since grown gates of its own, and all of them were reading
+`undefined`: the on-device prefilter (no floor, ceiling or risk shape, so it
+rejected nobody and recorded a clip for creators the orchestrator was about to
+reject on reach a moment later), `prescreenNiche` (never switched on for any
+campaign that asked), and the early reach reject. Both modes now spread the full
+config, with session-resolved mechanical values still winning.
 
 ### Keyword depth is bounded
 

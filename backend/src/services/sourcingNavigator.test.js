@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { scout, scrollResults, MAX_KEYWORD_DEPTH } = require('./sourcingNavigator');
+const { scout, scrollResults, MAX_KEYWORD_DEPTH, resolveClip } = require('./sourcingNavigator');
 
 function fakeDriver() {
   const ops = [];
@@ -1824,4 +1824,80 @@ test('a page with one new card among opened ones is still worked, not skipped', 
     driver.ops.some((o) => o[0] === 'tap' && o[1] === 6 && o[2] === 6),
     'the second, unopened card was still tapped',
   );
+});
+
+// ── resolveClip: no recording ever fails quietly ────────────────────────────
+//
+// Every one of these used to end with `clip = null` and NOTHING written to the
+// log, which is indistinguishable from a scout that never tried to record. The
+// reason string is the whole point of the function.
+test('resolveClip turns stored bytes into what the judge reads', async () => {
+  const store = { clip_1: { buf: Buffer.from('mp4-bytes'), mediaType: 'video/mp4' } };
+  const out = await resolveClip({ clipId: 'clip_1' }, async (id) => store[id] || null);
+  assert.strictEqual(out.reason, null);
+  assert.strictEqual(out.clip.mimeType, 'video/mp4');
+  assert.strictEqual(Buffer.from(out.clip.dataBase64, 'base64').toString(), 'mp4-bytes');
+});
+
+test('resolveClip says so when the agent returns an empty clip id', async () => {
+  // uploadClip ends in optString("clipId", ""), so this is the shape a failed
+  // upload actually produced — and `rec.clipId || rec` then looked the whole
+  // OBJECT up in the store, missed, and returned null without a word.
+  const out = await resolveClip({ clipId: '' }, async () => { throw new Error('must not be looked up'); });
+  assert.strictEqual(out.clip, null);
+  assert.match(out.reason, /no clip id/);
+});
+
+test('resolveClip says so when the clip is not in the store', async () => {
+  const out = await resolveClip({ clipId: 'clip_9' }, async () => null);
+  assert.strictEqual(out.clip, null);
+  assert.match(out.reason, /clip_9 was not in the clip store/);
+});
+
+test('resolveClip says so when the agent returns nothing at all', async () => {
+  const out = await resolveClip(null, async () => null);
+  assert.strictEqual(out.clip, null);
+  assert.match(out.reason, /returned nothing/);
+});
+
+test('resolveClip still accepts a bare string clip id', async () => {
+  const out = await resolveClip('clip_2', async (id) => (
+    id === 'clip_2' ? { buf: Buffer.from('x'), mediaType: 'video/mp4' } : null
+  ));
+  assert.strictEqual(out.reason, null);
+  assert.ok(out.clip.dataBase64);
+});
+
+test('a recording that yields no bytes is logged, not swallowed', async () => {
+  const lines = [];
+  const driver = driverWithSearch();
+  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
+  // The recorder itself SUCCEEDS. This is the case that never threw and so never
+  // reached the catch that does the logging.
+  driver.recordClip = async () => ({ clipId: '' });
+
+  const out = [];
+  for await (const c of scout({
+    driver,
+    config: { pacingMs: 0 },
+    opts: { keywords: ['coach'], max: 1 },
+    read: scriptedRead([
+      ...OPEN_SEARCH,
+      { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
+      { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+      { screen: 'profile', followers: 9000, bio: 'chef', targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+      { screen: 'reels_feed', targets: { back: BACK } },
+      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
+      ...Array(8).fill({ screen: 'search_results', targets: { back: BACK } }),
+    ]),
+    deps: { log: (m) => lines.push(m), getClip: async () => null },
+  })) out.push(c);
+
+  assert.ok(
+    lines.some((l) => /recording failed — judging without video/.test(l)),
+    `a silent no-video recording must still be reported, got: ${lines.join(' | ')}`,
+  );
+  assert.ok(out.length, 'the creator is still yielded — no video is not fatal');
 });

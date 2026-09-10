@@ -738,7 +738,7 @@ async function* scoutReelFeed({
             source: 'backend-navigator:feed-scroll',
             screens: ['reels_feed', 'profile', 'reels_tab'],
             view: arrived.view,
-            config, prescreen, deviceHint,
+            config, prescreen, deviceHint, log,
           });
           if (profile) {
             yield profile;
@@ -831,7 +831,7 @@ async function captureViaReel({
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
     view: arrived.view,
-    config, prescreen, deviceHint,
+    config, prescreen, deviceHint, log,
     sourceTerm: term,
   });
 }
@@ -848,6 +848,10 @@ async function analyseProfile({
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
   reelsWindow = REELS_PER_PROFILE, recordClip = true, clipsWanted = CLIPS_PER_PROFILE,
   view: arrivedOn = null, sourceClip = null, sourceTerm = null,
+  // Not optional in practice. Every call site used to leave this defaulted, so
+  // analyseProfile's logging — "not recording", and the recording failures that
+  // explain a run judging everyone on bio text — went to a no-op and profiles
+  // mode looked silent no matter what went wrong on the phone.
   config = {}, prescreen = null, deviceHint = null, log = () => {},
 }) {
   // The caller that verified we reached this profile already read the screen;
@@ -1181,6 +1185,46 @@ async function grabShot({ driver, kind }) {
  * it here, in the player we already stand in, also costs nothing extra to reach.
  */
 // Record ONE reel already on screen at `point` (video + audio), and come back to
+/**
+ * Turn a `recordClip` result into bytes the judge can actually read.
+ *
+ * Returns `{ clip, reason }` with exactly one of them set. `reason` is why there
+ * is no video, IN WORDS, because until now every way of ending up without one
+ * was silent: the phone recorded, the upload succeeded, and the backend then
+ * quietly judged on bio text with nothing written to the log. Two paths did it.
+ *
+ *   - The agent's `uploadClip` ends in `json.optString("clipId", "")`, so a
+ *     response missing the id hands back an EMPTY STRING. That is falsy, so the
+ *     old `rec.clipId || rec` fell through to the whole result object, which is
+ *     not a key in the clip store, so the lookup missed and returned null.
+ *   - A clip genuinely not in the store — expired, evicted, or the backend
+ *     restarted between the upload and the take.
+ *
+ * Neither threw, so neither reached the catch that does the logging. "Screen
+ * capture is not granted" was therefore never the only explanation for a run
+ * that watches reels and judges everyone on text — it was just the only one
+ * that said anything.
+ */
+async function resolveClip(rec, getClip) {
+  if (!rec) return { clip: null, reason: 'the agent returned nothing for the recording' };
+  const clipId = typeof rec === 'string' ? rec : rec.clipId;
+  if (!clipId) {
+    return { clip: null, reason: 'the agent recorded but returned no clip id — the upload to /clip most likely failed' };
+  }
+  const stored = await getClip(clipId);
+  if (!stored) {
+    return { clip: null, reason: `${clipId} was not in the clip store (expired, evicted, or the backend restarted mid-recording)` };
+  }
+  if (stored.buf) {
+    return {
+      clip: { dataBase64: stored.buf.toString('base64'), mimeType: stored.mediaType || 'video/mp4' },
+      reason: null,
+    };
+  }
+  if (stored.dataBase64) return { clip: stored, reason: null };
+  return { clip: null, reason: `${clipId} was in the store but held no bytes` };
+}
+
 // the grid. Best-effort throughout: a host without recordClip or a failed
 // recording must never cost the reach data we already have.
 async function recordAt({
@@ -1193,21 +1237,17 @@ async function recordAt({
   let clip = null;
   try {
     const rec = await driver.recordClip(clipSeconds);
-    const clipId = rec && (rec.clipId || rec);
-    const stored = clipId ? await getClip(clipId) : null;
     // clipStore hands back { buf, mediaType }; reelJudge reads
     // { dataBase64, mimeType }. Attaching the store's record verbatim meant
     // classifyWithGemini saw no dataBase64, returned null, and every candidate
     // from this flow quietly fell through to the bio-text tier — the video was
     // recorded and uploaded, and then never judged.
-    if (stored && stored.buf) {
-      clip = {
-        dataBase64: stored.buf.toString('base64'),
-        mimeType: stored.mediaType || 'video/mp4',
-      };
-    } else if (stored && stored.dataBase64) {
-      clip = stored;
-    }
+    const resolved = await resolveClip(rec, getClip);
+    clip = resolved.clip;
+    // A recording that came back with nothing usable is the same outcome as one
+    // that threw, and it used to be the quiet one. Same wording, so one grep
+    // finds every creator judged without video whatever the cause.
+    if (!clip) log(`[sourcing] recording failed — judging without video: ${resolved.reason}`);
   } catch (err) {
     // Still not fatal — but no longer silent. A recorder that fails EVERY time
     // (screen capture not granted on the phone is the usual cause) is
@@ -1330,7 +1370,7 @@ async function openAndCaptureProfile({
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
     view: arrived.view,
-    config, prescreen, deviceHint,
+    config, prescreen, deviceHint, log,
   });
   return { ...profile, username: handle };
 }
@@ -1416,4 +1456,5 @@ module.exports = {
   REELS_PER_PROFILE,
   CLIPS_PER_PROFILE,
   MAX_KEYWORD_DEPTH,
+  resolveClip,
 };

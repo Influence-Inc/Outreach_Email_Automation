@@ -214,3 +214,58 @@ test('a campaign with no depth history behaves exactly as before', async () => {
   await session.start({ hostId: 1, run: { id: 17, campaign_id: 'c', config: {} }, deps }).promise;
   assert.strictEqual(opts.keywordDepth, undefined, 'no seed means start at the top');
 });
+
+// ── the navigator gets the whole campaign, not just the pacing knobs ─────────
+//
+// Profiles mode used to forward seven mechanical values and nothing else, on the
+// reasoning that the orchestrator does the judging. But the navigator grew gates
+// of its own that all read config, and every one of them was reading undefined:
+// the on-device prefilter (no floor/ceiling/risk, so it rejected nobody and a
+// clip was recorded for creators about to be rejected on reach a moment later),
+// the screenshot prescreen (never switched on), and the early reach reject.
+test('profiles mode forwards the campaign config to the navigator', async () => {
+  let got = null;
+  const deps = {
+    ...baseDeps(),
+    scout: (args) => { got = args.config; return (async function* () {})(); },
+  };
+  await session.start({
+    hostId: 1,
+    run: {
+      id: 5,
+      campaign_id: 'c',
+      config: {
+        floor: 15000, ceiling: 400000, risk: 'low', niche: 'fitness',
+        keywords: ['gym'], prescreenNiche: true, floorTolerance: 0,
+      },
+    },
+    deps,
+  }).promise;
+
+  assert.strictEqual(got.floor, 15000, 'the on-device reach gate can see the floor');
+  assert.strictEqual(got.ceiling, 400000);
+  assert.strictEqual(got.risk, 'low');
+  assert.strictEqual(got.niche, 'fitness');
+  assert.strictEqual(got.prescreenNiche, true, 'the prescreen actually switches on');
+});
+
+// Mechanical values are still resolved by the session, so spreading the campaign
+// config must not let a stale saved value win over them. tapJitterPx is the
+// clean test: the session takes it from deps/env and never from the campaign, so
+// a saved one must lose. (pacingMs deliberately DOES read the campaign first.)
+test('session-resolved knobs still beat the spread campaign config', async () => {
+  let got = null;
+  const deps = {
+    ...baseDeps(),
+    tapJitterPx: 5,
+    scout: (args) => { got = args.config; return (async function* () {})(); },
+  };
+  await session.start({
+    hostId: 1,
+    run: { id: 6, campaign_id: 'c', config: { tapJitterPx: 999, clipSeconds: 30 } },
+    deps,
+  }).promise;
+
+  assert.strictEqual(got.tapJitterPx, 5, 'the session resolves jitter, not the saved config');
+  assert.strictEqual(got.clipSeconds, 30, 'a real clip length still comes through');
+});
