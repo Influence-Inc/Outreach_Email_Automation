@@ -198,3 +198,37 @@ test('feed warming is off unless a campaign asks for it', () => {
   assert.strictEqual(buildConfig({ warmFeed: 'true' }, {}).warmFeed, true);
   assert.strictEqual(buildConfig({ warmFeed: 'yes' }, {}).warmFeed, false, 'only a real yes counts');
 });
+
+// ── example creators, as typed ──────────────────────────────────────────────
+//
+// Handles, links and sentences, one per line. NOT comma-split like keywords:
+// a description of a creator may well contain a comma, and splitting on it
+// turns one sentence into two fragments that each read as a separate demand.
+
+test('example creators split on newlines, never on commas', () => {
+  const cfg = buildConfig({}, {
+    idealExamples: '@marathonhandbook\nhttps://www.instagram.com/reel/Cxyz123/\ncoaches who film their own training, no studio lighting',
+  });
+  assert.deepStrictEqual(cfg.idealExamples, [
+    '@marathonhandbook',
+    'https://www.instagram.com/reel/Cxyz123/',
+    'coaches who film their own training, no studio lighting',
+  ]);
+});
+
+test('blank lines and stray whitespace are dropped', () => {
+  const cfg = buildConfig({}, { avoidExamples: '  @repostpage  \n\n\n   \nmeme aggregators\n' });
+  assert.deepStrictEqual(cfg.avoidExamples, ['@repostpage', 'meme aggregators']);
+});
+
+test('an already-split array is taken as given', () => {
+  const cfg = buildConfig({}, { idealExamples: ['@one', '  @two  ', ''] });
+  assert.deepStrictEqual(cfg.idealExamples, ['@one', '@two']);
+});
+
+// The niche call belongs to the judge; the threshold is a floor under the
+// obviously-wrong, not a gate that overrules it.
+test('the niche threshold defaults low enough to leave the call to the judge', () => {
+  const { DEFAULTS } = require('./sourcingFilters');
+  assert.strictEqual(DEFAULTS.nicheThreshold, 0.1);
+});

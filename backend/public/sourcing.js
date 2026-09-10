@@ -76,6 +76,12 @@ function numOrUndef(id) {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// Config stores these as arrays; the textarea wants one per line.
+function asLines(v) {
+  if (Array.isArray(v)) return v.join('\n');
+  return v || '';
+}
+
 function readForm() {
   return {
     niche: el('niche').value.trim(),
@@ -89,8 +95,10 @@ function readForm() {
     clipsPerProfile: numOrUndef('clipsPerProfile'),
     maxProfiles: numOrUndef('maxProfiles'),
     creatorPassThreshold: numOrUndef('creatorPassThreshold'),
-    minCreativity: numOrUndef('minCreativity'),
-    minBrandFit: numOrUndef('minBrandFit'),
+    // The example creators, as typed. Newline-separated so a handle, a link and
+    // a sentence can all sit on their own line; sourcingConfig splits them.
+    idealExamples: el('idealExamples').value.trim(),
+    avoidExamples: el('avoidExamples').value.trim(),
     brandProduct: el('brandProduct').value.trim(),
     brandName: el('brandName').value.trim(),
     // The judge is briefed on the brand BEFORE it sees the creator, so this is
@@ -118,8 +126,8 @@ function fillForm(cfg) {
   el('clipsPerProfile').value = cfg.clipsPerProfile ?? 3;
   el('maxProfiles').value = cfg.maxProfiles ?? '';
   el('creatorPassThreshold').value = cfg.creatorPassThreshold ?? 0.72;
-  el('minCreativity').value = cfg.minCreativity ?? 0;
-  el('minBrandFit').value = cfg.minBrandFit ?? 4;
+  el('idealExamples').value = asLines(cfg.idealExamples);
+  el('avoidExamples').value = asLines(cfg.avoidExamples);
   el('brandProduct').value = cfg.brandProduct || '';
   el('brandName').value = cfg.brandName || '';
   el('brandBrief').value = cfg.brandBrief || '';
@@ -248,17 +256,33 @@ function viewRange(reels) {
  * Dug out of the evidence bundle, which is where the per-clip analysis lands;
  * a candidate rejected before it was ever judged simply has none.
  */
-function creativityOf(c) {
+/** The per-clip analysis, wherever it ended up in the evidence bundle. */
+function clipAnalysisOf(c) {
   const ev = (c && c.evidence) || null;
-  if (!ev) return '—';
-  const clip = (ev.niche && ev.niche.clip)
+  if (!ev) return null;
+  return (ev.niche && ev.niche.clip)
     || (ev.niche && Array.isArray(ev.niche.clipAnalyses) && ev.niche.clipAnalyses[0])
     || ev.clip
     || null;
-  if (!clip) return '—';
-  if (clip.creativity_level) return escapeHtml(clip.creativity_level);
-  return clip.creativity == null ? '—' : escapeHtml(String(clip.creativity));
 }
+
+/**
+ * A craft verdict as the judge's own word.
+ *
+ * Neither creativity nor brand fit rejects a creator any more, so both reach
+ * this table on purpose — and the level is what makes that useful rather than
+ * confusing. A candidate dropped before it was ever judged simply has none.
+ */
+function levelCell(c, field) {
+  const clip = clipAnalysisOf(c);
+  if (!clip) return '—';
+  const level = clip[`${field}_level`];
+  if (level) return escapeHtml(level);
+  return clip[field] == null ? '—' : escapeHtml(String(clip[field]));
+}
+
+function creativityOf(c) { return levelCell(c, 'creativity'); }
+function brandFitOf(c) { return levelCell(c, 'brand_fit'); }
 
 function renderCandidates(rows) {
   const tb = el('cand-rows');
@@ -272,6 +296,7 @@ function renderCandidates(rows) {
       <td>${viewRange(c.reels)}</td>
       <td>${niche}</td>
       <td>${creativityOf(c)}</td>
+      <td>${brandFitOf(c)}</td>
       <td>${risk === '—' ? '—' : `<span class="pill ${risk}">${risk}</span>`}</td>
       <td><span class="pill ${c.decision}">${c.decision}</span></td>
       <td>${escapeHtml(c.reject_reason || '')}</td>`;
