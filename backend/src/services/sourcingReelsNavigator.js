@@ -336,6 +336,13 @@ async function handleCreator({
         // recording would cost another stretch on the phone for a verdict we
         // are already waiting on.
         recordClip: false,
+        // But DO open one reel to read its like and comment counts, unless the
+        // feed player already gave us a complete set. Without this the grid's
+        // view counts have no reactions to be weighed against and the
+        // bought-views check cannot run in this mode at all. Turning the check
+        // off (minViewEngagementRate: 0) turns off its cost too.
+        sampleEngagement: config.minViewEngagementRate !== 0
+          && !(entry.views != null && (entry.likes != null || entry.comments != null)),
       });
       if (profile) {
         candidate.username = profile.username || candidate.username;
@@ -347,6 +354,11 @@ async function handleCreator({
         // here, so reels mode captured them on the phone and then judged without
         // them — the whole point of opening the profile at all.
         if (Array.isArray(profile.shots) && profile.shots.length) candidate.shots = profile.shots;
+        // A COMPLETE set of counts beats the partial one the feed gave us.
+        // The feed reel's likes have no view count to sit against on the builds
+        // we have; the sampled grid reel has both, read off the same reel, which
+        // is the only pairing the bought-views ratio can honestly be taken from.
+        if (profile.engagement) candidate.engagement = profile.engagement;
         candidate.evidence = { ...candidate.evidence, ...profile.evidence, source: 'reels-feed' };
       }
     } catch (err) {

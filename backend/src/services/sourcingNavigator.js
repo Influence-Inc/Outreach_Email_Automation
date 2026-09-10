@@ -848,6 +848,11 @@ async function analyseProfile({
   fallbackUsername = null, source = 'backend-navigator', screens = ['profile'],
   reelsWindow = REELS_PER_PROFILE, recordClip = true, clipsWanted = CLIPS_PER_PROFILE,
   view: arrivedOn = null, sourceClip = null, sourceTerm = null,
+  // Open one reel purely to read its like/comment counts when nothing else on
+  // this visit will. Off by default because the search flow already gets them
+  // free from the reels it records; feed mode turns it on, since it records on
+  // the feed and would otherwise collect none at all.
+  sampleEngagement = false,
   config = {}, prescreen = null, deviceHint = null, log = () => {},
 }) {
   // The caller that verified we reached this profile already read the screen;
@@ -985,6 +990,25 @@ async function analyseProfile({
     engagements = captured.engagements;
   } else {
     clips = [];
+  }
+
+  // FEED MODE'S ONLY WAY TO GET THE RATIO.
+  //
+  // There the reel is recorded on the feed, so nothing above ever opened one
+  // from the grid and no counts were collected — which left the bought-views
+  // check with a view count and no reactions to weigh it against, i.e. inert on
+  // exactly the discovery mode that most needs it. Opening one representative
+  // reel costs a tap, a read and a back press, and only happens when we have
+  // nothing already and the creator is still in the running.
+  if (sampleEngagement && !engagements.length && !skipReason) {
+    const target = pickEngagementSample(reels);
+    if (target) {
+      const sampled = await sampleEngagementAt({
+        driver, read, point: target.point, gridViews: target.views, pacingMs, jitterPx,
+      });
+      if (sampled) engagements.push(sampled);
+      else log(`[sourcing] @${header.username || fallbackUsername || '?'}: no engagement counts on the reel player`);
+    }
   }
 
   const shots = [bioShot, gridShot].filter(Boolean);
@@ -1225,6 +1249,72 @@ async function grabShot({ driver, kind }) {
  * it here, in the player we already stand in, also costs nothing extra to reach.
  */
 // Record ONE reel already on screen at `point` (video + audio), and come back to
+/**
+ * Which reel to open when all we want is its like and comment counts.
+ *
+ * The TYPICAL reel by view count, deliberately — not the best one. A genuinely
+ * viral reel reaches far past the creator's own audience, picking up a mass of
+ * passive viewers who never react, so its like-to-view ratio is naturally the
+ * WORST one they have. Sampling it would systematically read real hits as
+ * bought reach, which is the exact false positive this whole check has to avoid.
+ * The median reel is what the creator normally does, and a creator who buys
+ * reach systematically shows it there too.
+ *
+ * Only reels we can both tap and price qualify — a tap point with no view count
+ * gives half a ratio, which is no ratio at all.
+ */
+function pickEngagementSample(reels) {
+  const usable = (reels || []).filter(
+    (r) => r && r.point && Number.isFinite(Number(r.views)),
+  );
+  if (!usable.length) return null;
+  const byViews = [...usable].sort((a, b) => Number(a.views) - Number(b.views));
+  return byViews[Math.floor(byViews.length / 2)];
+}
+
+/**
+ * Open ONE reel purely to read its like and comment counts, then come straight
+ * back to the grid. No recording.
+ *
+ * This is what makes the bought-views check work in FEED mode. There, the reel
+ * is recorded on the feed and the profile visit never opens anything from the
+ * grid — so the counts and the view numbers stayed on separate screens and the
+ * ratio between them could never be taken. One tap, one read and one back press
+ * per creator buys the whole signal.
+ *
+ * `gridViews` is the view count the grid already gave for THIS reel, used when
+ * the player does not carry one of its own (which, on every build captured so
+ * far, it does not). That pairing is the entire point: same reel, both halves.
+ */
+async function sampleEngagementAt({
+  driver, read = readView, point, gridViews = null, pacingMs, jitterPx = 0,
+}) {
+  if (!point) return null;
+  await humanTap(driver, point, jitterPx, pacingMs);
+
+  let sampled = null;
+  try {
+    const player = await read(driver);
+    // Reactions are the signal; a player read that produced neither tells us
+    // nothing, and pairing "no likes" with a real view count would invent
+    // fraud rather than measure it.
+    if (player && (player.likes != null || player.comments != null)) {
+      sampled = {
+        likes: player.likes ?? null,
+        comments: player.comments ?? null,
+        views: player.views ?? gridViews ?? null,
+      };
+    }
+  } catch (_) {
+    /* enrichment only — never a reason to lose the creator */
+  }
+
+  await backTo({
+    driver, read, pacingMs, jitterPx, wanted: ['reels_tab', 'profile'], maxHops: 2,
+  });
+  return sampled;
+}
+
 // the grid. Best-effort throughout: a host without recordClip or a failed
 // recording must never cost the reach data we already have.
 async function recordAt({
