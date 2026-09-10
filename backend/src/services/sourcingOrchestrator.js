@@ -122,6 +122,14 @@ async function processCandidate(run, config, candidate, deps) {
 
   // Rule 1/3: niche score (AI when available, deterministic keyword fallback).
   // Only reached by creators the cheap gates could not reject.
+  //
+  // Whether the judge is about to see a VIDEO is worth counting, and this is the
+  // only honest place to count it: a creator rejected on reach above was never
+  // recorded by design, so tallying them as "judged without video" would make a
+  // healthy run look broken. Everyone from here on was genuinely sent to the
+  // model, so withVideo + withoutVideo is exactly the set of judgements made,
+  // and the split says how many were made on pictures and text alone.
+  const hadClip = !!(candidate.clip || (Array.isArray(candidate.clips) && candidate.clips.length));
   const niche = await nicheMatch(candidate, config, { classify: deps.nicheClassify });
   candidate.nicheScore = niche.nicheScore;
   candidate.nicheReason = niche.nicheReason;
@@ -198,13 +206,13 @@ async function processCandidate(run, config, candidate, deps) {
     evidence: candidate.evidence || null,
     decision: 'pending',
   });
-  if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted' };
+  if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted', judged: true, hadClip };
 
   if (!verdict.pass) {
     await deps.updateCandidate(row.id, {
       decision: 'rejected', reject_reason: verdict.rejectReason, decided_by: 'rule',
     });
-    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: verdict.rejectReason };
+    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: verdict.rejectReason, judged: true, hadClip };
   }
 
   // Passed the rules — guard against creators we're already contacting in this
@@ -214,7 +222,7 @@ async function processCandidate(run, config, candidate, deps) {
     await deps.updateCandidate(row.id, {
       decision: 'rejected', reject_reason: 'already in campaign', decided_by: 'rule',
     });
-    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'already in campaign' };
+    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'already in campaign', judged: true, hadClip };
   }
   // ...and (best-effort) against creators already USED in the Creator-DB.
   if (deps.isUsed) {
@@ -223,7 +231,7 @@ async function processCandidate(run, config, candidate, deps) {
         await deps.updateCandidate(row.id, {
           decision: 'rejected', reject_reason: 'used creator', decided_by: 'rule',
         });
-        return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'used creator' };
+        return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'used creator', judged: true, hadClip };
       }
     } catch (_) {
       /* Creator-DB unreachable — don't block sourcing on it */
@@ -237,7 +245,7 @@ async function processCandidate(run, config, candidate, deps) {
   const disposition = reachUnverified ? 'review' : reviewDecision(verdict, config);
   if (disposition === 'review') {
     await deps.updateCandidate(row.id, { decision: 'review', decided_by: 'rule' });
-    return { decision: 'review', added: false, candidateId: row.id };
+    return { decision: 'review', added: false, candidateId: row.id, judged: true, hadClip };
   }
 
   const creator = await deps.insertCreator({
@@ -248,7 +256,7 @@ async function processCandidate(run, config, candidate, deps) {
     sourcedVia: sourceTag(run, config, candidate, { niche, gate }),
   });
   await deps.updateCandidate(row.id, { decision: 'added', creator_id: creator.id, decided_by: 'rule' });
-  return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id };
+  return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id, judged: true, hadClip };
 }
 
 // Drive a run to completion off a candidate source. `source.next()` resolves to a
@@ -256,7 +264,15 @@ async function processCandidate(run, config, candidate, deps) {
 // deps.shouldStop() returns true. Returns { status, stats }.
 async function runWithSource(run, config, source, deps) {
   const targetCount = Number(config.targetCount || run.target_count || 0);
-  const stats = { scanned: 0, added: 0, rejected: 0, skipped: 0, review: 0, byReason: {} };
+  // withVideo / withoutVideo count JUDGEMENTS, not creators scanned — see the
+  // note at the judge call in processCandidate. A run whose withVideo stays 0
+  // while withoutVideo climbs is a run whose phone is not delivering its
+  // recordings, which is otherwise invisible until someone reads a verdict and
+  // wonders why it only ever talks about the bio.
+  const stats = {
+    scanned: 0, added: 0, rejected: 0, skipped: 0, review: 0, byReason: {},
+    withVideo: 0, withoutVideo: 0,
+  };
   let stopped = false;
 
   while (!targetCount || stats.added < targetCount) {
@@ -273,6 +289,10 @@ async function runWithSource(run, config, source, deps) {
       res = await processCandidate(run, config, candidate, deps);
     } catch (err) {
       res = { decision: 'error', added: false, rejectReason: err.message };
+    }
+
+    if (res.judged) {
+      if (res.hadClip) stats.withVideo += 1; else stats.withoutVideo += 1;
     }
 
     if (res.added) {

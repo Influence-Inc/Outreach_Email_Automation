@@ -29,7 +29,7 @@
 // screen stops the run immediately.
 
 const {
-  readView, IG_ANDROID_PACKAGE, analyseProfile, REELS_PER_PROFILE,
+  readView, IG_ANDROID_PACKAGE, analyseProfile, REELS_PER_PROFILE, resolveClip,
 } = require('./sourcingNavigator');
 const engagementPolicy = require('./engagementPolicy');
 const { looksOffNiche } = require('./sourcingFilters');
@@ -204,14 +204,13 @@ async function collectBatch({
     try {
       // eslint-disable-next-line no-await-in-loop
       const rec = await driver.recordClip(clipSeconds);
-      const clipId = rec && (rec.clipId || rec);
       // eslint-disable-next-line no-await-in-loop
-      const stored = clipId ? await getClip(clipId) : null;
-      if (stored && stored.buf) {
-        clip = { dataBase64: stored.buf.toString('base64'), mimeType: stored.mediaType || 'video/mp4' };
-      } else if (stored && stored.dataBase64) {
-        clip = stored;
-      }
+      const resolved = await resolveClip(rec, getClip);
+      clip = resolved.clip;
+      // The quiet half of the same failure: the phone recorded and uploaded, and
+      // the bytes never made it back here. Indistinguishable from a granted
+      // recorder until it is said out loud.
+      if (!clip) warn(`[reels] recording failed — judging without video: ${resolved.reason}`);
     } catch (err) {
       // The usual cause is screen capture not being granted on the phone, which
       // fails instantly and every time — so the scout looks like it is scrolling
@@ -331,6 +330,7 @@ async function handleCreator({
         fallbackUsername: entry.username,
         source: 'reels-feed',
         config,
+        log: warn,
         screens: ['profile', 'reels_tab'],
         // The feed reel is already recorded and in the analysis queue; a second
         // recording would cost another stretch on the phone for a verdict we

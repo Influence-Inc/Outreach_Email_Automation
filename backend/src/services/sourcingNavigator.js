@@ -738,7 +738,7 @@ async function* scoutReelFeed({
             source: 'backend-navigator:feed-scroll',
             screens: ['reels_feed', 'profile', 'reels_tab'],
             view: arrived.view,
-            config, prescreen, deviceHint,
+            config, prescreen, deviceHint, log,
           });
           if (profile) {
             yield profile;
@@ -831,7 +831,7 @@ async function captureViaReel({
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
     view: arrived.view,
-    config, prescreen, deviceHint,
+    config, prescreen, deviceHint, log,
     sourceTerm: term,
   });
 }
@@ -853,6 +853,10 @@ async function analyseProfile({
   // free from the reels it records; feed mode turns it on, since it records on
   // the feed and would otherwise collect none at all.
   sampleEngagement = false,
+  // `log` is not optional in practice. Every call site used to leave it
+  // defaulted, so analyseProfile's logging — "not recording", and the recording
+  // failures that explain a run judging everyone on bio text — went to a no-op
+  // and profiles mode looked silent no matter what went wrong on the phone.
   config = {}, prescreen = null, deviceHint = null, log = () => {},
 }) {
   // The caller that verified we reached this profile already read the screen;
@@ -1249,6 +1253,113 @@ async function grabShot({ driver, kind }) {
  * it here, in the player we already stand in, also costs nothing extra to reach.
  */
 // Record ONE reel already on screen at `point` (video + audio), and come back to
+// the grid. Best-effort throughout: a host without recordClip or a failed
+// recording must never cost the reach data we already have.
+async function recordAt({
+  driver, point, pacingMs, jitterPx = 0, read = readView, clipSeconds = 12, getClip,
+  log = () => {},
+}) {
+  if (!driver.recordClip || !point) return { clip: null, view: null };
+
+  await humanTap(driver, point, jitterPx, pacingMs);
+
+  // The player is open, which is the ONLY screen carrying likes and comments —
+  // the grid has view counts and nothing else. Reading it here is what gives
+  // search mode an engagement signal at all; before this, candidate.engagement
+  // was never set outside reels mode, so every fraud check that depends on it
+  // was silently inert on the default discovery path.
+  //
+  // One extra screen read per recorded reel, on a screen we are standing on
+  // anyway, and entirely best-effort: a failed read leaves the counts null,
+  // which every downstream check reads as "unmeasured" rather than as zero.
+  let engagement = null;
+  try {
+    const player = await read(driver);
+    if (player && (player.likes != null || player.comments != null || player.views != null)) {
+      engagement = {
+        likes: player.likes ?? null,
+        comments: player.comments ?? null,
+        views: player.views ?? null,
+      };
+    }
+  } catch (_) {
+    /* enrichment only — never a reason to lose the recording */
+  }
+
+  let clip = null;
+  try {
+    const rec = await driver.recordClip(clipSeconds);
+    // clipStore hands back { buf, mediaType }; reelJudge reads
+    // { dataBase64, mimeType }. Attaching the store's record verbatim meant
+    // classifyWithGemini saw no dataBase64, returned null, and every candidate
+    // from this flow quietly fell through to the bio-text tier — the video was
+    // recorded and uploaded, and then never judged.
+    const resolved = await resolveClip(rec, getClip);
+    clip = resolved.clip;
+    // A recording that came back with nothing usable is the same outcome as one
+    // that threw, and it used to be the quiet one. Same wording, so one grep
+    // finds every creator judged without video whatever the cause.
+    if (!clip) log(`[sourcing] recording failed — judging without video: ${resolved.reason}`);
+  } catch (err) {
+    // Still not fatal — but no longer silent. A recorder that fails EVERY time
+    // (screen capture not granted on the phone is the usual cause) is
+    // indistinguishable, from the outside, from a scout that simply never
+    // watches anything: the candidate is judged on bio text and the reel appears
+    // to have been skipped. Say so, once per attempt.
+    log(`[sourcing] recording failed — judging without video: ${(err && err.message) || err}`);
+  }
+  // Back to the grid — but only as far as the grid, so a recording that never
+  // opened the player does not press back out of the profile. The view it lands
+  // on is handed back: it is the grid re-rendered, which is what the next reel
+  // has to be located on.
+  const view = await backTo({
+    driver, read, pacingMs, jitterPx,
+    wanted: ['reels_tab', 'profile'],
+    maxHops: 2,
+  });
+  return { clip, view, engagement };
+}
+
+/**
+ * Turn a `recordClip` result into bytes the judge can actually read.
+ *
+ * Returns `{ clip, reason }` with exactly one of them set. `reason` is why there
+ * is no video, IN WORDS, because until now every way of ending up without one
+ * was silent: the phone recorded, the upload succeeded, and the backend then
+ * quietly judged on bio text with nothing written to the log. Two paths did it.
+ *
+ *   - The agent's `uploadClip` ends in `json.optString("clipId", "")`, so a
+ *     response missing the id hands back an EMPTY STRING. That is falsy, so the
+ *     old `rec.clipId || rec` fell through to the whole result object, which is
+ *     not a key in the clip store, so the lookup missed and returned null.
+ *   - A clip genuinely not in the store — expired, evicted, or the backend
+ *     restarted between the upload and the take.
+ *
+ * Neither threw, so neither reached the catch that does the logging. "Screen
+ * capture is not granted" was therefore never the only explanation for a run
+ * that watches reels and judges everyone on text — it was just the only one
+ * that said anything.
+ */
+async function resolveClip(rec, getClip) {
+  if (!rec) return { clip: null, reason: 'the agent returned nothing for the recording' };
+  const clipId = typeof rec === 'string' ? rec : rec.clipId;
+  if (!clipId) {
+    return { clip: null, reason: 'the agent recorded but returned no clip id — the upload to /clip most likely failed' };
+  }
+  const stored = await getClip(clipId);
+  if (!stored) {
+    return { clip: null, reason: `${clipId} was not in the clip store (expired, evicted, or the backend restarted mid-recording)` };
+  }
+  if (stored.buf) {
+    return {
+      clip: { dataBase64: stored.buf.toString('base64'), mimeType: stored.mediaType || 'video/mp4' },
+      reason: null,
+    };
+  }
+  if (stored.dataBase64) return { clip: stored, reason: null };
+  return { clip: null, reason: `${clipId} was in the store but held no bytes` };
+}
+
 /**
  * Which reel to open when all we want is its like and comment counts.
  *
@@ -1313,77 +1424,6 @@ async function sampleEngagementAt({
     driver, read, pacingMs, jitterPx, wanted: ['reels_tab', 'profile'], maxHops: 2,
   });
   return sampled;
-}
-
-// the grid. Best-effort throughout: a host without recordClip or a failed
-// recording must never cost the reach data we already have.
-async function recordAt({
-  driver, point, pacingMs, jitterPx = 0, read = readView, clipSeconds = 12, getClip,
-  log = () => {},
-}) {
-  if (!driver.recordClip || !point) return { clip: null, view: null };
-
-  await humanTap(driver, point, jitterPx, pacingMs);
-
-  // The player is open, which is the ONLY screen carrying likes and comments —
-  // the grid has view counts and nothing else. Reading it here is what gives
-  // search mode an engagement signal at all; before this, candidate.engagement
-  // was never set outside reels mode, so every fraud check that depends on it
-  // was silently inert on the default discovery path.
-  //
-  // One extra screen read per recorded reel, on a screen we are standing on
-  // anyway, and entirely best-effort: a failed read leaves the counts null,
-  // which every downstream check reads as "unmeasured" rather than as zero.
-  let engagement = null;
-  try {
-    const player = await read(driver);
-    if (player && (player.likes != null || player.comments != null || player.views != null)) {
-      engagement = {
-        likes: player.likes ?? null,
-        comments: player.comments ?? null,
-        views: player.views ?? null,
-      };
-    }
-  } catch (_) {
-    /* enrichment only — never a reason to lose the recording */
-  }
-
-  let clip = null;
-  try {
-    const rec = await driver.recordClip(clipSeconds);
-    const clipId = rec && (rec.clipId || rec);
-    const stored = clipId ? await getClip(clipId) : null;
-    // clipStore hands back { buf, mediaType }; reelJudge reads
-    // { dataBase64, mimeType }. Attaching the store's record verbatim meant
-    // classifyWithGemini saw no dataBase64, returned null, and every candidate
-    // from this flow quietly fell through to the bio-text tier — the video was
-    // recorded and uploaded, and then never judged.
-    if (stored && stored.buf) {
-      clip = {
-        dataBase64: stored.buf.toString('base64'),
-        mimeType: stored.mediaType || 'video/mp4',
-      };
-    } else if (stored && stored.dataBase64) {
-      clip = stored;
-    }
-  } catch (err) {
-    // Still not fatal — but no longer silent. A recorder that fails EVERY time
-    // (screen capture not granted on the phone is the usual cause) is
-    // indistinguishable, from the outside, from a scout that simply never
-    // watches anything: the candidate is judged on bio text and the reel appears
-    // to have been skipped. Say so, once per attempt.
-    log(`[sourcing] recording failed — judging without video: ${(err && err.message) || err}`);
-  }
-  // Back to the grid — but only as far as the grid, so a recording that never
-  // opened the player does not press back out of the profile. The view it lands
-  // on is handed back: it is the grid re-rendered, which is what the next reel
-  // has to be located on.
-  const view = await backTo({
-    driver, read, pacingMs, jitterPx,
-    wanted: ['reels_tab', 'profile'],
-    maxHops: 2,
-  });
-  return { clip, view, engagement };
 }
 
 /**
@@ -1510,7 +1550,7 @@ async function openAndCaptureProfile({
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
     view: arrived.view,
-    config, prescreen, deviceHint,
+    config, prescreen, deviceHint, log,
   });
   return { ...profile, username: handle };
 }
@@ -1596,4 +1636,5 @@ module.exports = {
   REELS_PER_PROFILE,
   CLIPS_PER_PROFILE,
   MAX_KEYWORD_DEPTH,
+  resolveClip,
 };

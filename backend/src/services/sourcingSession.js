@@ -235,7 +235,25 @@ async function runSession({ hostId, run, deps }) {
     const clipStore = require('./clipStore');
     gen = scoutFn({
       driver,
+      // The WHOLE campaign config, for the same reason reels mode needs it.
+      //
+      // This branch used to forward the mechanical knobs alone, on the reasoning
+      // that profiles mode judges in the orchestrator (which does get the real
+      // config) so the navigator only needed pacing. That stopped being true as
+      // the navigator grew gates of its own, and all of them were reading
+      // `undefined`:
+      //
+      //   - the on-device prefilter in analyseProfile — no floor, no ceiling, no
+      //     risk shape, so it rejected NOBODY and a clip was recorded and
+      //     uploaded for every creator, including the ones the orchestrator was
+      //     about to reject on reach a moment later;
+      //   - `prescreenNiche`, so the screenshot prescreen never switched on for
+      //     any campaign that asked for it;
+      //   - `floor` / `floorTolerance`, so the early reach reject never fired.
+      //
+      // Mechanical values still win, so nothing about pacing changes.
       config: {
+        ...config,
         pacingMs,
         tapJitterPx,
         clipSeconds: config.clipSeconds,
@@ -254,7 +272,11 @@ async function runSession({ hostId, run, deps }) {
     const stats = (result && result.stats) || {};
     log(
       `[sourcing-session] run #${run.id} host ${hostId}: ended status=${result && result.status} ` +
-      `scanned=${stats.scanned || 0} added=${stats.added || 0} review=${stats.review || 0} rejected=${stats.rejected || 0}`,
+      `scanned=${stats.scanned || 0} added=${stats.added || 0} review=${stats.review || 0} rejected=${stats.rejected || 0} ` +
+      // How many verdicts actually had a reel to watch. `withVideo=0` on a run
+      // that judged anyone at all means no recording reached the judge, whatever
+      // the phone appeared to be doing.
+      `judged=${(stats.withVideo || 0) + (stats.withoutVideo || 0)} withVideo=${stats.withVideo || 0} withoutVideo=${stats.withoutVideo || 0}`,
     );
   } finally {
     try { if (gen.return) await gen.return(); } catch (_) { /* generator already done */ }

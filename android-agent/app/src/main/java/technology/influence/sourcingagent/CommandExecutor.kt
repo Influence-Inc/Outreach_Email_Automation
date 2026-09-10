@@ -29,6 +29,13 @@ class CommandExecutor(
     private val hostId: Int,
     private val power: PowerController,
     private val clipProvider: () -> ClipProvider?,
+    // Why there is no recorder, when there is no recorder. "Not granted" and
+    // "granted, then stopped by the platform" need different actions from the
+    // operator and used to read identically.
+    private val clipUnavailableReason: () -> String = {
+        "screen capture is not granted on this phone — open the Sourcing Agent " +
+            "app and tap \"Grant screen capture\" to enable reel recording"
+    },
 ) {
 
     companion object {
@@ -142,12 +149,17 @@ class CommandExecutor(
 
             "recordClip" -> {
                 val provider = clipProvider()
-                    ?: throw IllegalStateException(
-                        "screen capture is not granted on this phone — open the Sourcing Agent " +
-                            "app and tap \"Grant screen capture\" to enable reel recording"
-                    )
+                    ?: throw IllegalStateException(clipUnavailableReason())
                 val bytes = provider.record(a.optInt("seconds", 12))
                 val clipId = backend.uploadClip(hostId, bytes, "video/mp4")
+                // An upload that came back without an id means the bytes did not
+                // land, and returning it anyway made the backend look up an empty
+                // string, find nothing, and judge without video in silence.
+                if (clipId.isEmpty()) {
+                    throw IllegalStateException(
+                        "the clip uploaded but the backend returned no clipId — the recording was lost"
+                    )
+                }
                 JSONObject().apply { put("clipId", clipId) }
             }
 

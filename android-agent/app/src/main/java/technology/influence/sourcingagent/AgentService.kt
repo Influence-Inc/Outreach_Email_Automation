@@ -67,6 +67,19 @@ class AgentService : Service() {
     private var projection: MediaProjection? = null
     private var clipRecorder: ClipRecorder? = null
 
+    // Screen capture is NOT a permission that stays granted. MediaProjection is a
+    // per-session consent, and Android ends it on its own — the user dismissing
+    // the cast notification, the service being restarted by the system, or the
+    // platform revoking it. When that happens onStop() nulls the recorder and
+    // every later recordClip fails, so a phone the operator correctly remembers
+    // granting reports itself as never having been granted. These two say which
+    // it was, so the run log names the fix instead of the symptom.
+    @Volatile
+    private var projectionEverGranted = false
+
+    @Volatile
+    private var projectionStopped = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -117,6 +130,15 @@ class AgentService : Service() {
             hostId = hostId,
             power = power,
             clipProvider = { clipRecorder },
+            clipUnavailableReason = {
+                if (projectionEverGranted && projectionStopped) {
+                    "screen capture was granted but Android has since stopped it — reopen the " +
+                        "Sourcing Agent app and tap \"Grant screen capture\" again"
+                } else {
+                    "screen capture has not been granted on this phone — open the Sourcing Agent " +
+                        "app and tap \"Grant screen capture\" to enable reel recording"
+                }
+            },
         )
 
         // Starting immediately after enabling accessibility is the normal case,
@@ -281,8 +303,12 @@ class AgentService : Service() {
                 override fun onStop() {
                     clipRecorder = null
                     projection = null
+                    projectionStopped = true
                 }
             }, null)
+
+            projectionEverGranted = true
+            projectionStopped = false
 
             val metrics = resources.displayMetrics
             clipRecorder = ClipRecorder(
