@@ -310,23 +310,37 @@ test('maxViewSpike is tunable per campaign', () => {
 // ── brand fit ───────────────────────────────────────────────────────────────
 
 // The closest thing in the blend to the question an outreach actually asks:
-// could this creator hold THIS product and have it look native.
-test('a creator who could not plausibly hold the product is rejected', () => {
-  const r = scoreCreator(strong({
+// could this creator hold THIS product and have it look native. It is the
+// LARGEST single weight, so a poor score already costs a creator more than any
+// other component — which is why it no longer also deletes them. The level is
+// reported instead, and a human decides.
+test('weak brand fit is not rejected by default — it only costs score', () => {
+  const poor = scoreCreator(strong({
     creator: { fit_score: 95, consistency_of_niche: 9 },
     clips: [
       { creativity: 9, hook_strength: 9, is_original_creator: true, brand_fit: 2 },
       { creativity: 9, hook_strength: 8, is_original_creator: true, brand_fit: 3 },
     ],
   }), {});
-  assert.strictEqual(r.pass, false);
-  assert.match(r.rejectReason, /brand fit 2\.5 below 4/);
+  assert.ok(!/brand fit/.test(String(poor.rejectReason)), 'no longer a hard reject');
+  assert.strictEqual(poor.components.brandFit, 0.25, 'and the weak score is still reported');
+
+  // The cost is real: the same creator with a strong pairing scores far higher.
+  const good = scoreCreator(strong({
+    creator: { fit_score: 95, consistency_of_niche: 9 },
+    clips: [
+      { creativity: 9, hook_strength: 9, is_original_creator: true, brand_fit: 9 },
+      { creativity: 9, hook_strength: 8, is_original_creator: true, brand_fit: 10 },
+    ],
+  }), {});
+  assert.ok(good.score > poor.score + 0.15, 'brand fit still moves the number a lot');
 });
 
-test('the brand-fit floor is tunable, and 0 turns it off', () => {
+test('the brand-fit floor is opt-in, and still works when a run asks for one', () => {
   const poor = strong({ clips: [{ creativity: 9, hook_strength: 9, is_original_creator: true, brand_fit: 2 }] });
-  assert.match(scoreCreator(poor, {}).rejectReason, /brand fit/);
+  assert.ok(!/brand fit/.test(String(scoreCreator(poor, {}).rejectReason)), 'off by default');
   assert.ok(!/brand fit/.test(String(scoreCreator(poor, { minBrandFit: 0 }).rejectReason)));
+  assert.match(scoreCreator(poor, { minBrandFit: 4 }).rejectReason, /brand fit 2 below 4/);
   assert.match(scoreCreator(strong({
     clips: [{ creativity: 9, hook_strength: 9, is_original_creator: true, brand_fit: 6 }],
   }), { minBrandFit: 8 }).rejectReason, /brand fit 6 below 8/);

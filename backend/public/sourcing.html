@@ -147,11 +147,22 @@
         <label for="creatorPassThreshold">Quality bar (0-1)</label>
         <input id="creatorPassThreshold" type="number" min="0" max="1" step="0.01" value="0.72" />
 
-        <label for="minCreativity">Min creativity (0 = no floor)</label>
-        <input id="minCreativity" type="number" min="0" max="10" step="1" value="0" placeholder="0" />
+        <label for="idealExamples">Creators you want</label>
+        <textarea id="idealExamples" rows="3"
+          placeholder="One per line — a handle, a reel link, or a description in your own words. e.g.&#10;@marathonhandbook&#10;https://www.instagram.com/reel/Cxyz123/&#10;coaches who film their own training, no studio lighting"></textarea>
 
-        <label for="minBrandFit">Min brand fit (1-10)</label>
-        <input id="minBrandFit" type="number" min="0" max="10" step="1" value="4" />
+        <label for="avoidExamples">Creators you don't</label>
+        <textarea id="avoidExamples" rows="3"
+          placeholder="Same format. e.g.&#10;@gymtok.reposts&#10;pages that repost other people's clips&#10;anyone whose reels are mostly product hauls"></textarea>
+
+        <p class="scout-hint" style="grid-column:1/-1;margin:-4px 0 4px">
+          These go to the judge as written, before it sees any candidate, so it knows
+          what you are after rather than inferring it from keywords.
+          <strong>A handle or link is read as text, not opened</strong> &mdash; the judge
+          sees the name, not the reel behind it. A line describing what you like about
+          them (&ldquo;films their own training, no studio lighting&rdquo;) teaches it far
+          more than the URL alone.
+        </p>
 
         <label for="prescreenNiche">Screenshot pre-check</label>
         <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">
@@ -231,7 +242,7 @@
       </div>
       <table class="scout-table">
         <thead>
-          <tr><th>Handle</th><th>Views (min–max)</th><th>Niche</th><th>Creativity</th><th>Risk</th><th>Decision</th><th>Reason</th></tr>
+          <tr><th>Handle</th><th>Views (min–max)</th><th>Niche</th><th>Creativity</th><th>Brand fit</th><th>Risk</th><th>Decision</th><th>Reason</th></tr>
         </thead>
         <tbody id="cand-rows"></tbody>
       </table>

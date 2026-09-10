@@ -467,3 +467,38 @@ test('the prompt tells the judge that low creativity is a legitimate answer', ()
   assert.match(p, /not a bar to clear/i);
   assert.match(p, /is not dropped for it/i);
 });
+
+// The brand-fit level, reported for the same reason creativity's is: nothing is
+// rejected for a weak pairing any more, so it has to be visible instead.
+test('the brand-fit level is carried through as a word', () => {
+  const clip = reelJudge.parseClipAnalysis({ brand_fit: 'derivative' });
+  assert.strictEqual(clip.brand_fit_level, 'derivative');
+  assert.strictEqual(clip.brand_fit, 2);
+});
+
+test('an unasked brand fit has no level rather than a flattering default', () => {
+  // No brandProduct configured means the question was never put, and the schema
+  // makes the field nullable for exactly that case.
+  assert.strictEqual(reelJudge.parseClipAnalysis({ niche: 'running' }).brand_fit_level, null);
+  assert.strictEqual(reelJudge.parseClipAnalysis({ brand_fit: null }).brand_fit_level, null);
+});
+
+// Handles, links and free text the admin typed reach the judge BEFORE it sees a
+// candidate, so it knows what is wanted rather than inferring it from keywords.
+test('the admin\'s example creators reach the prompt on both sides', () => {
+  const p = reelJudge.buildProfilePrompt({ username: 'x' }, {
+    niche: 'running',
+    idealExamples: ['@marathonhandbook', 'coaches who film their own training, no studio lighting'],
+    avoidExamples: ['@gymtok.reposts'],
+  }, []);
+  assert.match(p, /GOOD — creators like these/);
+  assert.match(p, /@marathonhandbook/);
+  assert.match(p, /no studio lighting/, 'a comma in a description does not split it');
+  assert.match(p, /BAD — creators like these are wrong for us/);
+  assert.match(p, /@gymtok\.reposts/);
+});
+
+test('a campaign that named no examples is not handed an empty block to reason from', () => {
+  const p = reelJudge.buildProfilePrompt({ username: 'x' }, { niche: 'running' }, []);
+  assert.ok(!/GOOD — creators like these/.test(p));
+});

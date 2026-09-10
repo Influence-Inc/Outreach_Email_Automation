@@ -70,11 +70,17 @@ const DEFAULT_MAX_SPIKE = 12;
 // cannot use plain content.
 const DEFAULT_MIN_CREATIVITY = 0;
 
-// Brand fit is a new judgement and its calibration is unproven, so the default
-// floor rejects only a clearly implausible pairing rather than trying to be
-// selective. Raise it once a few runs show what the numbers look like in
-// practice. 0 disables it.
-const DEFAULT_MIN_BRAND_FIT = 4;
+// No brand-fit floor by default, for the same reason craft has none.
+//
+// It sat at 4 while the judgement was new and unproven — which is exactly the
+// wrong time to have it delete creators. Brand fit is the largest single weight
+// in the blend (0.25), so a poor score already costs a creator more than any
+// other component; a floor on top of that removed them from the shortlist
+// before a human could disagree with the model. The level is reported on every
+// candidate instead, so a weak pairing is visible rather than invisible.
+//
+// Set a value per-run to bring the floor back.
+const DEFAULT_MIN_BRAND_FIT = 0;
 
 // Engagement floor, as a share of the creator's own following.
 //

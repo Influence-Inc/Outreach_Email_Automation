@@ -213,6 +213,10 @@ function parseClipAnalysis(raw) {
     // Null when the model was never asked (no brandProduct configured) — the
     // scorer treats that as "not judged", never as a fit of zero.
     brand_fit: scaleLevel(raw.brand_fit),
+    // The same verdict as a word. Nothing is rejected for weak brand fit any
+    // more, so this is what keeps a poor pairing visible on the shortlist
+    // instead of it just scoring low for no stated reason.
+    brand_fit_level: levelName(raw.brand_fit),
     brand_fit_reason: str(raw.brand_fit_reason),
     reasoning: str(raw.reasoning),
   };

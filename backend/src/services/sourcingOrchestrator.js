@@ -11,7 +11,9 @@
 // routes/sourcing.js builds the production `deps` from db, duplicateGuard,
 // creatorDb and the shared creator-insert helper.
 
-const { nicheMatch, decide, decideReel, prefilter } = require('./sourcingFilters');
+const {
+  nicheMatch, decide, decideReel, prefilter, DEFAULTS: FILTER_DEFAULTS,
+} = require('./sourcingFilters');
 const { scoreCreator } = require('./creatorScore');
 
 const REVIEW_BAND_DEFAULT = 0.15;
@@ -24,7 +26,12 @@ function reviewDecision(verdict, config = {}) {
   if (!config.reviewBorderline) return 'add';
   const score = verdict && verdict.nicheScore;
   if (typeof score !== 'number') return 'add'; // niche unassessed -> unchanged behavior
-  const threshold = config.nicheThreshold != null ? config.nicheThreshold : 0.5;
+  // The shared default, not a second copy of it — this used to hardcode 0.5,
+  // so lowering the real threshold would have quietly left the review band
+  // measuring against a number nothing else used any more.
+  const threshold = config.nicheThreshold != null
+    ? config.nicheThreshold
+    : FILTER_DEFAULTS.nicheThreshold;
   const band = config.reviewBand != null ? config.reviewBand : REVIEW_BAND_DEFAULT;
   return score < threshold + band ? 'review' : 'add';
 }

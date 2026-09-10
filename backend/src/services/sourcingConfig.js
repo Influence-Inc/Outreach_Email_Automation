@@ -23,6 +23,22 @@ function num(v) {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * Split on NEWLINES only — one entry per line.
+ *
+ * Keywords split on commas as well, which is right for a keyword list and wrong
+ * for anything written as a sentence: "films their own training, no studio
+ * lighting" is one description of a creator, and comma-splitting turns it into
+ * two fragments that each read as a separate demand.
+ */
+function toLineList(v) {
+  if (Array.isArray(v)) return v.map((s) => String(s).trim()).filter(Boolean);
+  return String(v || '')
+    .split(/\r?\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 // The five things creatorScore weighs. Named here so a typo in a saved campaign
 // config ("creativty") is dropped rather than silently becoming a sixth
 // component that dilutes every real one.
@@ -133,8 +149,12 @@ function buildConfig(defaults = {}, override = {}) {
     minViewEngagementRate: num(merged.minViewEngagementRate),
     // Free-text taste, stated up front rather than learned from decisions that
     // do not exist yet on a new campaign. See nicheCalibration.statedTaste.
-    idealExamples: toKeywordList(merged.idealExamples),
-    avoidExamples: toKeywordList(merged.avoidExamples),
+    // One per line, NOT comma-split: these are handles, links and sentences
+    // describing the creators this brand wants, and a sentence may well contain
+    // a comma. Fed to the judge before it sees any candidate — see
+    // nicheCalibration.statedTaste.
+    idealExamples: toLineList(merged.idealExamples),
+    avoidExamples: toLineList(merged.avoidExamples),
     // Look at the profile screenshots before recording any video, and skip a
     // creator the pictures say is plainly in another line of work. Costs one
     // small image call; saves a recording, an upload and a video call every time
@@ -169,6 +189,6 @@ function buildConfig(defaults = {}, override = {}) {
 }
 
 module.exports = {
-  buildConfig, toKeywordList, weightsOf, clipSecondsOf,
+  buildConfig, toKeywordList, toLineList, weightsOf, clipSecondsOf,
   RISKS, WEIGHT_KEYS, MIN_CLIP_SECONDS, DEFAULT_CLIP_SECONDS,
 };

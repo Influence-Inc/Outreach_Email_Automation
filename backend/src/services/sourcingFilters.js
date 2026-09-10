@@ -28,7 +28,20 @@ const DEFAULTS = {
   // buying against does not clear it, and no amount of the rest being strong
   // changes that. Raise it per-run if a campaign genuinely wants slack.
   floorTolerance: 0,
-  nicheThreshold: 0.5,
+  // The niche call belongs to the JUDGE, not to this number.
+  //
+  // At 0.5 this was the decision: half the model's scale was rejected outright
+  // before anything else in the pipeline got a say, and a run's whole reject
+  // column read "niche score 0.35 below 0.5" — the backend overruling a
+  // judgement it is far less qualified to make than the model that watched the
+  // reel, read the bio and was briefed on the brand.
+  //
+  // 0.1 turns it back into what it should have been all along: a floor under
+  // the obviously-wrong, not a gate. A creator the judge scored at all is now
+  // carried forward to the deterministic gate (services/creatorScore.js), where
+  // fit, craft, brand fit and reach are weighed together. Raise it per-run for a
+  // campaign that wants the blunt version back.
+  nicheThreshold: 0.1,
   // Risk-classification knobs (tunable). See classifyRisk().
   lowCv: 0.4,        // coefficient-of-variation ceiling for a "stable" (low) creator
   mediumCv: 0.9,     // ...and for "moderate swings" (medium)
