@@ -580,3 +580,61 @@ test('creators rejected before the judge are counted in neither column', async (
   assert.strictEqual(stats.withVideo, 1);
   assert.strictEqual(stats.withoutVideo, 0, 'the reach rejection never reached the judge');
 });
+
+// ── a profile we never reached is not a creator we rejected ─────────────────
+//
+// Reach can be missing by design (a reel off the feed carries no view counts
+// yet) or by fault (the profile visit ran and never landed). The second leaves
+// the view floor, the risk shape, the outlier check and both engagement checks
+// inert for that row — and until it was named, a whole run of them looked
+// exactly like ordinary niche rejections. That is how 22 went by unnoticed.
+
+test('a failed profile visit is named in the reject reason, not hidden behind the niche score', async () => {
+  const saved = [];
+  const deps = {
+    nicheClassify: async () => ({ score: 0.05, reason: 'not our niche' }),
+    persistCandidate: async (rec) => ({ id: 1, ...rec }),
+    updateCandidate: async (id, patch) => saved.push(patch),
+    findDuplicate: async () => null,
+    insertCreator: async () => ({ id: 'c1' }),
+    updateRun: async () => {},
+  };
+  const res = await processCandidate(
+    { id: 7, campaign_id: 'camp' },
+    { discovery: 'reels', niche: 'running' },
+    {
+      username: 'mia',
+      reels: [{ caption: 'a reel' }], // no view counts — reach never read
+      evidence: { profileVisit: 'failed', profileVisitScreen: 'unknown' },
+    },
+    deps,
+  );
+
+  assert.strictEqual(res.decision, 'rejected');
+  assert.match(res.rejectReason, /profile never opened/);
+  assert.match(res.rejectReason, /judged on the reel alone/);
+  assert.match(saved[0].reject_reason, /profile never opened/);
+});
+
+// The ordinary case must keep reading as an ordinary rejection, or the signal
+// is worthless.
+test('a creator we DID reach keeps a plain reject reason', async () => {
+  const saved = [];
+  const deps = {
+    nicheClassify: async () => ({ score: 0.05, reason: 'not our niche' }),
+    persistCandidate: async (rec) => ({ id: 1, ...rec }),
+    updateCandidate: async (id, patch) => saved.push(patch),
+    findDuplicate: async () => null,
+    insertCreator: async () => ({ id: 'c1' }),
+    updateRun: async () => {},
+  };
+  const res = await processCandidate(
+    { id: 7, campaign_id: 'camp' },
+    { discovery: 'reels', niche: 'running' },
+    { username: 'mia', reels: [{ caption: 'a reel' }], evidence: {} },
+    deps,
+  );
+
+  assert.strictEqual(res.decision, 'rejected');
+  assert.ok(!/profile never opened/.test(res.rejectReason), 'no false alarm');
+});

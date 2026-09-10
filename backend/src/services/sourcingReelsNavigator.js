@@ -318,6 +318,22 @@ async function handleCreator({
       // Not there. Keep the creator on what the feed reel already told us
       // rather than reading some other screen as their profile — and fall
       // through, so the queued analysis is still collected below.
+      //
+      // SAY SO, though. A creator whose profile never opened reaches the scorer
+      // with no follower count and no reach window, which reads downstream as
+      // "reels mode, reach unverifiable by design" — the same shape as a normal
+      // feed candidate. The two are not the same thing: one is expected, the
+      // other is a fault that silently disables the view floor, the risk shape,
+      // the spike check and both engagement checks for that row. Without this
+      // stamp a whole run of them looks like ordinary rejections.
+      if (!arrived.ok) {
+        warn(`[reels] @${entry.username}: profile never opened (last screen: ${arrived.view && arrived.view.screen}) — judging without reach`);
+        candidate.evidence = {
+          ...candidate.evidence,
+          profileVisit: 'failed',
+          profileVisitScreen: (arrived.view && arrived.view.screen) || 'unknown',
+        };
+      }
       const profile = !arrived.ok ? null : await analyseProfile({
         view: arrived.view,
         driver,

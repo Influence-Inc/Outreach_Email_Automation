@@ -1092,7 +1092,11 @@ test('a profile hop that did not land is retried rather than analysed', async ()
     ...OPEN_SEARCH,
     { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
     { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    // arriveAt now looks TWICE per attempt — once after tapping, once more
+    // before repeating the tap — so a hop that genuinely did not land has to
+    // miss both looks before the retry it is testing for happens.
     { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } }, // tap did nothing
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } }, // still nothing on the second look
     { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
     { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
     { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },

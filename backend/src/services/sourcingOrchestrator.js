@@ -88,6 +88,22 @@ async function processCandidate(run, config, candidate, deps) {
     && candidate.reels.some((r) => r && Number.isFinite(Number(r.views)));
   const reachUnverified = reelsMode && !hasReach;
 
+  // Reach can be missing for two very different reasons, and until now they were
+  // indistinguishable on the dashboard:
+  //
+  //   BY DESIGN — a reel straight off the feed carries no view counts, so a
+  //     candidate whose profile visit is still to come has none yet.
+  //   BY FAULT  — the profile visit ran and never landed, so the follower count
+  //     and the whole reach window are missing for a creator we DID try to
+  //     measure. Every reach gate is inert for that row: the view floor, the
+  //     risk shape, the outlier check and both engagement checks all skip.
+  //
+  // The second is worth shouting about, because a run where it happens to every
+  // creator looks exactly like a run of ordinary niche rejections — which is
+  // precisely how 22 of them went by unnoticed. Naming it in the reject reason
+  // puts it in stats.byReason, where a whole run of them is one line.
+  const visitFailed = !!(candidate.evidence && candidate.evidence.profileVisit === 'failed');
+
   // CHEAP GATES FIRST. Reel count, the view floor and the risk shape are
   // arithmetic on numbers already read off the grid, and between them they reject
   // most creators. Judging the niche is a multimodal model call on recorded video
@@ -216,10 +232,16 @@ async function processCandidate(run, config, candidate, deps) {
   if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted', judged: true, hadClip };
 
   if (!verdict.pass) {
+    // A creator we never actually reached was not rejected on their merits —
+    // say which it was, so a run of these reads as the fault it is rather than
+    // as a shortlist doing its job.
+    const rejectReason = visitFailed
+      ? `profile never opened — judged on the reel alone (${verdict.rejectReason})`
+      : verdict.rejectReason;
     await deps.updateCandidate(row.id, {
-      decision: 'rejected', reject_reason: verdict.rejectReason, decided_by: 'rule',
+      decision: 'rejected', reject_reason: rejectReason, decided_by: 'rule',
     });
-    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: verdict.rejectReason, judged: true, hadClip };
+    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason, judged: true, hadClip };
   }
 
   // Passed the rules — guard against creators we're already contacting in this
