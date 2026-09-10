@@ -104,10 +104,15 @@ test('an action that did not land is retried', async () => {
   let acted = 0;
   const r = await arriveAt({
     driver,
+    // Two reads per attempt now — one after acting, one second look before
+    // repeating the action — so a script that exercises three attempts needs
+    // four misses before the screen finally lands.
     read: scriptedRead([
-      { screen: 'search_results', targets: {} },  // did not land
-      { screen: 'search_results', targets: {} },  // still not
-      { screen: 'profile', targets: {} },         // landed
+      { screen: 'search_results', targets: {} },  // attempt 1: did not land
+      { screen: 'search_results', targets: {} },  //            still not, on the second look
+      { screen: 'search_results', targets: {} },  // attempt 2: did not land
+      { screen: 'search_results', targets: {} },  //            still not, on the second look
+      { screen: 'profile', targets: {} },         // attempt 3: landed
     ]),
     wanted: ['profile'],
     act: async () => { acted += 1; },
@@ -274,4 +279,57 @@ test('the cap can be turned off', () => {
   const cap = createProfileCap({ max: 0 });
   for (let i = 0; i < 1000; i += 1) assert.strictEqual(cap.take(), true);
   assert.strictEqual(cap.spent(), false);
+});
+
+// ── a slow screen is not a missed one ───────────────────────────────────────
+//
+// Every attempt re-runs act(), which is right for a tap that landed on nothing
+// and wrong for anything still in flight. Opening a profile by deep link is the
+// case that matters: firing the intent again RESTARTS the navigation, so a
+// profile needing three seconds to render was interrupted at 1.5s, twice, and
+// then written off — and that creator reached the scorer with no follower count
+// and no reach window, silently disabling every reach gate for that row.
+
+test('a screen that arrives late is recognised without repeating the action', async () => {
+  let acts = 0;
+  let reads = 0;
+  // Still rendering on the first look, there on the second — the shape of a
+  // deep-linked profile that needed longer than one pacing interval.
+  const read = async () => {
+    reads += 1;
+    return reads >= 2 ? { screen: 'profile' } : { screen: 'unknown' };
+  };
+  const r = await arriveAt({
+    driver: {}, read, wanted: ['profile'], pacingMs: 0,
+    act: async () => { acts += 1; },
+  });
+
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(acts, 1, 'the deep link was fired ONCE, not restarted');
+  assert.strictEqual(r.attempts, 1);
+});
+
+test('a genuinely missed action is still retried', async () => {
+  let acts = 0;
+  const r = await arriveAt({
+    driver: {}, read: async () => ({ screen: 'unknown' }), wanted: ['profile'], pacingMs: 0,
+    act: async () => { acts += 1; },
+  });
+
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(acts, 3, 'still exhausts its attempts when nothing ever lands');
+});
+
+// settleMs governs how long to WAIT before the second look, not whether to take
+// it — a run paced at 0 must still get the look, or the fix disappears on
+// exactly the fast runs and tests where it is hardest to notice.
+test('the second look happens even at zero pacing', async () => {
+  let reads = 0;
+  const read = async () => { reads += 1; return { screen: 'unknown' }; };
+  await arriveAt({
+    driver: {}, read, wanted: ['profile'], pacingMs: 0, settleMs: 0,
+    act: async () => {},
+  });
+  // 3 attempts, each: one read after acting + one second look on the first two.
+  assert.strictEqual(reads, 5);
 });

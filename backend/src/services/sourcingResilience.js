@@ -94,8 +94,13 @@ async function clearDialogs({
 async function arriveAt({
   driver, read, wanted, act, attempts = DEFAULT_ARRIVE_ATTEMPTS,
   pacingMs = 0, jitterPx = 0, log = noop, what = 'screen',
+  settleMs = null,
 }) {
   const want = Array.isArray(wanted) ? wanted : [wanted];
+  // How long to give a screen that is still arriving before concluding the
+  // action missed. Defaults to the run's own pacing, so a slower run is
+  // automatically more patient.
+  const settle = settleMs == null ? pacingMs : settleMs;
   let view = null;
 
   for (let i = 1; i <= attempts; i += 1) {
@@ -116,6 +121,33 @@ async function arriveAt({
       const cleared = await clearDialogs({ driver, read, view, pacingMs, jitterPx, log });
       view = cleared.view;
       if (want.includes(view.screen)) return { ok: true, view, attempts: i };
+    }
+
+    // LOOK AGAIN BEFORE ACTING AGAIN.
+    //
+    // Every attempt re-runs `act()`, which is right for a tap that landed on
+    // nothing and wrong for anything still in flight. Opening a profile by deep
+    // link is the case that matters: firing the intent a second time RESTARTS
+    // the navigation, so a profile that needed three seconds to render was
+    // never given three seconds — it was interrupted at 1.5s, twice, and then
+    // written off. That is a creator reaching the scorer with no follower count
+    // and no reach window at all, which silently disables the view floor, the
+    // risk shape, the spike check and both engagement checks for that row.
+    //
+    // One more read costs a fraction of what repeating the action costs, and
+    // turns "slow" back into "arrived".
+    // The extra LOOK is the point; `settle` only says how long to wait before
+    // taking it, so a run paced at 0 (every test, and a deliberately fast run)
+    // still gets the second look rather than silently losing the whole fix.
+    if (i < attempts) {
+      // eslint-disable-next-line no-await-in-loop
+      if (settle > 0) await sleep(jitteredDelay(settle));
+      // eslint-disable-next-line no-await-in-loop
+      view = await read(driver);
+      if (want.includes(view.screen)) {
+        log(`[sourcing] ${what}: arrived on the second look — it was slow, not missed`);
+        return { ok: true, view, attempts: i };
+      }
     }
 
     if (i < attempts) log(`[sourcing] ${what}: expected ${want.join('|')}, got ${view.screen} — retrying`);
