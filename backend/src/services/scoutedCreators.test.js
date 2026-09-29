@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const db = require('../db');
-const { listCampaigns, addScoutedCreator, buildNote } = require('./scoutedCreators');
+const { listCampaigns, addScoutedCreator, buildNote, awaitingScrape } = require('./scoutedCreators');
 
 const origOne = db.one;
 const origMany = db.many;
@@ -117,4 +117,31 @@ test('the note names the scout and carries the reel to replicate', () => {
     buildNote({ scoutName: null, reelLinks: ['https://x/reel/1', ''] }),
     'Scouted by a scout via the Creator Database · Reel to replicate: https://x/reel/1',
   );
+});
+
+test('awaitingScrape asks only for scouted creators that still need scraping', async () => {
+  let captured;
+  db.many = async (sql, params) => {
+    captured = { sql, params };
+    return [{ id: 9, instagram_url: 'https://www.instagram.com/mery/', instagram_username: 'mery', status: 'pending_extraction' }];
+  };
+  const rows = await awaitingScrape('camp-1');
+
+  assert.strictEqual(rows.length, 1);
+  assert.deepStrictEqual(captured.params, ['camp-1']);
+  // Scoped to the campaign, and to scouted rows only — so a poll can never
+  // sweep in the campaign's other pending creators.
+  assert.match(captured.sql, /campaign_id = \$1/);
+  assert.match(captured.sql, /sourced_via->>'mode' = 'scouting'/);
+  assert.match(captured.sql, /status = 'pending_extraction'/);
+  // Anything already scraped drops out, so it isn't scraped twice.
+  assert.match(captured.sql, /ig_scraped_data->>'reel_count' IS NULL/);
+});
+
+test('awaitingScrape without a campaign asks nothing', async () => {
+  db.many = async () => {
+    throw new Error('should not query');
+  };
+  assert.deepStrictEqual(await awaitingScrape(''), []);
+  assert.deepStrictEqual(await awaitingScrape(undefined), []);
 });

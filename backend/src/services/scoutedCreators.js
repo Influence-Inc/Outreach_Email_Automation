@@ -104,4 +104,29 @@ async function addScoutedCreator({
   return { created: true, creator, campaign };
 }
 
-module.exports = { listCampaigns, addScoutedCreator, buildNote };
+// Scouted creators in a campaign that still need their Instagram scrape.
+//
+// A manually added creator is scraped because the dashboard page that added
+// them hands the row to the Chrome extension. A scouted creator arrives through
+// a server-to-server call, so no page ever does that — the dashboard asks for
+// them here instead and treats them as freshly added.
+//
+// Deliberately narrow: only scouted rows, only while still 'pending_extraction'
+// with no reel data. That is what keeps this from sweeping in the campaign's
+// other pending creators, which the add flow has always been careful not to do.
+// Cheap on purpose (a few columns, one indexed campaign) because it is polled.
+async function awaitingScrape(campaignId) {
+  if (!campaignId) return [];
+  return db.many(
+    `SELECT id, instagram_url, instagram_username, status
+       FROM creators
+      WHERE campaign_id = $1
+        AND status = 'pending_extraction'
+        AND sourced_via->>'mode' = 'scouting'
+        AND (ig_scraped_data IS NULL OR ig_scraped_data->>'reel_count' IS NULL)
+      ORDER BY created_at ASC, id ASC`,
+    [campaignId],
+  );
+}
+
+module.exports = { listCampaigns, addScoutedCreator, buildNote, awaitingScrape };

@@ -17,6 +17,7 @@ const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('.
 const { renderIgDm } = require('../services/templates');
 const { flagDismissedSql, flagFingerprintSql } = require('../db/flagFingerprint');
 const { STALE_REEL_MONTHS, recentReelSql } = require('../db/reelFreshness');
+const scoutedCreators = require('../services/scoutedCreators');
 
 // Assemble the off-Instagram email-enrichment context for a creator: the links
 // captured by the extension (creators.bio_links) plus anything a fresh scrape
@@ -741,6 +742,18 @@ router.post('/', async (req, res, next) => {
 // updated match. The response carries the same rate_log + contract the dashboard
 // uses, so the panel renders the identical timeline / offer state.
 // Registered before '/:id' so the literal "panel" segment isn't read as an id.
+// Scouted creators still waiting for their Instagram scrape. The dashboard polls
+// this while a campaign is open and hands anything new to the extension, exactly
+// as it does for a creator added by hand. Registered before '/:id' so the literal
+// "awaiting-scrape" segment isn't read as an id.
+router.get('/awaiting-scrape', async (req, res, next) => {
+  try {
+    const { campaign_id } = req.query;
+    if (!campaign_id) return res.status(400).json({ error: 'campaign_id is required' });
+    res.json(await scoutedCreators.awaitingScrape(campaign_id));
+  } catch (err) { next(err); }
+});
+
 router.get('/panel', async (req, res, next) => {
   try {
     const { creator_id, username, campaign_id } = req.query;

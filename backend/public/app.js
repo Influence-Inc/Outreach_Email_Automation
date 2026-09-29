@@ -498,6 +498,8 @@ async function selectCampaign(id) {
   syncCampaignIntakeUI(c);
   syncStageFilterUI();
   await refreshCreators();
+  // Anyone promoted from the scouting sheet while nobody was looking is scraped now.
+  checkScoutedCreators();
 }
 
 function syncSendEmailsBtn(c) {
@@ -4122,9 +4124,11 @@ el('scrape-cancel-btn').addEventListener('click', () => {
 //   • onlyPending: true → every still-unscraped row in the campaign.
 //   • (neither)         → an explicit full re-scrape of the whole campaign.
 // Runs automatically when creators are added; there's no manual button.
+// Resolves true only if a run was actually handed to the extension, so callers
+// that must not lose a creator can tell "started" from "skipped, try later".
 async function startExtensionScrape({ onlyPending = false, creators: explicitRows = null } = {}) {
-  if (!state.selectedCampaignId) return;
-  if (scrapeInFlight) return; // don't stack queues over one another
+  if (!state.selectedCampaignId) return false;
+  if (scrapeInFlight) return false; // don't stack queues over one another
   el('scrape-cancel-btn').textContent = 'Cancel';
   // Ask the bridge to (re)announce, so a missed initial handshake doesn't make
   // the "not detected" check below a false positive.
@@ -4153,7 +4157,7 @@ async function startExtensionScrape({ onlyPending = false, creators: explicitRow
         showScrapeProgress('No creators in this campaign.');
         el('scrape-cancel-btn').textContent = 'Hide';
       }
-      return;
+      return false;
     }
     const creators = list.map((r) => ({
       id: r.id,
@@ -4183,12 +4187,67 @@ async function startExtensionScrape({ onlyPending = false, creators: explicitRow
         el('scrape-cancel-btn').textContent = 'Hide';
       }
     }, 2000);
+    return true;
   } catch (err) {
     scrapeInFlight = false;
     showScrapeProgress(`Failed: ${err.message}`);
     el('scrape-cancel-btn').textContent = 'Hide';
+    return false;
   }
 }
+
+// --- Scouted creators: scrape on arrival -----------------------------------
+//
+// A creator added by hand is scraped because THIS page hands the new row to the
+// Chrome extension (see the add handlers above). A creator promoted from the
+// Creator Database scouting sheet arrives through a server-to-server call, so no
+// page ever sees an "add" — without this they would sit in the table unscraped
+// until someone noticed.
+//
+// So: while a campaign is open, and when it is first opened, ask the server which
+// scouted creators are still waiting and treat any new one exactly like a manual
+// add — show it in the table, then run the same extension scrape. That scrape's
+// own follow-up (off-Instagram email search) then runs as it does for any add.
+//
+// The scrape needs a browser with the extension and this page open, which is why
+// it happens here and not on the server. If nobody has the campaign open when a
+// creator arrives, it happens the next time someone opens it.
+const SCOUTED_POLL_MS = 20000;
+// Creators already handed to the extension in THIS page load. The server keeps
+// listing a row until its reel data lands, so without this a profile the
+// extension couldn't read (private, gone) would be retried on every poll.
+// A reload starts fresh, which is the right moment to try again.
+const scoutedScrapeTried = new Set();
+let scoutedCheckBusy = false;
+
+async function checkScoutedCreators() {
+  const campaignId = state.selectedCampaignId;
+  // Not looking at a campaign, or a scrape is already running (they don't stack;
+  // the next poll picks these up once it finishes).
+  if (!campaignId || el('campaign-view').hidden || scrapeInFlight || scoutedCheckBusy) return;
+  scoutedCheckBusy = true;
+  try {
+    const waiting = await api(
+      `/api/creators/awaiting-scrape?campaign_id=${encodeURIComponent(campaignId)}`,
+    );
+    const fresh = Array.isArray(waiting) ? waiting.filter((r) => !scoutedScrapeTried.has(r.id)) : [];
+    if (!fresh.length) return;
+    // Bring them into the table first, so the row is there while it is scraped.
+    await refreshCreators();
+    await refreshCampaigns();
+    // The operator may have moved on, or another run may have started, meanwhile.
+    if (state.selectedCampaignId !== campaignId || scrapeInFlight) return;
+    const started = await startExtensionScrape({ creators: fresh });
+    if (started) fresh.forEach((r) => scoutedScrapeTried.add(r.id));
+  } catch (err) {
+    // A poll is best-effort; a hiccup must never surface as an error to the operator.
+    console.warn(`Scouted-creator check failed: ${err.message}`);
+  } finally {
+    scoutedCheckBusy = false;
+  }
+}
+
+setInterval(checkScoutedCreators, SCOUTED_POLL_MS);
 
 // --- Email source display ------------------------------------------------
 
