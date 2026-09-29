@@ -46,11 +46,15 @@ const DEFAULT_WEIGHTS = Object.freeze({
   brandFit: 0.25,
 });
 
-// Raised from 0.6: at 0.6 a creator with strong topical fit but mediocre craft
-// still cleared, because fit + niche consistency + steadiness alone add up past
-// the bar without creativity or hook contributing much. 0.72 requires the craft
-// components to actually carry weight.
-const DEFAULT_PASS_THRESHOLD = 0.72;
+// The default quality bar — a campaign can set its own (creatorPassThreshold).
+//
+// 0.52, lowered from 0.72. At 0.72 a creator had to be judged "distinctive" on
+// most components to clear it: one judged "competent" across the board — solid,
+// usable work — scored about 0.58 and was rejected, so the shortlist held only
+// standouts. At 0.52 that creator is shortlisted, while one judged "derivative"
+// across the board (about 0.31) still is not, and the hard rejects (reposts,
+// unsafe, bought views, one-outlier reach) apply whatever the score.
+const DEFAULT_PASS_THRESHOLD = 0.52;
 
 // A creator whose best reel is this far above their typical one is carried by a
 // single outlier rather than a real audience.
@@ -166,8 +170,8 @@ function engagementRate({ engagement, followers } = {}) {
 // so coercing first turned every unasked question into the worst possible
 // answer: reelJudge.parseClipAnalysis reports an unasked brand fit as an
 // explicit `brand_fit: null`, and scoring that as 0 kept its 0.25 weight in the
-// blend — capping every creator on a campaign with no brand details at 0.75, so
-// only one near-perfect on everything else could clear the 0.72 bar.
+// blend — capping every creator on a campaign with no brand details at 0.75,
+// and dragging every one of them down by a quarter of the scale.
 function num(v) {
   if (v == null || v === '') return null;
   const n = Number(v);

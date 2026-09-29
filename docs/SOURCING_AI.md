@@ -72,7 +72,7 @@ model docs for current rates.
 - `reviewBorderline: true` — hold **near‑threshold** passers in the **review
   queue** instead of auto‑adding. Near either threshold that can reject: a
   weighted quality score within `reviewScoreBand` (default `0.05`) of
-  `creatorPassThreshold` (default `0.72`), or a niche score within `reviewBand`
+  `creatorPassThreshold` (default `0.52`), or a niche score within `reviewBand`
   (default `0.15`) of `nicheThreshold` (default `0.1`). The reason is stored on
   the candidate (`evidence.reviewHold`) and shown in the review queue.
 - `reviewUnjudged` (default **on**) — a creator no model could analyse (no
@@ -119,7 +119,7 @@ the blend is per campaign:
 
 ```json
 { "creatorWeights": { "hook": 3, "creativity": 2, "fit": 1 },
-  "creatorPassThreshold": 0.72,
+  "creatorPassThreshold": 0.65,
   "maxViewSpike": 40 }
 ```
 
@@ -128,10 +128,20 @@ exactly what it looks like. Unknown keys are dropped rather than diluting the
 real ones, and an absent `creatorWeights` uses the defaults. (`maxViewSpike`
 defaults to `12`; the `40` above is an example of a campaign loosening it.)
 
+`creatorPassThreshold` — the **quality bar** — defaults to **0.52** (the
+Scout page's *Quality bar* field). At 0.52 a creator the judge calls
+"competent" across the board (≈0.58) is shortlisted and one it calls
+"derivative" throughout (≈0.31) is not; the hard rejects apply whatever the
+score. It was 0.72 until lowered: at that bar only creators judged
+"distinctive" on most components cleared it. Campaigns whose saved defaults
+still carried the old 0.72 were moved to 0.52 once, on the first boot after the
+change (`data_migrations` row `quality-bar-0.72-to-0.52`); any other saved value
+was left as set.
+
 A component that was not measured — `null` or absent — drops out of the blend
 and its weight goes to the rest. It is never scored as `0`: an explicit `null`
 used to count as a zero, which capped every creator on a campaign with no brand
-details at 0.75 against the 0.72 bar.
+details at 0.75.
 
 There is **no follower band**. Reach is what a campaign buys and `floor` /
 `ceiling` gate on it directly; a band on followers only ever rejected creators

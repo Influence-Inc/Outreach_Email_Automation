@@ -135,10 +135,10 @@ function buildConfig(defaults = {}, override = {}) {
     maxProfiles: num(merged.maxProfiles),
     // How long an unchanging screen counts as stuck rather than slow.
     stallMs: num(merged.stallMs),
-    // The deterministic gate's bar (services/creatorScore.js). Raising this is
-    // the single most direct quality dial: at 0.6 a creator with strong fit but
-    // mediocre craft still clears, because creativity and hook are only a
-    // quarter of the weighting between them.
+    // The deterministic gate's bar (services/creatorScore.js, default 0.52) —
+    // the single most direct quality dial. At the default a creator judged
+    // "competent" across the board is shortlisted; raise it toward 0.72 and
+    // only creators judged "distinctive" on most components clear.
     creatorPassThreshold: num(merged.creatorPassThreshold),
     // A hard floor on craft, checked outside the weighted blend. 0 disables it.
     minCreativity: num(merged.minCreativity),

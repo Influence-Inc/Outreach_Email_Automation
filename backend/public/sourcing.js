@@ -133,7 +133,7 @@ function fillForm(cfg) {
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
   el('clipsPerProfile').value = cfg.clipsPerProfile ?? 3;
   el('maxProfiles').value = cfg.maxProfiles ?? '';
-  el('creatorPassThreshold').value = cfg.creatorPassThreshold ?? 0.72;
+  el('creatorPassThreshold').value = cfg.creatorPassThreshold ?? 0.52;
   el('idealExamples').value = asLines(cfg.idealExamples);
   el('brandProduct').value = cfg.brandProduct || '';
   el('brandName').value = cfg.brandName || '';
@@ -293,7 +293,7 @@ function brandFitOf(c) { return levelCell(c, 'brand_fit'); }
 
 /**
  * The weighted quality score the deterministic gate gave — the number the
- * quality bar (0.72 by default) is measured against. A creator decided before
+ * quality bar (0.52 by default) is measured against. A creator decided before
  * the gate ran (rejected on reach, or judged by no model) simply has none.
  */
 function scoreOf(c) {
@@ -302,8 +302,8 @@ function scoreOf(c) {
   // A hard reject (repost page, unsafe, bought views...) is decided before any
   // score is computed and reports 0 — showing "0" would read as "scored zero".
   if (s.pass === false && s.score === 0 && s.rejectReason !== 'below the fit threshold') return '—';
-  // Three places, as the scorer rounds them — so "0.735" here matches the
-  // "within 0.05 of the 0.72 bar" a review reason states.
+  // Three places, as the scorer rounds them — so "0.535" here matches the
+  // "within 0.05 of the 0.52 bar" a review reason states.
   return String(Math.round(s.score * 1000) / 1000);
 }
 

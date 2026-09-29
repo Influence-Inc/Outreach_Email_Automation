@@ -755,15 +755,15 @@ test('an unengaged following is rejected without a model too', async () => {
 // ── borderline on QUALITY, not only on niche ────────────────────────────────
 //
 // The niche threshold is now a floor under the obviously wrong (0.1); the bar
-// that actually decides an analysed creator is the quality score (0.72). A
-// review band measured only on niche let a creator who scraped past the bar at
-// 0.73 be added with no human look.
+// that actually decides an analysed creator is the quality score (0.52 by
+// default). A review band measured only on niche let a creator who scraped past
+// the bar be added with no human look.
 
 test('reviewDecision holds a quality score just over the bar', () => {
   const on = { reviewBorderline: true };
-  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, on, { pass: true, score: 0.74 }), 'review');
-  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, on, { pass: true, score: 0.8 }), 'add');
-  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, {}, { pass: true, score: 0.74 }), 'add', 'dial off');
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, on, { pass: true, score: 0.54 }), 'review');
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, on, { pass: true, score: 0.6 }), 'add');
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, {}, { pass: true, score: 0.54 }), 'add', 'dial off');
   // The campaign's own bar and band are honoured.
   const own = { reviewBorderline: true, creatorPassThreshold: 0.6, reviewScoreBand: 0.1 };
   assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, own, { pass: true, score: 0.65 }), 'review');
@@ -773,8 +773,8 @@ test('reviewDecision holds a quality score just over the bar', () => {
 test('the hold reason says which threshold a creator was close to', () => {
   const on = { reviewBorderline: true };
   assert.match(
-    reviewHoldReason({ nicheScore: 0.9 }, on, { gate: { pass: true, score: 0.735 } }),
-    /quality score 0\.735 is within 0\.05 of the 0\.72 bar/,
+    reviewHoldReason({ nicheScore: 0.9 }, on, { gate: { pass: true, score: 0.535 } }),
+    /quality score 0\.535 is within 0\.05 of the 0\.52 bar/,
   );
   assert.match(reviewHoldReason({ nicheScore: 0.2 }, on, { gate: { pass: true, score: 0.9 } }), /niche score 0\.2 is within 0\.15 of the 0\.1 floor/);
   assert.strictEqual(reviewHoldReason({ nicheScore: 0.9 }, on, { gate: { pass: true, score: 0.9 } }), null);
@@ -785,22 +785,24 @@ test('the hold reason says which threshold a creator was close to', () => {
 
 test('a creator just over the quality bar goes to review with the reason', async () => {
   const { deps, creators, candidates } = memStore();
-  const custom = { ...deps, nicheClassify: judged().nicheClassify };
+  // Competent craft on a middling fit — solid, not special.
+  const custom = { ...deps, nicheClassify: judged({ clip: { creativity: 5, hook_strength: 5 } }).nicheClassify };
   const cfg = {
     niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5, reviewBorderline: true,
   };
 
-  // fit 0.6, consistency 0.5, steadiness 1, creativity 0.8, hook 0.8 -> 0.733
+  // fit 0.5, consistency 0.4, steadiness 1, creativity 0.5, hook 0.5 -> 0.553
   const res = await processCandidate(
     { id: 1 }, cfg,
-    { username: 'scraped', reels: fitReels(), creatorAnalysis: { fit_score: 60, consistency_of_niche: 5 } },
+    { username: 'scraped', reels: fitReels(), creatorAnalysis: { fit_score: 50, consistency_of_niche: 4 } },
     custom,
   );
 
   assert.strictEqual(res.decision, 'review');
   assert.strictEqual(creators.length, 0);
-  assert.ok(candidates[0].evidence.creatorScore.score >= 0.72, 'it did clear the bar');
-  assert.match(candidates[0].evidence.reviewHold, /quality score .* of the 0\.72 bar/);
+  const { score } = candidates[0].evidence.creatorScore;
+  assert.ok(score >= 0.52 && score < 0.57, `it only just cleared the bar (${score})`);
+  assert.match(candidates[0].evidence.reviewHold, /quality score .* of the 0\.52 bar/);
 });
 
 test('a creator well over the quality bar is still added with the dial on', async () => {

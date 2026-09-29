@@ -20,8 +20,8 @@ const { scoreCreator, checkReach, DEFAULT_PASS_THRESHOLD } = require('./creatorS
 const REVIEW_BAND_DEFAULT = 0.15;
 
 // How far over the quality bar still counts as "only just cleared it". Smaller
-// than the niche band on purpose: passers bunch between the bar (0.72) and
-// ~0.85, so a band of 0.15 here would hold nearly every creator for review.
+// than the niche band on purpose: most passers sit within a few tenths of the
+// bar, so a band of 0.15 here would hold a large share of them for review.
 const REVIEW_SCORE_BAND_DEFAULT = 0.05;
 
 const fmt = (n) => String(Math.round(n * 1000) / 1000);
@@ -32,9 +32,9 @@ const fmt = (n) => String(Math.round(n * 1000) / 1000);
  * Only when the admin turned on reviewBorderline. Two thresholds can reject a
  * creator, so "near-threshold" means near either of them:
  *
- *   - the QUALITY bar (creatorPassThreshold, 0.72) — the one that actually
- *     decides a creator the judge analysed. Checking only the niche score let a
- *     creator who scraped past the bar at 0.73 be added with no human look.
+ *   - the QUALITY bar (creatorPassThreshold, 0.52 by default) — the one that
+ *     actually decides a creator the judge analysed. Checking only the niche
+ *     score let a creator who scraped past the bar be added with no human look.
  *   - the NICHE floor (nicheThreshold, 0.1) — a creator the judge only just
  *     placed in the niche at all.
  */
