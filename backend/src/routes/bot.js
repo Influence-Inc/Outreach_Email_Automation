@@ -1,9 +1,9 @@
 'use strict';
 
-// Bot API: read-only, server-to-server endpoints for the campaigns dashboard
-// (influence-stats) to fetch data the admin UI needs to render — e.g. the
+// Bot API: server-to-server endpoints for the campaigns dashboard
+// (influence-stats), the Slack bot and the Creator Database — e.g. the
 // per-creator contract signing URL that populates the "Contract submission"
-// column. Requests carry `x-bot-token: OUTREACH_BOT_TOKEN`, matching the shape
+// column, or the campaign a scouted creator is added to. Requests carry `x-bot-token: OUTREACH_BOT_TOKEN`, matching the shape
 // influence-stats uses for its own upstream bot endpoint.
 
 const express = require('express');
@@ -12,6 +12,7 @@ const contracts = require('../services/contracts');
 const { runBackfill } = require('../services/contractBackfill');
 const { runBackfill: runDashboardBackfill } = require('../services/dashboardBackfill');
 const creatorUpdates = require('../services/creatorUpdates');
+const scoutedCreators = require('../services/scoutedCreators');
 
 const router = express.Router();
 
@@ -195,6 +196,63 @@ router.get('/creator-updates/:creatorId', requireBotToken, async (req, res, next
     if (!status) return res.status(404).json({ error: 'Creator not found' });
     res.json(status);
   } catch (err) {
+    next(err);
+  }
+});
+
+// --- Scouted creators ------------------------------------------------------
+// The Creator Database runs a team of human scouts, each working for one of our
+// campaigns. These two endpoints are its side of that link.
+
+// GET /api/bot/campaigns — the campaigns a scout can be assigned to, for the
+// picker on the Creator Database's admin page.
+router.get('/campaigns', requireBotToken, async (_req, res, next) => {
+  try {
+    const rows = await scoutedCreators.listCampaigns();
+    res.json({
+      campaigns: rows.map((r) => ({ id: r.id, name: r.name, brandName: r.brand_name })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/bot/scouted-creators
+//
+// Body:
+//   { campaign_id, instagram_username, full_name?, scout_name?, reel_links?,
+//     source_ref? }
+//
+// Adds the creator to the campaign as 'pending_extraction', exactly as if they'd
+// been added by hand, so enrichment and outreach pick them up unchanged. 201 when
+// added; 200 when the campaign already had them — a re-promote or a retry is a
+// success, not a conflict. 404 when the campaign doesn't exist, so the caller can
+// tell a stale assignment apart from an outage.
+router.post('/scouted-creators', requireBotToken, async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const result = await scoutedCreators.addScoutedCreator({
+      campaignId: b.campaign_id,
+      username: b.instagram_username,
+      fullName: b.full_name || null,
+      scoutName: b.scout_name || null,
+      reelLinks: Array.isArray(b.reel_links) ? b.reel_links.map(String) : [],
+      sourceRef: b.source_ref ? String(b.source_ref) : null,
+    });
+    res.status(result.created ? 201 : 200).json({
+      ok: true,
+      created: result.created,
+      creatorId: result.creator.id,
+      status: result.creator.status,
+      campaign: {
+        id: result.campaign.id,
+        name: result.campaign.name,
+        brandName: result.campaign.brand_name,
+      },
+    });
+  } catch (err) {
+    if (err.code === 'BAD_REQUEST') return res.status(400).json({ error: err.message });
+    if (err.code === 'NO_CAMPAIGN') return res.status(404).json({ error: err.message });
     next(err);
   }
 });
