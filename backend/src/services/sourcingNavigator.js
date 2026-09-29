@@ -1475,7 +1475,9 @@ async function captureReelClips({
       const rec = await recordAt({
         driver, point: onScreen.point, pacingMs, jitterPx, read, clipSeconds, getClip, log,
       });
-      if (rec.clip) clips.push({ ...rec.clip, views: onScreen.views });
+      // `origin` tells the judge where this video truly came from — the
+      // creator's own grid, not the search result that surfaced them.
+      if (rec.clip) clips.push({ ...rec.clip, views: onScreen.views, origin: 'grid' });
       // Whatever the player showed for this reel. Kept even when the recording
       // itself failed: the counts are the fraud signal and they cost nothing
       // extra, so losing them because the recorder was unavailable would throw

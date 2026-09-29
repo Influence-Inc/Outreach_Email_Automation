@@ -240,6 +240,30 @@ test('decide rejects when too few reels to judge', () => {
   assert.match(out.rejectReason, /only 3 reels/);
 });
 
+// The navigator reads AT MOST `reelsWindow` reels, and the dashboard lets that
+// go down to 3. Under a fixed minimum of 6 that rejected every creator —
+// "only 3 reels (need 6)" — however good they were.
+test('the reel minimum never exceeds the window the run was asked to read', () => {
+  assert.strictEqual(F.requiredReels({ minReels: 6, reelsWindow: 12 }), 6);
+  assert.strictEqual(F.requiredReels({ minReels: 6, reelsWindow: 3 }), 3);
+  assert.strictEqual(F.requiredReels({ minReels: 6, reelsWindow: 5 }), 5);
+  assert.strictEqual(F.requiredReels({ minReels: 6 }), 6, 'no window stated keeps the minimum');
+  assert.strictEqual(F.requiredReels({}), F.DEFAULTS.minReels);
+});
+
+test('a small reels window judges on that window instead of rejecting everyone', () => {
+  const { buildConfig } = require('./sourcingConfig');
+  for (const w of [3, 4, 5]) {
+    const cfg = buildConfig({}, { niche: 'gym', floor: 15000, risk: 'high', reelsWindow: w });
+    const full = reelsOf(Array(w).fill(50000), 'gym');
+    assert.strictEqual(F.prefilter({ reels: full }, cfg).pass, true, `window ${w}: a full window passes the prefilter`);
+    assert.strictEqual(F.decide({ reels: full }, cfg).pass, true, `window ${w}: and the decision`);
+  }
+  // It is still a minimum: a creator short of even the small window is rejected.
+  const cfg3 = buildConfig({}, { floor: 15000, risk: 'high', reelsWindow: 3 });
+  assert.match(F.prefilter({ reels: reelsOf([50000, 50000], 'gym') }, cfg3).rejectReason, /only 2 reels \(need 3\)/);
+});
+
 // ── the 'all' risk appetite ─────────────────────────────────────────────────
 
 // Ordered tolerance already means 'high' accepts everything under it, but "any

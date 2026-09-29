@@ -43,8 +43,11 @@ const profileVerdict = {
 test('buildProfilePrompt describes the media in the order it is sent', () => {
   const p = reelJudge.buildProfilePrompt(profileCandidate, { niche: 'fitness', keywords: ['homegym'] }, profileCandidate.shots);
   // Video first, then each screenshot — matching how geminiClient appends parts.
-  assert.match(p, /1\. A REEL VIDEO/);
-  assert.match(p, /this is the reel that came back for the search "homegym"/);
+  assert.match(p, /1\. A REEL VIDEO \(with audio\) — one of their reels, captioned: "full home gym tour"/);
+  // The keyword is how they were FOUND — it is not what the video is. The
+  // navigator records from the creator's own grid, never the search player.
+  assert.match(p, /Found via: an Instagram search for "homegym"/);
+  assert.ok(!/came back for the search/.test(p), 'the video is not claimed to be the keyword match');
   assert.match(p, /2\. A SCREENSHOT of their profile header and bio/);
   assert.match(p, /3\. A SCREENSHOT of their reels grid/);
   assert.match(p, /home gym workout/); // captions
@@ -61,7 +64,7 @@ test('classifyProfile sends the video + both screenshots in ONE call', async () 
   const r = await reelJudge.classifyProfile(profileCandidate, { niche: 'fitness' }, { gemini });
 
   assert.strictEqual(seen.length, 1, 'one call, not one per reel');
-  assert.strictEqual(seen[0].videoBase64, 'VIDEO');
+  assert.deepStrictEqual(seen[0].videos.map((v) => v.data), ['VIDEO']);
   assert.deepStrictEqual(seen[0].images.map((i) => i.data), ['BIOSHOT', 'GRIDSHOT']);
 
   assert.strictEqual(r.source, 'gemini-profile');
@@ -70,7 +73,200 @@ test('classifyProfile sends the video + both screenshots in ONE call', async () 
   assert.strictEqual(r.creatorAnalysis.fit_score, 82);
   assert.strictEqual(r.creatorAnalysis.consistency_of_niche, 9);
   assert.strictEqual(r.clip.content_format, 'talking_head');
-  assert.deepStrictEqual(r.evidence.evidenceUsed, { video: true, shots: ['bio', 'reels_grid'], captions: 2 });
+  assert.deepStrictEqual(r.evidence.evidenceUsed, {
+    video: true, videos: 1, videosRecorded: 1, shots: ['bio', 'reels_grid'], captions: 2,
+  });
+});
+
+// ── every recorded reel reaches the judge ───────────────────────────────────
+//
+// The navigator records the creator's best reels plus a typical one ("Reels to
+// watch per creator", 3 by default), but only `clip` — the single best — was
+// ever sent to the profile judge. Two of every three recordings were paid for
+// on the phone and never watched.
+
+const gridClips = [
+  { dataBase64: 'TOP', mimeType: 'video/mp4', views: 120000, origin: 'grid' },
+  { dataBase64: 'SECOND', mimeType: 'video/mp4', views: 95000, origin: 'grid' },
+  { dataBase64: 'TYPICAL', mimeType: 'video/mp4', views: 40000, origin: 'grid' },
+];
+
+test('the profile judge watches every recorded reel, in one call', async () => {
+  const seen = [];
+  const gemini = { available: () => true, classifyReelVideo: async (opts) => { seen.push(opts); return profileVerdict; } };
+  const cand = { ...profileCandidate, clip: gridClips[0], clips: gridClips };
+
+  const r = await reelJudge.classifyProfile(cand, { niche: 'fitness' }, { gemini });
+
+  assert.strictEqual(seen.length, 1, 'still one call');
+  assert.deepStrictEqual(seen[0].videos.map((v) => v.data), ['TOP', 'SECOND', 'TYPICAL'], 'best first, all three');
+  assert.strictEqual(r.evidence.evidenceUsed.videos, 3);
+  assert.strictEqual(r.evidence.evidenceUsed.videosRecorded, 3);
+  assert.ok(seen[0].maxOutputTokens > 800, 'room to describe each video');
+});
+
+test('each video is labelled by where it truly came from', () => {
+  const p = reelJudge.buildProfilePrompt(
+    { ...profileCandidate, clip: gridClips[0], clips: gridClips },
+    { niche: 'fitness' },
+    profileCandidate.shots,
+  );
+  assert.match(p, /1\. A REEL VIDEO \(with audio\) — one of their own recent reels, recorded from their Reels grid, 120000 views\./);
+  assert.match(p, /3\. A REEL VIDEO \(with audio\) — one of their own recent reels, recorded from their Reels grid, 40000 views\./);
+  assert.match(p, /4\. A SCREENSHOT of their profile header and bio/, 'screenshots are numbered after the videos');
+  assert.match(p, /both their best-performing and their\s+typical work/);
+  assert.match(p, /FIRST, watch every video/);
+
+  const feed = reelJudge.buildProfilePrompt(
+    { username: 'x', discovery: 'reels', clip: { dataBase64: 'F', origin: 'feed' } }, {}, [],
+  );
+  assert.match(feed, /the reel the Reels feed showed us, which is how we found them/);
+  assert.match(feed, /Found via: the Reels feed/);
+});
+
+test('a screenshots-only judgement is not told to watch a video that is not there', () => {
+  const p = reelJudge.buildProfilePrompt({ username: 'x' }, {}, profileCandidate.shots, []);
+  assert.match(p, /There is no video for this creator/);
+  assert.ok(!/FIRST, watch/.test(p));
+});
+
+test('videos that do not fit one inline request are left out, not the whole call', () => {
+  const big = (id, mb) => ({ dataBase64: 'A'.repeat(Math.ceil((mb * 1024 * 1024 * 4) / 3)), id });
+  // 18MB limit less 0.5MB headroom leaves 17.5MB: a (10) fits, b (8) would not, c (1) does.
+  const kept = reelJudge.fitVideos([big('a', 10), big('b', 8), big('c', 1)], [], 18 * 1024 * 1024);
+  assert.deepStrictEqual(kept.map((v) => v.id), ['a', 'c'], 'b would overflow; c still fits');
+  assert.strictEqual(reelJudge.fitVideos([big('a', 8), big('b', 8), big('c', 1)], []).length, 3, 'three normal clips all fit');
+  assert.deepStrictEqual(reelJudge.fitVideos([big('huge', 30)], []), [], 'one clip too big for any request');
+});
+
+// ── an unasked brand fit is not a brand fit ─────────────────────────────────
+//
+// A model handed a response template fills in every field — so a campaign with
+// no brand details still got a brand fit back: a guess about a brand nobody
+// described, carrying the largest weight in the score.
+
+test('with no brand details the template does not ask for a brand fit', () => {
+  const p = reelJudge.buildProfilePrompt(profileCandidate, { niche: 'fitness' }, profileCandidate.shots);
+  assert.ok(!/"brand_fit"/.test(p), 'no brand_fit field in the template');
+  assert.match(p, /production_quality, creativity, hook_strength and consistency_of_niche are each exactly one of/);
+
+  const asked = reelJudge.buildProfilePrompt(profileCandidate, { niche: 'fitness', brandProduct: 'a shoe' }, profileCandidate.shots);
+  assert.match(asked, /"brand_fit": "competent"/);
+  assert.match(asked, /hook_strength, brand_fit and consistency_of_niche/);
+  assert.match(asked, /Put the level in brand_fit/);
+  assert.ok(!/brand_fit \(0-10\)/.test(asked), 'the schema takes a level, not a number');
+});
+
+test('a brand fit the model filled in unasked is dropped', async () => {
+  const gemini = fakeGemini({ ...profileVerdict, brand_fit: 'distinctive', brand_fit_reason: 'guessed' });
+  const unasked = await reelJudge.classifyProfile(profileCandidate, { niche: 'fitness' }, { gemini });
+  assert.strictEqual(unasked.clip.brand_fit, null);
+  assert.strictEqual(unasked.clip.brand_fit_level, null);
+
+  const asked = await reelJudge.classifyProfile(profileCandidate, { niche: 'fitness', brandName: 'Velo' }, { gemini });
+  assert.strictEqual(asked.clip.brand_fit, 8, 'kept when the question was asked');
+});
+
+test('the per-reel prompt briefs the brand before asking for a fit, and only then', () => {
+  const briefed = reelJudge.buildPrompt(clipCandidate, { niche: 'fitness', brandName: 'Velo Running', brandProduct: 'a racing shoe' });
+  assert.match(briefed, /Brand: Velo Running/);
+  assert.match(briefed, /BRAND FIT/);
+  assert.ok(!/BRAND FIT/.test(reelJudge.buildPrompt(clipCandidate, { niche: 'fitness' })));
+});
+
+test('the per-reel judge drops a brand fit nobody asked for', async () => {
+  const gemini = fakeGemini({ niche_score: 0.8, brand_fit: 7 });
+  const r = await reelJudge.classifyWithGemini(clipCandidate, { niche: 'fitness' }, { gemini });
+  assert.strictEqual(r.clip.brand_fit, null);
+  const kept = await reelJudge.classifyWithGemini(clipCandidate, { niche: 'fitness', brandProduct: 'shoe' }, { gemini });
+  assert.strictEqual(kept.clip.brand_fit, 7);
+});
+
+// ── Claude judges the creator when Gemini cannot ────────────────────────────
+//
+// With no Gemini verdict the chain fell to a bare niche score, so the quality
+// bar, originality and brand safety never ran for that creator.
+
+const noGemini = { available: () => false };
+
+function fakeClaude(reply, calls = []) {
+  return {
+    calls,
+    getClient: () => ({}),
+    callClaudeMessages: async (system, messages, maxTokens) => {
+      calls.push({ system, messages, maxTokens });
+      return JSON.stringify(reply);
+    },
+  };
+}
+
+const claudeVerdict = {
+  niche_score: 0.8, audience_match: 0.7, genre: 'home fitness', confidence: 0.7, reason: 'fits',
+  niche: 'fitness', content_format: 'tutorial', production_quality: 'distinctive',
+  creativity: 'distinctive', hook_strength: 'exceptional', brand_safety: 'safe',
+  is_original_creator: true, consistency_of_niche: 'distinctive', fit_score: 80, reject_reason: null,
+};
+
+test('with no Gemini, Claude gives the structured verdict the quality gate needs', async () => {
+  const claude = fakeClaude(claudeVerdict);
+  const classify = reelJudge.makeClassifier({
+    gemini: noGemini, claude, claudeClassify: async () => ({ score: 0.1, reason: 'legacy' }),
+  });
+
+  const r = await classify(profileCandidate, { niche: 'fitness' });
+
+  assert.strictEqual(r.source, 'claude-profile');
+  assert.strictEqual(r.clip.creativity, 8);
+  assert.strictEqual(r.clip.is_original_creator, true);
+  assert.strictEqual(r.clip.hook_strength, null, 'a hook needs a video — unmeasured, whatever the reply says');
+  assert.strictEqual(r.creatorAnalysis.fit_score, 80);
+  assert.strictEqual(r.evidence.evidenceUsed.video, false);
+
+  // The screenshots went to Claude as images, before the text that refers to them.
+  const content = claude.calls[0].messages[0].content;
+  assert.deepStrictEqual(content.map((c) => c.type), ['image', 'image', 'text']);
+  assert.strictEqual(content[0].source.data, 'BIOSHOT');
+  assert.match(content[2].text, /there is no video/i);
+});
+
+test("Claude's verdict lets the deterministic gate run", async () => {
+  const { scoreCreator } = require('./creatorScore');
+  const r = await reelJudge.makeClassifier({ gemini: noGemini, claude: fakeClaude(claudeVerdict) })(
+    profileCandidate, { niche: 'fitness' },
+  );
+  const reels = Array.from({ length: 12 }, () => ({ views: 50000 }));
+  const gate = scoreCreator({ creator: r.creatorAnalysis, clips: [r.clip], reels }, {});
+  assert.strictEqual(gate.components.hook, null, 'hook dropped out of the blend');
+  assert.ok(gate.pass, `judged on what the pictures show (score ${gate.score})`);
+});
+
+test('with no pictures at all, Claude does not grade craft or originality', async () => {
+  const r = await reelJudge.classifyProfileWithClaude(
+    { username: 'x', bio: 'home fitness', reels: [{ caption: 'leg day' }] },
+    { niche: 'fitness' },
+    { claude: fakeClaude(claudeVerdict) },
+  );
+  assert.strictEqual(r.clip.creativity, null);
+  assert.strictEqual(r.clip.production_quality, null);
+  assert.strictEqual(r.clip.is_original_creator, null);
+  assert.strictEqual(r.clip.niche, 'fitness', 'the niche call from the text still stands');
+});
+
+test('Claude is skipped when it is not configured, and a bad reply falls through', async () => {
+  const off = await reelJudge.classifyProfileWithClaude(profileCandidate, {}, { claude: { getClient: () => null } });
+  assert.strictEqual(off, null);
+
+  const junk = await reelJudge.classifyProfileWithClaude(profileCandidate, {}, {
+    claude: { getClient: () => ({}), callClaudeMessages: async () => 'not json' },
+  });
+  assert.strictEqual(junk, null);
+
+  const classify = reelJudge.makeClassifier({
+    gemini: noGemini,
+    claude: { getClient: () => null },
+    claudeClassify: async () => ({ score: 0.3, reason: 'legacy' }),
+  });
+  assert.strictEqual((await classify(profileCandidate, {})).reason, 'legacy');
 });
 
 test('classifyProfile still judges when only screenshots came back (no clip)', async () => {
@@ -162,6 +358,9 @@ test('makeClassifier reuses a precomputed _nicheVerdict (no double judging)', as
 test('makeClassifier prefers Gemini, falling back to Claude when there is no clip', async () => {
   const classify = reelJudge.makeClassifier({
     gemini: fakeGemini({ niche_score: 0.8, genre: 'fitness' }),
+    // No structured Claude tier here (and never a real network call from a
+    // test, whatever ANTHROPIC_API_KEY the environment happens to hold).
+    claude: { getClient: () => null },
     claudeClassify: async () => ({ score: 0.2, reason: 'claude-thumbnails' }),
   });
   const withClip = await classify(clipCandidate, {});
@@ -481,6 +680,35 @@ test('an unasked brand fit has no level rather than a flattering default', () =>
   // makes the field nullable for exactly that case.
   assert.strictEqual(reelJudge.parseClipAnalysis({ niche: 'running' }).brand_fit_level, null);
   assert.strictEqual(reelJudge.parseClipAnalysis({ brand_fit: null }).brand_fit_level, null);
+});
+
+// The whole path, parser to gate, for a campaign that filled in no brand
+// details. The scorer's own tests leave the key out; the parser writes it as an
+// explicit null, and that null used to score as a brand fit of 0 — capping
+// every creator at 0.75 against a 0.72 bar.
+test('a verdict with no brand question scores as unasked, not as a fit of zero', () => {
+  const { scoreCreator } = require('./creatorScore');
+  const reply = {
+    video_description: 'a coach filming her own set', niche_score: 0.85, genre: 'fitness',
+    reason: 'on niche', niche: 'fitness', content_format: 'tutorial',
+    production_quality: 'distinctive', creativity: 'distinctive', hook_strength: 'distinctive',
+    brand_safety: 'safe', is_original_creator: true, consistency_of_niche: 'distinctive',
+    fit_score: 80,
+  };
+  const clip = reelJudge.parseClipAnalysis(reply);
+  assert.strictEqual(clip.brand_fit, null, 'the parser reports the unasked question as null');
+
+  const reels = Array.from({ length: 12 }, (_, i) => ({ views: 40000 + (i % 3) * 4000 }));
+  const r = scoreCreator({ creator: reelJudge.parseCreatorAnalysis(reply), clips: [clip], reels }, {});
+  assert.strictEqual(r.components.brandFit, null, 'unmeasured, not zero');
+  assert.ok(r.pass, `a creator judged distinctive throughout passes (score ${r.score})`);
+  assert.ok(r.score > 0.8, `score ${r.score}`);
+});
+
+test('a missing fit score is unmeasured rather than a fit of zero', () => {
+  assert.strictEqual(reelJudge.parseCreatorAnalysis({ fit_score: null }).fit_score, null);
+  assert.strictEqual(reelJudge.parseCreatorAnalysis({}).fit_score, null);
+  assert.strictEqual(reelJudge.parseCreatorAnalysis({ fit_score: 0 }).fit_score, 0, 'a real 0 stays 0');
 });
 
 // Handles, links and free text reach the judge BEFORE it sees a candidate, so

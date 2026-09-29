@@ -206,7 +206,11 @@ async function collectBatch({
       const rec = await driver.recordClip(clipSeconds);
       // eslint-disable-next-line no-await-in-loop
       const resolved = await resolveClip(rec, getClip);
-      clip = resolved.clip;
+      // `origin` tells the judge this is the reel the feed served us — the one
+      // we found the creator by, not a pick from their own grid.
+      clip = resolved.clip
+        ? { ...resolved.clip, origin: 'feed', ...(view.views != null ? { views: view.views } : {}) }
+        : null;
       // The quiet half of the same failure: the phone recorded and uploaded, and
       // the bytes never made it back here. Indistinguishable from a granted
       // recorder until it is said out loud.

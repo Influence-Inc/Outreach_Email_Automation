@@ -233,7 +233,10 @@ class MainActivity : AppCompatActivity() {
             SourcingAccessibilityService.isEnabledInSettings(this) -> "enabled, binding…"
             else -> "OFF — tap step 1"
         }
-        val capture = if (projectionData != null) "granted" else "not granted (reels only)"
+        // Both discovery modes record reels for the AI judge — profiles mode
+        // records a creator's best and typical reels from their grid — so
+        // without this every creator is judged on screenshots and text alone.
+        val capture = if (projectionData != null) "granted" else "not granted — no reels will be watched"
         binding.toggleAgent.text = if (AgentService.isRunning) "3. Stop agent" else "3. Start agent"
         binding.status.text = buildString {
             appendLine("accessibility : $a11y")

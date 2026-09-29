@@ -40,6 +40,17 @@ test('buildConfig parses the review-queue knobs', () => {
   assert.strictEqual(off.reviewBorderline, false);
 });
 
+// The config is a whitelist: a knob missing here is silently dropped whatever
+// the campaign sets.
+test('buildConfig carries the quality-score review band and the unjudged hold', () => {
+  const cfg = buildConfig({}, { reviewScoreBand: '0.08' });
+  assert.strictEqual(cfg.reviewScoreBand, 0.08);
+  assert.strictEqual(cfg.reviewUnjudged, true, 'holding unjudged creators is on by default');
+  assert.strictEqual(buildConfig({}, { reviewUnjudged: false }).reviewUnjudged, false);
+  assert.strictEqual(buildConfig({}, { reviewUnjudged: 'false' }).reviewUnjudged, false);
+  assert.strictEqual(buildConfig({ reviewUnjudged: false }, {}).reviewUnjudged, false, 'from saved defaults too');
+});
+
 test('buildConfig defaults risk to medium and drops junk numbers', () => {
   const cfg = buildConfig({}, { risk: 'bogus', floor: 'abc', targetCount: 5 });
   assert.strictEqual(cfg.risk, 'medium');
@@ -231,4 +242,25 @@ test('an already-split array is taken as given', () => {
 test('the niche threshold defaults low enough to leave the call to the judge', () => {
   const { DEFAULTS } = require('./sourcingFilters');
   assert.strictEqual(DEFAULTS.nicheThreshold, 0.1);
+});
+
+// The Scout page now sends an emptied field as null (so a save can clear it
+// under merge semantics). The same form starts runs, so a null must mean
+// "not set" there too — never 0, and never a crash.
+test('a field sent as null is unset for the run, not zero', () => {
+  const cfg = buildConfig(
+    { floor: 20000, ceiling: 500000, maxProfiles: 50, creatorPassThreshold: 0.8, reelsWindow: 9 },
+    {
+      floor: null, ceiling: null, floorTolerance: null, maxProfiles: null,
+      creatorPassThreshold: null, reelsWindow: null, clipsPerProfile: null, targetCount: 5,
+    },
+  );
+  assert.strictEqual(cfg.floor, undefined, 'a cleared floor means no floor, not 0');
+  assert.strictEqual(cfg.ceiling, undefined);
+  assert.strictEqual(cfg.floorTolerance, undefined);
+  assert.strictEqual(cfg.maxProfiles, undefined);
+  assert.strictEqual(cfg.creatorPassThreshold, undefined, 'the scorer falls back to its default bar');
+  assert.strictEqual(cfg.reelsWindow, 12, 'the window falls back to its default');
+  assert.strictEqual(cfg.clipsPerProfile, undefined);
+  assert.strictEqual(cfg.targetCount, 5);
 });

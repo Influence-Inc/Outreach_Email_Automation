@@ -69,11 +69,15 @@ function seenFreshness(iso) {
   return `<span style="color:${dot}">●</span> ${new Date(iso).toLocaleString()}`;
 }
 
-function numOrUndef(id) {
+// An empty field is sent as null, not left out. Saving defaults MERGES into
+// what is stored (so settings this page does not show survive), and under a
+// merge an omitted key keeps its old value — null is how a cleared field
+// actually gets cleared.
+function numOrNull(id) {
   const raw = el(id).value;
-  if (raw === '' || raw == null) return undefined;
+  if (raw === '' || raw == null) return null;
   const n = Number(raw);
-  return Number.isFinite(n) ? n : undefined;
+  return Number.isFinite(n) ? n : null;
 }
 
 // Config stores these as arrays; the textarea wants one per line.
@@ -86,22 +90,22 @@ function readForm() {
   return {
     niche: el('niche').value.trim(),
     keywords: el('keywords').value.trim(),
-    floor: numOrUndef('floor'),
-    floorTolerance: numOrUndef('floorTolerance'),
-    ceiling: numOrUndef('ceiling'),
+    floor: numOrNull('floor'),
+    floorTolerance: numOrNull('floorTolerance'),
+    ceiling: numOrNull('ceiling'),
     risk: el('risk').value,
-    targetCount: numOrUndef('targetCount'),
-    reelsWindow: numOrUndef('reelsWindow'),
-    clipsPerProfile: numOrUndef('clipsPerProfile'),
-    maxProfiles: numOrUndef('maxProfiles'),
-    creatorPassThreshold: numOrUndef('creatorPassThreshold'),
+    targetCount: numOrNull('targetCount'),
+    reelsWindow: numOrNull('reelsWindow'),
+    clipsPerProfile: numOrNull('clipsPerProfile'),
+    maxProfiles: numOrNull('maxProfiles'),
+    creatorPassThreshold: numOrNull('creatorPassThreshold'),
     // The example creators, as typed. Newline-separated so a handle, a link and
     // a sentence can all sit on their own line; sourcingConfig splits them.
     //
     // Only the wanted side is asked for. The judge still understands an
-    // avoid-list (sourcingConfig and nicheCalibration both take one), it is
-    // simply not something this page collects — so nothing sets it, and the
-    // saved config stops carrying one the moment defaults are saved from here.
+    // avoid-list (sourcingConfig and nicheCalibration both take one) set through
+    // the API — and because saving merges, one set that way now survives a save
+    // from this page instead of being wiped by it.
     idealExamples: el('idealExamples').value.trim(),
     brandProduct: el('brandProduct').value.trim(),
     brandName: el('brandName').value.trim(),
@@ -287,6 +291,32 @@ function levelCell(c, field) {
 function creativityOf(c) { return levelCell(c, 'creativity'); }
 function brandFitOf(c) { return levelCell(c, 'brand_fit'); }
 
+/**
+ * The weighted quality score the deterministic gate gave — the number the
+ * quality bar (0.72 by default) is measured against. A creator decided before
+ * the gate ran (rejected on reach, or judged by no model) simply has none.
+ */
+function scoreOf(c) {
+  const s = c && c.evidence && c.evidence.creatorScore;
+  if (!s || typeof s.score !== 'number') return '—';
+  // A hard reject (repost page, unsafe, bought views...) is decided before any
+  // score is computed and reports 0 — showing "0" would read as "scored zero".
+  if (s.pass === false && s.score === 0 && s.rejectReason !== 'below the fit threshold') return '—';
+  // Three places, as the scorer rounds them — so "0.735" here matches the
+  // "within 0.05 of the 0.72 bar" a review reason states.
+  return String(Math.round(s.score * 1000) / 1000);
+}
+
+/**
+ * Why a row ended where it did: the reject reason, or — for a creator waiting
+ * in review — what the reviewer is being asked to confirm.
+ */
+function reasonOf(c) {
+  if (c.reject_reason) return c.reject_reason;
+  if (c.decision === 'review' && c.evidence && c.evidence.reviewHold) return `held: ${c.evidence.reviewHold}`;
+  return '';
+}
+
 function renderCandidates(rows) {
   const tb = el('cand-rows');
   tb.innerHTML = '';
@@ -300,22 +330,38 @@ function renderCandidates(rows) {
       <td>${niche}</td>
       <td>${creativityOf(c)}</td>
       <td>${brandFitOf(c)}</td>
+      <td>${scoreOf(c)}</td>
       <td>${risk === '—' ? '—' : `<span class="pill ${risk}">${risk}</span>`}</td>
       <td><span class="pill ${c.decision}">${c.decision}</span></td>
-      <td>${escapeHtml(c.reject_reason || '')}</td>`;
+      <td>${escapeHtml(reasonOf(c))}</td>`;
     tb.appendChild(tr);
   }
+}
+
+// "gemini-profile 9 · claude-profile 2 · keyword 1" — which judge gave each
+// verdict. A run with no gemini-* entry never had a reel watched.
+function judgesSummary(judgedBy) {
+  const entries = Object.entries(judgedBy || {});
+  if (!entries.length) return '—';
+  return entries.map(([k, n]) => `${k} ${n}`).join(' · ');
 }
 
 async function refreshRun() {
   if (!currentRun) return;
   const { run, candidates } = await api(`/api/sourcing/runs/${currentRun.id}`);
   currentRun = run;
+  const stats = run.stats || {};
   el('run-id').textContent = `#${run.id}`;
   el('run-status').textContent = run.status;
   el('run-found').textContent = run.found_count ?? 0;
   el('run-target').textContent = run.target_count ?? 0;
-  el('run-scanned').textContent = (run.stats && run.stats.scanned) || candidates.length || 0;
+  el('run-scanned').textContent = stats.scanned || candidates.length || 0;
+  // withVideo of all judgements. "0 of 12" on a live run means the phone is
+  // recording nothing — screen capture was never granted, or Android stopped it.
+  const judged = (stats.withVideo || 0) + (stats.withoutVideo || 0);
+  el('run-video').textContent = judged ? `${stats.withVideo || 0} of ${judged}` : '—';
+  el('run-video').style.color = judged && !stats.withVideo ? '#b42318' : '';
+  el('run-judges').textContent = judgesSummary(stats.judgedBy);
   renderCandidates(candidates);
   if (run.status === 'done' || run.status === 'stopped' || run.status === 'error') stopPolling();
 }
@@ -341,7 +387,7 @@ function renderReview(rows) {
   if (!tb) return;
   tb.innerHTML = '';
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="6" class="scout-hint">Nothing waiting for review.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="8" class="scout-hint">Nothing waiting for review.</td></tr>';
     return;
   }
   for (const c of rows) {
@@ -349,14 +395,18 @@ function renderReview(rows) {
     const niche = c.niche_score == null ? '—' : Number(c.niche_score).toFixed(2);
     const genreAud = [ev.genre, ev.audienceMatch != null ? `aud ${Number(ev.audienceMatch).toFixed(2)}` : null]
       .filter(Boolean).join(' · ') || '—';
+    // Model-written text: escaped like everything else read off a verdict.
     const why = ev.reason || c.niche_reason || '';
+    const held = (c.evidence && c.evidence.reviewHold) || '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${handleLink(c.username)}</td>
       <td>${fmt(c.followers)}</td>
       <td>${niche}</td>
-      <td>${genreAud}</td>
-      <td>${why}</td>
+      <td>${scoreOf(c)}</td>
+      <td>${escapeHtml(genreAud)}</td>
+      <td>${escapeHtml(why)}</td>
+      <td>${escapeHtml(held) || '—'}</td>
       <td style="white-space:nowrap">
         <button data-approve="${c.id}" class="btn-primary small">Approve</button>
         <button data-reject="${c.id}" class="ghost small">Reject</button>
@@ -637,7 +687,40 @@ function wire() {
   el('watch-frame').addEventListener('click', onFrameClick);
 }
 
+// --- Which judges this deployment has --------------------------------------
+//
+// Without Gemini no reel is watched; without Claude as well, nothing judges
+// quality and every creator who passes the reach rules waits in review. A run
+// looks normal either way, so say it before anyone starts one.
+async function loadJudgeStatus() {
+  const banner = el('judge-banner');
+  if (!banner) return;
+  let status;
+  try {
+    status = await api('/api/sourcing/status');
+  } catch (_) {
+    return; // informational only — never block the page on it
+  }
+  const mode = status && status.judge && status.judge.mode;
+  if (mode === 'pictures') {
+    banner.textContent = 'The video judge (Gemini) is not configured, so no reels are watched: creators '
+      + 'are judged by Claude from their profile screenshots and captions. Set GEMINI_API_KEY on the '
+      + 'backend to judge the actual videos.';
+    banner.className = 'judge-banner warn';
+    banner.hidden = false;
+  } else if (mode === 'none') {
+    banner.textContent = 'No AI judge is configured (GEMINI_API_KEY / ANTHROPIC_API_KEY). Nothing can check '
+      + 'quality, originality or brand safety, so creators who pass the reach and keyword rules are held in '
+      + 'Pending review instead of being added.';
+    banner.className = 'judge-banner err';
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+  }
+}
+
 wire();
+loadJudgeStatus();
 loadCampaigns().then(() => loadReview()).catch((err) => setStatus(err.message, 'err'));
 loadHosts().catch(() => { /* non-fatal if the hosts card fails */ });
 // Keep the host-health tile live (connection freshness + active session).

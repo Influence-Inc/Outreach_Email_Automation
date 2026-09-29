@@ -93,13 +93,22 @@ another app will not pass review — so sideload it.
      Paired phone-hosts**
    - *Host ID* — the integer next to that host (e.g. `3`)
 3. **Tap "1. Enable accessibility service"** → find **Sourcing Agent** under
-   *Installed apps* and switch it on. This is the one permission that matters.
-4. **Tap "3. Start agent".** The status panel should read
+   *Installed apps* and switch it on. Without it the phone cannot be driven at all.
+4. **Tap "2. Grant screen capture"** and accept. This is what lets the AI judge
+   *watch* reels, and **both** discovery modes need it: profiles mode (the
+   default) records each creator's best and typical reels from their Reels
+   grid, and reels mode records the reel the feed served. Without it the run
+   still works, but every creator is judged on screenshots and text alone — the
+   run log shows `withVideo=0` and the Scout page's run card shows
+   *Judged with video 0 of N*.
+5. **Tap "3. Start agent".** The status panel should read
    `idle — waiting for a queued run`, then `running — session started (run #N)`
    once someone queues a run from the dashboard.
 
-Step 2 (screen capture) is **only** needed for `discovery: "reels"` mode, which
-records video with audio for the AI judge. Skip it otherwise.
+Screen capture is a per-session consent, not a permanent permission: Android
+ends it when the cast notification is dismissed or the service is restarted.
+If a run starts logging `screen capture was granted but Android has since
+stopped it`, open the app and grant it again.
 
 ### Backend prerequisite
 

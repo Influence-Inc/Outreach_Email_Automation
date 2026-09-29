@@ -12,8 +12,16 @@ drives a real Instagram app (no IG API), and now:
 3. **(Optionally) engages** — very occasionally likes/saves the clearly on‑brand
    reels to warm Instagram's Explore/Reels algorithm toward the target niche.
 
-Everything degrades gracefully: with no `GEMINI_API_KEY` the judge falls back to
-Claude‑on‑thumbnails, then keyword scoring — the pipeline still runs.
+Everything degrades gracefully: with no `GEMINI_API_KEY` (or when a Gemini call
+fails) the judge falls back to **Claude on the profile screenshots and captions**
+— the same structured verdict, so the quality bar, originality and brand safety
+still run, with the hook left unmeasured because nothing watched a video — then
+to a bare Claude niche score, then keyword scoring. The fraud checks (bought
+views, an unengaged following, one-outlier reach) are arithmetic and run
+whatever judged the creator. A creator **no** model could analyse is held in the
+review queue rather than added (`reviewUnjudged`, below). The Scout page shows a
+banner when Gemini or both judges are missing, and every run records which judge
+gave each verdict (`stats.judgedBy`).
 
 ## Cost
 
@@ -55,14 +63,32 @@ model docs for current rates.
 ### Scouting rules (per campaign)
 
 - `discovery: "reels"` — use the explore/scroll reel‑feed flow (watch + hear +
-  occasionally engage); omit for the classic search → profile flow. A reel off
-  the feed has no multi‑reel view window, so reels‑mode candidates are scored on
-  the Gemini niche match **only** (the floor/risk/stability rules don't apply)
-  and are **always routed to the review queue** — a human confirms reach before
-  they're added. (Profiles mode keeps the full deterministic rules + auto‑add.)
+  occasionally engage); omit for the classic search → profile flow. The feed
+  navigator opens each creator's profile and reads their Reels grid, so a
+  reels‑mode candidate normally gets the full deterministic rules like any other.
+  Only one whose reach could **not** be read is judged on the niche match alone
+  and **routed to the review queue** for a human to confirm reach.
 - `targetAudience` / `genres` — fed to the Gemini judge (audience fit + on‑brand genres).
-- `reviewBorderline: true` (+ optional `reviewBand`, default `0.15`) — hold
-  near‑threshold AI matches in the **review queue** instead of auto‑adding.
+- `reviewBorderline: true` — hold **near‑threshold** passers in the **review
+  queue** instead of auto‑adding. Near either threshold that can reject: a
+  weighted quality score within `reviewScoreBand` (default `0.05`) of
+  `creatorPassThreshold` (default `0.72`), or a niche score within `reviewBand`
+  (default `0.15`) of `nicheThreshold` (default `0.1`). The reason is stored on
+  the candidate (`evidence.reviewHold`) and shown in the review queue.
+- `reviewUnjudged` (default **on**) — a creator no model could analyse (no
+  Gemini, no Claude, or every call failed) never had the quality bar,
+  originality or brand safety checked, so they are held for review rather than
+  added on the reach and keyword rules alone. `reviewUnjudged: false` restores
+  adding them.
+- `reelsWindow` (default `12`) — how many recent reels are read. A creator needs
+  `min(6, reelsWindow)` reels with readable views: the minimum never exceeds the
+  window the run was asked to read.
+
+Saving from the Scout page **merges** into the stored defaults
+(`PATCH /api/sourcing/config/:campaignId`): keys the page sends replace the
+stored ones, a key sent as `null` is removed, and settings the page does not show
+(`targetAudience`, `genres`, `creatorWeights`, the engagement floors,
+`avoidExamples`, `enabled`, …) survive a save instead of being wiped by it.
 
 ### Search terms
 
@@ -85,8 +111,9 @@ configured terms.
 
 ### Per-campaign scoring
 
-`creatorScore` blends five components — `fit`, `nicheConsistency`,
-`viewSteadiness`, `creativity`, `hook`. A skincare brand is buying production
+`creatorScore` blends six components — `brandFit` (0.25), `fit` (0.20),
+`creativity` (0.20), `hook` (0.15), `nicheConsistency` (0.10) and
+`viewSteadiness` (0.10) by default. A skincare brand is buying production
 quality, a meme brand is buying the hook, a B2B brand is buying audience fit, so
 the blend is per campaign:
 
@@ -98,7 +125,13 @@ the blend is per campaign:
 
 Weights are relative, not required to sum to 1 — `{fit: 2, hook: 1}` means
 exactly what it looks like. Unknown keys are dropped rather than diluting the
-real ones, and an absent `creatorWeights` uses the defaults.
+real ones, and an absent `creatorWeights` uses the defaults. (`maxViewSpike`
+defaults to `12`; the `40` above is an example of a campaign loosening it.)
+
+A component that was not measured — `null` or absent — drops out of the blend
+and its weight goes to the rest. It is never scored as `0`: an explicit `null`
+used to count as a zero, which capped every creator on a campaign with no brand
+details at 0.75 against the 0.72 bar.
 
 There is **no follower band**. Reach is what a campaign buys and `floor` /
 `ceiling` gate on it directly; a band on followers only ever rejected creators
@@ -178,6 +211,13 @@ accounts sit at 1–3%, and this is a hard reject on a creator we may never look
 again, so it is set to catch the obviously-bought rather than to sort average
 from good. An unread count is **unmeasured, not zero** — a creator whose counts
 we could not read is judged on everything else.
+
+These checks — bought views (`minViewEngagementRate`, 0.5% of views), an
+unengaged following (`minEngagementRate`) and one-outlier reach
+(`maxViewSpike`) — are arithmetic on counts read off the screen, so they run
+**whether or not a model analysed the creator** (`creatorScore.checkReach`).
+They used to live only inside the AI gate, which let a creator the judge could
+not analyse be added on bought reach.
 
 ### Taste a brand can state up front
 
@@ -270,7 +310,10 @@ which is the whole point.
 
 A campaign that filled none of this in sends **no brand block and no fit
 question** rather than a block of "(unspecified)": nothing to measure against is
-better handled by silence than by asking the model to guess.
+better handled by silence than by asking the model to guess. The response
+template then leaves `brand_fit` out too (a model fills in every field it is
+handed), any brand fit that comes back anyway is dropped, and the score treats
+brand fit as **unmeasured** — its weight goes to the other components.
 
 ### How long the judge watches, and what it does with it
 
@@ -288,8 +331,16 @@ exists to avoid. The description is kept on the verdict
 (`evidence.videoDescription`) so a reviewer can check the score against the video
 rather than taking the number on trust.
 
-Only then does it weigh the **video, the bio screenshot and the captions
+Only then does it weigh the **videos, the bio screenshot and the captions
 together** against the campaign's brand brief, product, keywords and niche.
+
+**Every reel recorded for the creator goes to the judge**, in the same single
+call: up to `clipsPerProfile` (default 3) — their best performers plus a typical
+one — so the judge can compare their best work with their everyday work. Only
+the single best used to be sent; the other recordings were paid for on the phone
+and never watched. Clips are included best-first while they fit Gemini's inline
+request limit, and `evidence.niche.evidenceUsed` records `videos` (watched)
+against `videosRecorded`.
 
 > **If reels seem to flash past unwatched**, the recording is failing rather than
 > running short. Both paths log
@@ -324,7 +375,11 @@ from the outside. Four separate things had to be fixed before that was visible:
    it; *"has not been granted"* means grant it for the first time.
 
 **`withVideo=0` on a run that judged anyone at all** means no recording reached
-the judge, whatever the phone appeared to be doing on screen.
+the judge, whatever the phone appeared to be doing on screen. The Scout page's
+run card shows the same number (*Judged with video*), in red at zero, next to
+*Judged by* — which judge gave each verdict (`stats.judgedBy`). Screen capture is
+needed in **both** discovery modes: profiles mode records from each creator's
+grid too.
 
 ### The navigator gets the whole campaign config
 
@@ -352,7 +407,7 @@ A creator is judged from an **evidence bundle**, in one multimodal call:
 
 | Evidence | Where it comes from |
 | --- | --- |
-| **The reel that matched** (video **+ audio**) | Recorded in the player we land in after tapping the keyword's result — so it is the most search-relevant sample of that creator's work, not a reel picked at random off their grid. |
+| **Their reels** (video **+ audio**) | Recorded from the creator's own Reels grid **after** the reach gates pass: their best performers plus a typical one (`clipsPerProfile`, default 3). In reels mode, the reel the feed served. Each is labelled to the judge by where it came from and its view count — the keyword that surfaced the creator is stated separately (*Found via*), never passed off as the video. |
 | **A screenshot of the bio** | Taken on the profile header before navigating away. |
 | **A screenshot of the reels grid** | Taken at the top of the Reels tab — their most recent work, with view counts. |
 | **Caption text + reach** | Read off the grid (`reelsWindow` reels), plus followers and the lowest / typical / highest view counts. |
@@ -360,12 +415,14 @@ A creator is judged from an **evidence bundle**, in one multimodal call:
 The pictures are what text cannot give: whether the grid is a person on camera or
 a wall of reposted memes, and whether the bio reads like a real creator. The
 verdict lands on `sourced_candidates.evidence.niche`, including `evidenceUsed`
-(which of the four were actually present), so a thin judgement is visible as a
-thin one in the review queue.
+(what was actually present, and how many of the recorded reels were watched), so
+a thin judgement is visible as a thin one in the review queue.
 
 When the navigator captured no screenshots (an older host), it falls back to
-judging the recorded clips individually, then to Claude on captions, then to
-keyword scoring — the pipeline always degrades rather than stalling.
+judging the recorded clips individually; with no Gemini verdict at all, to
+Claude on the screenshots and captions (structured, so the gate still runs),
+then to a bare Claude niche score, then to keyword scoring — the pipeline always
+degrades rather than stalling.
 
 > A phone answers `screenshot` with the PNG inline as base64, which clears 1 MB
 > routinely, so `/api/sourcing/hosts/:id/commands/result` parses at a 12 MB limit
@@ -383,11 +440,24 @@ so one keyword is never scouted twice.
 
 ### Review queue
 
-When `reviewBorderline` is on, a passer whose niche score is within `reviewBand`
-of the threshold gets `decision = "review"` instead of being added. Admins
-approve/reject from the **Pending review** card on the Scout Creators page
-(`GET /api/sourcing/review`, `POST /api/sourcing/candidates/:id/approve|reject`);
-the Gemini reasoning (genre / audience / why) is shown inline.
+A creator who passed every rule gets `decision = "review"` instead of being
+added when:
+
+- their reach could not be read (a reel off the feed whose grid never loaded);
+- no model analysed them (`reviewUnjudged`, on by default); or
+- `reviewBorderline` is on and they are near a threshold — a quality score
+  within `reviewScoreBand` (0.05) of the quality bar, or a niche score within
+  `reviewBand` (0.15) of the niche floor.
+
+The reason is stored as `evidence.reviewHold` and shown in the **Held because**
+column. Admins approve/reject from the **Pending review** card on the Scout
+Creators page (`GET /api/sourcing/review`,
+`POST /api/sourcing/candidates/:id/approve|reject`); the quality score and the
+judge's reasoning (genre / audience / why) are shown inline.
+
+Every rejection carries its reason — including the gate's own (`not an original
+creator`, `below the fit threshold`, `… views look bought`), which used to be
+saved blank and counted as `unknown` in `stats.byReason`.
 
 ### Scouting rules (per campaign)
 

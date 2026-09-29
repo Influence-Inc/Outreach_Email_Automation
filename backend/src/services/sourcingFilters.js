@@ -21,7 +21,9 @@ const { callClaudeMessages, parseJsonLoose } = require('./claudeClient');
 
 const DEFAULTS = {
   reelsWindow: 12,   // how many recent reels to measure
-  minReels: 6,       // fewer than this and we can't judge the creator
+  // Fewer than this and we can't judge the creator — but never more than the
+  // run was asked to read. See requiredReels().
+  minReels: 6,
   // How many of the window may sit below the floor. ZERO by design: the floor is
   // the campaign's minimum, and "minimum" that eleven of twelve reels satisfy is
   // not a minimum. A creator whose recent reels dip below the number the brand is
@@ -295,7 +297,8 @@ async function defaultClassify(candidate, config) {
   const raw = await callClaudeMessages(system, [{ role: 'user', content }], 200);
   const parsed = parseJsonLoose(raw);
   if (!parsed || typeof parsed.score !== 'number') return null;
-  return { score: clamp01(parsed.score), reason: parsed.reason || 'ai' };
+  // Named, so a run's stats.judgedBy says "claude" rather than a generic "ai".
+  return { score: clamp01(parsed.score), reason: parsed.reason || 'ai', source: 'claude' };
 }
 
 // Resolve a niche score for the candidate. Tries the AI classifier (injectable as
@@ -353,16 +356,33 @@ function clamp01(n) {
  *
  * `pass: true` means "worth judging", not "accepted".
  */
+/**
+ * How many reels with a readable view count a creator must have.
+ *
+ * `minReels`, but never more than the window the run was asked to read. The
+ * navigator collects AT MOST `reelsWindow` reels, so a window of 3 (the
+ * dashboard allows it) under a fixed minimum of 6 rejected every creator —
+ * "only 3 reels (need 6)" — however good they were. A small window is a
+ * deliberate choice to judge on fewer reels, and it is honoured as one.
+ */
+function requiredReels(cfg = {}) {
+  const min = Number(cfg.minReels);
+  const floor = Number.isFinite(min) && min > 0 ? min : DEFAULTS.minReels;
+  const window = Number(cfg.reelsWindow);
+  return Number.isFinite(window) && window > 0 ? Math.min(floor, Math.round(window)) : floor;
+}
+
 function prefilter(candidate, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
   const views = reelViews(candidate.reels);
   const reelCount = views.length;
   const viewFloorPass = passesViewFloor(views, cfg.floor, cfg.floorTolerance || 0);
   const riskProfile = classifyRisk(views, cfg);
+  const needed = requiredReels(cfg);
 
   let rejectReason = null;
-  if (reelCount < cfg.minReels) {
-    rejectReason = `only ${reelCount} reels (need ${cfg.minReels})`;
+  if (reelCount < needed) {
+    rejectReason = `only ${reelCount} reels (need ${needed})`;
   } else if (!viewFloorPass) {
     const low = views.filter((v) => v < cfg.floor).length;
     rejectReason = low === reelCount
@@ -399,8 +419,9 @@ function decide(candidate, config = {}) {
   };
 
   // Gate order mirrors cost: cheap deterministic checks first.
-  if (evalResult.reelCount < cfg.minReels) {
-    evalResult.rejectReason = `only ${evalResult.reelCount} reels (need ${cfg.minReels})`;
+  const needed = requiredReels(cfg);
+  if (evalResult.reelCount < needed) {
+    evalResult.rejectReason = `only ${evalResult.reelCount} reels (need ${needed})`;
   } else if (!evalResult.viewFloorPass) {
     const low = views.filter((v) => v < cfg.floor).length;
     evalResult.rejectReason = low === views.length
@@ -450,6 +471,7 @@ function decideReel(candidate, config = {}) {
 
 module.exports = {
   prefilter,
+  requiredReels,
   DEFAULTS,
   parseCount,
   reelViews,

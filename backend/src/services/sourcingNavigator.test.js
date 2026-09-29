@@ -970,6 +970,9 @@ test('records the best and typical reels, not merely the first one', async () =>
   assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 3);
 
   assert.strictEqual(out[0].clips.length, 3);
+  // Each recording says where it came from, so the judge is told the truth:
+  // these are the creator's own grid reels, not the search result.
+  assert.deepStrictEqual(out[0].clips.map((c) => c.origin), ['grid', 'grid', 'grid']);
   const recorded = out[0].clips.map((c) => c.views);
   assert.deepStrictEqual(recorded.slice(0, 2), [90000, 5000], 'the two best, best first');
   // The third is a typical reel from the middle of the window — not another top

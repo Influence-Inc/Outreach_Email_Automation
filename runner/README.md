@@ -122,12 +122,15 @@ mode; the auto-reconnect + keep-awake reliability applies here too.
 > live on a computer). `scout` mode — the navigator running on the host rather
 > than the backend — is still Node-only and unaffected.
 
-**For reel evaluation with audio** (backend `discovery: "reels"` mode), the host
-also needs **scrcpy 2.0+** on `PATH` (Android 11+ for audio) — `adb screenrecord`
-can't capture audio. macOS `brew install scrcpy`, Ubuntu `sudo apt install
-scrcpy`, Windows: the scrcpy release on PATH. The agent records short clips
-(video+audio) that the backend hands to Gemini. See
-[`docs/SOURCING_AI.md`](../docs/SOURCING_AI.md) for the full AI/engagement setup.
+**For reel evaluation with audio** (in **both** discovery modes — profiles mode
+records each creator's best and typical reels from their grid, reels mode records
+the feed reel), the host also needs **scrcpy 2.0+** on `PATH` (Android 11+ for
+audio) — `adb screenrecord` can't capture audio. macOS `brew install scrcpy`,
+Ubuntu `sudo apt install scrcpy`, Windows: the scrcpy release on PATH. The agent
+records short clips (video+audio) that the backend hands to Gemini; without
+scrcpy every creator is judged on screenshots and text alone (`withVideo=0` in
+the run log). See [`docs/SOURCING_AI.md`](../docs/SOURCING_AI.md) for the full
+AI/engagement setup.
 
 ## Android setup
 

@@ -26,6 +26,7 @@ const sourcingSession = require('../services/sourcingSession');
 const clipStore = require('../services/clipStore');
 const humanize = require('../services/humanize');
 const geminiClient = require('../services/geminiClient');
+const claudeClient = require('../services/claudeClient');
 const sourcingMetrics = require('../services/sourcingMetrics');
 const { readScreen } = require('../services/screenVision');
 
@@ -61,6 +62,42 @@ function nextRunStatus(currentStatus, done) {
 router.get('/gemini/health', async (_req, res, next) => {
   try {
     res.json(await geminiClient.ping());
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Which judges this deployment can use, and what that means for a run.
+ *
+ * Without Gemini nothing watches the reels; without Claude too, nothing judges
+ * quality at all, and every creator who passes the reach rules waits in review.
+ * That used to be invisible — a run just looked normal — so the Scout page
+ * states it. Configuration only, no network call (GET /gemini/health is the one
+ * that proves the key and model actually work). Pure + exported for tests.
+ */
+function judgeStatus({ gemini = geminiClient, claude = claudeClient } = {}) {
+  const video = !!(gemini.available && gemini.available());
+  const pictures = !!(claude.getClient && claude.getClient());
+  let mode = 'none';
+  if (video) mode = 'video';
+  else if (pictures) mode = 'pictures';
+  return {
+    gemini: video,
+    geminiModel: video && gemini.model ? gemini.model() : null,
+    claude: pictures,
+    mode,
+  };
+}
+
+// GET /api/sourcing/status — admin-only via the top-level siteAuth gate.
+router.get('/status', (_req, res, next) => {
+  try {
+    res.json({
+      judge: judgeStatus(),
+      remoteControl: hostCommands.enabled(),
+      liveMirror: hostChannel.enabled(),
+    });
   } catch (err) {
     next(err);
   }
@@ -166,16 +203,50 @@ router.get('/config/:campaignId', async (req, res, next) => {
   }
 });
 
+/**
+ * Apply a PATCH to a campaign's saved scouting defaults.
+ *
+ * A MERGE, not a replacement. The Scout page only knows the fields it shows,
+ * and saving from it used to overwrite the whole object — silently wiping every
+ * setting that can only be set through the API (targetAudience, genres,
+ * creatorWeights, the engagement floors, avoidExamples, `enabled` for the
+ * sweeper's auto-enqueue, ...). Keys in the patch replace the saved ones; a key
+ * sent as null is REMOVED, which is how a field is cleared. Shallow on purpose:
+ * a nested value such as creatorWeights is replaced whole, as it was sent.
+ *
+ * Pure + exported for tests.
+ */
+function mergeSourcingDefaults(current, patch) {
+  const base = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+  const out = { ...base };
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (value === null || value === undefined) delete out[key];
+    else out[key] = value;
+  }
+  return out;
+}
+
 router.patch('/config/:campaignId', async (req, res, next) => {
   try {
     const body = req.body || {};
     if (typeof body !== 'object' || Array.isArray(body)) {
       return res.status(400).json({ error: 'body must be an object' });
     }
-    const row = await db.one(
-      `UPDATE campaigns SET sourcing_defaults = $2::jsonb WHERE id = $1 RETURNING sourcing_defaults`,
-      [req.params.campaignId, JSON.stringify(body)],
-    );
+    // Read-merge-write under a row lock, so two admins saving at once cannot
+    // each drop the other's keys.
+    const row = await db.withTransaction(async (client) => {
+      const cur = await client.query(
+        `SELECT sourcing_defaults FROM campaigns WHERE id = $1 FOR UPDATE`,
+        [req.params.campaignId],
+      );
+      if (!cur.rows.length) return null;
+      const merged = mergeSourcingDefaults(cur.rows[0].sourcing_defaults, body);
+      const saved = await client.query(
+        `UPDATE campaigns SET sourcing_defaults = $2::jsonb WHERE id = $1 RETURNING sourcing_defaults`,
+        [req.params.campaignId, JSON.stringify(merged)],
+      );
+      return saved.rows[0] || null;
+    });
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(row.sourcing_defaults || {});
   } catch (err) {
@@ -593,5 +664,7 @@ router.get('/hosts/:id/control', requireLiveMirror, requireHostOrSlack, async (r
 // `app.use('/api/sourcing', sourcing)` still works) so they can be unit-tested.
 router.nextRunStatus = nextRunStatus;
 router.annotateHostHealth = annotateHostHealth;
+router.mergeSourcingDefaults = mergeSourcingDefaults;
+router.judgeStatus = judgeStatus;
 
 module.exports = router;

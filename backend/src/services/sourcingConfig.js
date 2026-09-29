@@ -113,11 +113,17 @@ function buildConfig(defaults = {}, override = {}) {
     targetCount: num(merged.targetCount) || 0,
     reelsWindow: num(merged.reelsWindow) || 12,
     nicheThreshold: num(merged.nicheThreshold),
-    // Route borderline passers (niche score just over the threshold) to a human
-    // review queue instead of auto-adding. reviewBand = how far above threshold
-    // still counts as "borderline".
+    // Route borderline passers to a human review queue instead of auto-adding.
+    // Borderline means close to EITHER threshold that can reject: the quality
+    // bar (creatorPassThreshold) within reviewScoreBand (default 0.05), or the
+    // niche floor (nicheThreshold) within reviewBand (default 0.15).
     reviewBorderline: merged.reviewBorderline === true || merged.reviewBorderline === 'true',
     reviewBand: num(merged.reviewBand),
+    reviewScoreBand: num(merged.reviewScoreBand),
+    // Hold a creator no model could analyse (no Gemini, no Claude, or every
+    // call failed) for review rather than adding them on the reach and keyword
+    // rules alone. On unless a campaign explicitly turns it off.
+    reviewUnjudged: merged.reviewUnjudged !== false && merged.reviewUnjudged !== 'false',
     // 'reels' = explore/scroll reel-feed flow (watch+hear); else search→profile.
     discovery: merged.discovery === 'reels' ? 'reels' : '',
     clipSeconds: clipSecondsOf(merged.clipSeconds),

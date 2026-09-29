@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const {
-  runWithSource, arraySource, processCandidate, reviewDecision, sourceNote,
+  runWithSource, arraySource, processCandidate, reviewDecision, reviewHoldReason, sourceNote,
 } = require('./sourcingOrchestrator');
 
 // In-memory implementation of the injected side effects.
@@ -44,6 +44,10 @@ function memStore(seedCreators = []) {
 }
 
 const run = { id: 1, campaign_id: 'camp-1' };
+// Most of these tests exercise the deterministic rules on their own (the memStore
+// classifier returns no analysis), so they opt out of the default that holds a
+// creator no model could judge for review — see the "not quality-judged" tests.
+const DETERMINISTIC = { reviewUnjudged: false };
 const goodCfg = {
   floor: 15000,
   ceiling: 500000,
@@ -51,6 +55,7 @@ const goodCfg = {
   niche: 'fitness',
   keywords: ['gym'],
   nicheThreshold: 0.4,
+  ...DETERMINISTIC,
 };
 const fitReels = (v = 100000) => Array(12).fill(0).map(() => ({ views: v, caption: 'gym day' }));
 
@@ -157,7 +162,7 @@ test('a borderline passer is held for review, not auto-added', async () => {
 test('a clear passer above the review band is still auto-added', async () => {
   const { creators, deps } = memStore();
   deps.nicheClassify = async () => ({ score: 0.95, reason: 'clear' });
-  const cfg = { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, reviewBorderline: true, reviewBand: 0.15, targetCount: 5 };
+  const cfg = { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, reviewBorderline: true, reviewBand: 0.15, targetCount: 5, ...DETERMINISTIC };
   const res = await processCandidate(run, cfg, { username: 'clear', bio: 'x', reels: fitReels() }, deps);
   assert.strictEqual(res.decision, 'added');
   assert.strictEqual(creators.length, 1);
@@ -215,6 +220,7 @@ test('a reels-mode candidate WITH reach is decided, not parked in review', async
     ceiling: 100000000,
     risk: 'high',
     targetCount: 5,
+    ...DETERMINISTIC,
   };
 
   const res = await processCandidate(
@@ -317,9 +323,11 @@ test('the gate records its components on the candidate', async () => {
   assert.ok(score.stats.typical > 0);
 });
 
-// Nothing changes for a run with no AI analysis at all — the deterministic
-// scouting rules still decide on their own.
-test('with no analysis present the existing rules are untouched', async () => {
+// With no AI analysis the quality bar, originality and brand safety never run.
+// Auto-adding on the reach and keyword rules alone turned a missing or failing
+// judge into a silent keyword matcher, so by default such a creator waits for a
+// human — with the reason stated.
+test('a creator no model could analyse is held for review, not auto-added', async () => {
   const { deps, creators, candidates } = memStore();
   const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
 
@@ -327,12 +335,30 @@ test('with no analysis present the existing rules are untouched', async () => {
     { id: 1 }, cfg, { username: 'plain', bio: 'home fitness', reels: fitReels() }, deps,
   );
 
+  assert.strictEqual(res.decision, 'review');
+  assert.match(res.reviewReason, /not quality-judged/);
+  assert.strictEqual(creators.length, 0, 'not added without a quality judgement');
+  assert.strictEqual(candidates[0].decision, 'review');
+  assert.match(candidates[0].evidence.reviewHold, /not quality-judged/, 'the reviewer sees why');
+  assert.ok(!candidates[0].evidence.creatorScore, 'no gate ran');
+  assert.strictEqual(candidates[0].evidence.reachChecks.pass, true, 'but the reach checks did');
+});
+
+// A campaign that deliberately runs on the deterministic rules alone can say so.
+test('reviewUnjudged: false adds on the reach and keyword rules alone', async () => {
+  const { deps, creators, candidates } = memStore();
+  const cfg = {
+    niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5, ...DETERMINISTIC,
+  };
+
+  const res = await processCandidate(
+    { id: 1 }, cfg, { username: 'plain', bio: 'home fitness', reels: fitReels() }, deps,
+  );
+
   assert.strictEqual(res.decision, 'added');
   assert.strictEqual(creators.length, 1);
-  assert.ok(
-    !candidates[0].evidence || !candidates[0].evidence.creatorScore,
-    'no gate ran',
-  );
+  assert.ok(!candidates[0].evidence.creatorScore, 'no gate ran');
+  assert.ok(!candidates[0].evidence.reviewHold);
 });
 
 // ── provenance on the added creator (§7) ────────────────────────────────────
@@ -341,7 +367,9 @@ test('with no analysis present the existing rules are untouched', async () => {
 // later, which of them is worth running again.
 test('an added creator is tagged with the keyword and mode that found them', async () => {
   const { deps, creators } = memStore();
-  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+  const cfg = {
+    niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5, ...DETERMINISTIC,
+  };
 
   await processCandidate(
     { id: 42 }, cfg,
@@ -362,6 +390,7 @@ test('a reels-feed creator is tagged with the mode and no keyword', async () => 
   const { deps, creators } = memStore();
   const cfg = {
     discovery: 'reels', niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5,
+    ...DETERMINISTIC,
   };
 
   await processCandidate(
@@ -380,7 +409,9 @@ test('the genre from the analysis rides along on the tag', async () => {
     ...deps,
     nicheClassify: async () => ({ score: 0.9, reason: 'ok', evidence: { genre: 'home workouts' } }),
   };
-  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+  const cfg = {
+    niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5, ...DETERMINISTIC,
+  };
 
   await processCandidate({ id: 1 }, cfg, { username: 'lee', reels: fitReels() }, custom);
   assert.strictEqual(creators[0].sourcedVia.genre, 'home workouts');
@@ -504,7 +535,7 @@ test('a creator who clears the view gates is still judged', async () => {
 
   await processCandidate(
     { id: 1 },
-    { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, targetCount: 5 },
+    { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, targetCount: 5, ...DETERMINISTIC },
     { username: 'good', bio: 'fitness', reels: fitReels() },
     custom,
   );
@@ -637,4 +668,171 @@ test('a creator we DID reach keeps a plain reject reason', async () => {
 
   assert.strictEqual(res.decision, 'rejected');
   assert.ok(!/profile never opened/.test(res.rejectReason), 'no false alarm');
+});
+
+// ── a gate rejection says why ───────────────────────────────────────────────
+//
+// decide() passed, so its own rejectReason was null — and that null was what got
+// saved. Every repost page, bought-views and below-the-bar rejection showed a
+// blank Reason on the dashboard and was filed under "unknown" in the run stats.
+
+test("a gate rejection is saved with the gate's reason, not a blank", async () => {
+  const { deps, candidates } = memStore();
+  const custom = { ...deps, nicheClassify: judged({ clip: { is_original_creator: false } }).nicheClassify };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  const { stats } = await runWithSource(
+    { id: 1, campaign_id: 'camp-1' }, cfg,
+    arraySource([{ username: 'repostking', reels: fitReels(), creatorAnalysis: { fit_score: 95, consistency_of_niche: 9 } }]),
+    custom,
+  );
+
+  assert.strictEqual(candidates[0].decision, 'rejected');
+  assert.strictEqual(candidates[0].reject_reason, 'not an original creator');
+  assert.deepStrictEqual(stats.byReason, { 'not an original creator': 1 }, 'not "unknown"');
+});
+
+test('a below-the-bar creator is saved with that reason', async () => {
+  const { deps, candidates } = memStore();
+  const custom = { ...deps, nicheClassify: judged({ clip: { creativity: 2, hook_strength: 2 } }).nicheClassify };
+  const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
+
+  await processCandidate(
+    { id: 1 }, cfg,
+    { username: 'meh', reels: fitReels(), creatorAnalysis: { fit_score: 30, consistency_of_niche: 2 } },
+    custom,
+  );
+  assert.strictEqual(candidates[0].reject_reason, 'below the fit threshold');
+});
+
+// ── the reach checks need no model ──────────────────────────────────────────
+//
+// Bought views, an unengaged following and one-outlier reach are arithmetic on
+// counts read off the screen. They lived only inside the AI gate, so a creator
+// no model could analyse skipped all three and could be added on bought reach.
+
+test('bought views are rejected even when no model analysed the creator', async () => {
+  const { deps, candidates, creators } = memStore();
+  const res = await processCandidate(
+    run, goodCfg,
+    {
+      username: 'boughtviews',
+      bio: 'fitness',
+      reels: fitReels(),
+      followers: 10000,
+      engagement: { likes: 150, comments: 0, views: 500000 },
+    },
+    deps,
+  );
+
+  assert.strictEqual(res.decision, 'rejected');
+  assert.match(candidates[0].reject_reason, /views look bought/);
+  assert.strictEqual(candidates[0].evidence.reachChecks.pass, false);
+  assert.strictEqual(creators.length, 0);
+});
+
+test('reach carried by one outlier reel is rejected without a model too', async () => {
+  const { deps, candidates } = memStore();
+  const spiky = [...Array(11).fill({ views: 30000, caption: 'gym day' }), { views: 900000, caption: 'gym day' }];
+  const res = await processCandidate(run, goodCfg, { username: 'onehit', bio: 'fitness', reels: spiky }, deps);
+
+  assert.strictEqual(res.decision, 'rejected');
+  assert.strictEqual(candidates[0].reject_reason, 'reach driven by a single outlier');
+});
+
+test('an unengaged following is rejected without a model too', async () => {
+  const { deps, candidates } = memStore();
+  const res = await processCandidate(
+    run, goodCfg,
+    { username: 'ghosts', bio: 'fitness', reels: fitReels(), followers: 1000000, engagement: { likes: 900, comments: 20 } },
+    deps,
+  );
+
+  assert.strictEqual(res.decision, 'rejected');
+  assert.match(candidates[0].reject_reason, /of followers, below/);
+});
+
+// ── borderline on QUALITY, not only on niche ────────────────────────────────
+//
+// The niche threshold is now a floor under the obviously wrong (0.1); the bar
+// that actually decides an analysed creator is the quality score (0.72). A
+// review band measured only on niche let a creator who scraped past the bar at
+// 0.73 be added with no human look.
+
+test('reviewDecision holds a quality score just over the bar', () => {
+  const on = { reviewBorderline: true };
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, on, { pass: true, score: 0.74 }), 'review');
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, on, { pass: true, score: 0.8 }), 'add');
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, {}, { pass: true, score: 0.74 }), 'add', 'dial off');
+  // The campaign's own bar and band are honoured.
+  const own = { reviewBorderline: true, creatorPassThreshold: 0.6, reviewScoreBand: 0.1 };
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, own, { pass: true, score: 0.65 }), 'review');
+  assert.strictEqual(reviewDecision({ nicheScore: 0.9 }, own, { pass: true, score: 0.75 }), 'add');
+});
+
+test('the hold reason says which threshold a creator was close to', () => {
+  const on = { reviewBorderline: true };
+  assert.match(
+    reviewHoldReason({ nicheScore: 0.9 }, on, { gate: { pass: true, score: 0.735 } }),
+    /quality score 0\.735 is within 0\.05 of the 0\.72 bar/,
+  );
+  assert.match(reviewHoldReason({ nicheScore: 0.2 }, on, { gate: { pass: true, score: 0.9 } }), /niche score 0\.2 is within 0\.15 of the 0\.1 floor/);
+  assert.strictEqual(reviewHoldReason({ nicheScore: 0.9 }, on, { gate: { pass: true, score: 0.9 } }), null);
+  assert.match(reviewHoldReason({ nicheScore: 0.9 }, {}, { reachUnverified: true }), /reach not measured/);
+  assert.match(reviewHoldReason({ nicheScore: 0.9 }, {}, { gate: null }), /not quality-judged/);
+  assert.strictEqual(reviewHoldReason({ nicheScore: 0.9 }, { reviewUnjudged: false }, { gate: null }), null);
+});
+
+test('a creator just over the quality bar goes to review with the reason', async () => {
+  const { deps, creators, candidates } = memStore();
+  const custom = { ...deps, nicheClassify: judged().nicheClassify };
+  const cfg = {
+    niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5, reviewBorderline: true,
+  };
+
+  // fit 0.6, consistency 0.5, steadiness 1, creativity 0.8, hook 0.8 -> 0.733
+  const res = await processCandidate(
+    { id: 1 }, cfg,
+    { username: 'scraped', reels: fitReels(), creatorAnalysis: { fit_score: 60, consistency_of_niche: 5 } },
+    custom,
+  );
+
+  assert.strictEqual(res.decision, 'review');
+  assert.strictEqual(creators.length, 0);
+  assert.ok(candidates[0].evidence.creatorScore.score >= 0.72, 'it did clear the bar');
+  assert.match(candidates[0].evidence.reviewHold, /quality score .* of the 0\.72 bar/);
+});
+
+test('a creator well over the quality bar is still added with the dial on', async () => {
+  const { deps, creators } = memStore();
+  const custom = { ...deps, nicheClassify: judged().nicheClassify };
+  const cfg = {
+    niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5, reviewBorderline: true,
+  };
+
+  const res = await processCandidate(
+    { id: 1 }, cfg,
+    { username: 'clear', reels: fitReels(), creatorAnalysis: { fit_score: 90, consistency_of_niche: 9 } },
+    custom,
+  );
+
+  assert.strictEqual(res.decision, 'added');
+  assert.strictEqual(creators.length, 1);
+});
+
+// ── which judge actually ran ────────────────────────────────────────────────
+
+test('the run counts which judge produced each verdict', async () => {
+  const { deps } = memStore();
+  const analysed = judged().nicheClassify;
+  deps.nicheClassify = async (cand) => (cand.username === 'judgedA'
+    ? { ...(await analysed()), source: 'gemini-profile' }
+    : null); // falls through to keyword scoring
+  const source = arraySource([
+    { username: 'judgedA', bio: 'fitness', reels: fitReels(), creatorAnalysis: { fit_score: 90, consistency_of_niche: 9 } },
+    { username: 'keywordB', bio: 'fitness', reels: fitReels() },
+  ]);
+
+  const { stats } = await runWithSource(run, goodCfg, source, deps);
+  assert.deepStrictEqual(stats.judgedBy, { 'gemini-profile': 1, keyword: 1 });
 });
