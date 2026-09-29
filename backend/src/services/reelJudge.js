@@ -5,15 +5,21 @@
 //
 // It's the AI classifier the sourcing orchestrator injects as `nicheClassify`.
 // The composite order is:
-//   1. Gemini video (watch + hear)  — when a clip is present AND a key is set
-//   2. Claude on thumbnails/captions (sourcingFilters.defaultClassify)
-//   3. keyword scoring                — nicheMatch's built-in final fallback
+//   1. Gemini, whole profile         — every recorded reel (video + audio) plus
+//                                      the bio and grid screenshots, one call
+//   2. Gemini, reel by reel          — when there are no screenshots
+//   3. Claude, whole profile         — screenshots + captions, no video; the
+//                                      same structured verdict, so the quality
+//                                      gate still runs when Gemini cannot
+//   4. Claude, niche score only      (sourcingFilters.defaultClassify)
+//   5. keyword scoring               — nicheMatch's built-in final fallback
 //
 // So the pipeline gets the richest available signal and always degrades cleanly.
-// The Gemini verdict (genre / audience_match / language / spoken topic / reason)
-// is returned as `evidence` so the orchestrator can persist WHY a creator matched.
+// The verdict (genre / audience_match / language / spoken topic / reason) is
+// returned as `evidence` so the orchestrator can persist WHY a creator matched.
 
 const geminiClientDefault = require('./geminiClient');
+const claudeClientDefault = require('./claudeClient');
 const { statedTaste } = require('./nicheCalibration');
 const { defaultClassify, clamp01, round3 } = require('./sourcingFilters');
 const { reelStats } = require('./creatorScore');
@@ -225,7 +231,8 @@ function parseClipAnalysis(raw) {
 /** Coerce a per-creator reply into the documented shape. */
 function parseCreatorAnalysis(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const fit = Number(raw.fit_score);
+  // A missing fit score is unmeasured, not a fit of 0 — Number(null) is 0.
+  const fit = raw.fit_score == null || raw.fit_score === '' ? NaN : Number(raw.fit_score);
   return {
     primary_niche: str(raw.primary_niche),
     consistency_of_niche: scaleLevel(raw.consistency_of_niche),
@@ -268,52 +275,169 @@ function hasBrandContext(config = {}) {
 }
 
 /**
+ * A brand fit the judge was never asked for is unmeasured, whatever it wrote.
+ *
+ * A model handed a response template fills in every field of it — so a campaign
+ * with no brand details still came back with a brand fit: a guess about a brand
+ * nobody described, carrying the largest single weight in the score. Null is
+ * what the scorer reads as "not judged", and its weight goes to what WAS.
+ */
+function dropUnaskedBrandFit(clip, config = {}) {
+  if (!clip || hasBrandContext(config)) return clip;
+  return {
+    ...clip, brand_fit: null, brand_fit_level: null, brand_fit_reason: '',
+  };
+}
+
+// ── the videos a profile judgement watches ──────────────────────────────────
+
+// Kept free in one inline Gemini request for the prompt text and the JSON
+// envelope, on top of the media itself.
+const INLINE_HEADROOM_BYTES = 512 * 1024;
+
+// Base64 length -> decoded bytes (4 characters carry 3 bytes).
+function b64Bytes(b64) {
+  return Math.floor((String(b64 || '').length * 3) / 4);
+}
+
+/**
+ * Every reel recorded for this creator, best first — not just `clip`.
+ *
+ * The navigator records up to clipsPerProfile reels (the dashboard's "Reels to
+ * watch per creator": the best performers plus a typical one), but only `clip`,
+ * the single best, ever reached the profile judge — so two of every three
+ * recordings were paid for on the phone and never watched. `clips` is the full
+ * set when the navigator made one; `clip` covers the paths that record a single
+ * reel (the reels feed).
+ */
+function recordedVideos(candidate = {}) {
+  const list = Array.isArray(candidate.clips) && candidate.clips.length
+    ? candidate.clips
+    : [candidate.clip];
+  return list.filter((c) => c && c.dataBase64);
+}
+
+/**
+ * As many videos as fit in ONE inline request beside the screenshots, in order
+ * (best first). A clip too big for the room left is skipped rather than sent:
+ * geminiClient refuses an oversized request outright, which would cost the
+ * creator every video, not just the one that did not fit.
+ */
+function fitVideos(videos, images = [], limit = geminiClientDefault.MAX_INLINE_BYTES) {
+  let room = limit - INLINE_HEADROOM_BYTES - images.reduce((n, i) => n + b64Bytes(i.data), 0);
+  const sent = [];
+  for (const v of videos) {
+    const size = b64Bytes(v.dataBase64);
+    if (size > room) continue;
+    sent.push(v);
+    room -= size;
+  }
+  return sent;
+}
+
+/**
+ * One line naming a video by where it truly came from.
+ *
+ * The prompt used to call its video "the reel that came back for the search",
+ * but the navigator records from the creator's own Reels grid, after the reach
+ * gates — never in the search player. Telling the judge it is watching the
+ * keyword match when it is watching their most-viewed reel is a wrong premise,
+ * and a wrong premise skews a verdict.
+ */
+function videoLine(v, n) {
+  let where = 'one of their reels';
+  if (v.origin === 'feed') where = 'the reel the Reels feed showed us, which is how we found them';
+  else if (v.origin === 'grid') where = 'one of their own recent reels, recorded from their Reels grid';
+  const views = v.views != null && Number.isFinite(Number(v.views)) ? `, ${Number(v.views)} views` : '';
+  const caption = v.caption ? `, captioned: "${String(v.caption).slice(0, 200)}"` : '';
+  return `${n}. A REEL VIDEO (with audio) — ${where}${views}${caption}.`;
+}
+
+/** How this creator came to be looked at, when the navigator recorded it. */
+function foundVia(candidate = {}) {
+  if (candidate.sourceTerm) return `an Instagram search for "${candidate.sourceTerm}"`;
+  if (candidate.discovery === 'reels') return 'the Reels feed';
+  return null;
+}
+
+/** "a, b and c" — for naming a list of fields in one sentence. */
+function listed(names) {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names.join('');
+}
+
+/**
  * The profile prompt: what the creator's bio and grid LOOK like, what their
- * captions say, their reach, and one reel — the one our keyword actually
- * surfaced — watched and heard in full.
+ * captions say, their reach, and every reel recorded for them — watched and
+ * heard in full.
  *
  * This is one call where the older path spent four (three reels plus a
  * creator-level pass), and it judges the thing we actually care about: not "was
  * this one reel on-brand" but "is this creator, as a whole, on-brand". The media
- * is described in the order geminiClient appends it — video first, then each
- * screenshot — so the model knows which picture is which.
+ * is described in the order geminiClient appends it — videos first, then each
+ * screenshot — so the model knows which is which.
  */
-function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
+function buildProfilePrompt(candidate = {}, config = {}, shots = [], videos = recordedVideos(candidate)) {
   const captions = (candidate.reels || [])
     .map((r) => (r && r.caption ? String(r.caption).slice(0, 200) : null))
     .filter(Boolean)
     .slice(0, 12);
   const stats = reelStats(candidate.reels || []);
-  const clip = candidate.clip || {};
-  const media = [];
-  if (clip.dataBase64) {
-    media.push(
-      `1. A REEL VIDEO (with audio)${candidate.sourceTerm ? ` — this is the reel that came back for the search "${candidate.sourceTerm}"` : ''}`
-      + `${clip.caption ? `, captioned: "${String(clip.caption).slice(0, 200)}"` : ''}.`,
-    );
-  }
+  const media = videos.map((v, i) => videoLine(v, i + 1));
   shots.forEach((s) => {
     media.push(s.kind === 'reels_grid'
       ? `${media.length + 1}. A SCREENSHOT of their reels grid — the thumbnails and view counts of their recent reels.`
       : `${media.length + 1}. A SCREENSHOT of their profile header and bio.`);
   });
+  const gridVideos = videos.filter((v) => v.origin === 'grid').length;
+  const askBrandFit = hasBrandContext(config);
+  const via = foundVia(candidate);
+  const levelled = [
+    'production_quality', 'creativity', 'hook_strength',
+    ...(askBrandFit ? ['brand_fit'] : []),
+    'consistency_of_niche',
+  ];
+
+  let watch;
+  if (videos.length > 1) {
+    watch = [
+      'FIRST, watch every video the whole way through and describe each one,',
+      'numbered as above: what happens on screen, what is being said, the setting,',
+      'and anything held or worn that a brand could sit alongside.',
+    ];
+  } else if (videos.length === 1) {
+    watch = [
+      'FIRST, watch the video the whole way through and describe it: what happens',
+      'on screen, what is being said, the setting, and anything held or worn that a',
+      'brand could sit alongside.',
+    ];
+  } else {
+    watch = [
+      'There is no video for this creator, so FIRST describe what the screenshots',
+      'show: who is on screen, what they make, and what their grid looks like.',
+    ];
+  }
 
   return [
     'You are judging an Instagram CREATOR for a brand campaign.',
     '',
     'You are given, in this order:',
     ...(media.length ? media : ['(no media — judge from the text below alone)']),
+    ...(gridVideos > 1 ? [
+      '',
+      'The grid reels were picked to show both their best-performing and their',
+      'typical work — the view counts say which is which. Compare them: a creator',
+      'whose everyday reel holds up is a safer bet than one carried by a single hit.',
+    ] : []),
     '',
-    'FIRST, watch the video the whole way through and describe it: what happens',
-    'on screen, what is being said, the setting, and anything held or worn that a',
-    'brand could sit alongside. Put that in video_description BEFORE you score',
-    'anything. Describing it first is not busywork — a judgement made without',
-    'having said what the reel actually IS tends to fall back on the caption and',
-    'the handle, which is the mistake this whole pipeline exists to avoid.',
+    ...watch,
+    'Put that in video_description BEFORE you score anything. Describing first is',
+    'not busywork — a judgement made without having said what the reel actually',
+    'IS tends to fall back on the caption and the handle, which is the mistake',
+    'this whole pipeline exists to avoid.',
     '',
-    'THEN judge the CREATOR, not just this one reel: use the grid screenshot to',
-    'see whether the reel is typical of them or an outlier, and the bio screenshot',
-    'to see how they present themselves. Weigh the video, the bio and the captions',
+    'THEN judge the CREATOR, not just these reels: use the grid screenshot to see',
+    'whether what you watched is typical of them, and the bio screenshot to see',
+    'how they present themselves. Weigh the video, the bio and the captions',
     'TOGETHER against the brand and the target niche below — spoken topic,',
     'language and music matter as much as the visuals.',
     '',
@@ -327,16 +451,17 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     // without it looking bought" are different questions, and only the second
     // predicts whether a collaboration works. Asked only when the campaign said
     // what it sells — there is nothing to judge fit against otherwise.
-    ...(hasBrandContext(config) ? [
+    ...(askBrandFit ? [
       'BRAND FIT — judge this specifically: could THIS creator feature the product',
       'above in one of their own reels and have it look native rather than a paid',
       'read? Consider what they already make, who watches them, and whether the',
       'product belongs in that world. A creator in the right niche who could not',
-      'plausibly hold this product scores LOW. Put the score in brand_fit (0-10)',
-      'and one line of why in brand_fit_reason.',
+      'plausibly hold this product scores LOW. Put the level in brand_fit and one',
+      'line of why in brand_fit_reason.',
       '',
     ] : []),
     `Creator @${candidate.username || 'unknown'}`,
+    ...(via ? [`Found via: ${via}`] : []),
     `Followers: ${candidate.followers ?? '(unknown)'}`,
     `Bio text: ${candidate.bio || '(none)'}`,
     `Reach across ${stats.count || 0} recent reels — lowest ${stats.min ?? '?'}, `
@@ -359,14 +484,14 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     'work is derivative — grading it kindly only hides what it is.',
     '',
     'Respond with ONLY a JSON object of exactly this shape, no prose and no',
-    'markdown fences. production_quality, creativity, hook_strength, brand_fit and',
-    'consistency_of_niche are each exactly one of: "derivative", "competent",',
-    '"distinctive", "exceptional" — derivative = generic/templated, competent =',
-    'solid but ordinary, distinctive = memorable and above the norm for this niche,',
-    'exceptional = the best you would expect to see in this niche. niche_score,',
-    'audience_match and confidence are 0-1. is_original_creator is false for repost',
-    'pages, meme aggregators and clip farms. reject_reason is null unless the',
-    'creator should be dropped outright. fit_score is 0-100.',
+    `markdown fences. ${listed(levelled)} are each exactly one of:`,
+    '"derivative", "competent", "distinctive", "exceptional" — derivative =',
+    'generic/templated, competent = solid but ordinary, distinctive = memorable and',
+    'above the norm for this niche, exceptional = the best you would expect to see',
+    'in this niche. niche_score, audience_match and confidence are 0-1.',
+    'is_original_creator is false for repost pages, meme aggregators and clip',
+    'farms. reject_reason is null unless the creator should be dropped outright.',
+    'fit_score is 0-100.',
     '{',
     '  "video_description": "",',
     '  "niche_score": 0.0,',
@@ -387,8 +512,9 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
     '  "spoken_language": "",',
     '  "on_screen_products": [],',
     '  "ugc_ad_fit": 0,',
-    '  "brand_fit": "competent",',
-    '  "brand_fit_reason": "",',
+    // Only in the template when the question was asked — a template field is a
+    // field the model fills in, asked or not.
+    ...(askBrandFit ? ['  "brand_fit": "competent",', '  "brand_fit_reason": "",'] : []),
     '  "reasoning": "",',
     '  "primary_niche": "",',
     '  "consistency_of_niche": "competent",',
@@ -405,29 +531,31 @@ function buildProfilePrompt(candidate = {}, config = {}, shots = []) {
  *
  * Preferred over judgeClips whenever the navigator captured profile screenshots,
  * because it answers the creator-level question directly from creator-level
- * evidence — bio, grid, captions, reach and the keyword-matched reel — instead of
- * inferring it from three reels judged in isolation.
+ * evidence — bio, grid, captions, reach and every reel recorded for them —
+ * instead of inferring it from reels judged in isolation.
  */
 async function classifyProfile(candidate, config, deps = {}) {
   const gemini = deps.gemini || geminiClientDefault;
   if (!gemini.available || !gemini.available()) return null;
 
   const shots = (candidate.shots || []).filter((s) => s && s.dataBase64);
-  const clip = candidate.clip && candidate.clip.dataBase64 ? candidate.clip : null;
-  if (!shots.length && !clip) return null; // nothing a picture-or-video judge can add
+  const images = shots.map((s) => ({ data: s.dataBase64, mimeType: s.mimeType || 'image/png' }));
+  const recorded = recordedVideos(candidate);
+  const videos = fitVideos(recorded, images);
+  if (!shots.length && !videos.length) return null; // nothing a picture-or-video judge can add
 
   const parsed = await gemini.classifyReelVideo({
-    videoBase64: clip ? clip.dataBase64 : undefined,
-    mimeType: clip ? (clip.mimeType || 'video/mp4') : undefined,
-    images: shots.map((s) => ({ data: s.dataBase64, mimeType: s.mimeType || 'image/png' })),
-    promptText: buildProfilePrompt(candidate, config, shots),
+    videos: videos.map((v) => ({ data: v.dataBase64, mimeType: v.mimeType || 'video/mp4' })),
+    images,
+    promptText: buildProfilePrompt(candidate, config, shots, videos),
     label: `profile @${candidate.username || '?'}`,
-    maxOutputTokens: 800,
+    // Room to describe every video before the verdict.
+    maxOutputTokens: 800 + 200 * Math.max(0, videos.length - 1),
     responseSchema: PROFILE_RESPONSE_SCHEMA,
   });
   if (!parsed || typeof parsed.niche_score !== 'number') return null;
 
-  const clipAnalysis = parseClipAnalysis(parsed);
+  const clipAnalysis = dropUnaskedBrandFit(parseClipAnalysis(parsed), config);
   const creator = parseCreatorAnalysis(parsed);
 
   return {
@@ -451,10 +579,195 @@ async function classifyProfile(candidate, config, deps = {}) {
       clip: clipAnalysis,
       creator,
       // What the verdict was actually looking at, so a review can tell a
-      // full-evidence judgement from a thin one.
+      // full-evidence judgement from a thin one — including how many of the
+      // reels recorded for this creator the judge really watched.
       evidenceUsed: {
-        video: !!clip,
+        video: videos.length > 0,
+        videos: videos.length,
+        videosRecorded: recorded.length,
         shots: shots.map((s) => s.kind),
+        captions: (candidate.reels || []).filter((r) => r && r.caption).length,
+      },
+    },
+  };
+}
+
+// ── Claude, when Gemini cannot judge ────────────────────────────────────────
+
+const CLAUDE_PROFILE_SYSTEM = 'You judge Instagram creators for brand campaigns. '
+  + 'Respond with ONLY a JSON object, no prose and no markdown fences.';
+
+/**
+ * The profile prompt for a judge that cannot watch video: the same questions as
+ * buildProfilePrompt, answered from the screenshots and the text alone. Asks
+ * for null wherever only a video could give the answer.
+ */
+function buildClaudeProfilePrompt(candidate = {}, config = {}, images = []) {
+  const captions = (candidate.reels || [])
+    .map((r) => (r && r.caption ? String(r.caption).slice(0, 200) : null))
+    .filter(Boolean)
+    .slice(0, 12);
+  const stats = reelStats(candidate.reels || []);
+  const askBrandFit = hasBrandContext(config);
+  const via = foundVia(candidate);
+  const media = images.map((img, i) => {
+    if (img.kind === 'reels_grid') {
+      return `${i + 1}. A SCREENSHOT of their reels grid — the thumbnails and view counts of their recent reels.`;
+    }
+    if (img.kind === 'bio') return `${i + 1}. A SCREENSHOT of their profile header and bio.`;
+    return `${i + 1}. A THUMBNAIL of one of their recent reels.`;
+  });
+  const levelled = [
+    ...(images.length ? ['production_quality', 'creativity'] : []),
+    ...(askBrandFit ? ['brand_fit'] : []),
+    'consistency_of_niche',
+  ];
+
+  return [
+    'You are judging an Instagram CREATOR for a brand campaign, from pictures and',
+    'text only — there is no video.',
+    '',
+    'You are given, in this order:',
+    ...(media.length ? media : ['(no pictures — judge from the text below alone)']),
+    '',
+    'Judge the CREATOR against the brand and the target niche below, from what',
+    'the pictures and the text actually show. Do not guess at anything only',
+    'watching a reel could tell you.',
+    '',
+    `Target niche/genre: ${config.niche || '(unspecified)'}`,
+    `Campaign keywords: ${(config.keywords || []).join(', ') || '(none)'}`,
+    `Allowed genres: ${(config.genres || []).join(', ') || '(any)'}`,
+    '',
+    brandBrief(config),
+    ...(askBrandFit ? [
+      'BRAND FIT — judge this specifically: could THIS creator feature the product',
+      'above in one of their own reels and have it look native rather than a paid',
+      'read? A creator in the right niche who could not plausibly hold this product',
+      'scores LOW. Put the level in brand_fit and one line of why in',
+      'brand_fit_reason.',
+      '',
+    ] : []),
+    `Creator @${candidate.username || 'unknown'}`,
+    ...(via ? [`Found via: ${via}`] : []),
+    `Followers: ${candidate.followers ?? '(unknown)'}`,
+    `Bio text: ${candidate.bio || '(none)'}`,
+    `Reach across ${stats.count || 0} recent reels — lowest ${stats.min ?? '?'}, `
+      + `typical ${stats.typical ?? '?'}, highest ${stats.max ?? '?'}.`,
+    captions.length ? `Recent reel captions:\n- ${captions.join('\n- ')}` : 'Recent reel captions: (none)',
+    (config.calibration && config.calibration.text) || '',
+    statedTaste(config),
+    '',
+    'creativity is a DESCRIPTION, not a bar to clear. A plainly-shot creator is',
+    'still a usable one, so say "derivative" when the work is derivative.',
+    '',
+    `${listed(levelled)} are each exactly one of: "derivative", "competent",`,
+    '"distinctive", "exceptional". hook_strength is always null — a hook is the',
+    'opening seconds of a video, which you cannot see.',
+    ...(images.length ? [
+      'is_original_creator is false for repost pages, meme aggregators and clip farms',
+      '(watermarks, other people on camera, mixed unrelated content) and null if you',
+      'cannot tell.',
+    ] : [
+      'With no pictures, production_quality, creativity and is_original_creator are',
+      'null — there is nothing to judge them from.',
+    ]),
+    'niche_score, audience_match and confidence are 0-1. fit_score is 0-100.',
+    'reject_reason is null unless the creator should be dropped outright.',
+    '{',
+    '  "niche_score": 0.0,',
+    '  "audience_match": 0.0,',
+    '  "genre": "",',
+    '  "confidence": 0.0,',
+    '  "reason": "",',
+    '  "niche": "",',
+    '  "sub_niche": "",',
+    '  "content_format": "talking_head | vlog | skit | tutorial | review | ugc_ad | compilation | other",',
+    `  "production_quality": ${images.length ? '"competent"' : 'null'},`,
+    `  "creativity": ${images.length ? '"competent"' : 'null'},`,
+    '  "hook_strength": null,',
+    '  "brand_safety": "safe | caution | unsafe",',
+    `  "is_original_creator": ${images.length ? 'true' : 'null'},`,
+    ...(askBrandFit ? ['  "brand_fit": "competent",', '  "brand_fit_reason": "",'] : []),
+    '  "reasoning": "",',
+    '  "primary_niche": "",',
+    '  "consistency_of_niche": "competent",',
+    '  "audience_guess": "",',
+    '  "fit_score": 0,',
+    '  "reject_reason": null',
+    '}',
+  ].join('\n');
+}
+
+/**
+ * The creator-level judgement from Claude, for when Gemini cannot give one.
+ *
+ * Without this, a missing, misconfigured or failing Gemini key dropped every
+ * creator to a bare niche score (sourcingFilters.defaultClassify) with no
+ * analysis behind it — so the quality bar, the originality check and brand
+ * safety simply never ran. Claude cannot watch the reels through this client,
+ * but it can read the profile screenshots and the captions, which answer most
+ * of what the gate asks. What only a video can answer (the hook) comes back
+ * null: unmeasured, so its weight goes to what WAS measured instead of 0.
+ */
+async function classifyProfileWithClaude(candidate = {}, config = {}, deps = {}) {
+  const claude = deps.claude || claudeClientDefault;
+  if (!claude.getClient || !claude.getClient()) return null;
+
+  const images = [
+    ...(candidate.shots || [])
+      .filter((s) => s && s.dataBase64)
+      .map((s) => ({ kind: s.kind, mediaType: s.mimeType || 'image/jpeg', data: s.dataBase64 })),
+    ...(candidate.thumbnails || [])
+      .filter((t) => t && t.data)
+      .map((t) => ({ kind: 'thumbnail', mediaType: t.mediaType || 'image/jpeg', data: t.data })),
+  ].slice(0, 4);
+
+  // Pictures before the text that refers to them, in the order it lists them.
+  const content = [
+    ...images.map((img) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mediaType, data: img.data },
+    })),
+    { type: 'text', text: buildClaudeProfilePrompt(candidate, config, images) },
+  ];
+  const raw = await claude.callClaudeMessages(CLAUDE_PROFILE_SYSTEM, [{ role: 'user', content }], 900);
+  const parse = claude.parseJsonLoose || claudeClientDefault.parseJsonLoose;
+  const parsed = parse(raw);
+  if (!parsed || typeof parsed.niche_score !== 'number') return null;
+
+  let clipAnalysis = dropUnaskedBrandFit(parseClipAnalysis(parsed), config);
+  // Nothing here watched a video, whatever the reply says.
+  clipAnalysis = { ...clipAnalysis, hook_strength: null };
+  if (!images.length) {
+    clipAnalysis = {
+      ...clipAnalysis,
+      production_quality: null,
+      creativity: null,
+      creativity_level: null,
+      is_original_creator: null,
+    };
+  }
+  const creator = parseCreatorAnalysis(parsed);
+
+  return {
+    score: clamp01(parsed.niche_score),
+    reason: parsed.reason || clipAnalysis.reasoning || 'claude-profile',
+    source: 'claude-profile',
+    clip: clipAnalysis,
+    creatorAnalysis: creator,
+    evidence: {
+      source: 'claude-profile',
+      genre: parsed.genre || clipAnalysis.niche || null,
+      audienceMatch: typeof parsed.audience_match === 'number' ? clamp01(parsed.audience_match) : null,
+      confidence: typeof parsed.confidence === 'number' ? clamp01(parsed.confidence) : null,
+      reason: parsed.reason || clipAnalysis.reasoning || null,
+      clip: clipAnalysis,
+      creator,
+      evidenceUsed: {
+        video: false,
+        videos: 0,
+        videosRecorded: recordedVideos(candidate).length,
+        shots: images.map((img) => img.kind),
         captions: (candidate.reels || []).filter((r) => r && r.caption).length,
       },
     },
@@ -515,6 +828,16 @@ function buildPrompt(candidate, config = {}) {
     `Allowed genres: ${(config.genres || []).join(', ') || '(any)'}`,
     `Brand target audience: ${config.targetAudience || '(unspecified)'}`,
     '',
+    // The schema below asks for brand_fit, which this prompt used to request
+    // without ever saying who the brand is — a fit score against nothing. The
+    // brief goes here when the campaign gave one; without it, brand_fit is
+    // dropped as unasked after parsing (dropUnaskedBrandFit).
+    ...(hasBrandContext(config) ? [
+      brandBrief(config),
+      'BRAND FIT: could THIS creator feature the product above in one of their own',
+      'reels and have it look native rather than a paid read? Score it in brand_fit.',
+      '',
+    ] : []),
     `Creator @${candidate.username || 'unknown'}`,
     `Bio: ${candidate.bio || '(none)'}`,
     captions.length ? `Recent captions:\n- ${captions.join('\n- ')}` : 'Recent captions: (none)',
@@ -555,7 +878,7 @@ async function classifyWithGemini(candidate, config, deps = {}) {
   // The per-clip analysis rides along as `clip`. The deterministic scorer
   // (services/creatorScore.js) reads it; nothing downstream that already reads
   // score / genre / audienceMatch / language / spokenTopic / reason changes.
-  const clipAnalysis = parseClipAnalysis(parsed);
+  const clipAnalysis = dropUnaskedBrandFit(parseClipAnalysis(parsed), config);
 
   return {
     score: clamp01(parsed.niche_score),
@@ -642,21 +965,27 @@ async function judgeClips(candidate, config, deps = {}) {
 }
 
 // The composite classifier the orchestrator injects as `nicheClassify`.
-// deps.gemini / deps.claudeClassify are injectable for tests.
+// deps.gemini / deps.claude / deps.claudeClassify are injectable for tests.
 function makeClassifier(deps = {}) {
   const claudeClassify = deps.claudeClassify || defaultClassify;
   return async function classify(candidate, config) {
     // Reuse a verdict already computed upstream (e.g. the reels-feed navigator
     // judged the clip to decide engagement) so we never pay for Gemini twice.
     if (candidate && candidate._nicheVerdict) return candidate._nicheVerdict;
-    // Whole-profile evidence (bio + grid pictures alongside the reel) answers the
-    // creator-level question directly, so it wins when the navigator captured it.
+    // Whole-profile evidence (bio + grid pictures alongside the reels) answers
+    // the creator-level question directly, so it wins when the navigator
+    // captured it.
     if (candidate && Array.isArray(candidate.shots) && candidate.shots.length) {
       const p = await classifyProfile(candidate, config, deps);
       if (p) return p;
     }
     const g = await judgeClips(candidate, config, deps);
     if (g) return g;
+    // Gemini gave nothing — no key, a bad model name, or every attempt failed.
+    // Claude still gives the STRUCTURED verdict from the pictures and captions,
+    // so the quality gate runs instead of the creator falling to a bare score.
+    const c = await classifyProfileWithClaude(candidate, config, deps);
+    if (c) return c;
     return claudeClassify(candidate, config);
   };
 }
@@ -665,10 +994,15 @@ module.exports = {
   buildPrompt,
   brandBrief,
   hasBrandContext,
+  dropUnaskedBrandFit,
+  recordedVideos,
+  fitVideos,
   buildCreatorPrompt,
   buildProfilePrompt,
+  buildClaudeProfilePrompt,
   classifyWithGemini,
   classifyProfile,
+  classifyProfileWithClaude,
   judgeClips,
   makeClassifier,
   parseClipAnalysis,

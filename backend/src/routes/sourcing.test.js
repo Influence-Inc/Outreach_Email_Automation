@@ -49,3 +49,69 @@ test('annotateHostHealth marks which host has a live backend session', () => {
 test('annotateHostHealth tolerates empty input', () => {
   assert.deepStrictEqual(sourcing.annotateHostHealth(null, { isActive: () => false, activeRunId: () => null }), []);
 });
+
+// ── saving scouting defaults ────────────────────────────────────────────────
+//
+// The Scout page only knows the fields it shows. Saving from it used to REPLACE
+// the stored object, wiping every setting that exists only through the API.
+
+test('saving from the page keeps the settings the page does not show', () => {
+  const stored = {
+    niche: 'running', floor: 20000,
+    targetAudience: 'amateur marathoners 25-40',
+    genres: ['running', 'endurance'],
+    creatorWeights: { hook: 3, fit: 1 },
+    minEngagementRate: 0.02,
+    avoidExamples: ['gym meme repost pages'],
+    enabled: true,
+  };
+  const fromPage = { niche: 'trail running', floor: 25000, risk: 'low', reviewBorderline: true };
+  const out = sourcing.mergeSourcingDefaults(stored, fromPage);
+
+  assert.strictEqual(out.niche, 'trail running', 'what the page sent wins');
+  assert.strictEqual(out.floor, 25000);
+  assert.strictEqual(out.risk, 'low');
+  assert.strictEqual(out.targetAudience, 'amateur marathoners 25-40', 'API-only settings survive');
+  assert.deepStrictEqual(out.genres, ['running', 'endurance']);
+  assert.deepStrictEqual(out.creatorWeights, { hook: 3, fit: 1 });
+  assert.strictEqual(out.minEngagementRate, 0.02);
+  assert.deepStrictEqual(out.avoidExamples, ['gym meme repost pages']);
+  assert.strictEqual(out.enabled, true, "the sweeper's auto-enqueue flag survives");
+});
+
+test('a field cleared on the page is removed, not left at its old value', () => {
+  const out = sourcing.mergeSourcingDefaults({ floor: 20000, ceiling: 500000, niche: 'x' }, { floor: null });
+  assert.ok(!('floor' in out), 'null removes the key');
+  assert.strictEqual(out.ceiling, 500000);
+});
+
+test('merging into nothing, or merging nothing, is safe', () => {
+  assert.deepStrictEqual(sourcing.mergeSourcingDefaults(null, { niche: 'x' }), { niche: 'x' });
+  assert.deepStrictEqual(sourcing.mergeSourcingDefaults({ niche: 'x' }, {}), { niche: 'x' });
+  assert.deepStrictEqual(sourcing.mergeSourcingDefaults(['junk'], { niche: 'x' }), { niche: 'x' });
+});
+
+test('a nested setting is replaced whole, as sent', () => {
+  const out = sourcing.mergeSourcingDefaults({ creatorWeights: { hook: 3, fit: 1 } }, { creatorWeights: { fit: 2 } });
+  assert.deepStrictEqual(out.creatorWeights, { fit: 2 });
+});
+
+test('merging never mutates the stored object', () => {
+  const stored = { niche: 'x', floor: 1 };
+  sourcing.mergeSourcingDefaults(stored, { floor: null, niche: 'y' });
+  assert.deepStrictEqual(stored, { niche: 'x', floor: 1 });
+});
+
+// ── which judges a run can use ──────────────────────────────────────────────
+
+test('judgeStatus says whether reels are watched, only pictured, or not judged at all', () => {
+  const gemini = (on) => ({ available: () => on, model: () => 'gemini-flash-lite-latest' });
+  const claude = (on) => ({ getClient: () => (on ? {} : null) });
+
+  assert.deepStrictEqual(sourcing.judgeStatus({ gemini: gemini(true), claude: claude(true) }), {
+    gemini: true, geminiModel: 'gemini-flash-lite-latest', claude: true, mode: 'video',
+  });
+  assert.strictEqual(sourcing.judgeStatus({ gemini: gemini(false), claude: claude(true) }).mode, 'pictures');
+  assert.strictEqual(sourcing.judgeStatus({ gemini: gemini(false), claude: claude(false) }).mode, 'none');
+  assert.strictEqual(sourcing.judgeStatus({ gemini: gemini(false), claude: claude(false) }).geminiModel, null);
+});

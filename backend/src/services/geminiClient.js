@@ -125,6 +125,9 @@ function kb(bytes) { return `${Math.round(bytes / 1024)}KB`; }
 async function generate({
   videoBase64,
   mimeType = 'video/mp4',
+  // Several videos in one call, in order: [{ data, mimeType }]. A profile
+  // judgement watches every reel recorded for the creator, not only the first.
+  videos = [],
   promptText,
   images = [],
   maxOutputTokens = 500,
@@ -136,7 +139,11 @@ async function generate({
   const key = apiKey();
   if (!key) return null;
   if (!fetchImpl) throw new Error('fetch is not available');
-  const videoBytes = videoBase64 ? approxBytes(videoBase64) : 0;
+  const vidList = [
+    ...(videoBase64 ? [{ data: videoBase64, mimeType }] : []),
+    ...(videos || []).filter((v) => v && v.data),
+  ];
+  const videoBytes = vidList.reduce((n, v) => n + approxBytes(v.data), 0);
   const imgList = (images || []).filter((i) => i && i.data);
   const imageBytes = imgList.reduce((n, i) => n + approxBytes(i.data), 0);
   if (videoBytes + imageBytes > MAX_INLINE_BYTES) {
@@ -148,7 +155,7 @@ async function generate({
   }
 
   const parts = [];
-  if (videoBase64) parts.push({ inlineData: { mimeType, data: videoBase64 } });
+  for (const v of vidList) parts.push({ inlineData: { mimeType: v.mimeType || 'video/mp4', data: v.data } });
   for (const img of imgList) {
     parts.push({ inlineData: { mimeType: img.mimeType || 'image/jpeg', data: img.data } });
   }
@@ -215,7 +222,8 @@ async function generate({
   };
 
   console.log(
-    `[gemini] -> ${label} model=${mdl} video=${videoBytes ? kb(videoBytes) : 'none'} `
+    `[gemini] -> ${label} model=${mdl} video=${videoBytes ? kb(videoBytes) : 'none'}`
+    + `${vidList.length > 1 ? ` (${vidList.length} clips)` : ''} `
     + `images=${imgList.length}${imageBytes ? ` (${kb(imageBytes)})` : ''} prompt=${(promptText || '').length}ch`,
   );
 

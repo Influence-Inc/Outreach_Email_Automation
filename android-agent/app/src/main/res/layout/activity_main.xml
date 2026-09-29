@@ -91,7 +91,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="2. Grant screen capture (only for reels mode)" />
+            android:text="2. Grant screen capture (needed to watch reels)" />
 
         <Button
             android:id="@+id/toggleAgent"

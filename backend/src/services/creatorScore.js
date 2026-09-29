@@ -162,7 +162,14 @@ function engagementRate({ engagement, followers } = {}) {
   return ((haveLikes ? likes : 0) + (haveComments ? comments : 0)) / f;
 }
 
+// Null (or '') is "not measured", never 0. Number(null) is 0 and 0 is finite,
+// so coercing first turned every unasked question into the worst possible
+// answer: reelJudge.parseClipAnalysis reports an unasked brand fit as an
+// explicit `brand_fit: null`, and scoring that as 0 kept its 0.25 weight in the
+// blend — capping every creator on a campaign with no brand details at 0.75, so
+// only one near-perfect on everything else could clear the 0.72 bar.
 function num(v) {
+  if (v == null || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -201,6 +208,88 @@ function reelStats(reels) {
   };
 }
 
+/** The limits the reach checks apply: the campaign's own, else the defaults. */
+function reachLimits(config = {}) {
+  return {
+    maxSpike: config.maxViewSpike != null ? config.maxViewSpike : DEFAULT_MAX_SPIKE,
+    minViewEngagement: config.minViewEngagementRate != null
+      ? config.minViewEngagementRate
+      : DEFAULT_MIN_VIEW_ENGAGEMENT,
+    minEngagement: config.minEngagementRate != null
+      ? config.minEngagementRate
+      : DEFAULT_MIN_ENGAGEMENT_RATE,
+  };
+}
+
+/**
+ * Reach, plus both engagement ratios.
+ *
+ * The ratios are reported whether or not they reject, so a reviewer can see the
+ * numbers a borderline creator was let through on.
+ */
+function measureReach({ reels = [], engagement = null, followers = null } = {}) {
+  const stats = reelStats(reels);
+  const rate = engagementRate({ engagement, followers });
+  stats.engagementRate = rate == null ? null : round3(rate);
+  const viewRate = viewEngagementRate({ engagement });
+  stats.viewEngagementRate = viewRate == null ? null : round3(viewRate);
+  return { stats, rate, viewRate };
+}
+
+/** The first reach check this creator fails, as a reason — or null. */
+function reachRejectReason({ stats, rate, viewRate }, limits) {
+  // BOUGHT VIEWS: a reach number nobody reacted to.
+  //
+  // Checked before the follower ratio because it catches what that one cannot.
+  // A creator with 10k real followers, 500k bought views and 150 likes reads as
+  // a perfectly healthy 1.5% against their following, and as 0.03% against the
+  // views they are actually being sold on. The second number is the true one,
+  // and it is the number a campaign pays for.
+  //
+  // Only ever applied when the views AND at least one reaction count were really
+  // read — a missing view count is not evidence of anything.
+  if (limits.minViewEngagement > 0 && viewRate != null && viewRate < limits.minViewEngagement) {
+    return `${(viewRate * 100).toFixed(3)}% of viewers reacted, below `
+      + `${(limits.minViewEngagement * 100).toFixed(2)}% — views look bought`;
+  }
+
+  // Bought reach and repost farms: plenty of followers, almost no one reacting.
+  // Only ever applied when BOTH halves were actually read — an unread like count
+  // is not evidence of an unengaged audience.
+  if (limits.minEngagement > 0 && rate != null && rate < limits.minEngagement) {
+    return `engagement ${(rate * 100).toFixed(2)}% of followers, below ${(limits.minEngagement * 100).toFixed(2)}%`;
+  }
+
+  // No follower-band reject. Follower count is a vanity number that reach
+  // already answers better: what a campaign buys is views, and `floor` /
+  // `ceiling` gate on those directly. A band on followers only ever rejected
+  // creators whose reach we had actually measured and liked.
+
+  // Carried by one outlier rather than a real audience.
+  if (stats.spike != null && limits.maxSpike > 0 && stats.spike > limits.maxSpike) {
+    return 'reach driven by a single outlier';
+  }
+  return null;
+}
+
+/**
+ * The reach checks on their own: bought views, a following nobody engages
+ * with, and reach carried by one outlier reel.
+ *
+ * Pure arithmetic on numbers read off the screen — no model is involved in any
+ * of them. They used to live only inside scoreCreator, which runs only when an
+ * AI analysis exists, so every creator the judge could not analyse (no Gemini
+ * key, a failed or throttled call) skipped all three and could be added on
+ * bought reach. The orchestrator now runs these whenever the full gate cannot.
+ *
+ * @returns {{pass:boolean, rejectReason:(string|null), stats:object}}
+ */
+function checkReach({ reels = [], engagement = null, followers = null } = {}, config = {}) {
+  const measured = measureReach({ reels, engagement, followers });
+  const rejectReason = reachRejectReason(measured, reachLimits(config));
+  return { pass: !rejectReason, rejectReason, stats: measured.stats };
+}
+
 /**
  * Decide a creator.
  *
@@ -213,25 +302,13 @@ function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null,
   const threshold = config.creatorPassThreshold != null
     ? config.creatorPassThreshold
     : DEFAULT_PASS_THRESHOLD;
-  const maxSpike = config.maxViewSpike != null ? config.maxViewSpike : DEFAULT_MAX_SPIKE;
   const minCreativity = config.minCreativity != null
     ? config.minCreativity
     : DEFAULT_MIN_CREATIVITY;
   const minBrandFit = config.minBrandFit != null ? config.minBrandFit : DEFAULT_MIN_BRAND_FIT;
-  const minViewEngagement = config.minViewEngagementRate != null
-    ? config.minViewEngagementRate
-    : DEFAULT_MIN_VIEW_ENGAGEMENT;
-  const minEngagement = config.minEngagementRate != null
-    ? config.minEngagementRate
-    : DEFAULT_MIN_ENGAGEMENT_RATE;
 
-  const stats = reelStats(reels);
-  const measuredRate = engagementRate({ engagement, followers });
-  stats.engagementRate = measuredRate == null ? null : round3(measuredRate);
-  // Reported whether or not it rejects, so a reviewer can see the ratio that a
-  // borderline creator was let through on.
-  const measuredViewRate = viewEngagementRate({ engagement });
-  stats.viewEngagementRate = measuredViewRate == null ? null : round3(measuredViewRate);
+  const measured = measureReach({ reels, engagement, followers });
+  const { stats } = measured;
   const clipList = Array.isArray(clips) ? clips.filter(Boolean) : [];
 
   // A component is null when it could not be measured — NOT zero. Treating
@@ -285,42 +362,10 @@ function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null,
     return reject(`brand fit ${round3(brandFit)} below ${minBrandFit}`);
   }
 
-  // BOUGHT VIEWS: a reach number nobody reacted to.
-  //
-  // Checked before the follower ratio because it catches what that one cannot.
-  // A creator with 10k real followers, 500k bought views and 150 likes reads as
-  // a perfectly healthy 1.5% against their following, and as 0.03% against the
-  // views they are actually being sold on. The second number is the true one,
-  // and it is the number a campaign pays for.
-  //
-  // Only ever applied when the views AND at least one reaction count were really
-  // read — a missing view count is not evidence of anything.
-  if (minViewEngagement > 0 && measuredViewRate != null && measuredViewRate < minViewEngagement) {
-    return reject(
-      `${(measuredViewRate * 100).toFixed(3)}% of viewers reacted, below `
-      + `${(minViewEngagement * 100).toFixed(2)}% — views look bought`,
-    );
-  }
-
-  // Bought reach and repost farms: plenty of followers, almost no one reacting.
-  // Only ever applied when BOTH halves were actually read — an unread like count
-  // is not evidence of an unengaged audience.
-  const engRate = engagementRate({ engagement, followers });
-  if (minEngagement > 0 && engRate != null && engRate < minEngagement) {
-    return reject(
-      `engagement ${(engRate * 100).toFixed(2)}% of followers, below ${(minEngagement * 100).toFixed(2)}%`,
-    );
-  }
-
-  // No follower-band reject. Follower count is a vanity number that reach
-  // already answers better: what a campaign buys is views, and `floor` /
-  // `ceiling` gate on those directly. A band on followers only ever rejected
-  // creators whose reach we had actually measured and liked.
-
-  // Carried by one outlier rather than a real audience.
-  if (stats.spike != null && maxSpike > 0 && stats.spike > maxSpike) {
-    return reject('reach driven by a single outlier');
-  }
+  // Bought views, an unengaged following, one-outlier reach — see checkReach,
+  // which runs these same checks for creators no model could analyse.
+  const reachReason = reachRejectReason(measured, reachLimits(config));
+  if (reachReason) return reject(reachReason);
 
   // ── weighted score ────────────────────────────────────────────────────────
 
@@ -348,6 +393,7 @@ function scoreCreator({ creator = {}, clips = [], reels = [], engagement = null,
 
 module.exports = {
   scoreCreator,
+  checkReach,
   engagementRate,
   viewEngagementRate,
   DEFAULT_MIN_VIEW_ENGAGEMENT,

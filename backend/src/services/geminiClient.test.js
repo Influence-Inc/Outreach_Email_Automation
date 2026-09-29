@@ -51,6 +51,35 @@ test('classifyReelVideo posts the clip inline (low res) and parses the JSON verd
   assert.strictEqual(body.generationConfig.responseMimeType, 'application/json');
 });
 
+// A profile judgement watches every reel recorded for the creator in ONE call:
+// each video its own part, in order, then the screenshots, then the prompt —
+// the order the prompt numbers them in.
+test('several videos go out as separate parts, in order, before the images', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 0.8 }) });
+  await gc.classifyReelVideo({
+    videos: [{ data: 'V1', mimeType: 'video/mp4' }, { data: 'V2' }, { data: 'V3', mimeType: 'video/webm' }],
+    images: [{ data: 'IMG', mimeType: 'image/jpeg' }],
+    promptText: 'judge the creator',
+    fetchImpl,
+  });
+
+  const parts = JSON.parse(fetchImpl.calls[0].opts.body).contents[0].parts;
+  assert.deepStrictEqual(
+    parts.map((p) => (p.inlineData ? `${p.inlineData.mimeType}:${p.inlineData.data}` : `text:${p.text}`)),
+    ['video/mp4:V1', 'video/mp4:V2', 'video/webm:V3', 'image/jpeg:IMG', 'text:judge the creator'],
+  );
+});
+
+test('the inline size limit counts every video, not just one', async () => {
+  process.env.GEMINI_API_KEY = 'k';
+  const fetchImpl = fakeFetch({ json: verdictResponse({ niche_score: 0.8 }) });
+  const tenMb = 'A'.repeat(Math.ceil((10 * 1024 * 1024 * 4) / 3));
+  const out = await gc.classifyReelVideo({ videos: [{ data: tenMb }, { data: tenMb }], promptText: 'x', fetchImpl });
+  assert.strictEqual(out, null, '20MB of video is refused');
+  assert.strictEqual(fetchImpl.calls.length, 0, 'without a request');
+});
+
 test('model() defaults to the rolling flash-lite alias, not a pinned generation', () => {
   clearEnv();
   // A pinned generation string (e.g. "gemini-2.5-flash-lite") can 404 later when

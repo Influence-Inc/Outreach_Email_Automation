@@ -14,26 +14,81 @@
 const {
   nicheMatch, decide, decideReel, prefilter, DEFAULTS: FILTER_DEFAULTS,
 } = require('./sourcingFilters');
-const { scoreCreator } = require('./creatorScore');
+const { scoreCreator, checkReach, DEFAULT_PASS_THRESHOLD } = require('./creatorScore');
 
+// How far over the niche floor still counts as "only just on-niche".
 const REVIEW_BAND_DEFAULT = 0.15;
 
-// A passing candidate is either auto-added or held for human review. When the
-// admin turned on reviewBorderline, creators whose niche score is only just over
-// the threshold (within reviewBand) go to the review queue instead of straight
-// into the campaign — a trust dial for AI-sourced adds. Pure + exported for tests.
-function reviewDecision(verdict, config = {}) {
-  if (!config.reviewBorderline) return 'add';
+// How far over the quality bar still counts as "only just cleared it". Smaller
+// than the niche band on purpose: passers bunch between the bar (0.72) and
+// ~0.85, so a band of 0.15 here would hold nearly every creator for review.
+const REVIEW_SCORE_BAND_DEFAULT = 0.05;
+
+const fmt = (n) => String(Math.round(n * 1000) / 1000);
+
+/**
+ * Why a PASSING creator is borderline, or null when they clearly passed.
+ *
+ * Only when the admin turned on reviewBorderline. Two thresholds can reject a
+ * creator, so "near-threshold" means near either of them:
+ *
+ *   - the QUALITY bar (creatorPassThreshold, 0.72) — the one that actually
+ *     decides a creator the judge analysed. Checking only the niche score let a
+ *     creator who scraped past the bar at 0.73 be added with no human look.
+ *   - the NICHE floor (nicheThreshold, 0.1) — a creator the judge only just
+ *     placed in the niche at all.
+ */
+function borderlineReason(verdict, config = {}, gate = null) {
+  if (!config.reviewBorderline) return null;
+
+  if (gate && gate.pass && typeof gate.score === 'number') {
+    const bar = config.creatorPassThreshold != null ? config.creatorPassThreshold : DEFAULT_PASS_THRESHOLD;
+    const band = config.reviewScoreBand != null ? config.reviewScoreBand : REVIEW_SCORE_BAND_DEFAULT;
+    if (gate.score < bar + band) {
+      return `quality score ${fmt(gate.score)} is within ${fmt(band)} of the ${fmt(bar)} bar`;
+    }
+  }
+
   const score = verdict && verdict.nicheScore;
-  if (typeof score !== 'number') return 'add'; // niche unassessed -> unchanged behavior
-  // The shared default, not a second copy of it — this used to hardcode 0.5,
-  // so lowering the real threshold would have quietly left the review band
-  // measuring against a number nothing else used any more.
-  const threshold = config.nicheThreshold != null
-    ? config.nicheThreshold
-    : FILTER_DEFAULTS.nicheThreshold;
-  const band = config.reviewBand != null ? config.reviewBand : REVIEW_BAND_DEFAULT;
-  return score < threshold + band ? 'review' : 'add';
+  if (typeof score === 'number') {
+    // The shared default, not a second copy of it — this used to hardcode 0.5,
+    // so lowering the real threshold would have quietly left the review band
+    // measuring against a number nothing else used any more.
+    const threshold = config.nicheThreshold != null
+      ? config.nicheThreshold
+      : FILTER_DEFAULTS.nicheThreshold;
+    const band = config.reviewBand != null ? config.reviewBand : REVIEW_BAND_DEFAULT;
+    if (score < threshold + band) {
+      return `niche score ${fmt(score)} is within ${fmt(band)} of the ${fmt(threshold)} floor`;
+    }
+  }
+  return null;
+}
+
+// A passing candidate is either auto-added or held for human review — the
+// reviewBorderline trust dial for AI-sourced adds. Pure + exported for tests.
+function reviewDecision(verdict, config = {}, gate = null) {
+  return borderlineReason(verdict, config, gate) ? 'review' : 'add';
+}
+
+/**
+ * Why a creator who passed every rule goes to the review queue instead of into
+ * the campaign — or null to add them. The reason is stored on the candidate so
+ * the reviewer can see what they are being asked to confirm.
+ *
+ *   1. Reach never measured (a reel off the feed whose grid we did not read).
+ *   2. No model analysed them, so the quality bar, originality and brand
+ *      safety never ran. On by default: without it, a missing or failing AI
+ *      judge silently turned the scout into a keyword matcher that auto-adds.
+ *      `reviewUnjudged: false` restores adding on the reach and keyword rules.
+ *   3. Borderline on quality or niche, when reviewBorderline is on.
+ */
+function reviewHoldReason(verdict, config = {}, { gate = null, reachUnverified = false } = {}) {
+  if (reachUnverified) return 'reach not measured — confirm their views before adding';
+  if (!gate && config.reviewUnjudged !== false) {
+    return 'not quality-judged — no AI analysis was available, so only the reach and keyword rules ran';
+  }
+  return borderlineReason(verdict, config, gate);
 }
 
 // Provenance for a creator we actually added: which mode found them, and which
@@ -84,8 +139,10 @@ async function processCandidate(run, config, candidate, deps) {
   // path only when the grid gave us nothing keeps the old behaviour for the
   // cases it was written for.
   const reelsMode = String(config.discovery || '').toLowerCase() === 'reels';
+  // `views != null` first: Number(null) is 0, which would count a reel whose
+  // views were never read as measured reach.
   const hasReach = Array.isArray(candidate.reels)
-    && candidate.reels.some((r) => r && Number.isFinite(Number(r.views)));
+    && candidate.reels.some((r) => r && r.views != null && Number.isFinite(Number(r.views)));
   const reachUnverified = reelsMode && !hasReach;
 
   // Reach can be missing for two very different reasons, and until now they were
@@ -207,8 +264,33 @@ async function processCandidate(run, config, candidate, deps) {
     if (!gate.pass) {
       verdict.pass = false;
       verdict.reasons = [...(verdict.reasons || []), gate.rejectReason].filter(Boolean);
+      // The gate's reason IS the reason. decide() passed, so its own
+      // rejectReason is null — and persisting that left the dashboard's Reason
+      // column blank for every repost page, bought-views and below-the-bar
+      // rejection, and filed them all under "unknown" in the run stats.
+      verdict.rejectReason = verdict.rejectReason || gate.rejectReason;
+    }
+  } else {
+    // No model analysed this creator, so the gate above never ran — and with it
+    // went three checks that need no model at all: bought views, a following
+    // nobody engages with, and reach carried by one outlier reel. They are
+    // arithmetic on counts read off the screen, so they run regardless.
+    const reach = checkReach({
+      reels: candidate.reels || [],
+      engagement: candidate.engagement || null,
+      followers: candidate.followers ?? null,
+    }, config);
+    candidate.evidence = { ...(candidate.evidence || {}), reachChecks: reach };
+    if (!reach.pass) {
+      verdict.pass = false;
+      verdict.rejectReason = verdict.rejectReason || reach.rejectReason;
     }
   }
+
+  // Decided BEFORE persisting so the reason rides along on the evidence: a
+  // reviewer should see what they are being asked to confirm.
+  const holdReason = verdict.pass ? reviewHoldReason(verdict, config, { gate, reachUnverified }) : null;
+  if (holdReason) candidate.evidence = { ...(candidate.evidence || {}), reviewHold: holdReason };
 
   // Persist the candidate + its evaluation. persistCandidate returns the row, or
   // null when this handle was already scouted for the campaign (unique index).
@@ -229,7 +311,7 @@ async function processCandidate(run, config, candidate, deps) {
     evidence: candidate.evidence || null,
     decision: 'pending',
   });
-  if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted', judged: true, hadClip };
+  if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted', judged: true, hadClip, judge: niche.source };
 
   if (!verdict.pass) {
     // A creator we never actually reached was not rejected on their merits —
@@ -241,7 +323,7 @@ async function processCandidate(run, config, candidate, deps) {
     await deps.updateCandidate(row.id, {
       decision: 'rejected', reject_reason: rejectReason, decided_by: 'rule',
     });
-    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason, judged: true, hadClip };
+    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason, judged: true, hadClip, judge: niche.source };
   }
 
   // Passed the rules — guard against creators we're already contacting in this
@@ -251,7 +333,7 @@ async function processCandidate(run, config, candidate, deps) {
     await deps.updateCandidate(row.id, {
       decision: 'rejected', reject_reason: 'already in campaign', decided_by: 'rule',
     });
-    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'already in campaign', judged: true, hadClip };
+    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'already in campaign', judged: true, hadClip, judge: niche.source };
   }
   // ...and (best-effort) against creators already USED in the Creator-DB.
   if (deps.isUsed) {
@@ -260,21 +342,22 @@ async function processCandidate(run, config, candidate, deps) {
         await deps.updateCandidate(row.id, {
           decision: 'rejected', reject_reason: 'used creator', decided_by: 'rule',
         });
-        return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'used creator', judged: true, hadClip };
+        return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: 'used creator', judged: true, hadClip, judge: niche.source };
       }
     } catch (_) {
       /* Creator-DB unreachable — don't block sourcing on it */
     }
   }
 
-  // Trust dial: a passer whose reach we never measured still goes to review for
-  // a human to confirm. Once the creator's Reels grid has been read, the
-  // borderline dial decides, same as profiles mode — otherwise every reels-mode
+  // Trust dial — see reviewHoldReason. A passer whose reach we never measured,
+  // or whom no model could judge, goes to a human; once both are in hand the
+  // borderline dial decides, same in both modes — otherwise every reels-mode
   // creator sat in review forever with no decision made.
-  const disposition = reachUnverified ? 'review' : reviewDecision(verdict, config);
-  if (disposition === 'review') {
+  if (holdReason) {
     await deps.updateCandidate(row.id, { decision: 'review', decided_by: 'rule' });
-    return { decision: 'review', added: false, candidateId: row.id, judged: true, hadClip };
+    return {
+      decision: 'review', added: false, candidateId: row.id, reviewReason: holdReason, judged: true, hadClip, judge: niche.source,
+    };
   }
 
   const creator = await deps.insertCreator({
@@ -285,7 +368,7 @@ async function processCandidate(run, config, candidate, deps) {
     sourcedVia: sourceTag(run, config, candidate, { niche, gate }),
   });
   await deps.updateCandidate(row.id, { decision: 'added', creator_id: creator.id, decided_by: 'rule' });
-  return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id, judged: true, hadClip };
+  return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id, judged: true, hadClip, judge: niche.source };
 }
 
 // Drive a run to completion off a candidate source. `source.next()` resolves to a
@@ -298,9 +381,12 @@ async function runWithSource(run, config, source, deps) {
   // while withoutVideo climbs is a run whose phone is not delivering its
   // recordings, which is otherwise invisible until someone reads a verdict and
   // wonders why it only ever talks about the bio.
+  // judgedBy counts which tier actually produced each judgement. A run whose
+  // Gemini key is missing or failing still LOOKS normal — creators are scanned,
+  // some are added — and the only sign is that nothing was judged by it.
   const stats = {
     scanned: 0, added: 0, rejected: 0, skipped: 0, review: 0, byReason: {},
-    withVideo: 0, withoutVideo: 0,
+    withVideo: 0, withoutVideo: 0, judgedBy: {},
   };
   let stopped = false;
 
@@ -322,6 +408,8 @@ async function runWithSource(run, config, source, deps) {
 
     if (res.judged) {
       if (res.hadClip) stats.withVideo += 1; else stats.withoutVideo += 1;
+      const by = res.judge || 'unknown';
+      stats.judgedBy[by] = (stats.judgedBy[by] || 0) + 1;
     }
 
     if (res.added) {
@@ -358,5 +446,13 @@ function arraySource(list) {
 }
 
 module.exports = {
-  processCandidate, runWithSource, arraySource, reviewDecision, sourceTag, sourceNote,
+  processCandidate,
+  runWithSource,
+  arraySource,
+  reviewDecision,
+  reviewHoldReason,
+  sourceTag,
+  sourceNote,
+  REVIEW_BAND_DEFAULT,
+  REVIEW_SCORE_BAND_DEFAULT,
 };

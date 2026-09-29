@@ -276,7 +276,11 @@ async function runSession({ hostId, run, deps }) {
       // How many verdicts actually had a reel to watch. `withVideo=0` on a run
       // that judged anyone at all means no recording reached the judge, whatever
       // the phone appeared to be doing.
-      `judged=${(stats.withVideo || 0) + (stats.withoutVideo || 0)} withVideo=${stats.withVideo || 0} withoutVideo=${stats.withoutVideo || 0}`,
+      `judged=${(stats.withVideo || 0) + (stats.withoutVideo || 0)} withVideo=${stats.withVideo || 0} withoutVideo=${stats.withoutVideo || 0}`
+      // And which judge gave each verdict. No `gemini-*` entries on a run means
+      // the video judge never answered — a missing key, a bad model name, or a
+      // quota — and every creator was judged by a fallback.
+      + ` judgedBy=${JSON.stringify(stats.judgedBy || {})}`,
     );
   } finally {
     try { if (gen.return) await gen.return(); } catch (_) { /* generator already done */ }

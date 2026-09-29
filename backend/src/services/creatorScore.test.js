@@ -376,6 +376,27 @@ test('a campaign with no product configured is not penalised for brand fit', () 
   );
 });
 
+// The case above leaves the key OUT, which is not what production sends:
+// reelJudge.parseClipAnalysis always writes `brand_fit`, as an explicit null
+// when the question was never asked. Number(null) is 0, so null used to score
+// as the worst possible fit while keeping its full 0.25 weight.
+test('an explicit null brand fit is unmeasured, exactly like an absent one', () => {
+  const clip = { creativity: 8, hook_strength: 8, is_original_creator: true };
+  const absent = scoreCreator(strong({ clips: [clip] }), {});
+  const nulled = scoreCreator(strong({ clips: [{ ...clip, brand_fit: null }] }), {});
+
+  assert.strictEqual(nulled.components.brandFit, null, 'unmeasured, not zero');
+  assert.strictEqual(nulled.score, absent.score, 'null and absent score identically');
+  assert.ok(nulled.pass, 'a strong creator still passes');
+});
+
+test('null fit or niche consistency is unmeasured rather than zero', () => {
+  const r = scoreCreator(strong({ creator: { fit_score: null, consistency_of_niche: null } }), {});
+  assert.strictEqual(r.components.fit, null);
+  assert.strictEqual(r.components.nicheConsistency, null);
+  assert.ok(r.pass, 'judged on the components that were measured');
+});
+
 // The same trap that made an unanalysed creator score 0 on craft.
 test('an unmeasured component drops out of the average rather than scoring zero', () => {
   const noClips = scoreCreator({

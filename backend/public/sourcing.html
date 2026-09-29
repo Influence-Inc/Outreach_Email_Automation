@@ -32,6 +32,10 @@
     .scout-status { margin: 12px 0; font-size: 13px; min-height: 18px; }
     .scout-status.err { color: #b42318; }
     .scout-status.ok { color: #067647; }
+    .scout-status.warn { color: #b25e09; }
+    .judge-banner { margin: 14px 0 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.45; }
+    .judge-banner.warn { background: #fff4e5; color: #7a3f06; }
+    .judge-banner.err { background: #fdecea; color: #8a1c12; }
     table.scout-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
     table.scout-table th, table.scout-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #eee; }
     table.scout-table th { color: #6b7280; font-weight: 600; }
@@ -67,6 +71,7 @@
       Automatically discover creators from the Instagram app (via a paired phone) that match a
       campaign&rsquo;s niche and view/quality rules, and add the ones that pass into that campaign.
     </p>
+    <div id="judge-banner" class="judge-banner" hidden></div>
 
     <div class="card" style="margin-top:18px">
       <label for="campaign" style="font-weight:600;font-size:13px">Campaign</label>
@@ -112,6 +117,10 @@
 
         <label for="reelsWindow">Recent reels to check</label>
         <input id="reelsWindow" type="number" min="3" max="24" step="1" value="12" />
+        <p class="scout-hint" style="grid-column:1/-1;margin:-4px 0 4px">
+          A creator must have this many reels with readable views &mdash; or 6, when you check
+          more than 6. Checking fewer than 6 makes the reach and risk read less reliable.
+        </p>
 
         <label for="clipsPerProfile">Reels to watch per creator</label>
         <input id="clipsPerProfile" type="number" min="0" max="5" step="1" value="3" />
@@ -169,7 +178,8 @@
         <label for="reviewBorderline">Borderline → review</label>
         <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">
           <input id="reviewBorderline" type="checkbox" style="width:auto" />
-          Hold near-threshold AI matches for approval instead of auto-adding
+          Hold creators who only just clear the quality bar (within 0.05) or are only
+          just on-niche, for approval instead of auto-adding
         </label>
       </div>
       <p class="scout-hint">
@@ -235,10 +245,12 @@
         <div>Added<b id="run-found">0</b></div>
         <div>Target<b id="run-target">0</b></div>
         <div>Scanned<b id="run-scanned">0</b></div>
+        <div title="Judgements where a recorded reel reached the judge. 0 means the phone is not delivering recordings — check screen capture in the app.">Judged with video<b id="run-video">—</b></div>
+        <div title="Which judge produced each verdict. No Gemini entries means no reel was watched.">Judged by<b id="run-judges" style="font-size:13px;font-weight:600">—</b></div>
       </div>
       <table class="scout-table">
         <thead>
-          <tr><th>Handle</th><th>Views (min–max)</th><th>Niche</th><th>Creativity</th><th>Brand fit</th><th>Risk</th><th>Decision</th><th>Reason</th></tr>
+          <tr><th>Handle</th><th>Views (min–max)</th><th>Niche</th><th>Creativity</th><th>Brand fit</th><th title="Weighted quality score; the quality bar is 0.72 unless the campaign set its own">Score</th><th>Risk</th><th>Decision</th><th>Reason</th></tr>
         </thead>
         <tbody id="cand-rows"></tbody>
       </table>
@@ -249,10 +261,10 @@
         <h2 style="margin:0;font-size:16px">Pending review</h2>
         <button id="review-refresh" class="ghost small">Refresh</button>
       </div>
-      <p class="scout-hint">Borderline AI matches for the selected campaign — approve to add to the campaign, or reject. Enable with &ldquo;Borderline → review&rdquo; above.</p>
+      <p class="scout-hint">Creators waiting for a human decision for the selected campaign — approve to add them to the campaign, or reject. &ldquo;Held because&rdquo; says why: only just over the quality bar or the niche floor (with &ldquo;Borderline → review&rdquo; on), reach not measured, or no AI judge was available to check quality.</p>
       <table class="scout-table">
         <thead>
-          <tr><th>Handle</th><th>Followers</th><th>Niche</th><th>Genre / audience</th><th>Why</th><th></th></tr>
+          <tr><th>Handle</th><th>Followers</th><th>Niche</th><th>Score</th><th>Genre / audience</th><th>Why</th><th>Held because</th><th></th></tr>
         </thead>
         <tbody id="review-rows"></tbody>
       </table>

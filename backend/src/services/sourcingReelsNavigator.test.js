@@ -48,6 +48,7 @@ test('scrolls the feed, records + judges each reel, engages strong matches only'
   assert.deepStrictEqual(judged, ['mia', 'joe']);
   assert.strictEqual(out[0].username, 'mia');
   assert.strictEqual(out[0].clip.dataBase64, Buffer.from('MP4').toString('base64'));
+  assert.strictEqual(out[0].clip.origin, 'feed', 'the judge is told this is the reel the feed served');
   assert.ok(out[0]._nicheVerdict, 'verdict stashed for reuse downstream');
 
   // liked mia (0.9) but not joe (0.2)
