@@ -766,3 +766,29 @@ CREATE INDEX IF NOT EXISTS idx_creator_updates_creator ON creator_updates(creato
 -- in the order the events actually happened.
 CREATE INDEX IF NOT EXISTS idx_creator_updates_pending
   ON creator_updates(created_at) WHERE status = 'pending';
+
+-- One-time data changes. This file runs in full on every boot, so a backfill
+-- whose WHERE clause can come true again later (a value someone may choose
+-- deliberately after it ran) must not re-run: each one claims its name here
+-- first, and only the boot that inserts the name does the work.
+CREATE TABLE IF NOT EXISTS data_migrations (
+  name   TEXT PRIMARY KEY,
+  ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- The default quality bar (sourcing_defaults.creatorPassThreshold) dropped from
+-- 0.72 to 0.52. The Scout page sends the bar with every save, so a campaign that
+-- saved its defaults carries the old 0.72 explicitly and would never see the new
+-- default. Move exactly-0.72 bars to 0.52, once; any other value was set on
+-- purpose and is left alone. Compared as text so no stored value can fail a
+-- numeric cast and take the whole migration (and the boot) down with it.
+WITH claimed AS (
+  INSERT INTO data_migrations (name) VALUES ('quality-bar-0.72-to-0.52')
+  ON CONFLICT (name) DO NOTHING
+  RETURNING name
+)
+UPDATE campaigns
+   SET sourcing_defaults = jsonb_set(sourcing_defaults, '{creatorPassThreshold}', '0.52'::jsonb)
+ WHERE EXISTS (SELECT 1 FROM claimed)
+   AND jsonb_typeof(sourcing_defaults) = 'object'
+   AND sourcing_defaults->>'creatorPassThreshold' IN ('0.72', '.72', '0.720');

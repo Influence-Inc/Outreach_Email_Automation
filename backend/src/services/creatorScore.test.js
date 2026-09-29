@@ -253,22 +253,39 @@ test('weak craft costs materially more score than it used to', () => {
 });
 
 // Steadiness is nearly free to max out, which is why it was over-weighted: any
-// creator with a consistent audience scores ~0.98 on it.
-test('a steady audience alone no longer carries a weak creator as far', () => {
+// creator with a consistent audience scores ~0.98 on it. This pins the
+// WEIGHTING, not the default bar (a campaign-level dial): steady reach and fair
+// fit alone do not lift merely competent craft past a demanding bar.
+test('a steady audience alone does not carry a weak creator past a demanding bar', () => {
   const steadyButUninspired = strong({
     creator: { fit_score: 70, consistency_of_niche: 7 },
     clips: [{ creativity: 5, hook_strength: 5, is_original_creator: true }],
     reels: [{ views: 50000 }, { views: 50100 }, { views: 49900 }],
   });
-  assert.ok(scoreCreator(steadyButUninspired, {}).score < DEFAULT_PASS_THRESHOLD);
+  assert.strictEqual(scoreCreator(steadyButUninspired, { creatorPassThreshold: 0.72 }).pass, false);
 });
 
-test('the raised default bar is the one in force', () => {
-  assert.strictEqual(DEFAULT_PASS_THRESHOLD, 0.72);
+test('the default bar is the one in force', () => {
+  assert.strictEqual(DEFAULT_PASS_THRESHOLD, 0.52);
   // And it is still a dial, not a law.
   const borderline = strong({ creator: { fit_score: 70, consistency_of_niche: 7 } });
   assert.strictEqual(scoreCreator(borderline, { creatorPassThreshold: 0.95 }).pass, false);
   assert.strictEqual(scoreCreator(borderline, { creatorPassThreshold: 0.5 }).pass, true);
+});
+
+// What the 0.52 bar admits, in the judge's own words: solid, usable work is
+// shortlisted; work that is derivative throughout is not.
+test('at the default bar, competent work passes and derivative work does not', () => {
+  const reels = Array.from({ length: 12 }, (_, i) => ({ views: 40000 + (i % 3) * 4000 }));
+  const judged = (level, fit) => scoreCreator({
+    creator: { fit_score: fit, consistency_of_niche: level },
+    clips: [{ creativity: level, hook_strength: level, brand_fit: level, is_original_creator: true }],
+    reels,
+  }, {});
+  const competent = judged(5, 70);
+  const derivative = judged(2, 40);
+  assert.ok(competent.pass, `"competent" across the board scores ${competent.score}`);
+  assert.ok(!derivative.pass, `"derivative" across the board scores ${derivative.score}`);
 });
 
 // Every campaign shared one set of weights, because creatorWeights never crossed
