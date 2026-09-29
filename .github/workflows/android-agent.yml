@@ -45,8 +45,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # setup-android installs "tools platform-tools" by default, and the legacy
+      # "tools" package is gone from Google's SDK repository — sdkmanager now
+      # fails with "Failed to find package 'tools'" before anything builds.
+      # Nothing here uses it; the Android Gradle plugin fetches what it needs.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       # Covers the two contracts that fail invisibly on a real phone: the
       # dumpUi element shape screenVision.js matches on, and the HTTP envelope
