@@ -357,14 +357,210 @@
     bonus: '<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"></path></svg>',
   };
 
+  // The bonus deal's base CPM sits below the headline CPM ($4 under it), but never under
+  // half of it — an estimate of $6 shouldn't open the bonus deal at $2.
+  const bonusBaseCpm = (cpm) => Math.max(1, round2(cpm * 0.5), round2(cpm - 4));
+
+  // --- Estimated CPM & rate --------------------------------------------------------------
+  // The automated estimate from the backend (services/cpmEstimate.js, ported from the
+  // influence-creator-list repo): topic base range x country index, and rate = the
+  // creator's median views / 1000 x CPM. CPM and rate are editable and linked through
+  // those views; the topic and country can be corrected when the profile was misread.
+  // Typing previews into the deals below (onPreview); a committed change is saved, which
+  // also re-prices the suggested offers server-side.
+  const money2 = (n) => '$' + Number(n || 0).toFixed(2).replace(/\.00$/, '');
+
+  function cpmStickerLine(s) {
+    const amount =
+      s.name === 'topic'
+        ? `${money2(s.low)}–${money2(s.high)}`
+        : s.low === s.high
+        ? `×${s.low}`
+        : `×${s.low}–${s.high}`;
+    const level = s.level === 'none' ? 'no data yet' : `${s.level} level`;
+    const name = s.name.charAt(0).toUpperCase() + s.name.slice(1);
+    return `<li><b>${escapeHtml(name)}</b> ${escapeHtml(s.label)} <span class="num">${escapeHtml(amount)}</span>
+      <span class="cpm-why-meta">(${escapeHtml(level)}${s.evidence ? `; ${escapeHtml(s.evidence)}` : ''})</span></li>`;
+  }
+
+  function buildCpmEstimate(r, { onPreview }) {
+    const el = document.createElement('div');
+    el.className = 'section cpm-est';
+    const opts = r.cpm_options || { topics: [], countries: [] };
+    let ce = r.cpm_estimate;
+    let status = '';
+
+    const views = () => (ce && ce.expected_views ? Number(ce.expected_views.value) || 0 : 0);
+    const rateFor = (cpm) => (views() ? round2((views() / 1000) * cpm) : null);
+
+    function render() {
+      if (!ce) {
+        el.innerHTML = `<div class="section-title">Estimated CPM &amp; rate</div>
+          <div class="cpm-empty">The dashboard didn't return an estimate — update the backend to enable it.</div>`;
+        return;
+      }
+      const deal = ce.deal || {};
+      const badge =
+        deal.source === 'admin'
+          ? '<span class="cpm-badge set">Set by you</span>'
+          : deal.source === 'estimate_capped'
+          ? '<span class="cpm-badge capped">Held to campaign max</span>'
+          : '<span class="cpm-badge">Auto</span>';
+      const est = ce.cpm;
+      const shown = (s) => s.level !== 'none';
+      const noData = est.stickers.filter((s) => !shown(s)).map((s) => s.name);
+      const topicKey = (ce.overrides && ce.overrides.topic) || '';
+      const countryKey = (ce.overrides && ce.overrides.country) || '';
+      const topicOpts = opts.topics.some((t) => t.key === topicKey) || !topicKey
+        ? opts.topics
+        : [...opts.topics, { key: topicKey, label: topicKey.replace(/_/g, ' '), group: '' }];
+      // Just the topic's name here; the full chain (niche → group) is in the breakdown below.
+      const topicName = String(est.stickers[0].value || '').replace(/_/g, ' ');
+      const autoTopic =
+        !topicKey && ce.inputs && ce.inputs.topic.source === 'profile' && topicName
+          ? ` — ${topicName.charAt(0).toUpperCase()}${topicName.slice(1)}`
+          : '';
+      const autoCountry = !countryKey && ce.inputs && ce.inputs.country.source === 'bio' ? ` — ${est.stickers[1].label}` : '';
+      const option = (value, text, sel) =>
+        `<option value="${escapeHtml(value)}"${sel ? ' selected' : ''}>${escapeHtml(text)}</option>`;
+      const rate = deal.rate != null ? deal.rate : rateFor(deal.cpm);
+
+      el.innerHTML = `
+        <div class="section-title">Estimated CPM &amp; rate ${badge}</div>
+        <div class="cpm-box">
+          <div class="cpm-grid">
+            <div class="oc-field">
+              <label class="oc-field-label" for="deal-cpm">CPM</label>
+              <div class="oc-money"><span class="oc-money-prefix">$</span><input id="deal-cpm" type="number" min="0" step="0.5" class="oc-input oc-money-input num" value="${round2(deal.cpm)}"></div>
+              <div class="oc-sub">est. ${money2(est.low)}–${money2(est.high)} · mid ${money2(est.value)}</div>
+            </div>
+            <div class="oc-field">
+              <label class="oc-field-label" for="deal-rate">Rate / video</label>
+              <div class="oc-money"><span class="oc-money-prefix">$</span><input id="deal-rate" type="number" min="0" step="10" class="oc-input oc-money-input num" value="${rate != null ? Math.round(rate) : ''}" ${views() ? '' : 'disabled placeholder="—"'}></div>
+              <div class="oc-sub">${views() ? `at ${fmtViews(views())} median views` : 'scrape their reels to estimate a rate'}</div>
+            </div>
+          </div>
+          ${
+            deal.source === 'estimate_capped'
+              ? `<div class="cpm-note">Estimate ${money2(deal.estimate)} is above this campaign's max CPM, so deals use ${money2(deal.cap)}.</div>`
+              : ''
+          }
+          <div class="cpm-selects">
+            <label class="cpm-select"><span>Topic</span>
+              <select id="cpm-topic">${option('', `Auto (from profile)${autoTopic}`, !topicKey)}${topicOpts
+                .map((t) => option(t.key, t.group ? `${t.label} · ${t.group}` : t.label, t.key === topicKey))
+                .join('')}</select>
+            </label>
+            <label class="cpm-select"><span>Country</span>
+              <select id="cpm-country">${option('', `Auto (from bio)${autoCountry}`, !countryKey)}${opts.countries
+                .map((c) => option(c.code, c.name, c.code === countryKey))
+                .join('')}</select>
+            </label>
+          </div>
+          <ul class="cpm-why">
+            ${est.stickers.filter(shown).map(cpmStickerLine).join('')}
+            ${noData.length ? `<li class="cpm-why-meta">${escapeHtml(noData.join(', '))}: no data yet (×1)</li>` : ''}
+          </ul>
+          <div class="cpm-foot">
+            <span class="cpm-status">${escapeHtml(status)}</span>
+            ${deal.source === 'admin' ? '<button type="button" class="cpm-reset">Reset to estimate</button>' : ''}
+          </div>
+        </div>`;
+      wire();
+    }
+
+    async function save(body) {
+      status = 'Saving…';
+      const statusEl = el.querySelector('.cpm-status');
+      if (statusEl) statusEl.textContent = status;
+      try {
+        const resp = await api(`/api/creators/${r.id}/cpm`, { method: 'POST', body: JSON.stringify(body) });
+        ce = resp.cpm_estimate;
+        r.cpm_estimate = ce;
+        if (resp.suggested_offers) r.suggested_offers = resp.suggested_offers;
+        status = 'Saved';
+      } catch (err) {
+        status = `Couldn't save: ${err.message}`;
+      }
+      // Saved or not, the deals go back to the CPM the backend actually holds.
+      onPreview(ce.deal.cpm);
+      render();
+    }
+
+    function wire() {
+      const cpmIn = el.querySelector('#deal-cpm');
+      const rateIn = el.querySelector('#deal-rate');
+      const current = ce.deal;
+      // Not a usable number: nothing is saved, and the field and the deals go back to the
+      // saved CPM so the panel never shows a value the backend doesn't hold.
+      const reject = (what) => {
+        status = `Enter a positive ${what}`;
+        onPreview(current.cpm);
+        render();
+      };
+      const clearStatus = () => {
+        status = '';
+        const st = el.querySelector('.cpm-status');
+        if (st) st.textContent = '';
+      };
+      cpmIn.addEventListener('input', () => {
+        clearStatus();
+        const cpm = Number(cpmIn.value);
+        if (!(cpm > 0)) return;
+        const rate = rateFor(cpm);
+        if (rate != null && rateIn) rateIn.value = Math.round(rate);
+        onPreview(cpm);
+      });
+      cpmIn.addEventListener('change', () => {
+        const v = cpmIn.value.trim();
+        if (v === '') return save({ deal_cpm: null });
+        if (!(Number(v) > 0)) return reject('CPM');
+        if (round2(Number(v)) !== round2(current.cpm)) save({ deal_cpm: Number(v) });
+      });
+      if (rateIn && !rateIn.disabled) {
+        rateIn.addEventListener('input', () => {
+          clearStatus();
+          const rate = Number(rateIn.value);
+          if (!(rate > 0) || !views()) return;
+          const cpm = round2((rate * 1000) / views());
+          cpmIn.value = cpm;
+          onPreview(cpm);
+        });
+        rateIn.addEventListener('change', () => {
+          const v = rateIn.value.trim();
+          if (v === '') return save({ deal_cpm: null });
+          if (!(Number(v) > 0)) return reject('rate');
+          if (Math.round(Number(v)) !== Math.round(current.rate || 0)) save({ deal_rate: Number(v) });
+        });
+      }
+      const enterBlurs = (input) => input && input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+      });
+      enterBlurs(cpmIn);
+      enterBlurs(rateIn);
+      el.querySelector('#cpm-topic').addEventListener('change', (ev) => save({ topic: ev.target.value || null }));
+      el.querySelector('#cpm-country').addEventListener('change', (ev) => save({ country: ev.target.value || null }));
+      const reset = el.querySelector('.cpm-reset');
+      if (reset) reset.addEventListener('click', () => save({ deal_cpm: null }));
+    }
+
+    render();
+    return el;
+  }
+
   function buildOfferConfigurator(r, onRefresh) {
     const root = document.createElement('div');
 
     const stats = r.ig_scraped_data && typeof r.ig_scraped_data === 'object' ? r.ig_scraped_data : {};
     const offers = Array.isArray(r.suggested_offers) ? r.suggested_offers : [];
     const viewOffer = offers.find((o) => o.offer_type === 'view_based');
+    // Deals open at this creator's CPM — the one set in "Estimated CPM & rate" below, else
+    // the automated estimate. Older backends without an estimate fall back to the offers.
+    const dealCpm = r.cpm_estimate && r.cpm_estimate.deal ? Number(r.cpm_estimate.deal.cpm) : 0;
     const seedCpm =
-      Math.round(Number((viewOffer && viewOffer.cpm_applied) || (offers[0] && offers[0].cpm_applied) || 12)) || 12;
+      dealCpm > 0
+        ? round2(dealCpm)
+        : Math.round(Number((viewOffer && viewOffer.cpm_applied) || (offers[0] && offers[0].cpm_applied) || 12)) || 12;
     const safeFloor0 = Math.round(Number(stats.min_views) || Number(stats.p50) || 25000);
 
     const priorOfferSent =
@@ -372,7 +568,7 @@
     const sent = r.negotiation_status === 'AWAITING_DECISION';
 
     const custom = r.custom_offer && typeof r.custom_offer === 'object' ? r.custom_offer : null;
-    const bCpm0 = Math.max(1, seedCpm - 4);
+    const bCpm0 = bonusBaseCpm(seedCpm);
     const bUnlock0 = Math.round((safeFloor0 * 2 * 1.4) / 100000) * 100000 || safeFloor0;
     const bBonus0 = Math.max(1000, Math.round(((safeFloor0 * 2) / 1000) * bCpm0 * 0.15 / 500) * 500);
     const isType = (t) => custom && custom.offer_type === t;
@@ -409,6 +605,8 @@
           </div>
         </div>
       </div>
+
+      <div class="cpm-est-slot"></div>
 
       <div class="section">
         <div class="section-title">Safe floor</div>
@@ -633,6 +831,26 @@
     root.querySelectorAll('.oc-choose').forEach((btn) => {
       btn.addEventListener('click', () => { m.selected = btn.dataset.choose; recompute(); });
     });
+
+    // Every deal follows the creator's CPM: the view and video deals at it, the bonus deal
+    // at its lower base.
+    root.querySelector('.cpm-est-slot').replaceWith(
+      buildCpmEstimate(r, {
+        onPreview: (cpm) => {
+          m.vCpm = round2(cpm);
+          m.fCpm = round2(cpm);
+          m.bCpm = bonusBaseCpm(cpm);
+          for (const k of ['vCpm', 'fCpm', 'bCpm']) {
+            const input = root.querySelector(`input[data-k="${k}"]`);
+            if (input) input.value = m[k];
+          }
+          recompute();
+          // A drafted email quoting the old numbers is stale now. (Only ever called from a
+          // user action, after markStaleOnEdit below is defined.)
+          markStaleOnEdit();
+        },
+      }),
+    );
 
     function buildCustomOffer() {
       if (m.selected === 'view') {

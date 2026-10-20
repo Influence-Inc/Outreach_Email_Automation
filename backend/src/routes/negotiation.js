@@ -8,6 +8,7 @@ const contracts = require('../services/contracts');
 const offers = require('../services/offers');
 const briefs = require('../services/briefs');
 const { computeOffers } = require('../services/pricing');
+const { dealCpmFor } = require('../services/cpmEstimate');
 const { flagFingerprintSql } = require('../db/flagFingerprint');
 
 const router = express.Router();
@@ -129,8 +130,8 @@ router.post('/:id/quoted-rate', async (req, res, next) => {
     const params = [req.params.id, rate];
     let offerSet = '';
     if (rate !== null && creator.ig_scraped_data) {
-      const maxCpm = creator.max_cpm != null ? Number(creator.max_cpm) : Number(process.env.TARGET_CPM || 15);
-      const offers = computeOffers(creator.ig_scraped_data, maxCpm, rate);
+      // Priced at the creator's own CPM: the admin's, else the estimate (held to max_cpm).
+      const offers = computeOffers(creator.ig_scraped_data, dealCpmFor(creator).cpm, rate);
       params.push(JSON.stringify(offers));
       offerSet = `, suggested_offers = $${params.length}::jsonb`;
     }

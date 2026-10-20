@@ -1,0 +1,48 @@
+{
+  "version": "2026-10-spec-v1",
+  "source": "INFLUENCE enrichment spec §6 (initial benchmark table, provided by INFLUENCE)",
+  "as_of": "2026-10-02",
+  "note": "Industry reference values, not creator-specific results. Platform: Instagram Reels. Market not specified by the source; treated as US/USD.",
+  "benchmarks": [
+    {
+      "id": "ig-reel-finance-b2b-tech",
+      "niche_group": "Finance / B2B / Tech",
+      "niches": ["finance", "fintech", "b2b", "tech", "saas", "ai", "crypto", "investing"],
+      "platform": "instagram",
+      "content_type": "reel",
+      "low": 35,
+      "high": 60,
+      "currency": "USD"
+    },
+    {
+      "id": "ig-reel-health-fitness-skincare",
+      "niche_group": "Health / Fitness / Skincare",
+      "niches": ["health", "fitness", "skincare", "wellness", "nutrition"],
+      "platform": "instagram",
+      "content_type": "reel",
+      "low": 20,
+      "high": 35,
+      "currency": "USD"
+    },
+    {
+      "id": "ig-reel-lifestyle-fashion-beauty",
+      "niche_group": "Lifestyle / Fashion / Beauty",
+      "niches": ["lifestyle", "fashion", "beauty", "travel", "food", "home"],
+      "platform": "instagram",
+      "content_type": "reel",
+      "low": 15,
+      "high": 25,
+      "currency": "USD"
+    },
+    {
+      "id": "ig-reel-gaming-entertainment-humor",
+      "niche_group": "Gaming / Entertainment / Humor",
+      "niches": ["gaming", "entertainment", "humor", "comedy", "music"],
+      "platform": "instagram",
+      "content_type": "reel",
+      "low": 8,
+      "high": 15,
+      "currency": "USD"
+    }
+  ]
+}

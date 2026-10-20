@@ -284,6 +284,9 @@ async function runScrapeQueue(payload, sender) {
         if (Array.isArray(scraped.bioLinks) && scraped.bioLinks.length) {
           patchBody.bio_links = scraped.bioLinks;
         }
+        // The CPM + rate estimate reads the creator's topic and country from these.
+        if (scraped.biography) patchBody.ig_biography = scraped.biography;
+        if (scraped.category) patchBody.ig_category = scraped.category;
         // Mark this as a completed scrape so the backend can move a still-pending
         // creator to no_email when no address was found (the enrichment pass then
         // runs). Also guarantees a non-empty PATCH so that status transition fires.

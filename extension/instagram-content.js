@@ -389,9 +389,13 @@
       console.warn('[OEA] web_profile_info fetch failed:', e);
     }
 
+    // The profile category ("Fitness Model", "Digital creator"), read by the CPM estimate
+    // alongside the bio.
+    const categoryOf = (u) => (u && (u.category_name || u.business_category_name || u.category)) || null;
     const out = {
       email: user ? pickEmailFromUser(user) : null,
       biography: (user && user.biography) || null,
+      category: categoryOf(user),
       fullName: (user && user.full_name) || null,
       links: user ? pickLinksFromUser(user) : [],
     };
@@ -413,6 +417,7 @@
             out.email = pickEmailFromUser(infoUser);
             if (!out.fullName && infoUser.full_name) out.fullName = infoUser.full_name;
             if (!out.biography && infoUser.biography) out.biography = infoUser.biography;
+            if (!out.category) out.category = categoryOf(infoUser);
             if (!out.links.length) out.links = pickLinksFromUser(infoUser);
           }
         } else {
@@ -442,7 +447,9 @@
       username: null,
       reelViews: [],
       latestReelDate: null,
-      bioLinks: []
+      bioLinks: [],
+      biography: null,
+      category: null
     };
 
     try {
@@ -553,6 +560,10 @@
           console.log('Found name via web_profile_info:', apiData.fullName);
         }
         if (apiData.links && apiData.links.length) result.bioLinks = apiData.links;
+        // For the CPM estimate (topic + country). Only the API's clean bio is sent — the DOM
+        // header text also carries follower counts and other accounts' names.
+        if (apiData.biography) result.biography = apiData.biography;
+        if (apiData.category) result.category = apiData.category;
       }
 
       // Expand a truncated bio FIRST so an email hidden below the "more" fold

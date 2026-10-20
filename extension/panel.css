@@ -354,3 +354,28 @@ a { color: inherit; }
   padding: 9px 10px; margin-bottom: 10px; font-size: 12.5px; color: var(--ink-2);
 }
 .handoff-label { font-weight: 600; color: var(--danger); margin-bottom: 3px; font-size: 11.5px; }
+
+/* Estimated CPM & rate (buildCpmEstimate in panel.js) */
+.cpm-box { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); padding: 12px; }
+.cpm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cpm-badge { margin-left: 6px; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 999px; background: var(--bg); color: var(--muted); vertical-align: 1px; }
+.cpm-badge.set { background: rgba(20, 122, 82, 0.1); color: var(--green); }
+.cpm-badge.capped { background: rgba(255, 49, 64, 0.08); color: var(--danger); }
+.cpm-note { margin-top: 10px; font-size: 11px; color: var(--ink-2, var(--ink)); background: var(--bg); border-radius: var(--radius-xs); padding: 7px 9px; }
+.cpm-selects { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.cpm-select { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cpm-select span { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.cpm-select select { width: 100%; min-width: 0; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid var(--line);
+  border-radius: var(--radius-xs); background: var(--surface); color: var(--ink); }
+.cpm-select select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgba), 0.12); }
+.cpm-why { list-style: none; margin: 12px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); font-size: 11.5px; line-height: 1.5; }
+.cpm-why li + li { margin-top: 3px; }
+.cpm-why-meta { color: var(--faint); }
+.cpm-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; min-height: 18px; }
+.cpm-status { font-size: 11px; color: var(--muted); }
+.cpm-empty { font-size: 12px; color: var(--muted); }
+@media (max-width: 340px) { .cpm-grid, .cpm-selects { grid-template-columns: 1fr; } }
+.cpm-reset { appearance: none; background: none; border: 0; padding: 4px 0; font: inherit; font-size: 11.5px; font-weight: 600;
+  color: var(--muted); text-decoration: underline; cursor: pointer; }
+.cpm-reset:hover { color: var(--ink); }

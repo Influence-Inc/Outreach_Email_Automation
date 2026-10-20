@@ -5,6 +5,9 @@ const instantly = require('../services/instantly');
 const { scrapeProfile } = require('../services/igScraper');
 const { enrichEmail } = require('../services/emailEnrich');
 const { computeStats, computeOffers, parseViewCount } = require('../services/pricing');
+const cpmEstimate = require('../services/cpmEstimate');
+
+const { dealCpmFor } = cpmEstimate;
 const contracts = require('../services/contracts');
 const offerPortal = require('../services/offers');
 const briefs = require('../services/briefs');
@@ -772,7 +775,104 @@ router.get('/panel', async (req, res, next) => {
     if (!row) return res.status(404).json({ error: 'not found' });
     await attachRateLog([row]);
     await contracts.attachContracts([row]);
+    await attachCpmEstimate(row);
     res.json(row);
+  } catch (err) { next(err); }
+});
+
+// The automated CPM + rate estimate (services/cpmEstimate.js) and the CPM this creator's
+// deals use, held to their campaign's max_cpm. Computed on read, never stored.
+async function attachCpmEstimate(row) {
+  const campaign = row.campaign_id
+    ? await db.one(`SELECT max_cpm FROM campaigns WHERE id = $1`, [row.campaign_id])
+    : null;
+  row.cpm_estimate = cpmEstimate.panelEstimate({ ...row, max_cpm: campaign ? campaign.max_cpm : null });
+  row.cpm_options = cpmEstimate.OPTIONS;
+  return row;
+}
+
+// POST /api/creators/:id/cpm — the admin adjusts the estimate from the extension panel.
+// Body (every field optional; null or '' clears it back to the automatic value):
+//   deal_cpm  : the CPM to price this creator's deals at
+//   deal_rate : the per-video rate instead — stored as the CPM it implies at the
+//               creator's expected views, so CPM and rate can never disagree
+//   topic     : a topic or niche key, replacing the one read from the profile
+//   country   : an ISO country code, replacing the one read from the bio
+// Re-prices suggested_offers at the resulting CPM and returns the fresh estimate.
+router.post('/:id/cpm', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const has = (k) => Object.prototype.hasOwnProperty.call(body, k);
+    const blank = (v) => v == null || v === '';
+    const creator = await db.one(
+      `SELECT c.*, ca.max_cpm FROM creators c LEFT JOIN campaigns ca ON ca.id = c.campaign_id WHERE c.id = $1`,
+      [req.params.id],
+    );
+    if (!creator) return res.status(404).json({ error: 'not found' });
+
+    const sets = {};
+    if (has('topic')) {
+      if (!blank(body.topic) && !cpmEstimate.isTopicKey(String(body.topic))) {
+        return res.status(400).json({ error: 'topic must be a known topic or niche key' });
+      }
+      sets.cpm_topic_override = blank(body.topic) ? null : String(body.topic);
+    }
+    if (has('country')) {
+      if (!blank(body.country) && !cpmEstimate.isCountryCode(body.country)) {
+        return res.status(400).json({ error: 'country must be an ISO 3166-1 alpha-2 code' });
+      }
+      sets.cpm_country_override = blank(body.country) ? null : String(body.country).toUpperCase();
+    }
+    const positive = (v) => Number.isFinite(Number(v)) && Number(v) > 0 && Number(v) < 100000000;
+    if (has('deal_cpm') && has('deal_rate')) {
+      return res.status(400).json({ error: 'send deal_cpm or deal_rate, not both' });
+    }
+    if (has('deal_cpm')) {
+      if (!blank(body.deal_cpm) && !(positive(body.deal_cpm) && Number(body.deal_cpm) < 10000)) {
+        return res.status(400).json({ error: 'deal_cpm must be a positive number under 10,000 or null' });
+      }
+      sets.deal_cpm = blank(body.deal_cpm) ? null : Math.round(Number(body.deal_cpm) * 100) / 100;
+    } else if (has('deal_rate')) {
+      if (blank(body.deal_rate)) {
+        sets.deal_cpm = null;
+      } else {
+        const views = cpmEstimate.expectedViewsOf(creator);
+        if (!views) return res.status(400).json({ error: 'no view stats yet — scrape the creator before setting a rate' });
+        if (!positive(body.deal_rate)) return res.status(400).json({ error: 'deal_rate must be a positive number or null' });
+        sets.deal_cpm = Math.round(((Number(body.deal_rate) * 1000) / views.value) * 100) / 100;
+        if (!(sets.deal_cpm > 0 && sets.deal_cpm < 10000)) {
+          return res.status(400).json({ error: 'that rate implies a CPM outside 0–10,000' });
+        }
+      }
+    }
+    if (!Object.keys(sets).length) {
+      return res.status(400).json({ error: 'deal_cpm, deal_rate, topic or country is required' });
+    }
+
+    const next = { ...creator, ...sets };
+    const params = [req.params.id];
+    const assigns = Object.entries(sets).map(([k, v]) => {
+      params.push(v);
+      return `${k} = $${params.length}`;
+    });
+    if (next.ig_scraped_data) {
+      const quotedRate = next.quoted_rate != null ? Number(next.quoted_rate) : null;
+      params.push(JSON.stringify(computeOffers(next.ig_scraped_data, dealCpmFor(next).cpm, quotedRate)));
+      assigns.push(`suggested_offers = $${params.length}::jsonb`);
+    }
+    const row = await db.one(
+      `UPDATE creators SET ${assigns.join(', ')}, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      params,
+    );
+    await db
+      .query(`INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'deal_cpm_set', $2)`, [
+        req.params.id,
+        sets,
+      ])
+      .catch((err) => console.error('[creators] deal_cpm_set logging failed', err.message));
+
+    await attachCpmEstimate(row);
+    res.json({ cpm_estimate: row.cpm_estimate, suggested_offers: row.suggested_offers });
   } catch (err) { next(err); }
 });
 
@@ -888,6 +988,18 @@ router.patch('/:id', async (req, res, next) => {
       if (!Number.isNaN(d.getTime())) latestReelDateIso = d.toISOString().slice(0, 10);
     }
 
+    // The Instagram bio and profile category the extension scraped. The CPM estimate reads
+    // the creator's topic and country from them, so they're taken before the offers below
+    // are priced — a first scrape is estimated from its own bio, not a stale one.
+    const profileText = {};
+    for (const [key, max] of [['ig_biography', 2000], ['ig_category', 200]]) {
+      if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+      const v = typeof body[key] === 'string' ? body[key].trim().slice(0, max) : '';
+      profileText[key] = v || null;
+      params.push(profileText[key]);
+      updates.push(`${key} = $${params.length}`);
+    }
+
     if (Array.isArray(body.reel_views)) {
       const views = body.reel_views
         .map((v) => (typeof v === 'number' ? v : parseViewCount(v)))
@@ -899,15 +1011,14 @@ router.patch('/:id', async (req, res, next) => {
         updates.push(`ig_scraped_data = $${params.length}::jsonb`);
 
         const ctx = await db.one(
-          `SELECT c.quoted_rate, ca.max_cpm
+          `SELECT c.*, ca.max_cpm
            FROM creators c JOIN campaigns ca ON ca.id = c.campaign_id
            WHERE c.id = $1`,
           [req.params.id],
         );
         const quotedRate = ctx && ctx.quoted_rate != null ? Number(ctx.quoted_rate) : null;
-        const maxCpm =
-          ctx && ctx.max_cpm != null ? Number(ctx.max_cpm) : Number(process.env.TARGET_CPM || 15);
-        const offers = computeOffers(stats, maxCpm, quotedRate);
+        const { cpm } = dealCpmFor({ ...(ctx || {}), ...profileText, ig_scraped_data: stats });
+        const offers = computeOffers(stats, cpm, quotedRate);
         params.push(JSON.stringify(offers));
         updates.push(`suggested_offers = $${params.length}::jsonb`);
       }

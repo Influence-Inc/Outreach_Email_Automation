@@ -856,6 +856,12 @@ async function sendUsedCreatorInvite(creatorId) {
 // Returns { cpm, source }. cpm is always a positive finite number; source names
 // where it came from for logging + tests.
 async function resolvePriorCpm(creator, campaign) {
+  // A CPM an admin set for this creator in the extension panel (creators.deal_cpm) is the
+  // most recent human decision about their price, so it wins. The automated estimate does
+  // NOT enter this chain: this offer goes out with no one reviewing it.
+  const adminCpm = creator && creator.deal_cpm != null ? Number(creator.deal_cpm) : null;
+  if (Number.isFinite(adminCpm) && adminCpm > 0) return { cpm: adminCpm, source: 'admin_deal_cpm' };
+
   const record = await creatorDb.lookupCpmFromCreatorDb({
     email: creator.email,
     instagramUsername: creator.instagram_username,
