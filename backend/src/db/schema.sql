@@ -810,36 +810,21 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS cpm_topic_override   TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS cpm_country_override TEXT;
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS deal_cpm             NUMERIC(8,2);
 
--- Reel analysis for the Estimated CPM, as creator-list does it (services/reelAnalysis):
--- the creator's newest 30 Reels from Apify, each one's thumbnail OCR and Whisper transcript,
--- Jev's collaboration / brand (P3/P4) and topic / niche / genre / format (P5) answers, plus
--- Instagram's "Account based in" country and the follower counts of the brands they worked
--- with. One row per Instagram handle, shared by every campaign the creator is in.
---   status : queued | running | done | failed
---   analysis : the compact result (labels, counts, views; no captions or transcripts)
-CREATE TABLE IF NOT EXISTS creator_reel_analysis (
-  handle       TEXT PRIMARY KEY,
-  status       TEXT NOT NULL DEFAULT 'queued',
-  progress     JSONB,
-  analysis     JSONB,
-  error        TEXT,
-  cost_usd     NUMERIC(10,5),
-  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  started_at   TIMESTAMPTZ,
-  finished_at  TIMESTAMPTZ
+-- Creator data from the creator-list project's index ("Find creators"), through its partner
+-- API (services/creatorList.js). creator-list scrapes and analyses a creator once; Deal Studio
+-- reads the result, and asks creator-list to analyse the creators it doesn't have yet.
+--   status : indexed | queued | running | failed | not_indexed | error
+--   data   : what creator-list returned for an indexed creator (Estimated CPM / rate ranges
+--            and their evidence)
+CREATE TABLE IF NOT EXISTS creator_list_profiles (
+  handle     TEXT PRIMARY KEY,
+  status     TEXT NOT NULL,
+  data       JSONB,
+  request    JSONB,
+  error      TEXT,
+  queued_at  TIMESTAMPTZ,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
--- Instagram account facts the analysis looked up (Apify user-info actor): the creator's
--- "Account based in" country, and brand accounts' follower counts. Cached so a brand is
--- looked up once.
-CREATE TABLE IF NOT EXISTS instagram_accounts (
-  handle              TEXT PRIMARY KEY,
-  country_name        TEXT,
-  transparency_status TEXT,
-  followers           BIGINT,
-  verified            BOOLEAN,
-  found               BOOLEAN NOT NULL DEFAULT FALSE,
-  observed_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
--- The finished analysis, copied onto every creators row with that handle so the pricing code
--- (cpmEstimate.dealCpmFor) can read it from the row it already has.
-ALTER TABLE creators ADD COLUMN IF NOT EXISTS reel_analysis JSONB;
+-- The indexed creator's data, copied onto every creators row with that handle so the pricing
+-- code (cpmEstimate.dealCpmFor) can read it from the row it already has.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS creator_list JSONB;

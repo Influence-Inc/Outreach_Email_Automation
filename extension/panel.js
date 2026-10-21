@@ -362,15 +362,14 @@
   const bonusBaseCpm = (cpm) => Math.max(1, round2(cpm * 0.5), round2(cpm - 4));
 
   // --- Estimated CPM & rate --------------------------------------------------------------
-  // The automated estimate from the backend: influence-creator-list's pipeline run on the
-  // creator's newest 30 Reels (services/reelAnalysis: Apify -> thumbnail OCR + Whisper
-  // transcript -> Jev topic / niche / genre / format and brand-deal detection), then its
-  // Estimated CPM (topic x country x size / format / genre / brands) and fee cascade (their
-  // own quoted fees, else Estimated CPM x expected ad views). CPM and rate are editable and
-  // linked through the expected ad views; the topic and country can be corrected. Typing
-  // previews into the deals below (onPreview); a committed change is saved, which also
-  // re-prices the suggested offers server-side. Until the Reels are analysed the estimate
-  // reads the profile only, and says so.
+  // The creator's CPM and rate come from the creator-list project ("Find creators"): the backend
+  // looks them up in its index (services/creatorList.js), and if creator-list doesn't have them
+  // yet it analyses them there once — newest 30 Reels, transcripts, Jev labels, brand deals —
+  // and they join its index too. The panel shows the median of creator-list's Estimated CPM and
+  // rate. Until creator-list has them, the backend's port estimates from the profile only, and
+  // says so. CPM and rate are editable and linked through the expected ad views. Typing previews
+  // into the deals below (onPreview); a committed change is saved, which also re-prices the
+  // suggested offers server-side.
   const money2 = (n) => '$' + Number(n || 0).toFixed(2).replace(/\.00$/, '');
 
   function cpmStickerLine(s) {
@@ -386,47 +385,45 @@
       <span class="cpm-why-meta">(${escapeHtml(level)}${s.evidence ? `; ${escapeHtml(s.evidence)}` : ''})</span></li>`;
   }
 
-  const pct = (x) => `${Math.round(Number(x) * 100)}%`;
-  const shareLine = (list, n = 3) => (list || []).slice(0, n).map((x) => `${x.label} ${pct(x.share)}`).join(', ');
-  const FEE_METHOD = {
-    'rate_evidence:CAMPAIGN_ACTUAL': 'their accepted fees',
-    'rate_evidence:CREATOR_REPORTED': 'their quoted fees',
-    estimated_cpm: 'Estimated CPM × expected ad views',
-  };
+  const topLabels = (shares, n = 3) =>
+    Object.entries(shares || {})
+      .sort((x, y) => y[1] - x[1])
+      .slice(0, n)
+      .map(([k, v]) => `${k.replace(/_/g, ' ')} ${Math.round(Number(v) * 100)}%`)
+      .join(', ');
 
-  // Where the Reel analysis is at, and the button to start (or redo) it.
-  function analysisBlock(st, reels) {
-    const s = st || { status: 'none', missing_keys: [] };
-    const missing = (s.missing_keys || []).length;
-    const btn = (label) => (missing ? '' : `<button type="button" class="cpm-analyse">${escapeHtml(label)}</button>`);
-    if (s.status === 'queued' || s.status === 'running') {
-      const p = s.progress || {};
-      const what = p.step === 'analysing' && p.total
-        ? `transcribing &amp; classifying Reels ${Number(p.done) || 0}/${Number(p.total)}`
-        : p.step === 'looking_up_accounts' ? 'looking up country and brand sizes'
-        : s.status === 'queued' ? 'queued' : 'collecting Reels';
-      return `<div class="cpm-analysis busy"><div class="spinner sm"></div> Analysing Reels — ${what}…</div>`;
-    }
-    if (reels) {
-      const c = reels.counts || {};
-      const when = reels.as_of ? new Date(reels.as_of).toLocaleDateString() : '';
+  // Where creator-list is at with this creator, and what its numbers rest on.
+  function creatorListBlock(st, cl) {
+    const s = st || { status: 'unknown' };
+    const retry = '<div class="cpm-analysis-foot"><button type="button" class="cpm-analyse">Ask creator-list to analyse again</button></div>';
+    if (cl) {
+      const when = cl.as_of ? new Date(cl.as_of).toLocaleDateString() : '';
       const lines = [
-        `<b>${Number(c.reels) || 0} Reels analysed</b>${when ? ` · ${escapeHtml(when)}` : ''} · ${Number(c.transcribed) || 0} transcribed · ${Number(c.brand_deals) || 0} brand deals`,
-        reels.topics && reels.topics.length ? `Topics: ${escapeHtml(shareLine(reels.topics))}` : '',
-        reels.formats && reels.formats.length ? `Formats: ${escapeHtml(shareLine(reels.formats))}` : '',
-        reels.genres && reels.genres.length ? `Genres: ${escapeHtml(shareLine(reels.genres))}` : '',
-        reels.brands && reels.brands.length ? `Brands: ${escapeHtml(reels.brands.slice(0, 6).join(', '))}${reels.brands.length > 6 ? ` +${reels.brands.length - 6}` : ''}` : '',
+        `<b>From Find creators</b> · ${Number(cl.reels_analysed) || 0} Reels analysed${when ? ` · ${escapeHtml(when)}` : ''}`,
+        cl.main_topic ? `Topic: ${escapeHtml(String(cl.main_niche || cl.main_topic).replace(/_/g, ' '))}${cl.country_name ? ` · ${escapeHtml(cl.country_name)}` : ''}` : '',
+        cl.formats ? `Formats: ${escapeHtml(topLabels(cl.formats))}` : '',
+        cl.genres ? `Genres: ${escapeHtml(topLabels(cl.genres))}` : '',
+        cl.typical_views ? `Typical views: ${escapeHtml(fmtViews(Number(cl.typical_views)))}` : '',
+        `${Number(cl.brand_deals) || 0} brand deals${cl.brands && cl.brands.length ? `: ${escapeHtml(cl.brands.slice(0, 6).join(', '))}${cl.brands.length > 6 ? ` +${cl.brands.length - 6}` : ''}` : ''}`,
+        cl.realised_cpm ? `Realised CPM ${money2(cl.realised_cpm.mid)}${cl.realised_cpm.low != null ? ` (${money2(cl.realised_cpm.low)}–${money2(cl.realised_cpm.high)})` : ''}` : '',
       ].filter(Boolean);
       return `<div class="cpm-analysis">${lines.map((l) => `<div>${l}</div>`).join('')}
-        ${s.status === 'failed' ? `<div class="cpm-warn">Last re-run failed: ${escapeHtml(s.error || 'unknown error')}</div>` : ''}
-        <div class="cpm-analysis-foot">${btn('Re-analyse Reels')}</div></div>`;
+        ${s.error ? `<div class="cpm-warn">Couldn't refresh from creator-list: ${escapeHtml(s.error)}</div>` : ''}</div>`;
     }
-    if (missing) {
-      return `<div class="cpm-analysis"><div class="cpm-warn">Estimated from the profile only. Analysing Reels needs ${escapeHtml(s.missing_keys.join(', '))} on the server.</div></div>`;
+    if (s.status === 'queued' || s.status === 'running') {
+      const what = s.status === 'running' ? 'analysing their Reels now' : 'queued for analysis';
+      return `<div class="cpm-analysis busy"><div class="spinner sm"></div> Find creators is ${what} — the estimate below is from their profile until it's done.</div>`;
     }
-    return `<div class="cpm-analysis">
-      ${s.status === 'failed' ? `<div class="cpm-warn">Reel analysis failed: ${escapeHtml(s.error || 'unknown error')}</div>` : '<div class="cpm-warn">Estimated from the profile only — their Reels haven’t been analysed yet.</div>'}
-      <div class="cpm-analysis-foot">${btn(s.status === 'failed' ? 'Retry analysis' : 'Analyse Reels')}</div></div>`;
+    if (s.status === 'not_configured') {
+      return `<div class="cpm-analysis"><div class="cpm-warn">Estimated from the profile only. ${escapeHtml(s.error || '')}</div></div>`;
+    }
+    if (s.status === 'failed') {
+      return `<div class="cpm-analysis"><div class="cpm-warn">Find creators couldn't analyse them${s.request && s.request.note ? `: ${escapeHtml(s.request.note)}` : ''}. Estimated from the profile only.</div>${retry}</div>`;
+    }
+    if (s.status === 'error') {
+      return `<div class="cpm-analysis"><div class="cpm-warn">Couldn't reach creator-list: ${escapeHtml(s.error || 'unknown error')}. Estimated from the profile only.</div>${retry}</div>`;
+    }
+    return `<div class="cpm-analysis"><div class="cpm-warn">Not in Find creators yet. Estimated from the profile only.</div>${retry}</div>`;
   }
 
   function buildCpmEstimate(r, { onPreview, onAnalysed }) {
@@ -435,7 +432,7 @@
     const opts = r.cpm_options || { topics: [], countries: [] };
     let ce = r.cpm_estimate;
     let status = '';
-    let analysis = r.reel_analysis_status || null;
+    let listStatus = r.creator_list_status || null;
     let poll = null;
 
     const views = () => (ce && ce.expected_views ? Number(ce.expected_views.value) || 0 : 0);
@@ -451,30 +448,28 @@
       const badge =
         deal.source === 'admin'
           ? '<span class="cpm-badge set">Set by you</span>'
-          : '<span class="cpm-badge">Auto</span>';
+          : deal.source === 'creator_list'
+          ? '<span class="cpm-badge">Find creators</span>'
+          : '<span class="cpm-badge">Profile only</span>';
       const est = ce.cpm;
-      // A sticker with a detected value is shown even when creator-list has no factor for it yet
-      // (×1), so the admin sees what the Reels were labelled.
-      const shown = (s) => s.level !== 'none' || s.value != null;
-      const noData = est.stickers.filter((s) => !shown(s)).map((s) => s.name);
+      const fromList = ce.source === 'creator_list';
+      const stickers = est.stickers || [];
+      const shown = (s) => s.level !== 'none';
+      const noData = stickers.filter((s) => !shown(s)).map((s) => s.name);
       const topicKey = (ce.overrides && ce.overrides.topic) || '';
       const countryKey = (ce.overrides && ce.overrides.country) || '';
       const topicOpts = opts.topics.some((t) => t.key === topicKey) || !topicKey
         ? opts.topics
         : [...opts.topics, { key: topicKey, label: topicKey.replace(/_/g, ' '), group: '' }];
       // Just the topic's name here; the full chain (niche → group) is in the breakdown below.
-      const topicName = String(est.stickers[0].value || '').replace(/_/g, ' ');
-      const topicFrom = ce.inputs && ce.inputs.topic.source === 'reels' ? 'Reels' : 'profile';
+      const topicName = String((stickers[0] && stickers[0].value) || '').replace(/_/g, ' ');
       const autoTopic =
-        !topicKey && ce.inputs && ['profile', 'reels'].includes(ce.inputs.topic.source) && topicName
+        !topicKey && ce.inputs && ce.inputs.topic.source === 'profile' && topicName
           ? ` — ${topicName.charAt(0).toUpperCase()}${topicName.slice(1)}`
           : '';
-      const countrySrc = ce.inputs && ce.inputs.country.source;
-      const countryFrom = countrySrc === 'instagram' ? 'Instagram' : 'bio';
-      const autoCountry = !countryKey && ['bio', 'instagram'].includes(countrySrc) ? ` — ${est.stickers[1].label}` : '';
+      const autoCountry = !countryKey && ce.inputs && ce.inputs.country.source === 'bio' && stickers[1] ? ` — ${stickers[1].label}` : '';
       const ev = ce.expected_views;
       const fee = ce.rate;
-      const realised = ce.realised_cpm;
       const option = (value, text, sel) =>
         `<option value="${escapeHtml(value)}"${sel ? ' selected' : ''}>${escapeHtml(text)}</option>`;
       const rate = deal.rate != null ? deal.rate : rateFor(deal.cpm);
@@ -494,27 +489,26 @@
               <div class="oc-sub">${views() ? `at ${fmtViews(views())} expected ad views` : 'scrape their reels to estimate a rate'}</div>
             </div>
           </div>
-          ${ev ? `<div class="cpm-note">Expected ad views: ${escapeHtml(ev.basis || '')}${ev.sample_size ? ` (${Number(ev.sample_size)} Reels)` : ''}.</div>` : ''}
-          ${fee ? `<div class="cpm-note">Estimated rate ${money2(fee.value)} (${money2(fee.low)}–${money2(fee.high)}) from ${escapeHtml(FEE_METHOD[fee.method] || fee.method)}${fee.inputs && fee.inputs.amounts ? ` (${fee.inputs.amounts.length})` : ''}.</div>` : ''}
-          ${realised ? `<div class="cpm-note">Realised CPM at that rate: ${money2(realised.value)} (${money2(realised.low)}–${money2(realised.high)}, ${escapeHtml((realised.notes || [])[0] || '')}).</div>` : ''}
+          ${fromList && fee ? `<div class="cpm-note">Find creators' estimated rate ${money2(fee.value)}${fee.low != null ? ` (${money2(fee.low)}–${money2(fee.high)})` : ''} and CPM ${money2(est.value)}${est.low != null ? ` (${money2(est.low)}–${money2(est.high)})` : ''}: the medians are used.</div>` : ''}
+          ${!fromList && ev ? `<div class="cpm-note">Views: ${escapeHtml(ev.basis || '')}${ev.sample_size ? ` (${Number(ev.sample_size)} Reels)` : ''}.</div>` : ''}
           ${deal.above_campaign_max ? `<div class="cpm-warn">Above this campaign's max CPM (${money2(deal.campaign_max_cpm)}).</div>` : ''}
-          ${analysisBlock(analysis, ce.reels)}
-          <div class="cpm-selects">
+          ${creatorListBlock(listStatus, fromList ? ce.creator_list : null)}
+          ${fromList ? '' : `<div class="cpm-selects">
             <label class="cpm-select"><span>Topic</span>
-              <select id="cpm-topic">${option('', `Auto (from ${topicFrom})${autoTopic}`, !topicKey)}${topicOpts
+              <select id="cpm-topic">${option('', `Auto (from profile)${autoTopic}`, !topicKey)}${topicOpts
                 .map((t) => option(t.key, t.group ? `${t.label} · ${t.group}` : t.label, t.key === topicKey))
                 .join('')}</select>
             </label>
             <label class="cpm-select"><span>Country</span>
-              <select id="cpm-country">${option('', `Auto (from ${countryFrom})${autoCountry}`, !countryKey)}${opts.countries
+              <select id="cpm-country">${option('', `Auto (from bio)${autoCountry}`, !countryKey)}${opts.countries
                 .map((c) => option(c.code, c.name, c.code === countryKey))
                 .join('')}</select>
             </label>
           </div>
           <ul class="cpm-why">
-            ${est.stickers.filter(shown).map(cpmStickerLine).join('')}
+            ${stickers.filter(shown).map(cpmStickerLine).join('')}
             ${noData.length ? `<li class="cpm-why-meta">${escapeHtml(noData.join(', '))}: no data yet (×1)</li>` : ''}
-          </ul>
+          </ul>`}
           <div class="cpm-foot">
             <span class="cpm-status">${escapeHtml(status)}</span>
             ${deal.source === 'admin' ? '<button type="button" class="cpm-reset">Reset to estimate</button>' : ''}
@@ -592,42 +586,45 @@
       });
       enterBlurs(cpmIn);
       enterBlurs(rateIn);
-      el.querySelector('#cpm-topic').addEventListener('change', (ev) => save({ topic: ev.target.value || null }));
-      el.querySelector('#cpm-country').addEventListener('change', (ev) => save({ country: ev.target.value || null }));
+      const topicSel = el.querySelector('#cpm-topic');
+      if (topicSel) topicSel.addEventListener('change', (ev) => save({ topic: ev.target.value || null }));
+      const countrySel = el.querySelector('#cpm-country');
+      if (countrySel) countrySel.addEventListener('change', (ev) => save({ country: ev.target.value || null }));
       const reset = el.querySelector('.cpm-reset');
       if (reset) reset.addEventListener('click', () => save({ deal_cpm: null }));
-      const analyse = el.querySelector('.cpm-analyse');
-      if (analyse) analyse.addEventListener('click', startAnalysis);
+      const again = el.querySelector('.cpm-analyse');
+      if (again) again.addEventListener('click', askAgain);
     }
 
-    async function startAnalysis() {
+    // Ask creator-list to analyse the creator again (after it failed, or couldn't be reached).
+    async function askAgain() {
       try {
-        analysis = await api(`/api/creators/${r.id}/reel-analysis`, { method: 'POST' });
+        const resp = await api(`/api/creators/${r.id}/creator-list`, { method: 'POST' });
+        listStatus = resp.creator_list_status;
       } catch (err) {
-        analysis = { ...(analysis || {}), status: 'failed', error: err.message };
+        listStatus = { ...(listStatus || {}), status: 'error', error: err.message };
       }
       render();
       watch();
     }
 
-    // While the analysis runs, poll it; when it finishes, reload the panel so the estimate,
-    // the deals and the suggested offers all come from the analysed Reels.
+    // While creator-list analyses them, poll it; once they're indexed, reload the panel so the
+    // estimate, the deals and the suggested offers all come from creator-list's numbers.
     function watch() {
-      if (poll || !analysis || !['queued', 'running'].includes(analysis.status)) return;
+      if (poll || !listStatus || !['queued', 'running'].includes(listStatus.status)) return;
       poll = setInterval(async () => {
         if (!el.isConnected) { clearInterval(poll); poll = null; return; }
         try {
-          const next = await api(`/api/creators/${r.id}/reel-analysis`);
-          const finished = !['queued', 'running'].includes(next.status);
-          analysis = next;
-          if (finished) {
+          const next = await api(`/api/creators/${r.id}/creator-list`);
+          listStatus = next.creator_list_status;
+          if (!['queued', 'running'].includes(listStatus.status)) {
             clearInterval(poll);
             poll = null;
-            if (next.status === 'done' && onAnalysed) return onAnalysed();
+            if (listStatus.status === 'indexed' && onAnalysed) return onAnalysed();
           }
           render();
         } catch { /* keep polling */ }
-      }, 5000);
+      }, 20000);
     }
 
     render();

@@ -115,3 +115,34 @@ test('selector options list every topic and country', () => {
   assert.ok(est.isTopicKey('fitness') && est.isTopicKey('skincare') && !est.isTopicKey('nope'));
   assert.ok(est.isCountryCode('in') && !est.isCountryCode('ZZ'));
 });
+
+// creator-list's own numbers, once its index has the creator (services/creatorList.js).
+const CL = {
+  creator_list: {
+    as_of: '2026-10-20T00:00:00+00:00',
+    estimated_cpm: { mid: 6.81, low: 3.3, high: 11.55 },
+    estimated_rate: { mid: 172, low: 83, high: 292 },
+    typical_views: 25000,
+  },
+};
+
+test('creator-list data: its median CPM and rate are the ones shown and dealt at', () => {
+  const p = est.panelEstimate({ ...CL, ig_biography: 'NYC fashion stylist', ...stats(80000) });
+  assert.strictEqual(p.source, 'creator_list');
+  assert.deepStrictEqual(p.deal, { cpm: 6.81, source: 'creator_list', estimate: 6.81, rate: 172 });
+  assert.strictEqual(p.rate.value, 172);
+  assert.strictEqual(p.cpm.low, 3.3);
+  // The rate links to the CPM through the views creator-list priced the rate on.
+  assert.strictEqual(Math.round(est.expectedViewsOf(CL).value), 25257);
+});
+
+test('creator-list data: the admin CPM still wins; the profile overrides no longer apply', () => {
+  assert.deepStrictEqual(est.dealCpmFor({ ...CL, deal_cpm: 9 }), { cpm: 9, source: 'admin' });
+  assert.strictEqual(est.dealCpmFor({ ...CL, cpm_topic_override: 'tech', cpm_country_override: 'US' }).cpm, 6.81);
+});
+
+test('creator-list data without a CPM is ignored: the profile-only estimate is used', () => {
+  const d = est.dealCpmFor({ creator_list: { estimated_cpm: null }, cpm_topic_override: 'fitness', cpm_country_override: 'IN' });
+  assert.deepStrictEqual(d, { cpm: 6.19, source: 'estimate', estimate: 6.19 });
+});
+
