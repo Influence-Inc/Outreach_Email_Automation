@@ -362,12 +362,15 @@
   const bonusBaseCpm = (cpm) => Math.max(1, round2(cpm * 0.5), round2(cpm - 4));
 
   // --- Estimated CPM & rate --------------------------------------------------------------
-  // The automated estimate from the backend (services/cpmEstimate.js, ported from the
-  // influence-creator-list repo): topic base range x country index, and rate = the
-  // creator's median views / 1000 x CPM. CPM and rate are editable and linked through
-  // those views; the topic and country can be corrected when the profile was misread.
-  // Typing previews into the deals below (onPreview); a committed change is saved, which
-  // also re-prices the suggested offers server-side.
+  // The automated estimate from the backend: influence-creator-list's pipeline run on the
+  // creator's newest 30 Reels (services/reelAnalysis: Apify -> thumbnail OCR + Whisper
+  // transcript -> Jev topic / niche / genre / format and brand-deal detection), then its
+  // Estimated CPM (topic x country x size / format / genre / brands) and fee cascade (their
+  // own quoted fees, else Estimated CPM x expected ad views). CPM and rate are editable and
+  // linked through the expected ad views; the topic and country can be corrected. Typing
+  // previews into the deals below (onPreview); a committed change is saved, which also
+  // re-prices the suggested offers server-side. Until the Reels are analysed the estimate
+  // reads the profile only, and says so.
   const money2 = (n) => '$' + Number(n || 0).toFixed(2).replace(/\.00$/, '');
 
   function cpmStickerLine(s) {
@@ -383,12 +386,57 @@
       <span class="cpm-why-meta">(${escapeHtml(level)}${s.evidence ? `; ${escapeHtml(s.evidence)}` : ''})</span></li>`;
   }
 
-  function buildCpmEstimate(r, { onPreview }) {
+  const pct = (x) => `${Math.round(Number(x) * 100)}%`;
+  const shareLine = (list, n = 3) => (list || []).slice(0, n).map((x) => `${x.label} ${pct(x.share)}`).join(', ');
+  const FEE_METHOD = {
+    'rate_evidence:CAMPAIGN_ACTUAL': 'their accepted fees',
+    'rate_evidence:CREATOR_REPORTED': 'their quoted fees',
+    estimated_cpm: 'Estimated CPM × expected ad views',
+  };
+
+  // Where the Reel analysis is at, and the button to start (or redo) it.
+  function analysisBlock(st, reels) {
+    const s = st || { status: 'none', missing_keys: [] };
+    const missing = (s.missing_keys || []).length;
+    const btn = (label) => (missing ? '' : `<button type="button" class="cpm-analyse">${escapeHtml(label)}</button>`);
+    if (s.status === 'queued' || s.status === 'running') {
+      const p = s.progress || {};
+      const what = p.step === 'analysing' && p.total
+        ? `transcribing &amp; classifying Reels ${Number(p.done) || 0}/${Number(p.total)}`
+        : p.step === 'looking_up_accounts' ? 'looking up country and brand sizes'
+        : s.status === 'queued' ? 'queued' : 'collecting Reels';
+      return `<div class="cpm-analysis busy"><div class="spinner sm"></div> Analysing Reels — ${what}…</div>`;
+    }
+    if (reels) {
+      const c = reels.counts || {};
+      const when = reels.as_of ? new Date(reels.as_of).toLocaleDateString() : '';
+      const lines = [
+        `<b>${Number(c.reels) || 0} Reels analysed</b>${when ? ` · ${escapeHtml(when)}` : ''} · ${Number(c.transcribed) || 0} transcribed · ${Number(c.brand_deals) || 0} brand deals`,
+        reels.topics && reels.topics.length ? `Topics: ${escapeHtml(shareLine(reels.topics))}` : '',
+        reels.formats && reels.formats.length ? `Formats: ${escapeHtml(shareLine(reels.formats))}` : '',
+        reels.genres && reels.genres.length ? `Genres: ${escapeHtml(shareLine(reels.genres))}` : '',
+        reels.brands && reels.brands.length ? `Brands: ${escapeHtml(reels.brands.slice(0, 6).join(', '))}${reels.brands.length > 6 ? ` +${reels.brands.length - 6}` : ''}` : '',
+      ].filter(Boolean);
+      return `<div class="cpm-analysis">${lines.map((l) => `<div>${l}</div>`).join('')}
+        ${s.status === 'failed' ? `<div class="cpm-warn">Last re-run failed: ${escapeHtml(s.error || 'unknown error')}</div>` : ''}
+        <div class="cpm-analysis-foot">${btn('Re-analyse Reels')}</div></div>`;
+    }
+    if (missing) {
+      return `<div class="cpm-analysis"><div class="cpm-warn">Estimated from the profile only. Analysing Reels needs ${escapeHtml(s.missing_keys.join(', '))} on the server.</div></div>`;
+    }
+    return `<div class="cpm-analysis">
+      ${s.status === 'failed' ? `<div class="cpm-warn">Reel analysis failed: ${escapeHtml(s.error || 'unknown error')}</div>` : '<div class="cpm-warn">Estimated from the profile only — their Reels haven’t been analysed yet.</div>'}
+      <div class="cpm-analysis-foot">${btn(s.status === 'failed' ? 'Retry analysis' : 'Analyse Reels')}</div></div>`;
+  }
+
+  function buildCpmEstimate(r, { onPreview, onAnalysed }) {
     const el = document.createElement('div');
     el.className = 'section cpm-est';
     const opts = r.cpm_options || { topics: [], countries: [] };
     let ce = r.cpm_estimate;
     let status = '';
+    let analysis = r.reel_analysis_status || null;
+    let poll = null;
 
     const views = () => (ce && ce.expected_views ? Number(ce.expected_views.value) || 0 : 0);
     const rateFor = (cpm) => (views() ? round2((views() / 1000) * cpm) : null);
@@ -403,11 +451,11 @@
       const badge =
         deal.source === 'admin'
           ? '<span class="cpm-badge set">Set by you</span>'
-          : deal.source === 'estimate_capped'
-          ? '<span class="cpm-badge capped">Held to campaign max</span>'
           : '<span class="cpm-badge">Auto</span>';
       const est = ce.cpm;
-      const shown = (s) => s.level !== 'none';
+      // A sticker with a detected value is shown even when creator-list has no factor for it yet
+      // (×1), so the admin sees what the Reels were labelled.
+      const shown = (s) => s.level !== 'none' || s.value != null;
       const noData = est.stickers.filter((s) => !shown(s)).map((s) => s.name);
       const topicKey = (ce.overrides && ce.overrides.topic) || '';
       const countryKey = (ce.overrides && ce.overrides.country) || '';
@@ -416,11 +464,17 @@
         : [...opts.topics, { key: topicKey, label: topicKey.replace(/_/g, ' '), group: '' }];
       // Just the topic's name here; the full chain (niche → group) is in the breakdown below.
       const topicName = String(est.stickers[0].value || '').replace(/_/g, ' ');
+      const topicFrom = ce.inputs && ce.inputs.topic.source === 'reels' ? 'Reels' : 'profile';
       const autoTopic =
-        !topicKey && ce.inputs && ce.inputs.topic.source === 'profile' && topicName
+        !topicKey && ce.inputs && ['profile', 'reels'].includes(ce.inputs.topic.source) && topicName
           ? ` — ${topicName.charAt(0).toUpperCase()}${topicName.slice(1)}`
           : '';
-      const autoCountry = !countryKey && ce.inputs && ce.inputs.country.source === 'bio' ? ` — ${est.stickers[1].label}` : '';
+      const countrySrc = ce.inputs && ce.inputs.country.source;
+      const countryFrom = countrySrc === 'instagram' ? 'Instagram' : 'bio';
+      const autoCountry = !countryKey && ['bio', 'instagram'].includes(countrySrc) ? ` — ${est.stickers[1].label}` : '';
+      const ev = ce.expected_views;
+      const fee = ce.rate;
+      const realised = ce.realised_cpm;
       const option = (value, text, sel) =>
         `<option value="${escapeHtml(value)}"${sel ? ' selected' : ''}>${escapeHtml(text)}</option>`;
       const rate = deal.rate != null ? deal.rate : rateFor(deal.cpm);
@@ -437,22 +491,22 @@
             <div class="oc-field">
               <label class="oc-field-label" for="deal-rate">Rate / video</label>
               <div class="oc-money"><span class="oc-money-prefix">$</span><input id="deal-rate" type="number" min="0" step="10" class="oc-input oc-money-input num" value="${rate != null ? Math.round(rate) : ''}" ${views() ? '' : 'disabled placeholder="—"'}></div>
-              <div class="oc-sub">${views() ? `at ${fmtViews(views())} median views` : 'scrape their reels to estimate a rate'}</div>
+              <div class="oc-sub">${views() ? `at ${fmtViews(views())} expected ad views` : 'scrape their reels to estimate a rate'}</div>
             </div>
           </div>
-          ${
-            deal.source === 'estimate_capped'
-              ? `<div class="cpm-note">Estimate ${money2(deal.estimate)} is above this campaign's max CPM, so deals use ${money2(deal.cap)}.</div>`
-              : ''
-          }
+          ${ev ? `<div class="cpm-note">Expected ad views: ${escapeHtml(ev.basis || '')}${ev.sample_size ? ` (${Number(ev.sample_size)} Reels)` : ''}.</div>` : ''}
+          ${fee ? `<div class="cpm-note">Estimated rate ${money2(fee.value)} (${money2(fee.low)}–${money2(fee.high)}) from ${escapeHtml(FEE_METHOD[fee.method] || fee.method)}${fee.inputs && fee.inputs.amounts ? ` (${fee.inputs.amounts.length})` : ''}.</div>` : ''}
+          ${realised ? `<div class="cpm-note">Realised CPM at that rate: ${money2(realised.value)} (${money2(realised.low)}–${money2(realised.high)}, ${escapeHtml((realised.notes || [])[0] || '')}).</div>` : ''}
+          ${deal.above_campaign_max ? `<div class="cpm-warn">Above this campaign's max CPM (${money2(deal.campaign_max_cpm)}).</div>` : ''}
+          ${analysisBlock(analysis, ce.reels)}
           <div class="cpm-selects">
             <label class="cpm-select"><span>Topic</span>
-              <select id="cpm-topic">${option('', `Auto (from profile)${autoTopic}`, !topicKey)}${topicOpts
+              <select id="cpm-topic">${option('', `Auto (from ${topicFrom})${autoTopic}`, !topicKey)}${topicOpts
                 .map((t) => option(t.key, t.group ? `${t.label} · ${t.group}` : t.label, t.key === topicKey))
                 .join('')}</select>
             </label>
             <label class="cpm-select"><span>Country</span>
-              <select id="cpm-country">${option('', `Auto (from bio)${autoCountry}`, !countryKey)}${opts.countries
+              <select id="cpm-country">${option('', `Auto (from ${countryFrom})${autoCountry}`, !countryKey)}${opts.countries
                 .map((c) => option(c.code, c.name, c.code === countryKey))
                 .join('')}</select>
             </label>
@@ -542,9 +596,42 @@
       el.querySelector('#cpm-country').addEventListener('change', (ev) => save({ country: ev.target.value || null }));
       const reset = el.querySelector('.cpm-reset');
       if (reset) reset.addEventListener('click', () => save({ deal_cpm: null }));
+      const analyse = el.querySelector('.cpm-analyse');
+      if (analyse) analyse.addEventListener('click', startAnalysis);
+    }
+
+    async function startAnalysis() {
+      try {
+        analysis = await api(`/api/creators/${r.id}/reel-analysis`, { method: 'POST' });
+      } catch (err) {
+        analysis = { ...(analysis || {}), status: 'failed', error: err.message };
+      }
+      render();
+      watch();
+    }
+
+    // While the analysis runs, poll it; when it finishes, reload the panel so the estimate,
+    // the deals and the suggested offers all come from the analysed Reels.
+    function watch() {
+      if (poll || !analysis || !['queued', 'running'].includes(analysis.status)) return;
+      poll = setInterval(async () => {
+        if (!el.isConnected) { clearInterval(poll); poll = null; return; }
+        try {
+          const next = await api(`/api/creators/${r.id}/reel-analysis`);
+          const finished = !['queued', 'running'].includes(next.status);
+          analysis = next;
+          if (finished) {
+            clearInterval(poll);
+            poll = null;
+            if (next.status === 'done' && onAnalysed) return onAnalysed();
+          }
+          render();
+        } catch { /* keep polling */ }
+      }, 5000);
     }
 
     render();
+    watch();
     return el;
   }
 
@@ -836,6 +923,7 @@
     // at its lower base.
     root.querySelector('.cpm-est-slot').replaceWith(
       buildCpmEstimate(r, {
+        onAnalysed: onRefresh,
         onPreview: (cpm) => {
           m.vCpm = round2(cpm);
           m.fCpm = round2(cpm);

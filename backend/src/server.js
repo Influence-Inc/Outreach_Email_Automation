@@ -18,6 +18,7 @@ const bot = require('./routes/bot');
 const creatorDbRoutes = require('./routes/creatorDb');
 const sourcing = require('./routes/sourcing');
 const scheduler = require('./services/scheduler');
+const reelAnalysisQueue = require('./services/reelAnalysis/queue');
 const { syncCampaigns } = require('./services/campaignsApi');
 const { probeProfile, igCookieStatus } = require('./services/igScraper');
 const { seedDefaultIfEmpty } = require('./services/emailTemplates');
@@ -234,6 +235,9 @@ const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
   console.log(`Backend listening on http://localhost:${port}`);
   scheduler.start();
+
+  // Reel analyses (Estimated CPM) a restart cut off go back in the queue.
+  reelAnalysisQueue.recover().catch((err) => console.error('Reel analysis queue recovery failed:', err.message));
 
   // Say plainly whether the dashboard requires Slack sign-in or is wide open, so
   // a deploy that forgot the Slack credentials is visible in the logs.

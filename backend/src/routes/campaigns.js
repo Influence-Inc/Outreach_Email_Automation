@@ -274,9 +274,8 @@ router.post('/:id/recalculate-offers', async (req, res, next) => {
     let updated = 0;
     for (const c of creators) {
       const rate = c.quoted_rate != null ? Number(c.quoted_rate) : null;
-      // Each creator at their own CPM (the admin's, else the estimate), held to the
-      // campaign's (possibly just changed) ceiling.
-      const offers = computeOffers(c.ig_scraped_data, dealCpmFor(c, { campaignMaxCpm: campaign.max_cpm }).cpm, rate);
+      // Each creator at their own CPM: the admin's, else creator-list's Estimated CPM.
+      const offers = computeOffers(c.ig_scraped_data, dealCpmFor(c).cpm, rate);
       await db.query(
         `UPDATE creators SET suggested_offers = $2::jsonb, updated_at = NOW() WHERE id = $1`,
         [c.id, JSON.stringify(offers)],

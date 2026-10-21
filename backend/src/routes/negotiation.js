@@ -130,7 +130,7 @@ router.post('/:id/quoted-rate', async (req, res, next) => {
     const params = [req.params.id, rate];
     let offerSet = '';
     if (rate !== null && creator.ig_scraped_data) {
-      // Priced at the creator's own CPM: the admin's, else the estimate (held to max_cpm).
+      // Priced at the creator's own CPM: the admin's, else the Estimated CPM.
       const offers = computeOffers(creator.ig_scraped_data, dealCpmFor(creator).cpm, rate);
       params.push(JSON.stringify(offers));
       offerSet = `, suggested_offers = $${params.length}::jsonb`;

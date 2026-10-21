@@ -127,12 +127,13 @@ test('topic and country overrides re-estimate the CPM', async () => {
   }
 });
 
-test('the estimate is held to the campaign ceiling in the response', async () => {
+test('the estimate is not cut to the campaign max CPM, only flagged above it', async () => {
   install({ ...CREATOR, max_cpm: '30.00' });
   try {
     const r = await post({ topic: 'tech', country: 'US' });
-    assert.strictEqual(r.body.cpm_estimate.deal.source, 'estimate_capped');
-    assert.strictEqual(r.body.cpm_estimate.deal.cpm, 30);
+    assert.strictEqual(r.body.cpm_estimate.deal.source, 'estimate');
+    assert.strictEqual(r.body.cpm_estimate.deal.cpm, 47.5);
+    assert.strictEqual(r.body.cpm_estimate.deal.above_campaign_max, true);
   } finally {
     restore();
   }

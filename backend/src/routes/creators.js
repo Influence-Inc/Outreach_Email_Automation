@@ -8,6 +8,8 @@ const { computeStats, computeOffers, parseViewCount } = require('../services/pri
 const cpmEstimate = require('../services/cpmEstimate');
 
 const { dealCpmFor } = cpmEstimate;
+const reelAnalysis = require('../services/reelAnalysis/queue');
+const { rateEvidenceFor } = require('../services/rateEvidence');
 const contracts = require('../services/contracts');
 const offerPortal = require('../services/offers');
 const briefs = require('../services/briefs');
@@ -641,6 +643,8 @@ router.get('/', async (req, res, next) => {
     await briefs.attachBriefs(rows);
     await attachSegment(rows);
     await attachCategories(rows);
+    // The Reel analysis copy is pricing input, not dashboard data: keep list payloads light.
+    for (const r of rows) delete r.reel_analysis;
     res.json(rows);
 
     // Refresh new-vs-old segmentation in the background (best-effort). Any row
@@ -780,22 +784,53 @@ router.get('/panel', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// The automated CPM + rate estimate (services/cpmEstimate.js) and the CPM this creator's
-// deals use, held to their campaign's max_cpm. Computed on read, never stored.
+// The automated CPM + rate estimate (services/cpmEstimate.js) — creator-list's Estimated CPM
+// and fee cascade on the creator's analysed Reels — the CPM this creator's deals use, and where
+// the Reel analysis is at. Computed on read, never stored.
 async function attachCpmEstimate(row) {
   const campaign = row.campaign_id
     ? await db.one(`SELECT max_cpm FROM campaigns WHERE id = $1`, [row.campaign_id])
     : null;
-  row.cpm_estimate = cpmEstimate.panelEstimate({ ...row, max_cpm: campaign ? campaign.max_cpm : null });
+  const [rateEvidence, analysis] = await Promise.all([
+    rateEvidenceFor(row.instagram_username).catch(() => []),
+    reelAnalysis.status(row.instagram_username).catch(() => null),
+  ]);
+  row.cpm_estimate = cpmEstimate.panelEstimate({ ...row, max_cpm: campaign ? campaign.max_cpm : null }, { rateEvidence });
   row.cpm_options = cpmEstimate.OPTIONS;
+  row.reel_analysis_status = analysis
+    ? { ...analysis, missing_keys: reelAnalysis.missingKeys() }
+    : { status: 'none', missing_keys: reelAnalysis.missingKeys() };
+  delete row.reel_analysis;
   return row;
 }
+
+// POST /api/creators/:id/reel-analysis — (re)analyse the creator's Reels now, from the panel.
+router.post('/:id/reel-analysis', async (req, res, next) => {
+  try {
+    const creator = await db.one(`SELECT instagram_username FROM creators WHERE id = $1`, [req.params.id]);
+    if (!creator) return res.status(404).json({ error: 'not found' });
+    if (!creator.instagram_username) return res.status(400).json({ error: 'this creator has no Instagram handle' });
+    const out = await reelAnalysis.enqueue(creator.instagram_username, { force: true });
+    if (out && out.error) return res.status(400).json(out);
+    res.json(out);
+  } catch (err) { next(err); }
+});
+
+// GET /api/creators/:id/reel-analysis — where the analysis is at (the panel polls this).
+router.get('/:id/reel-analysis', async (req, res, next) => {
+  try {
+    const creator = await db.one(`SELECT instagram_username FROM creators WHERE id = $1`, [req.params.id]);
+    if (!creator) return res.status(404).json({ error: 'not found' });
+    const st = await reelAnalysis.status(creator.instagram_username);
+    res.json(st ? { ...st, missing_keys: reelAnalysis.missingKeys() } : { status: 'none', missing_keys: reelAnalysis.missingKeys() });
+  } catch (err) { next(err); }
+});
 
 // POST /api/creators/:id/cpm — the admin adjusts the estimate from the extension panel.
 // Body (every field optional; null or '' clears it back to the automatic value):
 //   deal_cpm  : the CPM to price this creator's deals at
 //   deal_rate : the per-video rate instead — stored as the CPM it implies at the
-//               creator's expected views, so CPM and rate can never disagree
+//               creator's expected ad views, so CPM and rate can never disagree
 //   topic     : a topic or niche key, replacing the one read from the profile
 //   country   : an ISO country code, replacing the one read from the bio
 // Re-prices suggested_offers at the resulting CPM and returns the fresh estimate.
@@ -1095,6 +1130,13 @@ router.patch('/:id', async (req, res, next) => {
       `UPDATE creators SET ${updates.join(', ')} WHERE id = $1 RETURNING *`,
       params,
     );
+    // A fresh extension scrape: analyse the creator's Reels for the Estimated CPM if that
+    // hasn't been done (or was done long ago). Runs in the background.
+    if (Array.isArray(body.reel_views) && row && row.instagram_username) {
+      reelAnalysis.autoEnqueue(row.instagram_username)
+        .catch((err) => console.error('[creators] reel analysis enqueue failed', err.message));
+    }
+    if (row) delete row.reel_analysis;
     res.json(row);
   } catch (err) { next(err); }
 });

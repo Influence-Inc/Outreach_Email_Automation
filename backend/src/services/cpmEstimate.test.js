@@ -81,25 +81,24 @@ test('unknown override values are ignored rather than trusted', () => {
   assert.strictEqual(r.cpm.stickers[1].value, 'GB');
 });
 
-test('deal CPM: the admin number wins over the estimate and the ceiling', () => {
+test('deal CPM: the admin number wins over the estimate', () => {
   const d = est.dealCpmFor({ deal_cpm: '22.40', max_cpm: 10, ...stats(50000) });
-  assert.deepStrictEqual(d, { cpm: 22.4, source: 'admin' });
+  assert.deepStrictEqual(d, { cpm: 22.4, source: 'admin', campaign_max_cpm: 10, above_campaign_max: true });
 });
 
-test('deal CPM: the estimate is held to the campaign ceiling', () => {
+// creator-list has no campaign ceiling: the Estimated CPM stands, and a campaign's max CPM is
+// only reported next to it.
+test('deal CPM: the estimate is never cut to the campaign max CPM, only flagged above it', () => {
   const row = { cpm_topic_override: 'tech', cpm_country_override: 'US', max_cpm: '30.00', ...stats(50000) };
-  const d = est.dealCpmFor(row);
-  assert.strictEqual(d.source, 'estimate_capped');
-  assert.strictEqual(d.cpm, 30);
-  assert.strictEqual(d.estimate, 47.5);
+  assert.deepStrictEqual(est.dealCpmFor(row), { cpm: 47.5, source: 'estimate', estimate: 47.5, campaign_max_cpm: 30, above_campaign_max: true });
+  // An explicit campaignMaxCpm (e.g. a just-changed one) beats the row's.
+  assert.strictEqual(est.dealCpmFor(row, { campaignMaxCpm: 60 }).above_campaign_max, false);
 });
 
-test('deal CPM: under the ceiling (or with none) the estimate is used as is', () => {
+test('deal CPM: with no campaign max CPM the estimate is used as is', () => {
   const row = { cpm_topic_override: 'fitness', cpm_country_override: 'IN', ...stats(50000) };
-  assert.deepStrictEqual(est.dealCpmFor({ ...row, max_cpm: 30 }), { cpm: 6.19, source: 'estimate', estimate: 6.19 });
-  assert.strictEqual(est.dealCpmFor({ ...row, max_cpm: null }).source, 'estimate');
-  // An explicit campaignMaxCpm (e.g. a just-changed ceiling) beats the row's.
-  assert.strictEqual(est.dealCpmFor({ ...row, max_cpm: 30 }, { campaignMaxCpm: 5 }).cpm, 5);
+  assert.deepStrictEqual(est.dealCpmFor({ ...row, max_cpm: null }), { cpm: 6.19, source: 'estimate', estimate: 6.19 });
+  assert.strictEqual(est.dealCpmFor({ ...row, max_cpm: 30 }).above_campaign_max, false);
 });
 
 test('panel payload: deal rate follows the deal CPM, overrides are echoed back', () => {

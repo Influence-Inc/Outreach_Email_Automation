@@ -356,7 +356,7 @@ function ctxFor(creator, extra = {}) {
     managerName: process.env.MANAGER_NAME || process.env.SENDER_NAME || 'Jennifer',
     refs: templates.REFERENCE_ACCOUNTS,
     // The CPM suggested offers are priced at: the admin's for this creator, else the
-    // automated estimate held to the campaign's max_cpm (services/cpmEstimate.js).
+    // Estimated CPM creator-list computes (services/cpmEstimate.js).
     maxCpm: dealCpmFor(creator).cpm,
     stage: creator.negotiation_status || null,
     hasStats: creator.ig_scraped_data != null,
