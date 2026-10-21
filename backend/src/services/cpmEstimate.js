@@ -12,15 +12,14 @@
 //                 x country index      (country -> region -> tier -> default market)
 //                 x clamp(size x format x genre x brands, 0.5, 2.0)
 //
-//   Estimated rate = the creator's own fees (accepted single-Reel offers, else quoted rates,
-//                    last 18 months), else expected ad views / 1000 x Estimated CPM
+//   Estimated rate = expected ad views / 1000 x Estimated CPM
 //
-// The inputs come from the creator's analysed Reels (services/reelAnalysis, creator-list's
-// P1-P5 pipeline: Apify -> OCR + Whisper -> Jev): every Reel's topic / niche / genre / format,
-// the brand deals detected and their brands' sizes, Instagram's "Account based in" country,
-// and the views behind P6-P9. Until a creator's Reels are analysed, the topic is read from the
-// words of the Instagram bio and category (each matched word standing in for one labelled
-// Reel) and the country from the bio. An admin can set the topic, country or CPM by hand.
+// Deal Studio prices a creator from the creator-list project itself whenever it can
+// (services/creatorList.js): creator-list analyses their Reels and returns its Estimated CPM
+// and rate (the median of each range), which land on the row as `creator_list`. Until then —
+// creator-list still analysing them, or not configured — this port estimates from the Instagram
+// bio and category (each matched word standing in for one labelled Reel) and the country from
+// the bio, and says so. An admin can set the CPM (or rate) by hand either way.
 
 const path = require('path');
 
@@ -46,7 +45,13 @@ const label = (key) => {
 };
 const round = (x, nd) => Number(x.toFixed(nd));
 // f"{round(n):,}" — Python rounds half to even (277,734.5 -> 277,734).
-const fmtInt = (n) => require('./reelAnalysis/pyre').pyRound(n).toLocaleString('en-US'); // eslint-disable-line global-require
+function pyRound(x) {
+  const f = Math.floor(x);
+  const d = x - f;
+  if (Math.abs(d - 0.5) < 1e-9) return f % 2 === 0 ? f : f + 1;
+  return Math.round(x);
+}
+const fmtInt = (n) => pyRound(n).toLocaleString('en-US');
 
 // --- Main value of a set of labels (estimated_cpm._main) ----------------------------------
 
@@ -646,102 +651,53 @@ const TOPIC_KEYS = Object.keys(TOPIC_RULES.topics);
 const isTopicKey = (k) => TOPIC_KEYS.includes(k) || Object.prototype.hasOwnProperty.call(PARENTS, k);
 const isCountryCode = (c) => KNOWN_CODES.has(String(c || '').toUpperCase());
 
-// Lazily required: reelAnalysis/economics has no dependency back on this file.
-const econ = () => require('./reelAnalysis/economics'); // eslint-disable-line global-require
-
-const analysisOf = (row) => {
-  let a = row && row.reel_analysis;
-  if (typeof a === 'string') { try { a = JSON.parse(a); } catch { a = null; } }
-  return a && Array.isArray(a.reels) && a.reels.length ? a : null;
-};
-
-// The analysed Reels as the economics see them: views = plays, observed when collected, and the
-// commercial status P3 decided (COLLABORATED -> sponsored, NOT_COLLABORATED -> organic).
-function postsOf(analysis) {
-  const observed = new Date(analysis.as_of);
-  return analysis.reels.filter((p) => p.published_at).map((p) => ({
-    post_id: p.post_id,
-    published_at: new Date(p.published_at),
-    views: Number.isFinite(p.plays) ? p.plays : null,
-    views_observed_at: observed,
-    status: econ().STATUS[p.p3.decision] || 'UNKNOWN',
-    classification_confidence: 1,
-  }));
+// creator-list's data on the row (services/creatorList.js pricingCopy), when it has a CPM.
+function creatorListOf(row) {
+  let c = row && row.creator_list;
+  if (typeof c === 'string') { try { c = JSON.parse(c); } catch { c = null; } }
+  return c && c.estimated_cpm && Number(c.estimated_cpm.mid) > 0 ? c : null;
 }
 
-const contentOf = (analysis) => analysis.reels.map((p) => {
-  const a = p.p5 || {};
-  const v = (k) => (a[k] ? a[k].value : null);
-  return { topic: v('topic'), niche: v('niche'), genre: v('genre'), format: v('format') };
-});
-
-// Detected brand deals (P3) with the brand (P4) and its follower count, when looked up.
-const brandDealsOf = (analysis) => analysis.reels
-  .filter((p) => p.p3.decision === 'COLLABORATED')
-  .map((p) => {
-    const b = (p.p4 && p.p4.sponsor_brand) || '';
-    const key = b.toLowerCase().replace(/^@/, '');
-    const size = (analysis.brand_sizes || {})[key];
-    return { brand: b, followers: b && size != null ? Number(size) : null };
-  });
-
-// Shares of each label across the analysed Reels ('unclear' and 'other' left out).
-function shares(values) {
-  const kept = values.filter((v) => !isIgnored(v));
-  const counts = new Map();
-  for (const v of kept) counts.set(v, (counts.get(v) || 0) + 1);
-  return mostCommon(counts, 50).map(([k, n]) => ({ key: k, label: label(k), share: round(n / kept.length, 2) }));
-}
-
-// Without analysed Reels: typical views = the median of the creator's scraped recent Reels.
-function scrapedTypicalViews(row) {
+// Without creator-list data: typical views = the median of the creator's scraped recent Reels.
+function scrapedViews(row) {
   const stats = row && row.ig_scraped_data && typeof row.ig_scraped_data === 'object' ? row.ig_scraped_data : null;
   const v = stats && Number(stats.p50);
   if (!(v > 0)) return null;
-  return {
-    metric: 'typical_views', value: v, low: null, high: null, unit: 'views', confidence: 'low', method: 'median_recent',
-    formula: 'median(views of recent Reels, brand deals included)', inputs: { sample_size: Number(stats.reel_count) || null },
-    notes: ['Reels not analysed yet: median views of the recent Reels the extension scraped'],
-  };
+  return { value: v, basis: 'median views of their recent Reels (extension scrape)', sample_size: Number(stats.reel_count) || null };
 }
 
-const VIEW_BASIS = {
-  baseline_x_multiplier: 'typical views x this creator\'s brand-deal views ratio',
-  median_brand_deal_reels: 'median views of their brand-deal Reels',
-  median_last_10: 'typical views of a normal Reel (no brand-deal ratio yet)',
-  median_recent: 'median views of recent Reels',
-};
-
-// Expected ad views in the shape the panel and routes use.
-function viewsSummary(d) {
-  if (!d || d.value == null) return null;
-  return {
-    value: d.value, low: d.low, high: d.high, method: d.method, confidence: d.confidence,
-    basis: VIEW_BASIS[d.method] || d.method, sample_size: (d.inputs && d.inputs.sample_size) || null, notes: d.notes || [],
-  };
+// The views CPM and rate are linked through. With creator-list data: the views its rate is
+// priced on (rate / CPM x 1000, so both medians show exactly as creator-list has them), else
+// its typical views.
+function expectedViewsFor(row, cl = creatorListOf(row)) {
+  if (cl) {
+    const cpm = Number(cl.estimated_cpm.mid);
+    const rate = cl.estimated_rate && Number(cl.estimated_rate.mid);
+    if (rate > 0) return { value: (rate * 1000) / cpm, basis: 'the views creator-list priced their rate on' };
+    if (Number(cl.typical_views) > 0) return { value: Number(cl.typical_views), basis: 'their typical views (creator-list)' };
+  }
+  return scrapedViews(row);
 }
 
-// The full estimate for a creators row — creator-list's P5 -> P11 on the row's analysed Reels
-// (row.reel_analysis), or the profile-only fallback before the Reels are analysed. Admin
-// overrides: cpm_topic_override, cpm_country_override. `rateEvidence` = the creator's own
-// fees (services/rateEvidence.js) for the fee cascade.
-function estimateForCreator(row = {}, { rateEvidence = [], now = new Date() } = {}) {
-  const E = econ();
-  const analysis = analysisOf(row);
-  const asOf = analysis ? new Date(analysis.as_of) : now;
-  const posts = analysis ? postsOf(analysis) : [];
-  const content = analysis ? contentOf(analysis) : [];
-
-  let typical;
-  let adViews;
-  let expected = null;
-  if (analysis) {
-    typical = E.typicalViews(posts, { asOf });
-    expected = E.expectedSponsoredViews(E.currentOrganicBaseline(posts, { asOf }), E.sponsoredMultiplier(posts, { asOf }));
-    adViews = E.expectedAdViews(expected, posts, typical, { asOf });
-  } else {
-    typical = scrapedTypicalViews(row);
-    adViews = typical ? { ...typical, metric: 'expected_ad_views', notes: [...typical.notes, 'no brand deals seen: assumes an ad gets as many views as a normal Reel'] } : null;
+// The estimate for a creators row: creator-list's when it has one, else the profile-only port.
+// Returns { source: 'creator_list' | 'profile', cpm, rate, expected_views, inputs, creator_list }.
+function estimateForCreator(row = {}) {
+  const cl = creatorListOf(row);
+  const views = expectedViewsFor(row, cl);
+  if (cl) {
+    const range = (r) => (r ? { value: Number(r.mid), low: r.low != null ? Number(r.low) : null, high: r.high != null ? Number(r.high) : null } : null);
+    const cpm = { ...range(cl.estimated_cpm), currency: 'USD', method: 'creator_list' };
+    const rateRange = range(cl.estimated_rate);
+    return {
+      source: 'creator_list',
+      cpm,
+      rate: rateRange && rateRange.value > 0
+        ? { ...rateRange, currency: 'USD', method: 'creator_list' }
+        : views ? estimateRate(cpm, views.value) : null,
+      expected_views: views,
+      inputs: null,
+      creator_list: cl,
+    };
   }
 
   let topic;
@@ -752,65 +708,37 @@ function estimateForCreator(row = {}, { rateEvidence = [], now = new Date() } = 
     const isNiche = !TOPIC_KEYS.includes(topicKey);
     topic = { ...topicSticker([{ topic: isNiche ? PARENTS[topicKey] : topicKey, niche: isNiche ? topicKey : null }]), evidence: 'set by admin' };
     topicSource = 'admin';
-  } else if (analysis) {
-    topic = topicSticker(content, 'Reels');
-    topicSource = 'reels';
   } else {
     const fromProfile = contentFromProfile({ bio: row.ig_biography, category: row.ig_category });
     words = fromProfile.map((c) => c.word);
     topic = topicSticker(fromProfile, 'profile keywords');
     topicSource = fromProfile.length ? 'profile' : 'none';
   }
-
   const override = row.cpm_country_override && isCountryCode(row.cpm_country_override) ? row.cpm_country_override : null;
-  const guess = creatorCountry(override, row.ig_biography, analysis && analysis.account ? analysis.account.instagram_country : null);
+  const guess = creatorCountry(override, row.ig_biography, null);
   const market = resolveMarket(guess.country);
-
-  const cpm = estimateCpm({
-    content,
-    market,
-    countryEvidence: guess.evidence,
-    typicalViews: typical && typical.value != null ? typical : null,
-    brandDeals: analysis ? brandDealsOf(analysis) : null,
-    topicSticker: topic,
-  });
-  const cpmDerived = { ...cpm, value: cpm.value };
-  const fee = E.estimateFee({ asOf: now, rateEvidence, estimatedCpm: cpmDerived, adViews: adViews || E.unknown('expected_ad_views', { reason: 'no views' }) });
-  const realised = analysis ? E.realisedCpm(fee, posts, { asOf }) : null;
-
+  const cpm = estimateCpm({ market, countryEvidence: guess.evidence, typicalViews: views && views.value, topicSticker: topic });
   return {
+    source: 'profile',
     cpm,
-    rate: fee.value != null ? fee : null,
-    rate_unknown_reason: fee.value == null ? fee.reason : null,
-    expected_views: viewsSummary(adViews),
-    typical_views: viewsSummary(typical),
-    realised_cpm: realised && realised.value != null ? realised : null,
+    rate: views ? estimateRate(cpm, views.value) : null,
+    expected_views: views,
     inputs: {
       topic: { key: topic.value, source: topicSource, words },
       country: { code: market.country, source: guess.source, evidence: guess.evidence },
     },
-    reels: analysis ? {
-      as_of: analysis.as_of,
-      counts: analysis.counts || null,
-      topics: shares(content.map((c) => (!isIgnored(c.topic) ? c.topic : null))),
-      niches: shares(content.map((c) => nicheOf(c.topic, c.niche))),
-      formats: shares(content.map((c) => c.format)),
-      genres: shares(content.map((c) => c.genre)),
-      brands: [...new Set(brandDealsOf(analysis).map((d) => d.brand).filter(Boolean))].sort((x, y) => x.toLowerCase().localeCompare(y.toLowerCase())),
-      instagram_country: analysis.account ? analysis.account.instagram_country : null,
-    } : null,
+    creator_list: null,
   };
 }
 
-// Kept for callers that only need the median-recent-views fallback.
+// The views a typed rate is turned into a CPM at.
 function expectedViewsOf(row) {
-  const est = estimateForCreator(row);
-  return est.expected_views;
+  return expectedViewsFor(row);
 }
 
-// The CPM Deal Studio prices this creator's deals at: the admin's own number first, else the
-// Estimated CPM exactly as creator-list computes it (no Deal Studio cap: a campaign's max CPM
-// is shown next to it as a warning, never folded into the estimate). Returns { cpm, source }.
+// The CPM Deal Studio prices this creator's deals at: the admin's own number first, else
+// creator-list's Estimated CPM (the profile-only estimate until creator-list has one). A
+// campaign's max CPM is shown next to it as a warning, never folded in. Returns { cpm, source }.
 function dealCpmFor(row = {}, { campaignMaxCpm } = {}) {
   const capRaw = campaignMaxCpm !== undefined ? campaignMaxCpm : row.max_cpm;
   const cap = capRaw != null && capRaw !== '' && Number(capRaw) > 0 ? round(Number(capRaw), 2) : null;
@@ -818,8 +746,9 @@ function dealCpmFor(row = {}, { campaignMaxCpm } = {}) {
   let out;
   if (override != null && Number.isFinite(override) && override > 0) out = { cpm: round(override, 2), source: 'admin' };
   else {
-    const est = round(estimateForCreator(row).cpm.value, 2);
-    out = { cpm: est, source: 'estimate', estimate: est };
+    const est = estimateForCreator(row);
+    const cpm = round(est.cpm.value, 2);
+    out = { cpm, source: est.source === 'creator_list' ? 'creator_list' : 'estimate', estimate: cpm };
   }
   if (cap != null) {
     out.campaign_max_cpm = cap;
@@ -829,9 +758,9 @@ function dealCpmFor(row = {}, { campaignMaxCpm } = {}) {
 }
 
 // What the extension panel shows: the estimate, the CPM + rate deals use, and the choices for
-// the topic and country selectors.
-function panelEstimate(row = {}, { rateEvidence = [] } = {}) {
-  const est = estimateForCreator(row, { rateEvidence });
+// the topic and country selectors (they only steer the profile-only estimate).
+function panelEstimate(row = {}) {
+  const est = estimateForCreator(row);
   const deal = dealCpmFor(row);
   const views = est.expected_views && est.expected_views.value;
   return {

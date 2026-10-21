@@ -1,4 +1,0 @@
-# Reel analysis (services/reelAnalysis) shells out to ffmpeg/ffprobe (Reel audio -> FLAC for
-# Whisper) and tesseract (thumbnail OCR). "..." keeps Nixpacks' default packages.
-[phases.setup]
-aptPkgs = ["...", "ffmpeg", "tesseract-ocr", "tesseract-ocr-eng"]
