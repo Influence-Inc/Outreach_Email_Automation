@@ -1,0 +1,1125 @@
+{
+ "topic": {
+  "single_topic": {
+   "content": [
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "fitness"
+    }
+   ],
+   "sticker": {
+    "name": "topic",
+    "value": "fitness",
+    "label": "Fitness → Health / Fitness / Skincare",
+    "level": "group",
+    "low": 20,
+    "high": 35,
+    "source": "ig-reel-health-fitness-skincare (2026-10-spec-v1)",
+    "evidence": "5 of 5 Reels"
+   }
+  },
+  "topic_no_group": {
+   "content": [
+    {
+     "topic": "pets_animals"
+    },
+    {
+     "topic": "pets_animals"
+    },
+    {
+     "topic": "pets_animals"
+    }
+   ],
+   "sticker": {
+    "name": "topic",
+    "value": "pets_animals",
+    "label": "Pets animals (no niche group)",
+    "level": "all",
+    "low": 19.5,
+    "high": 33.75,
+    "source": "average of all niche groups (2026-10-spec-v1)",
+    "evidence": "3 of 3 Reels"
+   }
+  },
+  "skincare_niche": {
+   "content": [
+    {
+     "topic": "beauty",
+     "niche": "skincare"
+    },
+    {
+     "topic": "beauty",
+     "niche": "skincare"
+    },
+    {
+     "topic": "beauty",
+     "niche": "skincare"
+    },
+    {
+     "topic": "beauty",
+     "niche": "skincare"
+    },
+    {
+     "topic": "beauty"
+    }
+   ],
+   "sticker": {
+    "name": "topic",
+    "value": "skincare",
+    "label": "Skincare → Health / Fitness / Skincare",
+    "level": "niche group",
+    "low": 20,
+    "high": 35,
+    "source": "ig-reel-health-fitness-skincare (2026-10-spec-v1)",
+    "evidence": "4 of 4 Reels"
+   }
+  },
+  "niche_outside_main_topic": {
+   "content": [
+    {
+     "topic": "tech_tools",
+     "niche": "ai_tools"
+    },
+    {
+     "topic": "tech_tools",
+     "niche": "ai_tools"
+    },
+    {
+     "topic": "tech_tools"
+    },
+    {
+     "topic": "tech_tools"
+    },
+    {
+     "topic": "tech_tools"
+    },
+    {
+     "topic": "tech_tools"
+    },
+    {
+     "topic": "tech_tools"
+    },
+    {
+     "topic": "tech_tools"
+    }
+   ],
+   "sticker": {
+    "name": "topic",
+    "value": "tech_tools",
+    "label": "Tech tools (no niche group)",
+    "level": "all",
+    "low": 19.5,
+    "high": 33.75,
+    "source": "average of all niche groups (2026-10-spec-v1)",
+    "evidence": "8 of 8 Reels"
+   }
+  },
+  "niche_only": {
+   "content": [
+    {
+     "niche": "personal_finance"
+    },
+    {
+     "niche": "personal_finance"
+    },
+    {
+     "niche": "personal_finance"
+    }
+   ],
+   "sticker": {
+    "name": "topic",
+    "value": "personal_finance",
+    "label": "Personal finance → Finance / B2B / Tech",
+    "level": "niche group",
+    "low": 35,
+    "high": 60,
+    "source": "ig-reel-finance-b2b-tech (2026-10-spec-v1)",
+    "evidence": "3 of 3 Reels"
+   }
+  },
+  "mixed": {
+   "content": [
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "food_drink"
+    },
+    {
+     "topic": "travel"
+    },
+    {
+     "topic": "gaming"
+    },
+    {
+     "topic": "pets_animals"
+    }
+   ],
+   "sticker": {
+    "name": "topic",
+    "value": "mixed",
+    "label": "Mixed topics",
+    "level": "mixed",
+    "low": 15.5,
+    "high": 26.75,
+    "source": "2026-10-spec-v1",
+    "evidence": "no topic in 40% of Reels (Fitness 1, Food drink 1, Travel 1, Gaming 1)"
+   }
+  },
+  "mixed_with_tie_then_main": {
+   "content": [
+    {
+     "topic": "beauty"
+    },
+    {
+     "topic": "fashion"
+    }
+   ],
+   "sticker": {
+    "name": "topic",
+    "value": "beauty",
+    "label": "Beauty → Lifestyle / Fashion / Beauty",
+    "level": "group",
+    "low": 15,
+    "high": 25,
+    "source": "ig-reel-lifestyle-fashion-beauty (2026-10-spec-v1)",
+    "evidence": "1 of 2 Reels"
+   }
+  },
+  "unclear_only": {
+   "content": [
+    {
+     "topic": "unclear"
+    },
+    {
+     "topic": "other"
+    }
+   ],
+   "sticker": {
+    "name": "topic",
+    "value": null,
+    "label": "No topic detected",
+    "level": "all",
+    "low": 19.5,
+    "high": 33.75,
+    "source": "average of all niche groups (2026-10-spec-v1)",
+    "evidence": "no Reel had a clear topic"
+   }
+  },
+  "empty": {
+   "content": [],
+   "sticker": {
+    "name": "topic",
+    "value": null,
+    "label": "No topic detected",
+    "level": "all",
+    "low": 19.5,
+    "high": 33.75,
+    "source": "average of all niche groups (2026-10-spec-v1)",
+    "evidence": "no Reel had a clear topic"
+   }
+  }
+ },
+ "market": {
+  "US": {
+   "country": "US",
+   "level": "country",
+   "key": "US",
+   "name": "United States",
+   "low": 1,
+   "high": 1,
+   "source": "base",
+   "source_url": null,
+   "table_version": "2026-10-market-v2"
+  },
+  "IN": {
+   "country": "IN",
+   "level": "country",
+   "key": "IN",
+   "name": "India",
+   "low": 0.15,
+   "high": 0.3,
+   "source": "influencerfee-2026",
+   "source_url": "https://influencerfee.com/blog/influencer-pricing-by-country/",
+   "table_version": "2026-10-market-v2"
+  },
+  "GB": {
+   "country": "GB",
+   "level": "country",
+   "key": "GB",
+   "name": "United Kingdom",
+   "low": 0.8,
+   "high": 0.9,
+   "source": "influencerfee-2026",
+   "source_url": "https://influencerfee.com/blog/influencer-pricing-by-country/",
+   "table_version": "2026-10-market-v2"
+  },
+  "PL": {
+   "country": "PL",
+   "level": "region",
+   "key": "eastern_europe",
+   "name": "Central and Eastern Europe",
+   "low": 0.25,
+   "high": 0.267,
+   "source": "ranktracker-reels-regions",
+   "source_url": "https://www.ranktracker.com/blog/regional-cpm-rates-for-instagram-reels-and-videos/",
+   "table_version": "2026-10-market-v2"
+  },
+  "KE": {
+   "country": "KE",
+   "level": "region",
+   "key": "africa",
+   "name": "Africa",
+   "low": 0.033,
+   "high": 0.1,
+   "source": "ranktracker-reels-regions",
+   "source_url": "https://www.ranktracker.com/blog/regional-cpm-rates-for-instagram-reels-and-videos/",
+   "table_version": "2026-10-market-v2"
+  },
+  "VN": {
+   "country": "VN",
+   "level": "region",
+   "key": "southeast_asia",
+   "name": "Southeast Asia",
+   "low": 0.1,
+   "high": 0.25,
+   "source": "influencerfee-2026",
+   "source_url": "https://influencerfee.com/blog/influencer-pricing-by-country/",
+   "table_version": "2026-10-market-v2"
+  },
+  "AE": {
+   "country": "AE",
+   "level": "region",
+   "key": "middle_east",
+   "name": "Gulf (UAE / Middle East)",
+   "low": 0.55,
+   "high": 0.7,
+   "source": "influencerfee-2026",
+   "source_url": "https://influencerfee.com/blog/influencer-pricing-by-country/",
+   "table_version": "2026-10-market-v2"
+  },
+  "JP": {
+   "country": "JP",
+   "level": "tier",
+   "key": "tier_2",
+   "name": "Tier 2 markets",
+   "low": 0.5,
+   "high": 0.56,
+   "source": "awisee-2025-reels-tiers",
+   "source_url": "https://awisee.com/blog/influencer-marketing-cpm/",
+   "table_version": "2026-10-market-v2"
+  },
+  "XX": {
+   "country": "XX",
+   "level": "default",
+   "key": null,
+   "name": "no CPM data for XX: middle of the sourced markets",
+   "low": 0.15,
+   "high": 0.75,
+   "source": "default",
+   "source_url": null,
+   "table_version": "2026-10-market-v2"
+  },
+  "None": {
+   "country": null,
+   "level": "default",
+   "key": null,
+   "name": "market unknown: middle of the sourced markets",
+   "low": 0.15,
+   "high": 0.75,
+   "source": "default",
+   "source_url": null,
+   "table_version": "2026-10-market-v2"
+  },
+  "in": {
+   "country": "IN",
+   "level": "country",
+   "key": "IN",
+   "name": "India",
+   "low": 0.15,
+   "high": 0.3,
+   "source": "influencerfee-2026",
+   "source_url": "https://influencerfee.com/blog/influencer-pricing-by-country/",
+   "table_version": "2026-10-market-v2"
+  }
+ },
+ "bio": {
+  "Fitness coach 🇮🇳 helping you get strong": {
+   "country": "IN",
+   "source": "bio",
+   "evidence": "flag IN"
+  },
+  "📍 Mumbai | food & travel": {
+   "country": "IN",
+   "source": "bio",
+   "evidence": "📍 mumbai"
+  },
+  "Based in London, UK. Makeup artist": {
+   "country": "GB",
+   "source": "bio",
+   "evidence": "london"
+  },
+  "NYC → LA. Travel + coffee": {
+   "country": "US",
+   "source": "bio",
+   "evidence": "nyc"
+  },
+  "Delhi girl living in Dubai": {
+   "country": null,
+   "source": "unknown",
+   "evidence": null
+  },
+  "contact: hello@delhi.eats | mumbai.com": {
+   "country": null,
+   "source": "unknown",
+   "evidence": null
+  },
+  "🇺🇸🇮🇳 dual": {
+   "country": null,
+   "source": "unknown",
+   "evidence": null
+  },
+  "🇺🇸🇺🇸 proud": {
+   "country": "US",
+   "source": "bio",
+   "evidence": "flag US"
+  },
+  "São Paulo 🌴 moda": {
+   "country": "BR",
+   "source": "bio",
+   "evidence": "são paulo"
+  },
+  "Georgia peach, Jordan fan": {
+   "country": null,
+   "source": "unknown",
+   "evidence": null
+  },
+  "📍Bengaluru, India": {
+   "country": "IN",
+   "source": "bio",
+   "evidence": "📍 bengaluru"
+  },
+  "just vibes": {
+   "country": null,
+   "source": "unknown",
+   "evidence": null
+  },
+  "": {
+   "country": null,
+   "source": "unknown",
+   "evidence": null
+  },
+  "Toronto based • Canada": {
+   "country": "CA",
+   "source": "bio",
+   "evidence": "toronto"
+  },
+  "made in méxico, living in cdmx": {
+   "country": "MX",
+   "source": "bio",
+   "evidence": "méxico"
+  }
+ },
+ "estimate": {
+  "us_fitness_120k": {
+   "content": [
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "fitness"
+    }
+   ],
+   "country": "US",
+   "views": 120000,
+   "value": 27.5,
+   "low": 20,
+   "high": 35,
+   "notes": [
+    "no data yet for size, format, genre, brands: 1.0 (filled from campaigns later)"
+   ],
+   "combined_factor": [
+    1,
+    1
+   ],
+   "stickers": [
+    {
+     "name": "topic",
+     "value": "fitness",
+     "label": "Fitness → Health / Fitness / Skincare",
+     "level": "group",
+     "low": 20,
+     "high": 35,
+     "source": "ig-reel-health-fitness-skincare (2026-10-spec-v1)",
+     "evidence": "4 of 4 Reels"
+    },
+    {
+     "name": "country",
+     "value": "US",
+     "label": "United States",
+     "level": "country",
+     "low": 1,
+     "high": 1,
+     "source": "base",
+     "evidence": "test"
+    },
+    {
+     "name": "size",
+     "value": "medium",
+     "label": "Medium (50K-250K views)",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "120,000 median recent views"
+    },
+    {
+     "name": "format",
+     "value": null,
+     "label": "No format detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear format"
+    },
+    {
+     "name": "genre",
+     "value": null,
+     "label": "No genre detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear genre"
+    },
+    {
+     "name": "brands",
+     "value": null,
+     "label": "Brand deals not checked",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": null
+    }
+   ]
+  },
+  "in_beauty_skincare_40k": {
+   "content": [
+    {
+     "topic": "beauty",
+     "niche": "skincare"
+    },
+    {
+     "topic": "beauty",
+     "niche": "skincare"
+    },
+    {
+     "topic": "beauty",
+     "niche": "skincare"
+    }
+   ],
+   "country": "IN",
+   "views": 40000,
+   "value": 6.1875,
+   "low": 3,
+   "high": 10.5,
+   "notes": [
+    "no data yet for size, format, genre, brands: 1.0 (filled from campaigns later)"
+   ],
+   "combined_factor": [
+    1,
+    1
+   ],
+   "stickers": [
+    {
+     "name": "topic",
+     "value": "skincare",
+     "label": "Skincare → Health / Fitness / Skincare",
+     "level": "niche group",
+     "low": 20,
+     "high": 35,
+     "source": "ig-reel-health-fitness-skincare (2026-10-spec-v1)",
+     "evidence": "3 of 3 Reels"
+    },
+    {
+     "name": "country",
+     "value": "IN",
+     "label": "India",
+     "level": "country",
+     "low": 0.15,
+     "high": 0.3,
+     "source": "https://influencerfee.com/blog/influencer-pricing-by-country/",
+     "evidence": "test"
+    },
+    {
+     "name": "size",
+     "value": "small",
+     "label": "Small (10K-50K views)",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "40,000 median recent views"
+    },
+    {
+     "name": "format",
+     "value": null,
+     "label": "No format detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear format"
+    },
+    {
+     "name": "genre",
+     "value": null,
+     "label": "No genre detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear genre"
+    },
+    {
+     "name": "brands",
+     "value": null,
+     "label": "Brand deals not checked",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": null
+    }
+   ]
+  },
+  "unknown_country_mixed": {
+   "content": [
+    {
+     "topic": "fitness"
+    },
+    {
+     "topic": "gaming"
+    },
+    {
+     "topic": "travel"
+    }
+   ],
+   "country": null,
+   "views": 9000,
+   "value": 8.85,
+   "low": 2.15,
+   "high": 18.75,
+   "notes": [
+    "country: market unknown: middle of the sourced markets (not the US price)",
+    "topic: mixed topics, so an average of niche groups is used",
+    "no data yet for size, format, genre, brands: 1.0 (filled from campaigns later)"
+   ],
+   "combined_factor": [
+    1,
+    1
+   ],
+   "stickers": [
+    {
+     "name": "topic",
+     "value": "mixed",
+     "label": "Mixed topics",
+     "level": "mixed",
+     "low": 14.3333,
+     "high": 25,
+     "source": "2026-10-spec-v1",
+     "evidence": "no topic in 40% of Reels (Fitness 1, Gaming 1, Travel 1)"
+    },
+    {
+     "name": "country",
+     "value": null,
+     "label": "market unknown: middle of the sourced markets",
+     "level": "default",
+     "low": 0.15,
+     "high": 0.75,
+     "source": "default",
+     "evidence": "test"
+    },
+    {
+     "name": "size",
+     "value": "tiny",
+     "label": "Tiny (under 10K views)",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "9,000 median recent views"
+    },
+    {
+     "name": "format",
+     "value": null,
+     "label": "No format detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear format"
+    },
+    {
+     "name": "genre",
+     "value": null,
+     "label": "No genre detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear genre"
+    },
+    {
+     "name": "brands",
+     "value": null,
+     "label": "Brand deals not checked",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": null
+    }
+   ]
+  },
+  "gb_tech_no_views": {
+   "content": [
+    {
+     "topic": "tech"
+    },
+    {
+     "topic": "tech"
+    }
+   ],
+   "country": "GB",
+   "views": null,
+   "value": 40.375,
+   "low": 28,
+   "high": 54,
+   "notes": [
+    "no data yet for size, format, genre, brands: 1.0 (filled from campaigns later)"
+   ],
+   "combined_factor": [
+    1,
+    1
+   ],
+   "stickers": [
+    {
+     "name": "topic",
+     "value": "tech",
+     "label": "Tech → Finance / B2B / Tech",
+     "level": "group",
+     "low": 35,
+     "high": 60,
+     "source": "ig-reel-finance-b2b-tech (2026-10-spec-v1)",
+     "evidence": "2 of 2 Reels"
+    },
+    {
+     "name": "country",
+     "value": "GB",
+     "label": "United Kingdom",
+     "level": "country",
+     "low": 0.8,
+     "high": 0.9,
+     "source": "https://influencerfee.com/blog/influencer-pricing-by-country/",
+     "evidence": "test"
+    },
+    {
+     "name": "size",
+     "value": null,
+     "label": "Typical views unknown",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "not enough Reels with views"
+    },
+    {
+     "name": "format",
+     "value": null,
+     "label": "No format detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear format"
+    },
+    {
+     "name": "genre",
+     "value": null,
+     "label": "No genre detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear genre"
+    },
+    {
+     "name": "brands",
+     "value": null,
+     "label": "Brand deals not checked",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": null
+    }
+   ]
+  },
+  "ke_no_topic_2m": {
+   "content": [],
+   "country": "KE",
+   "views": 2000000,
+   "value": 1.7706,
+   "low": 0.64,
+   "high": 3.38,
+   "notes": [
+    "topic: no topic detected, so an average of niche groups is used",
+    "no data yet for size, format, genre, brands: 1.0 (filled from campaigns later)"
+   ],
+   "combined_factor": [
+    1,
+    1
+   ],
+   "stickers": [
+    {
+     "name": "topic",
+     "value": null,
+     "label": "No topic detected",
+     "level": "all",
+     "low": 19.5,
+     "high": 33.75,
+     "source": "average of all niche groups (2026-10-spec-v1)",
+     "evidence": "no Reel had a clear topic"
+    },
+    {
+     "name": "country",
+     "value": "KE",
+     "label": "Africa",
+     "level": "region",
+     "low": 0.033,
+     "high": 0.1,
+     "source": "https://www.ranktracker.com/blog/regional-cpm-rates-for-instagram-reels-and-videos/",
+     "evidence": "test"
+    },
+    {
+     "name": "size",
+     "value": "huge",
+     "label": "Huge (1M+ views)",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "2,000,000 median recent views"
+    },
+    {
+     "name": "format",
+     "value": null,
+     "label": "No format detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear format"
+    },
+    {
+     "name": "genre",
+     "value": null,
+     "label": "No genre detected",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": "no Reel had a clear genre"
+    },
+    {
+     "name": "brands",
+     "value": null,
+     "label": "Brand deals not checked",
+     "level": "none",
+     "low": 1,
+     "high": 1,
+     "source": null,
+     "evidence": null
+    }
+   ]
+  }
+ },
+ "default_market": [
+  0.15,
+  0.75
+ ],
+ "labels": {
+  "fitness": {
+   "kind": "topic",
+   "key": "fitness",
+   "topic": "fitness",
+   "class": "dedicated"
+  },
+  "gym": {
+   "kind": "topic",
+   "key": "fitness",
+   "topic": "fitness",
+   "class": "dedicated"
+  },
+  "workouts": {
+   "kind": "topic",
+   "key": "fitness",
+   "topic": "fitness",
+   "class": "dedicated"
+  },
+  "makeup": {
+   "kind": "niche",
+   "key": "makeup",
+   "topic": "beauty",
+   "class": "broad"
+  },
+  "skincare": {
+   "kind": "niche",
+   "key": "skincare",
+   "topic": "beauty",
+   "class": "broad"
+  },
+  "skin": {
+   "kind": "topic",
+   "key": "beauty",
+   "topic": "beauty",
+   "class": "broad"
+  },
+  "outfits": {
+   "kind": "topic",
+   "key": "fashion",
+   "topic": "fashion",
+   "class": "broad"
+  },
+  "foodie": {
+   "kind": "topic",
+   "key": "food_drink",
+   "topic": "food_drink",
+   "class": "broad"
+  },
+  "recipes": {
+   "kind": "topic",
+   "key": "food_drink",
+   "topic": "food_drink",
+   "class": "broad"
+  },
+  "travel": {
+   "kind": "topic",
+   "key": "travel",
+   "topic": "travel",
+   "class": "broad"
+  },
+  "traveller": {
+   "kind": "topic",
+   "key": "travel",
+   "topic": "travel",
+   "class": "broad"
+  },
+  "gamer": {
+   "kind": "topic",
+   "key": "gaming",
+   "topic": "gaming",
+   "class": "dedicated"
+  },
+  "gaming": {
+   "kind": "topic",
+   "key": "gaming",
+   "topic": "gaming",
+   "class": "dedicated"
+  },
+  "crypto": {
+   "kind": "niche",
+   "key": "crypto_web3",
+   "topic": "finance_business",
+   "class": "dedicated"
+  },
+  "investing": {
+   "kind": "niche",
+   "key": "investing_stocks",
+   "topic": "finance_business",
+   "class": "dedicated"
+  },
+  "finance": {
+   "kind": "topic",
+   "key": "finance_business",
+   "topic": "finance_business",
+   "class": "dedicated"
+  },
+  "ai": null,
+  "coding": {
+   "kind": "niche",
+   "key": "coding_programming",
+   "topic": "tech",
+   "class": "dedicated"
+  },
+  "developer": {
+   "kind": "topic",
+   "key": "tech",
+   "topic": "tech",
+   "class": "dedicated"
+  },
+  "yoga": {
+   "kind": "niche",
+   "key": "yoga_pilates",
+   "topic": "fitness",
+   "class": "dedicated"
+  },
+  "dog": {
+   "kind": "topic",
+   "key": "pets_animals",
+   "topic": "pets_animals",
+   "class": "dedicated"
+  },
+  "puppy": {
+   "kind": "topic",
+   "key": "pets_animals",
+   "topic": "pets_animals",
+   "class": "dedicated"
+  },
+  "photographer": {
+   "kind": "topic",
+   "key": "photography_video",
+   "topic": "photography_video",
+   "class": "dedicated"
+  },
+  "editing": {
+   "kind": "niche",
+   "key": "video_editing",
+   "topic": "photography_video",
+   "class": "dedicated"
+  },
+  "dance": {
+   "kind": "niche",
+   "key": "dance_choreography",
+   "topic": "music_dance",
+   "class": "dedicated"
+  },
+  "singer": {
+   "kind": "niche",
+   "key": "singing_covers",
+   "topic": "music_dance",
+   "class": "dedicated"
+  },
+  "comedy": {
+   "kind": "genre",
+   "key": "comedy",
+   "topic": null,
+   "class": "dedicated"
+  },
+  "mom": {
+   "kind": "topic",
+   "key": "family_parenting",
+   "topic": "family_parenting",
+   "class": "dedicated"
+  },
+  "parenting": {
+   "kind": "topic",
+   "key": "family_parenting",
+   "topic": "family_parenting",
+   "class": "dedicated"
+  },
+  "wedding": {
+   "kind": "niche",
+   "key": "weddings",
+   "topic": "relationships_dating",
+   "class": "broad"
+  },
+  "luxury": null,
+  "coffee": {
+   "kind": "niche",
+   "key": "coffee_tea",
+   "topic": "food_drink",
+   "class": "broad"
+  },
+  "bodybuilding": {
+   "kind": "topic",
+   "key": "fitness",
+   "topic": "fitness",
+   "class": "dedicated"
+  },
+  "nutrition": {
+   "kind": "niche",
+   "key": "nutrition_supplements",
+   "topic": "health_wellness",
+   "class": "dedicated"
+  },
+  "supplements": {
+   "kind": "niche",
+   "key": "nutrition_supplements",
+   "topic": "health_wellness",
+   "class": "dedicated"
+  },
+  "vlog": {
+   "kind": "topic",
+   "key": "lifestyle_daily_life",
+   "topic": "lifestyle_daily_life",
+   "class": "broad"
+  },
+  "tech": {
+   "kind": "topic",
+   "key": "tech",
+   "topic": "tech",
+   "class": "dedicated"
+  },
+  "streetwear": {
+   "kind": "niche",
+   "key": "streetwear_sneakers",
+   "topic": "fashion",
+   "class": "broad"
+  },
+  "sneakers": {
+   "kind": "niche",
+   "key": "streetwear_sneakers",
+   "topic": "fashion",
+   "class": "broad"
+  },
+  "haircare": {
+   "kind": "niche",
+   "key": "haircare_hairstyles",
+   "topic": "beauty",
+   "class": "broad"
+  },
+  "unboxing": null,
+  "home": null,
+  "decor": {
+   "kind": "topic",
+   "key": "home_diy",
+   "topic": "home_diy",
+   "class": "broad"
+  },
+  "cars": {
+   "kind": "topic",
+   "key": "auto",
+   "topic": "auto",
+   "class": "dedicated"
+  },
+  "football": {
+   "kind": "topic",
+   "key": "sports",
+   "topic": "sports",
+   "class": "dedicated"
+  },
+  "xyzzy": null
+ },
+ "_source": "Generated by running influence-creator-list (commit f93d140) services/enrichment estimated_cpm.py / market.py and apps/bench/topics.mjs on fixed inputs. Regenerate when the reference tables are re-copied."
+}

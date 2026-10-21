@@ -1,0 +1,246 @@
+{
+  "version": "2026-10-factors-v4",
+  "as_of": "2026-10-12",
+  "note": "Stickers for the Estimated CPM (docs/ESTIMATION_PLAN.md). Base = a niche group range from cpm_benchmarks.json (US/USD), found most specific first: the creator's niche (its own row, then its group), its parent topic (own row, then group), then the average of all groups. Country = cpm_market_index.json. Size, format, genre and brands stickers are null until INFLUENCE campaign data fills them (step 6): null means 'no data yet', so the next level up (a format's or genre's family) is used, and with no level the sticker is 1.0. A factor is [low, high], multiplied into the CPM's low and high.",
+  "main_share_min": 0.4,
+  "combined_cap": [
+    0.5,
+    2.0
+  ],
+  "topic": {
+    "groups": {
+      "beauty": "ig-reel-lifestyle-fashion-beauty",
+      "fashion": "ig-reel-lifestyle-fashion-beauty",
+      "food_drink": "ig-reel-lifestyle-fashion-beauty",
+      "travel": "ig-reel-lifestyle-fashion-beauty",
+      "home_diy": "ig-reel-lifestyle-fashion-beauty",
+      "lifestyle_daily_life": "ig-reel-lifestyle-fashion-beauty",
+      "fitness": "ig-reel-health-fitness-skincare",
+      "health_wellness": "ig-reel-health-fitness-skincare",
+      "tech": "ig-reel-finance-b2b-tech",
+      "finance_business": "ig-reel-finance-b2b-tech",
+      "gaming": "ig-reel-gaming-entertainment-humor",
+      "entertainment_pop_culture": "ig-reel-gaming-entertainment-humor",
+      "music_dance": "ig-reel-gaming-entertainment-humor"
+    },
+    "groups_note": "Topic -> niche group, only where INFLUENCE's spec (cpm_benchmarks.json 'niches') names the subject. Topics not listed (tech_tools, science_education, career_work, family_parenting, relationships_dating, sports, auto, pets_animals, photography_video, art_design, books_writing, learning_study, self_improvement, nature_outdoors, spirituality_beliefs, news_politics, people_stories) use the average of all groups until campaign data gives them a row. 2026-10-13: 'tech' is technical content only (the technology in depth, for developers, engineers and founders) and stays Finance / B2B / Tech; 'tech_tools' (apps and AI tools used step by step for beginners), photo and video editing and graphic design are consumer creative audiences and use the average until campaigns give them a row.",
+    "niche_groups": {
+      "skincare": "ig-reel-health-fitness-skincare",
+      "nutrition_supplements": "ig-reel-health-fitness-skincare",
+      "healthy_recipes": "ig-reel-health-fitness-skincare",
+      "weight_loss": "ig-reel-health-fitness-skincare",
+      "ai_tools": "ig-reel-finance-b2b-tech",
+      "software_apps": "ig-reel-finance-b2b-tech",
+      "b2b_saas": "ig-reel-finance-b2b-tech",
+      "crypto_web3": "ig-reel-finance-b2b-tech",
+      "investing_stocks": "ig-reel-finance-b2b-tech",
+      "personal_finance": "ig-reel-finance-b2b-tech",
+      "memes_internet_culture": "ig-reel-gaming-entertainment-humor",
+      "movies_tv": "ig-reel-gaming-entertainment-humor",
+      "celebrity_news": "ig-reel-gaming-entertainment-humor",
+      "podcasts_talk_shows": "ig-reel-gaming-entertainment-humor",
+      "singing_covers": "ig-reel-gaming-entertainment-humor",
+      "original_music": "ig-reel-gaming-entertainment-humor",
+      "instruments_lessons": "ig-reel-gaming-entertainment-humor",
+      "music_production_dj": "ig-reel-gaming-entertainment-humor",
+      "dance_choreography": "ig-reel-gaming-entertainment-humor",
+      "luxury_lifestyle": "ig-reel-lifestyle-fashion-beauty",
+      "product_finds_hauls": "ig-reel-lifestyle-fashion-beauty",
+      "luxury_travel": "ig-reel-lifestyle-fashion-beauty",
+      "weddings": "ig-reel-lifestyle-fashion-beauty"
+    },
+    "niche_groups_note": "Niche -> niche group where it differs from its parent topic's (skincare is in the spec's Health / Fitness / Skincare group while beauty is Lifestyle; nutrition and diet recipes are Health; AI, apps, SaaS, crypto and investing are Finance / B2B / Tech; music and the entertainment niches the spec lists are Gaming / Entertainment / Humor; luxury, finds, luxury travel and weddings are Lifestyle). Other niches use their parent topic's group.",
+    "own_rows": {},
+    "own_rows_note": "Topic- or niche-specific ranges ({key: {low, high, source}}) override the group once known (a niche first, then its topic)."
+  },
+  "size": {
+    "basis": "typical views per normal Reel (P8), else median recent views",
+    "tiers": [
+      {
+        "key": "tiny",
+        "name": "Tiny (under 10K views)",
+        "max_views": 10000,
+        "factor": null
+      },
+      {
+        "key": "small",
+        "name": "Small (10K-50K views)",
+        "max_views": 50000,
+        "factor": null
+      },
+      {
+        "key": "medium",
+        "name": "Medium (50K-250K views)",
+        "max_views": 250000,
+        "factor": null
+      },
+      {
+        "key": "big",
+        "name": "Big (250K-1M views)",
+        "max_views": 1000000,
+        "factor": null
+      },
+      {
+        "key": "huge",
+        "name": "Huge (1M+ views)",
+        "max_views": null,
+        "factor": null
+      }
+    ]
+  },
+  "format": {
+    "values": {
+      "talking_head": null,
+      "skit": null,
+      "tutorial_how_to": null,
+      "review_unboxing": null,
+      "haul_showcase": null,
+      "list_ranking": null,
+      "comparison_versus": null,
+      "vlog_day_in_life": null,
+      "grwm_routine": null,
+      "interview_podcast_clip": null,
+      "street_interview": null,
+      "qa_answering_comments": null,
+      "reaction_duet_stitch": null,
+      "green_screen_commentary": null,
+      "dance_music_performance": null,
+      "lip_sync_trend": null,
+      "challenge_stunt": null,
+      "pov_text_overlay": null,
+      "voiceover_broll": null,
+      "photo_slideshow_montage": null,
+      "before_after": null,
+      "timelapse_process": null,
+      "screen_recording": null,
+      "animation_graphics": null,
+      "live_stream_clip": null
+    },
+    "families": {
+      "teaching": {
+        "members": [
+          "tutorial_how_to",
+          "review_unboxing",
+          "haul_showcase",
+          "list_ranking",
+          "comparison_versus",
+          "screen_recording",
+          "qa_answering_comments"
+        ],
+        "factor": null
+      },
+      "talk": {
+        "members": [
+          "talking_head",
+          "interview_podcast_clip",
+          "street_interview",
+          "green_screen_commentary",
+          "reaction_duet_stitch",
+          "live_stream_clip"
+        ],
+        "factor": null
+      },
+      "lifestyle": {
+        "members": [
+          "grwm_routine",
+          "vlog_day_in_life",
+          "voiceover_broll",
+          "photo_slideshow_montage",
+          "before_after",
+          "timelapse_process"
+        ],
+        "factor": null
+      },
+      "entertainment": {
+        "members": [
+          "skit",
+          "dance_music_performance",
+          "lip_sync_trend",
+          "challenge_stunt",
+          "pov_text_overlay",
+          "animation_graphics"
+        ],
+        "factor": null
+      }
+    }
+  },
+  "genre": {
+    "values": {
+      "comedy": null,
+      "educational": null,
+      "tips_hacks": null,
+      "review_recommendation": null,
+      "inspirational": null,
+      "storytelling": null,
+      "entertainment_spectacle": null,
+      "aesthetic_lifestyle": null,
+      "news_commentary": null,
+      "opinion_hot_take": null,
+      "reaction": null,
+      "promotional_announcement": null,
+      "behind_the_scenes": null,
+      "transformation": null,
+      "satisfying_asmr": null,
+      "wholesome_feel_good": null,
+      "prank_social_experiment": null
+    },
+    "families": {
+      "informative": {
+        "members": [
+          "educational",
+          "tips_hacks",
+          "news_commentary",
+          "opinion_hot_take"
+        ],
+        "factor": null
+      },
+      "commercial": {
+        "members": [
+          "review_recommendation",
+          "promotional_announcement"
+        ],
+        "factor": null
+      },
+      "entertaining": {
+        "members": [
+          "comedy",
+          "entertainment_spectacle",
+          "reaction",
+          "prank_social_experiment",
+          "satisfying_asmr"
+        ],
+        "factor": null
+      },
+      "emotional": {
+        "members": [
+          "inspirational",
+          "storytelling",
+          "wholesome_feel_good",
+          "transformation",
+          "behind_the_scenes"
+        ],
+        "factor": null
+      },
+      "aesthetic": {
+        "members": [
+          "aesthetic_lifestyle"
+        ],
+        "factor": null
+      }
+    }
+  },
+  "brands": {
+    "basis": "brand deals detected in the creator's recent Reels (P3/P4), and each brand's Instagram follower count (tools/collect_brand_sizes.py)",
+    "major_min_followers": 1000000,
+    "tiers": {
+      "major": 1.1,
+      "other": null,
+      "none": null,
+      "unknown": null
+    },
+    "note": "Creators who have worked with major brands command a somewhat higher CPM. 'major' is a provisional +10% set by INFLUENCE on 2026-10-07 (an assumption, not measured); calibrate_stickers.py replaces it with the measured value and removes it from 'provisional'. The other tiers stay null (1.0) until campaign data measures them.",
+    "provisional": [
+      "major"
+    ]
+  }
+}

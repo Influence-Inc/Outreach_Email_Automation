@@ -11,6 +11,7 @@
 
 const db = require('../db');
 const pricing = require('./pricing');
+const { dealCpmFor } = require('./cpmEstimate');
 const templates = require('./negotiationTemplates');
 const instantly = require('./instantly');
 const {
@@ -354,7 +355,9 @@ function ctxFor(creator, extra = {}) {
     cadence: process.env.CONTENT_CADENCE || process.env.CAMPAIGN_DEADLINE || '1-2 videos per week',
     managerName: process.env.MANAGER_NAME || process.env.SENDER_NAME || 'Jennifer',
     refs: templates.REFERENCE_ACCOUNTS,
-    maxCpm: creator.max_cpm != null ? Number(creator.max_cpm) : pricing.TARGET_CPM,
+    // The CPM suggested offers are priced at: the admin's for this creator, else the
+    // Estimated CPM creator-list computes (services/cpmEstimate.js).
+    maxCpm: dealCpmFor(creator).cpm,
     stage: creator.negotiation_status || null,
     hasStats: creator.ig_scraped_data != null,
     approvedOffer: extra.approvedOffer || null,
@@ -1725,10 +1728,8 @@ async function routeCreatorToOffer(creator, inbound) {
 
   let offers = Array.isArray(creator.suggested_offers) ? creator.suggested_offers : null;
   if (!offers || !offers.length) {
-    const maxCpm =
-      creator.max_cpm != null ? Number(creator.max_cpm) : Number(process.env.TARGET_CPM || 15);
     const quotedRate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
-    offers = pricing.computeOffers(creator.ig_scraped_data, maxCpm, quotedRate);
+    offers = pricing.computeOffers(creator.ig_scraped_data, dealCpmFor(creator).cpm, quotedRate);
   }
 
   await db.query(
@@ -1781,9 +1782,8 @@ async function startOfferForCreator(creatorId) {
     ? creator.suggested_offers
     : null;
   if (!offers) {
-    const maxCpm = creator.max_cpm != null ? Number(creator.max_cpm) : Number(process.env.TARGET_CPM || 15);
     const quotedRate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
-    offers = pricing.computeOffers(creator.ig_scraped_data, maxCpm, quotedRate);
+    offers = pricing.computeOffers(creator.ig_scraped_data, dealCpmFor(creator).cpm, quotedRate);
   }
 
   await db.query(

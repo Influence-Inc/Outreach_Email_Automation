@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { syncCampaigns } = require('../services/campaignsApi');
 const { computeOffers } = require('../services/pricing');
+const { dealCpmFor } = require('../services/cpmEstimate');
 const { flagDismissedSql } = require('../db/flagFingerprint');
 const { recentReelSql } = require('../db/reelFreshness');
 
@@ -266,14 +267,15 @@ router.post('/:id/recalculate-offers', async (req, res, next) => {
     const maxCpm = campaign.max_cpm != null ? Number(campaign.max_cpm) : Number(process.env.TARGET_CPM || 15);
 
     const creators = await db.many(
-      `SELECT id, ig_scraped_data, quoted_rate FROM creators
+      `SELECT * FROM creators
        WHERE campaign_id = $1 AND ig_scraped_data IS NOT NULL`,
       [req.params.id],
     );
     let updated = 0;
     for (const c of creators) {
       const rate = c.quoted_rate != null ? Number(c.quoted_rate) : null;
-      const offers = computeOffers(c.ig_scraped_data, maxCpm, rate);
+      // Each creator at their own CPM: the admin's, else creator-list's Estimated CPM.
+      const offers = computeOffers(c.ig_scraped_data, dealCpmFor(c).cpm, rate);
       await db.query(
         `UPDATE creators SET suggested_offers = $2::jsonb, updated_at = NOW() WHERE id = $1`,
         [c.id, JSON.stringify(offers)],

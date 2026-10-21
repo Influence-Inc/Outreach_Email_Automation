@@ -792,3 +792,54 @@ UPDATE campaigns
  WHERE EXISTS (SELECT 1 FROM claimed)
    AND jsonb_typeof(sourcing_defaults) = 'object'
    AND sourcing_defaults->>'creatorPassThreshold' IN ('0.72', '.72', '0.720');
+
+-- Automated CPM + creator rate estimation (services/cpmEstimate.js, ported from the
+-- influence-creator-list repo). The estimate itself is never stored: it is recomputed on
+-- every read from these inputs and the vendored reference tables, so it can't go stale.
+--   ig_biography / ig_category : the Instagram bio and profile category the extension
+--                                scrapes; the topic and country are read from them.
+--   cpm_topic_override         : a topic (or niche) key an admin picked, replacing the
+--                                topic read from the profile.
+--   cpm_country_override       : an ISO country code an admin picked, replacing the
+--                                country read from the bio.
+--   deal_cpm                   : the CPM an admin set for this creator's deals. NULL =
+--                                price at the Estimated CPM.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_biography         TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS ig_category          TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS cpm_topic_override   TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS cpm_country_override TEXT;
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS deal_cpm             NUMERIC(8,2);
+
+-- Reel analysis for the Estimated CPM, as creator-list does it (services/reelAnalysis):
+-- the creator's newest 30 Reels from Apify, each one's thumbnail OCR and Whisper transcript,
+-- Jev's collaboration / brand (P3/P4) and topic / niche / genre / format (P5) answers, plus
+-- Instagram's "Account based in" country and the follower counts of the brands they worked
+-- with. One row per Instagram handle, shared by every campaign the creator is in.
+--   status : queued | running | done | failed
+--   analysis : the compact result (labels, counts, views; no captions or transcripts)
+CREATE TABLE IF NOT EXISTS creator_reel_analysis (
+  handle       TEXT PRIMARY KEY,
+  status       TEXT NOT NULL DEFAULT 'queued',
+  progress     JSONB,
+  analysis     JSONB,
+  error        TEXT,
+  cost_usd     NUMERIC(10,5),
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  started_at   TIMESTAMPTZ,
+  finished_at  TIMESTAMPTZ
+);
+-- Instagram account facts the analysis looked up (Apify user-info actor): the creator's
+-- "Account based in" country, and brand accounts' follower counts. Cached so a brand is
+-- looked up once.
+CREATE TABLE IF NOT EXISTS instagram_accounts (
+  handle              TEXT PRIMARY KEY,
+  country_name        TEXT,
+  transparency_status TEXT,
+  followers           BIGINT,
+  verified            BOOLEAN,
+  found               BOOLEAN NOT NULL DEFAULT FALSE,
+  observed_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- The finished analysis, copied onto every creators row with that handle so the pricing code
+-- (cpmEstimate.dealCpmFor) can read it from the row it already has.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS reel_analysis JSONB;
