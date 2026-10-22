@@ -74,6 +74,23 @@ function enabled() {
   return slackClientId() !== null && slackClientSecret() !== null;
 }
 
+// True on Railway (or with NODE_ENV=production). A deployed instance never
+// falls back to an open dashboard: a missing or mid-rotation Slack credential
+// locks it instead of publishing every creator, contract and API route.
+function deployed() {
+  return Boolean(
+    process.env.RAILWAY_ENVIRONMENT_NAME ||
+      process.env.RAILWAY_ENVIRONMENT ||
+      process.env.RAILWAY_PROJECT_ID ||
+      process.env.NODE_ENV === 'production',
+  );
+}
+
+// The open, no-sign-in gate: local development only.
+function gateOpen() {
+  return !enabled() && !deployed();
+}
+
 // Optional shared machine credential for non-browser clients (extension, curl).
 function machineToken() {
   return envStr('DASHBOARD_API_TOKEN');
@@ -270,7 +287,8 @@ function verifyState(token, now = Date.now()) {
 // after login (`//evil.com` is a protocol-relative URL, not a local path).
 function safeNext(next) {
   const value = typeof next === 'string' ? next.trim() : '';
-  if (!value.startsWith('/') || value.startsWith('//')) return '/';
+  // Browsers read "/\\host" as protocol-relative too, so a backslash is refused.
+  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return '/';
   return value;
 }
 
@@ -307,6 +325,15 @@ function validateUser(user) {
     return { ok: false, reason: 'Your Slack email address is not verified.' };
   }
   const teams = allowedTeamIds();
+  // Without a workspace or domain allowlist any Slack account in the world can
+  // sign in. Refuse that on a deployed instance.
+  if (deployed() && teams.size === 0 && allowedEmailDomains().size === 0) {
+    return {
+      ok: false,
+      reason:
+        'Sign-in is locked: set SLACK_ALLOWED_TEAM_ID or SLACK_ALLOWED_EMAIL_DOMAINS on the server.',
+    };
+  }
   if (teams.size > 0) {
     const tid = String(user.teamId || '');
     const match = [...teams].some((t) => t === tid || t.toLowerCase() === tid.toLowerCase());
@@ -393,7 +420,7 @@ function sessionUser(req) {
 }
 
 function isAuthed(req) {
-  if (!enabled()) return true; // gate disabled
+  if (gateOpen()) return true; // local development only
   if (sessionUser(req)) return true;
   // Per-host sourcing token, verified by an earlier async pre-middleware that
   // stamps the request when the token hashes to an active row in
@@ -577,8 +604,12 @@ function sendLoginPage(res, status, opts) {
 // --- handlers -------------------------------------------------------------
 
 // GET /login — show the Slack sign-in page (or bounce through if already in).
+const NOT_CONFIGURED =
+  'Sign-in is not configured on this server. Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET.';
+
 function showLogin(req, res) {
-  if (!enabled() || isAuthed(req)) return res.redirect(safeNext(req.query?.next));
+  if (isAuthed(req)) return res.redirect(safeNext(req.query?.next));
+  if (!enabled()) return sendLoginPage(res, 503, { error: NOT_CONFIGURED });
   sendLoginPage(res, 200, { next: safeNext(req.query?.next) });
 }
 
@@ -586,8 +617,8 @@ function showLogin(req, res) {
 // post-login target and redirect to Slack's consent screen.
 function beginSlackLogin(req, res) {
   const next = safeNext(req.query?.next);
-  if (!enabled()) return res.redirect(next);
   if (isAuthed(req)) return res.redirect(next);
+  if (!enabled()) return sendLoginPage(res, 503, { error: NOT_CONFIGURED });
   const state = createState(next);
   const url = authorizeUrl({
     clientId: slackClientId(),
@@ -599,7 +630,8 @@ function beginSlackLogin(req, res) {
 
 // GET /auth/slack/callback — Slack redirects here with ?code&state (or ?error).
 async function handleSlackCallback(req, res) {
-  if (!enabled()) return res.redirect('/');
+  if (gateOpen()) return res.redirect('/');
+  if (!enabled()) return sendLoginPage(res, 503, { error: NOT_CONFIGURED });
   const query = req.query || {};
 
   if (query.error) {
@@ -659,7 +691,7 @@ function handleMe(req, res) {
 // --- middleware -----------------------------------------------------------
 
 function gate(req, res, next) {
-  if (!enabled()) return next();
+  if (gateOpen()) return next();
   if (isPublicPath(req.path)) return next();
   if (isAuthed(req)) return next();
 
@@ -671,10 +703,18 @@ function gate(req, res, next) {
 }
 
 function logSiteAuthConfig() {
+  if (!enabled() && deployed()) {
+    console.error(
+      'Slack sign-in: NOT CONFIGURED — SLACK_CLIENT_ID / SLACK_CLIENT_SECRET are not set on a deployed ' +
+        'instance, so the dashboard and admin API are LOCKED (DASHBOARD_API_TOKEN still works). ' +
+        'Set them to enable Sign in with Slack.',
+    );
+    return;
+  }
   if (!enabled()) {
     console.warn(
       'Slack sign-in: OFF — SLACK_CLIENT_ID / SLACK_CLIENT_SECRET are not set, the dashboard is ' +
-        'publicly reachable. Set them to require Sign in with Slack.',
+        'open (local development only; a deployed instance locks instead).',
     );
     return;
   }
@@ -683,7 +723,11 @@ function logSiteAuthConfig() {
   const domains = allowedEmailDomains();
   if (teams.size) bits.push(`workspace ${[...teams].join(', ')}`);
   if (domains.size) bits.push(`domain ${[...domains].join(', ')}`);
-  const scope = bits.length ? ` (restricted to ${bits.join(' + ')})` : ' (WARNING: no workspace/domain restriction — any Slack account can sign in)';
+  const scope = bits.length
+    ? ` (restricted to ${bits.join(' + ')})`
+    : deployed()
+      ? ' (LOCKED: set SLACK_ALLOWED_TEAM_ID or SLACK_ALLOWED_EMAIL_DOMAINS — sign-in is refused without one)'
+      : ' (WARNING: no workspace/domain restriction — any Slack account can sign in)';
   console.log(`Slack sign-in: ON — dashboard + admin API require Sign in with Slack${scope}`);
   if (machineToken()) {
     console.log('Machine token: ON — non-browser clients may authenticate with DASHBOARD_API_TOKEN');

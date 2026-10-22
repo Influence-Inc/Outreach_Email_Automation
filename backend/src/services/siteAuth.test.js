@@ -155,6 +155,45 @@ test('gate is a no-op when Slack is not configured', () => {
   });
 });
 
+test('a deployed instance locks the gate when Slack is not configured', () => {
+  withDisabled(() => {
+    process.env.RAILWAY_ENVIRONMENT_NAME = 'production';
+    try {
+      const r = res();
+      let called = false;
+      auth.gate(req({ path: '/api/campaigns', headers: { accept: 'application/json' } }), r, () => { called = true; });
+      assert.strictEqual(called, false);
+      assert.strictEqual(r.statusCode, 401);
+    } finally {
+      delete process.env.RAILWAY_ENVIRONMENT_NAME;
+    }
+  });
+});
+
+test('a deployed instance refuses sign-in without a workspace or domain allowlist', () => {
+  const user = { email: 'a@influence.com', emailVerified: true, name: 'A', teamId: 'T1' };
+  withEnv({ RAILWAY_ENVIRONMENT_NAME: 'production' }, () => {
+    try {
+      assert.strictEqual(auth.validateUser(user).ok, false);
+    } finally {
+      delete process.env.RAILWAY_ENVIRONMENT_NAME;
+    }
+  });
+  withEnv({ SLACK_ALLOWED_TEAM_ID: 'T1' }, () => {
+    process.env.RAILWAY_ENVIRONMENT_NAME = 'production';
+    try {
+      assert.strictEqual(auth.validateUser(user).ok, true);
+    } finally {
+      delete process.env.RAILWAY_ENVIRONMENT_NAME;
+    }
+  });
+});
+
+test('post-login redirects refuse backslash hosts', () => {
+  assert.strictEqual(auth.safeNext('/\\evil.com'), '/');
+  assert.strictEqual(auth.safeNext('/campaigns?x=1'), '/campaigns?x=1');
+});
+
 test('unauthenticated API call gets 401 JSON, not the login HTML', () => {
   withEnv({}, () => {
     const r = res();
