@@ -12,6 +12,14 @@ const router = express.Router();
 function verifySignature(req) {
   const secret = process.env.INSTANTLY_WEBHOOK_SECRET;
   if (!secret) return true; // verification disabled if secret not set
+  // Instantly cannot always sign its deliveries, so the same secret may instead
+  // ride in the webhook URL: /webhook/instantly?secret=<INSTANTLY_WEBHOOK_SECRET>.
+  const urlSecret = typeof req.query?.secret === 'string' ? req.query.secret : '';
+  if (urlSecret) {
+    const a = crypto.createHash('sha256').update(urlSecret).digest();
+    const b = crypto.createHash('sha256').update(secret).digest();
+    return crypto.timingSafeEqual(a, b);
+  }
   // HMAC the raw request bytes (captured in server.js), not a re-serialized
   // copy of the parsed body — key order/whitespace differences would never match.
   const raw = req.rawBody || Buffer.from(JSON.stringify(req.body));

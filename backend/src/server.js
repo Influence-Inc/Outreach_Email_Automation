@@ -37,6 +37,16 @@ const app = express();
 // correct once the proxy headers are trusted. The Slack sign-in gate relies on
 // them (Secure cookie flag, request-derived OAuth redirect URI).
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+// Baseline browser hardening on every response: no framing by other sites
+// (clickjacking), no MIME sniffing, HTTPS only, no full URLs leaked in Referer.
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
 app.use(cors());
 // A paired phone answers a `screenshot` command with the PNG inline as base64,
 // and a full-resolution phone screen easily clears 1 MB once base64-encoded.

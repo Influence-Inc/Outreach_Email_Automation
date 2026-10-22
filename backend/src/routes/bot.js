@@ -6,6 +6,7 @@
 // column, or the campaign a scouted creator is added to. Requests carry `x-bot-token: OUTREACH_BOT_TOKEN`, matching the shape
 // influence-stats uses for its own upstream bot endpoint.
 
+const crypto = require('crypto');
 const express = require('express');
 const db = require('../db');
 const contracts = require('../services/contracts');
@@ -24,7 +25,10 @@ function requireBotToken(req, res, next) {
     });
   }
   const provided = req.headers['x-bot-token'];
-  if (provided !== expected) return res.status(401).json({ error: 'Unauthorized' });
+  // Hash both sides so the constant-time compare never sees unequal lengths.
+  const a = crypto.createHash('sha256').update(String(provided || '')).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  if (!provided || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Unauthorized' });
   next();
 }
 
