@@ -11,7 +11,8 @@ const { findDuplicateCreator } = require('./duplicateGuard');
 const creatorDb = require('./creatorDb');
 const { insertPendingCreator } = require('./creatorInsert');
 const { sourceNote } = require('./sourcingOrchestrator');
-const reelJudge = require('./reelJudge');
+const jevJudge = require('./jevJudge');
+const creatorList = require('./creatorList');
 
 // Created as 'queued', matching services/sourcingSweep.js's autoEnqueueRuns —
 // both paths that CREATE a run agree it starts life unclaimed. A run only
@@ -61,6 +62,33 @@ async function listReview({ campaignId = null, limit = 100 } = {}) {
 
 // Approve a reviewed candidate: promote it into the campaign (idempotent) and
 // bump the run's found count so the dashboard reflects the manual add.
+/**
+ * Send a shortlisted creator to creator-list's "Curated by INFLUENCE Team"
+ * collection, and note the outcome on their candidate row so the dashboard can
+ * show whether it got there. Never throws.
+ */
+async function sendToCreatorList(candidateId, username, jev = null, sourceTerm = null) {
+  const out = await creatorList.addToCurated(username, {
+    labels: (jev && jev.labels) || null,
+    summary: (jev && jev.summary) || null,
+    sourceTerm,
+  });
+  if (out.status !== 'added') {
+    console.warn(`[sourcing] @${username} not sent to creator-list: ${out.error || out.status}`);
+  }
+  if (candidateId != null) {
+    try {
+      await db.query(
+        `UPDATE sourced_candidates
+            SET evidence = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object('creatorList', $2::jsonb)
+          WHERE id = $1`,
+        [candidateId, JSON.stringify({ ...out, at: new Date().toISOString() })],
+      );
+    } catch (_) { /* the outcome note is for the dashboard only */ }
+  }
+  return out;
+}
+
 async function approveCandidate(id) {
   const cand = await getCandidate(id);
   if (!cand) return null;
@@ -81,6 +109,10 @@ async function approveCandidate(id) {
     `UPDATE sourcing_runs SET found_count = found_count + 1, updated_at = NOW() WHERE id = $1`,
     [cand.run_id],
   );
+  // The admin settled a doubtful one: it joins the shortlist on creator-list too.
+  const ev = cand.evidence || {};
+  const jev = (ev.niche && ev.niche.jev) || null;
+  await sendToCreatorList(id, cand.username, jev, ev.sourceTerm || null);
   return { ...cand, decision: 'added', creator_id: creator.id };
 }
 
@@ -162,9 +194,10 @@ async function updateRun(id, patch) {
 }
 
 // Build the orchestrator deps bound to `run`. `nicheClassify` defaults to the
-// composite reel judge (Gemini video when a clip + key are present -> Claude on
-// thumbnails/captions -> keyword). Injectable so tests can override it.
-function makeDeps(run, { nicheClassify = reelJudge.makeClassifier() } = {}) {
+// Jev judge (services/jevJudge.js): the recorded reel's Groq transcript and
+// on-screen text, labelled by Jev the way creator-list labels its Reels.
+// Injectable so tests can override it.
+function makeDeps(run, { nicheClassify = jevJudge.makeClassifier() } = {}) {
   return {
     nicheClassify,
 
@@ -232,6 +265,15 @@ function makeDeps(run, { nicheClassify = reelJudge.makeClassifier() } = {}) {
       }),
 
     updateRun: (patch) => updateRun(run.id, patch),
+
+    // Jev shortlisted them: into creator-list's admin collection.
+    async shortlist({ username, candidate, jev, sourceTerm }) {
+      const row = await db.one(
+        `SELECT id FROM sourced_candidates WHERE campaign_id = $1 AND LOWER(username) = LOWER($2)`,
+        [run.campaign_id, username],
+      );
+      return sendToCreatorList(row ? row.id : null, username, jev, sourceTerm || (candidate && candidate.sourceTerm) || null);
+    },
   };
 }
 
@@ -287,6 +329,7 @@ module.exports = {
   listReview,
   approveCandidate,
   rejectCandidate,
+  sendToCreatorList,
   getCandidate,
   updateRun,
   touchRun,

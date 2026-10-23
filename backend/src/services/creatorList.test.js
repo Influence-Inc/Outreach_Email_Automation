@@ -200,3 +200,47 @@ test('bad handles never reach creator-list', async () => {
     restore();
   }
 });
+
+// ── the admin's collection: "Curated by INFLUENCE Team" ─────────────────────
+
+function withWebEnv(web, key, fn) {
+  const before = { web: process.env.CREATOR_LIST_WEB_URL, url: process.env.CREATOR_LIST_API_URL, key: process.env.CREATOR_LIST_API_KEY };
+  const set = (k, v) => { if (v == null) delete process.env[k]; else process.env[k] = v; };
+  set('CREATOR_LIST_WEB_URL', web);
+  set('CREATOR_LIST_API_KEY', key);
+  set('CREATOR_LIST_API_URL', null); // no bench: nothing queued, no network
+  return Promise.resolve(fn()).finally(() => {
+    set('CREATOR_LIST_WEB_URL', before.web);
+    set('CREATOR_LIST_API_URL', before.url);
+    set('CREATOR_LIST_API_KEY', before.key);
+  });
+}
+
+test('addToCurated posts the shortlisted creator with Jev labels to the site', () => withWebEnv('https://site.test/', 'k', async () => {
+  let sent = null;
+  const out = await creatorList.addToCurated('@Coach.Mia', {
+    labels: { topic: { value: 'fitness' }, niche: { value: 'unclear' }, genre: { value: 'educational' }, format: { value: 'talking_head' } },
+    summary: 'Fitness · Educational · Talking head',
+    sourceTerm: 'gym workout',
+    fetchImpl: async (url, init) => {
+      sent = { url, init, body: JSON.parse(init.body) };
+      return { ok: true, status: 200, json: async () => ({ ok: true, collection: 'curated-by-influence-team' }) };
+    },
+  });
+  assert.strictEqual(sent.url, 'https://site.test/api/partner/curated');
+  assert.strictEqual(sent.init.headers.Authorization, 'Bearer k');
+  assert.strictEqual(sent.body.handle, 'coach.mia');
+  assert.deepStrictEqual(sent.body.labels, { topic: 'fitness', niche: null, genre: 'educational', format: 'talking_head' });
+  assert.strictEqual(sent.body.note, 'Scouted by Deal Studio · Fitness · Educational · Talking head · found searching "gym workout"');
+  assert.deepStrictEqual(out, { status: 'added', collection: 'curated-by-influence-team', already: false });
+}));
+
+test('addToCurated never throws: not configured, refused, or down', () => withWebEnv(null, 'k', async () => {
+  assert.strictEqual((await creatorList.addToCurated('coach')).status, 'not_configured');
+  process.env.CREATOR_LIST_WEB_URL = 'https://site.test';
+  const refused = await creatorList.addToCurated('coach', { fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
+  assert.deepStrictEqual(refused, { status: 'error', error: 'creator-list refused the API key (CREATOR_LIST_API_KEY)' });
+  const down = await creatorList.addToCurated('coach', { fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
+  assert.deepStrictEqual(down, { status: 'error', error: 'ECONNREFUSED' });
+  assert.strictEqual((await creatorList.addToCurated('not a handle!')).status, 'invalid');
+}));

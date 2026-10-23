@@ -258,6 +258,21 @@ router.patch('/config/:campaignId', async (req, res, next) => {
 // Admin-only (top-level siteAuth gate). Candidates whose niche score is just over
 // the threshold land here (when reviewBorderline is on) instead of auto-adding.
 
+// The content taxonomy Jev labels reels with (creator-list's), for the target
+// pickers on the sourcing page.
+router.get('/taxonomy', (req, res) => {
+  const tax = require('../services/cpmReference/content_taxonomy.json'); // eslint-disable-line global-require
+  const { labelOf } = require('../services/jevJudge'); // eslint-disable-line global-require
+  const out = { version: tax.version };
+  for (const dim of ['topic', 'niche', 'genre', 'format']) {
+    out[dim] = Object.entries(tax.questions[dim].options)
+      .filter(([key]) => key !== 'other')
+      .map(([key, description]) => ({ key, label: labelOf(dim, key), description }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+  res.json(out);
+});
+
 router.get('/review', async (req, res, next) => {
   try {
     const campaignId = req.query.campaignId || req.query.campaign || null;

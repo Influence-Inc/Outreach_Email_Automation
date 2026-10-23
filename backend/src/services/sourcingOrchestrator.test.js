@@ -838,3 +838,79 @@ test('the run counts which judge produced each verdict', async () => {
   const { stats } = await runWithSource(run, goodCfg, source, deps);
   assert.deepStrictEqual(stats.judgedBy, { 'gemini-profile': 1, keyword: 1 });
 });
+
+// ── Jev decides (services/jevJudge.js) ──────────────────────────────────────
+//
+// The labels Jev gave the recorded reel, against the run's targets, ARE the
+// decision: shortlisted ones are added and sent to creator-list, doubtful ones
+// wait for the admin, off-target ones are rejected. Reach still applies first.
+
+const jevVerdict = (decision, reasons = [], fit = 0.8) => async () => ({
+  score: decision === 'reject' ? 0 : fit,
+  reason: reasons.join('; ') || 'Jev: Fitness',
+  source: 'jev',
+  evidence: { jev: { decision, reasons, fit, summary: 'Fitness · Educational · Talking head', labels: { topic: { value: 'fitness', confidence: fit } } } },
+});
+
+function jevStore(decision, reasons) {
+  const s = memStore();
+  s.shortlisted = [];
+  s.deps.nicheClassify = jevVerdict(decision, reasons);
+  s.deps.shortlist = async (x) => { s.shortlisted.push(x.username); return { status: 'added' }; };
+  return s;
+}
+
+const jevCfg = { floor: 15000, ceiling: 500000, risk: 'high', keywords: ['gym'] };
+
+test('Jev shortlists: added to the campaign and sent to creator-list', async () => {
+  const { deps, creators, candidates, shortlisted } = jevStore('shortlist');
+  const res = await processCandidate(run, jevCfg, { username: 'coach', reels: fitReels(), sourceTerm: 'gym' }, deps);
+
+  assert.strictEqual(res.decision, 'added');
+  assert.strictEqual(res.judge, 'jev');
+  assert.deepStrictEqual(creators.map((c) => c.username), ['coach']);
+  assert.deepStrictEqual(shortlisted, ['coach']);
+  assert.match(creators[0].sourcedVia.genre, /Fitness/);
+  assert.strictEqual(candidates[0].decision, 'added');
+});
+
+test('Jev unsure: held for the admin with its reasons, not added and not sent', async () => {
+  const { deps, creators, candidates, shortlisted } = jevStore('review', ['unsure of the subject: topic Fitness (45%)']);
+  const res = await processCandidate(run, jevCfg, { username: 'coach', reels: fitReels() }, deps);
+
+  assert.strictEqual(res.decision, 'review');
+  assert.match(res.reviewReason, /^doubtful — unsure of the subject/);
+  assert.strictEqual(creators.length, 0);
+  assert.strictEqual(shortlisted.length, 0);
+  assert.strictEqual(candidates[0].evidence.reviewHold, res.reviewReason);
+});
+
+test('Jev off target: rejected with its reason', async () => {
+  const { deps, creators, candidates } = jevStore('reject', ['off-target subject: topic Food & drink (90%)']);
+  const res = await processCandidate(run, jevCfg, { username: 'chef', reels: fitReels() }, deps);
+
+  assert.strictEqual(res.decision, 'rejected');
+  assert.strictEqual(res.rejectReason, 'Jev: off-target subject: topic Food & drink (90%)');
+  assert.strictEqual(creators.length, 0);
+  assert.strictEqual(candidates[0].reject_reason, res.rejectReason);
+});
+
+test('below the views benchmark never reaches Jev at all', async () => {
+  const { deps, shortlisted } = jevStore('shortlist');
+  let judged = false;
+  deps.nicheClassify = async () => { judged = true; return null; };
+  const res = await processCandidate(run, jevCfg, { username: 'small', reels: fitReels(2000) }, deps);
+
+  assert.strictEqual(res.decision, 'rejected');
+  assert.match(res.rejectReason, /below floor 15000/);
+  assert.strictEqual(judged, false);
+  assert.strictEqual(shortlisted.length, 0);
+});
+
+test('a creator-list outage does not undo the add', async () => {
+  const { deps, creators } = jevStore('shortlist');
+  deps.shortlist = async () => { throw new Error('creator-list down'); };
+  const res = await processCandidate(run, jevCfg, { username: 'coach', reels: fitReels() }, deps);
+  assert.strictEqual(res.decision, 'added');
+  assert.strictEqual(creators.length, 1);
+});

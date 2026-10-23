@@ -732,13 +732,14 @@ async function* scoutReelFeed({
 
         if (arrived.ok) {
           // eslint-disable-next-line no-await-in-loop
-          const profile = await analyseProfile({
+          const profile = await analyseThenRecordSource({
             driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip, reelsWindow, clipsWanted,
             fallbackUsername: feed.author || null,
             source: 'backend-navigator:feed-scroll',
             screens: ['reels_feed', 'profile', 'reels_tab'],
             view: arrived.view,
             config, prescreen, deviceHint, log,
+            caption: feed.caption || null,
           });
           if (profile) {
             yield profile;
@@ -806,17 +807,13 @@ async function captureViaReel({
   // spent here rather than on every card we merely glance at.
   if (cap && !cap.take()) return null;
 
-  // Deliberately NOT recording here any more.
+  // Deliberately NOT recording yet.
   //
-  // Standing in the player is the cheapest place to reach this reel, which is why
-  // the recording used to happen at this point — but it is also the point at
-  // which we know least about the creator. Their view counts, follower count and
-  // bio are all one screen away, and most creators fail on those. Recording first
-  // meant paying a recording, an upload and a model call for every creator to
-  // learn something the next screen would have told us for free.
-  //
-  // analyseProfile records from the creator's own grid instead, and only after
-  // the cheap gates have had their say.
+  // This reel IS the one we record — the one the keyword surfaced, which is what
+  // Jev labels — but not before the creator's views have been read. Their view
+  // counts are one screen away and most creators fail on them, so the profile is
+  // read first and the recording only happens, back in this player, for a
+  // creator who cleared the views benchmark. See analyseThenRecordSource.
 
   const arrived = await arriveAt({
     driver, read, pacingMs, jitterPx, log, what: `@${feed.author}`,
@@ -825,7 +822,7 @@ async function captureViaReel({
   });
   if (!arrived.ok) return null;
 
-  return analyseProfile({
+  return analyseThenRecordSource({
     driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
     fallbackUsername: feed.author,
     source: 'backend-navigator:reels-first',
@@ -833,7 +830,88 @@ async function captureViaReel({
     view: arrived.view,
     config, prescreen, deviceHint, log,
     sourceTerm: term,
+    caption: feed.caption || null,
   });
+}
+
+/**
+ * Read the creator's profile, and — only if their views cleared the benchmark —
+ * go back to the reel that surfaced them and record THAT reel.
+ *
+ * The scouting flow is: search a keyword, open a reel, check the creator's views,
+ * reject below the benchmark, and otherwise record the reel we found them
+ * through. Its audio goes to Groq and its frames are read for on-screen text,
+ * and Jev labels the topic, genre and format from them (services/jevJudge.js).
+ * Nothing from the creator's own grid is recorded any more: one reel, the one
+ * the search matched, is what gets judged.
+ */
+async function analyseThenRecordSource({ caption = null, ...opts }) {
+  const profile = await analyseProfile({ ...opts, recordClip: false });
+  if (!profile) return profile;
+  profile.sourceReel = { caption: caption || null };
+  if (caption && !profile.caption) profile.caption = caption;
+  // Below the views benchmark (or off-niche on the prescreen): nothing to record.
+  if (profile.evidence && profile.evidence.notRecorded) return profile;
+
+  const handle = String(profile.username || opts.fallbackUsername || '').toLowerCase();
+  const rec = await recordSourceReel({
+    driver: opts.driver,
+    read: opts.read || readView,
+    pacingMs: opts.pacingMs,
+    jitterPx: opts.jitterPx || 0,
+    clipSeconds: opts.clipSeconds,
+    getClip: opts.getClip || (async () => null),
+    log: opts.log || (() => {}),
+    author: handle,
+  });
+  if (rec.clip) {
+    const clip = { ...rec.clip, views: rec.engagement ? rec.engagement.views : null, origin: 'keyword-match' };
+    profile.clip = clip;
+    profile.clips = [clip];
+  }
+  if (rec.engagement && !profile.engagement) {
+    profile.engagement = totalEngagement([rec.engagement]) || undefined;
+  }
+  profile.evidence = {
+    ...profile.evidence,
+    clipCaptured: !!rec.clip,
+    clipsCaptured: rec.clip ? 1 : 0,
+    clipSource: rec.clip ? 'keyword-match' : null,
+    notRecorded: rec.clip ? undefined : rec.reason,
+  };
+  return profile;
+}
+
+/**
+ * Back from the profile to the reel player we came from, check it is still this
+ * creator's reel, and record it. Returns { clip, engagement, reason }.
+ */
+async function recordSourceReel({
+  driver, read = readView, pacingMs, jitterPx = 0, clipSeconds = 12, getClip, log = () => {}, author,
+}) {
+  if (!driver.recordClip) return { clip: null, engagement: null, reason: 'this phone agent cannot record' };
+  const view = await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 3 });
+  if (!view || view.screen !== 'reels_feed') {
+    log(`[sourcing] @${author}: could not get back to the reel that surfaced them — not recording`);
+    return { clip: null, engagement: null, reason: 'could not get back to the source reel' };
+  }
+  if (view.author && author && String(view.author).toLowerCase() !== author) {
+    log(`[sourcing] @${author}: the player now shows @${view.author} — not recording someone else's reel`);
+    return { clip: null, engagement: null, reason: 'the source reel was no longer on screen' };
+  }
+  // The player is the only screen with likes and comments; read them while here.
+  const engagement = (view.likes != null || view.comments != null || view.views != null)
+    ? { likes: view.likes ?? null, comments: view.comments ?? null, views: view.views ?? null }
+    : null;
+  try {
+    const resolved = await resolveClip(await driver.recordClip(clipSeconds), getClip);
+    if (!resolved.clip) log(`[sourcing] recording failed — judging without video: ${resolved.reason}`);
+    return { clip: resolved.clip, engagement, reason: resolved.clip ? null : resolved.reason };
+  } catch (err) {
+    const why = (err && err.message) || String(err);
+    log(`[sourcing] recording failed — judging without video: ${why}`);
+    return { clip: null, engagement, reason: `recording failed: ${why}` };
+  }
 }
 
 // Everything the scoring rules need about one creator, read off their profile.
@@ -1546,8 +1624,11 @@ async function openAndCaptureProfile({
   });
   if (!arrived.ok) return null;
 
+  // An Accounts row has no reel behind it, so the one reel judged is a typical
+  // one off the creator's own grid — still ONE, the same as the reels path.
   const profile = await analyseProfile({
-    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
+    driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
+    clipsWanted: Math.min(1, clipsWanted),
     fallbackUsername: handle,
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
@@ -1625,6 +1706,8 @@ async function ensureInInstagram({ driver, read = readView, pacingMs, jitterPx =
 
 module.exports = {
   scout,
+  analyseThenRecordSource,
+  recordSourceReel,
   readView,
   pickSearchTerms,
   IG_ANDROID_PACKAGE,

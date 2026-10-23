@@ -86,6 +86,37 @@ function asLines(v) {
   return v || '';
 }
 
+// ── Jev targets: creator-list's content taxonomy ─────────────────────────────
+
+const TARGET_SELECTS = { targetTopics: 'topic', targetNiches: 'niche', targetGenres: 'genre', targetFormats: 'format' };
+
+/** The keys picked in a multi-select. */
+function picked(id) {
+  return Array.from(el(id).selectedOptions || []).map((o) => o.value);
+}
+
+/** Select these keys in a multi-select (a list, or a comma string from older configs). */
+function pick(id, keys) {
+  const want = new Set((Array.isArray(keys) ? keys : String(keys || '').split(',')).map((k) => String(k).trim()));
+  for (const o of el(id).options) o.selected = want.has(o.value);
+}
+
+/** Fill the four pickers from the taxonomy the backend judges with. */
+async function loadTaxonomy() {
+  const tax = await api('/api/sourcing/taxonomy');
+  for (const [id, dim] of Object.entries(TARGET_SELECTS)) {
+    const sel = el(id);
+    sel.innerHTML = '';
+    for (const o of tax[dim] || []) {
+      const opt = document.createElement('option');
+      opt.value = o.key;
+      opt.textContent = o.label;
+      opt.title = o.description || '';
+      sel.appendChild(opt);
+    }
+  }
+}
+
 function readForm() {
   return {
     niche: el('niche').value.trim(),
@@ -96,17 +127,14 @@ function readForm() {
     risk: el('risk').value,
     targetCount: numOrNull('targetCount'),
     reelsWindow: numOrNull('reelsWindow'),
-    clipsPerProfile: numOrNull('clipsPerProfile'),
     maxProfiles: numOrNull('maxProfiles'),
-    creatorPassThreshold: numOrNull('creatorPassThreshold'),
-    // The example creators, as typed. Newline-separated so a handle, a link and
-    // a sentence can all sit on their own line; sourcingConfig splits them.
-    //
-    // Only the wanted side is asked for. The judge still understands an
-    // avoid-list (sourcingConfig and nicheCalibration both take one) set through
-    // the API — and because saving merges, one set that way now survives a save
-    // from this page instead of being wiped by it.
-    idealExamples: el('idealExamples').value.trim(),
+    // What Jev's labels are checked against; empty ones are read off the keywords.
+    targetTopics: picked('targetTopics'),
+    targetNiches: picked('targetNiches'),
+    targetGenres: picked('targetGenres'),
+    targetFormats: picked('targetFormats'),
+    jevAutoConfidence: numOrNull('jevAutoConfidence'),
+    jevRejectConfidence: numOrNull('jevRejectConfidence'),
     brandProduct: el('brandProduct').value.trim(),
     brandName: el('brandName').value.trim(),
     // The judge is briefed on the brand BEFORE it sees the creator, so this is
@@ -131,10 +159,13 @@ function fillForm(cfg) {
   el('risk').value = ['low', 'medium', 'high', 'all'].includes(cfg.risk) ? cfg.risk : 'medium';
   el('targetCount').value = cfg.targetCount ?? '';
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
-  el('clipsPerProfile').value = cfg.clipsPerProfile ?? 3;
   el('maxProfiles').value = cfg.maxProfiles ?? '';
-  el('creatorPassThreshold').value = cfg.creatorPassThreshold ?? 0.52;
-  el('idealExamples').value = asLines(cfg.idealExamples);
+  pick('targetTopics', cfg.targetTopics);
+  pick('targetNiches', cfg.targetNiches);
+  pick('targetGenres', cfg.targetGenres);
+  pick('targetFormats', cfg.targetFormats);
+  el('jevAutoConfidence').value = cfg.jevAutoConfidence ?? 0.6;
+  el('jevRejectConfidence').value = cfg.jevRejectConfidence ?? 0.6;
   el('brandProduct').value = cfg.brandProduct || '';
   el('brandName').value = cfg.brandName || '';
   el('brandBrief').value = cfg.brandBrief || '';
@@ -255,56 +286,44 @@ function viewRange(reels) {
   return `${fmt(Math.min(...vs))}–${fmt(Math.max(...vs))}`;
 }
 
-/**
- * The judge's creativity verdict, as the word it used.
- *
- * Nothing is rejected for low craft, so plainly-shot creators reach this table
- * on purpose — and the level is what makes that legible rather than confusing.
- * Dug out of the evidence bundle, which is where the per-clip analysis lands;
- * a candidate rejected before it was ever judged simply has none.
- */
-/** The per-clip analysis, wherever it ended up in the evidence bundle. */
-function clipAnalysisOf(c) {
-  const ev = (c && c.evidence) || null;
-  if (!ev) return null;
-  return (ev.niche && ev.niche.clip)
-    || (ev.niche && Array.isArray(ev.niche.clipAnalyses) && ev.niche.clipAnalyses[0])
-    || ev.clip
-    || null;
+/** Jev's verdict on a candidate, wherever the evidence bundle put it. */
+function jevOf(c) {
+  const ev = (c && c.evidence) || {};
+  return (ev.niche && ev.niche.jev) || null;
 }
 
-/**
- * A craft verdict as the judge's own word.
- *
- * Neither creativity nor brand fit rejects a creator any more, so both reach
- * this table on purpose — and the level is what makes that useful rather than
- * confusing. A candidate dropped before it was ever judged simply has none.
- */
-function levelCell(c, field) {
-  const clip = clipAnalysisOf(c);
-  if (!clip) return '—';
-  const level = clip[`${field}_level`];
-  if (level) return escapeHtml(level);
-  return clip[field] == null ? '—' : escapeHtml(String(clip[field]));
+const labelText = (k) => (k ? String(k).replace(/_/g, ' ').replace(/^./, (ch) => ch.toUpperCase()) : '');
+
+/** One Jev label with its confidence, e.g. "Fitness 82%" — the runner-up on hover. */
+function labelCell(c, dim) {
+  const j = jevOf(c);
+  const l = j && j.labels && j.labels[dim];
+  if (!l) return '—';
+  const pct = l.confidence != null ? ` ${Math.round(l.confidence * 100)}%` : '';
+  const title = l.runnerUp ? ` title="runner-up: ${escapeHtml(labelText(l.runnerUp))}"` : '';
+  return `<span${title}>${escapeHtml(labelText(l.value))}${pct}</span>`;
 }
 
-function creativityOf(c) { return levelCell(c, 'creativity'); }
-function brandFitOf(c) { return levelCell(c, 'brand_fit'); }
+/** Topic, with the niche under it when Jev placed one inside that topic. */
+function topicCell(c) {
+  const j = jevOf(c);
+  const n = j && j.labels && j.labels.niche;
+  const niche = n && !n.outsideTopic && !['unclear', 'other'].includes(n.value)
+    ? `<br><span class="scout-hint">${escapeHtml(labelText(n.value))}</span>` : '';
+  return labelCell(c, 'topic') + niche;
+}
 
-/**
- * The weighted quality score the deterministic gate gave — the number the
- * quality bar (0.52 by default) is measured against. A creator decided before
- * the gate ran (rejected on reach, or judged by no model) simply has none.
- */
-function scoreOf(c) {
-  const s = c && c.evidence && c.evidence.creatorScore;
-  if (!s || typeof s.score !== 'number') return '—';
-  // A hard reject (repost page, unsafe, bought views...) is decided before any
-  // score is computed and reports 0 — showing "0" would read as "scored zero".
-  if (s.pass === false && s.score === 0 && s.rejectReason !== 'below the fit threshold') return '—';
-  // Three places, as the scorer rounds them — so "0.535" here matches the
-  // "within 0.05 of the 0.52 bar" a review reason states.
-  return String(Math.round(s.score * 1000) / 1000);
+function fitOf(c) {
+  const j = jevOf(c);
+  return j && typeof j.fit === 'number' ? j.fit.toFixed(2) : '—';
+}
+
+/** Whether a shortlisted creator reached creator-list's admin collection. */
+function creatorListOf(c) {
+  const cl = c && c.evidence && c.evidence.creatorList;
+  if (!cl) return c.decision === 'added' ? '—' : '';
+  if (cl.status === 'added') return cl.already ? 'in collection' : 'added';
+  return `<span title="${escapeHtml(cl.error || '')}" style="color:#b42318">${escapeHtml(cl.status)}</span>`;
 }
 
 /**
@@ -322,18 +341,18 @@ function renderCandidates(rows) {
   tb.innerHTML = '';
   for (const c of rows) {
     const tr = document.createElement('tr');
-    const niche = c.niche_score == null ? '—' : Number(c.niche_score).toFixed(2);
     const risk = c.risk_profile || '—';
     tr.innerHTML = `
       <td>${handleLink(c.username)}</td>
       <td>${viewRange(c.reels)}</td>
-      <td>${niche}</td>
-      <td>${creativityOf(c)}</td>
-      <td>${brandFitOf(c)}</td>
-      <td>${scoreOf(c)}</td>
+      <td>${topicCell(c)}</td>
+      <td>${labelCell(c, 'genre')}</td>
+      <td>${labelCell(c, 'format')}</td>
+      <td>${fitOf(c)}</td>
       <td>${risk === '—' ? '—' : `<span class="pill ${risk}">${risk}</span>`}</td>
       <td><span class="pill ${c.decision}">${c.decision}</span></td>
-      <td>${escapeHtml(reasonOf(c))}</td>`;
+      <td>${escapeHtml(reasonOf(c))}</td>
+      <td>${creatorListOf(c)}</td>`;
     tb.appendChild(tr);
   }
 }
@@ -377,38 +396,30 @@ function stopPolling() {
 
 // --- Review queue (borderline matches) ------------------------------------
 
-function nicheEvidence(c) {
-  const n = c && c.evidence && c.evidence.niche;
-  return n && typeof n === 'object' ? n : {};
-}
-
 function renderReview(rows) {
   const tb = el('review-rows');
   if (!tb) return;
   tb.innerHTML = '';
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="scout-hint">Nothing waiting for review.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="7" class="scout-hint">Nothing waiting for review.</td></tr>';
     return;
   }
   for (const c of rows) {
-    const ev = nicheEvidence(c);
-    const niche = c.niche_score == null ? '—' : Number(c.niche_score).toFixed(2);
-    const genreAud = [ev.genre, ev.audienceMatch != null ? `aud ${Number(ev.audienceMatch).toFixed(2)}` : null]
-      .filter(Boolean).join(' · ') || '—';
-    // Model-written text: escaped like everything else read off a verdict.
-    const why = ev.reason || c.niche_reason || '';
+    const j = jevOf(c) || {};
+    const labels = [topicCell(c), labelCell(c, 'genre'), labelCell(c, 'format')].join(' · ');
+    // Transcript text came from a public reel: escaped like everything else.
+    const heard = j.transcript || j.onScreenText || '';
     const held = (c.evidence && c.evidence.reviewHold) || '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${handleLink(c.username)}</td>
       <td>${fmt(c.followers)}</td>
-      <td>${niche}</td>
-      <td>${scoreOf(c)}</td>
-      <td>${escapeHtml(genreAud)}</td>
-      <td>${escapeHtml(why)}</td>
+      <td>${labels}</td>
+      <td>${fitOf(c)}</td>
+      <td style="max-width:280px">${heard ? escapeHtml(heard.slice(0, 200)) : '—'}</td>
       <td>${escapeHtml(held) || '—'}</td>
       <td style="white-space:nowrap">
-        <button data-approve="${c.id}" class="btn-primary small">Approve</button>
+        <button data-approve="${c.id}" class="btn-primary small">Shortlist</button>
         <button data-reject="${c.id}" class="ghost small">Reject</button>
       </td>`;
     tb.appendChild(tr);
@@ -721,7 +732,11 @@ async function loadJudgeStatus() {
 
 wire();
 loadJudgeStatus();
-loadCampaigns().then(() => loadReview()).catch((err) => setStatus(err.message, 'err'));
+loadTaxonomy()
+  .catch(() => {})
+  .then(() => loadCampaigns())
+  .then(() => loadReview())
+  .catch((err) => setStatus(err.message, 'err'));
 loadHosts().catch(() => { /* non-fatal if the hosts card fails */ });
 // Keep the host-health tile live (connection freshness + active session).
 setInterval(() => loadHosts().catch(() => {}), 10000);
