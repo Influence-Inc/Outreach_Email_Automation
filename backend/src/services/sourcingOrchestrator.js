@@ -389,8 +389,9 @@ async function processCandidate(run, config, candidate, deps) {
  *   reach fails          → rejected on the rule that failed
  *   Jev: reject          → rejected, with Jev's reason
  *   Jev: review, or reach never measured → held for the admin
- *   Jev: shortlist       → added, and sent to creator-list's
- *                          "Curated by INFLUENCE Team" collection
+ *   Jev: shortlist       → shortlisted: sent to creator-list's
+ *                          "Curated by INFLUENCE Team" collection only
+ *                          (never added to the campaign)
  */
 async function finishJev(run, config, candidate, deps, {
   username, niche, jev, reachUnverified, visitFailed, hadClip,
@@ -454,7 +455,6 @@ async function finishJev(run, config, candidate, deps, {
       ? `profile never opened — judged on the reel alone (${verdict.rejectReason})`
       : verdict.rejectReason);
   }
-  if (await deps.findDuplicate({ campaignId, username, email: null })) return reject('already in campaign');
   if (deps.isUsed) {
     try {
       if (await deps.isUsed(username)) return reject('used creator');
@@ -468,17 +468,12 @@ async function finishJev(run, config, candidate, deps, {
     return { decision: 'review', added: false, candidateId: row.id, reviewReason: holdReason, ...base };
   }
 
-  const creator = await deps.insertCreator({
-    campaignId,
-    username,
-    fullName: candidate.full_name || candidate.fullName || null,
-    firstName: candidate.first_name || candidate.firstName || null,
-    sourcedVia: sourceTag(run, config, candidate, { niche }),
-  });
-  await deps.updateCandidate(row.id, { decision: 'added', creator_id: creator.id, decided_by: 'rule' });
-
-  // Shortlisted: into creator-list, the main page now. Best-effort — the creator
-  // is already in the campaign, and a creator-list outage must not undo that.
+  // Shortlisted. They go to creator-list's "Curated by INFLUENCE Team"
+  // collection — the Find creators page — and NOT into the run's campaign:
+  // creator-list is where creators are picked from now. 'added' on the
+  // candidate row means shortlisted (no creator_id); whether creator-list took
+  // them is noted on the row's evidence by deps.shortlist.
+  await deps.updateCandidate(row.id, { decision: 'added', decided_by: 'rule' });
   if (deps.shortlist) {
     try {
       await deps.shortlist({ username, candidate, jev, sourceTerm: candidate.sourceTerm || null });
@@ -486,7 +481,7 @@ async function finishJev(run, config, candidate, deps, {
       /* reported by deps.shortlist itself */
     }
   }
-  return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id, ...base };
+  return { decision: 'added', added: true, candidateId: row.id, ...base };
 }
 
 // Drive a run to completion off a candidate source. `source.next()` resolves to a
