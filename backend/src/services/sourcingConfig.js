@@ -102,13 +102,6 @@ function buildConfig(defaults = {}, override = {}) {
     brandBrief: merged.brandBrief ? String(merged.brandBrief).trim() : '',
     // Optional allow-list of genres the reel judge should treat as on-brand.
     genres: toKeywordList(merged.genres),
-    // What Jev's labels are checked against (services/jevJudge.js), as keys of
-    // creator-list's content taxonomy. Any left empty are read off the keywords
-    // and niche instead; format is only ever set here.
-    targetTopics: toKeywordList(merged.targetTopics),
-    targetNiches: toKeywordList(merged.targetNiches),
-    targetGenres: toKeywordList(merged.targetGenres),
-    targetFormats: toKeywordList(merged.targetFormats),
     // How sure Jev must be to shortlist on its own (default 0.6), and to reject
     // as off target (default 0.6). Anything less sure goes to the admin.
     jevAutoConfidence: num(merged.jevAutoConfidence),

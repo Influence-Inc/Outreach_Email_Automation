@@ -18,15 +18,50 @@ test('keywords name the targets when none were picked (creator-list topics.mjs w
   assert.deepStrictEqual(targetsOf({ keywords: ['funny skits'] }).genres, ['comedy']);
 });
 
-test('picked targets win, unknown keys are dropped, format is never guessed', () => {
-  const t = targetsOf({
-    keywords: ['gym workout'],
-    targetTopics: ['beauty', 'not_a_topic'],
-    targetFormats: ['tutorial_how_to'],
-  });
-  assert.deepStrictEqual(t.topics, ['beauty']);
-  assert.deepStrictEqual(t.formats, ['tutorial_how_to']);
-  assert.deepStrictEqual(targetsOf({ keywords: ['tutorial'] }).formats, []);
+test('the reel format is read from the keywords too', () => {
+  assert.deepStrictEqual(targetsOf({ keywords: ['gym workout tutorial'] }).formats, ['tutorial_how_to']);
+  assert.deepStrictEqual(targetsOf({ keywords: ['funny skits'] }).formats, ['skit']);
+  assert.deepStrictEqual(targetsOf({ keywords: ['tech unboxing'] }).formats, ['review_unboxing']);
+  // The longer phrase wins: a street interview is not also a podcast interview.
+  assert.deepStrictEqual(targetsOf({ keywords: ['street interview'] }).formats, ['street_interview']);
+  assert.deepStrictEqual(targetsOf({ keywords: ['gym'] }).formats, []);
+});
+
+test('hand-picked targets are gone: only the keywords count', () => {
+  const t = targetsOf({ keywords: ['gym workout'], targetTopics: ['beauty'], targetFormats: ['skit'] });
+  assert.deepStrictEqual(t.topics, ['fitness']);
+  assert.deepStrictEqual(t.formats, []);
+});
+
+test("the creator's own keyword decides; a format in another keyword is not asked of them", () => {
+  const cfg = { keywords: ['gym', 'workout tutorial', 'homegym'] };
+  const viaTutorial = targetsOf(cfg, 'workout tutorial');
+  assert.deepStrictEqual(viaTutorial.topics, ['fitness']);
+  assert.deepStrictEqual(viaTutorial.formats, ['tutorial_how_to']);
+  // "homegym" names nothing itself: the subject comes from the run, no format.
+  const viaHomegym = targetsOf(cfg, 'homegym');
+  assert.deepStrictEqual(viaHomegym.topics, ['fitness']);
+  assert.deepStrictEqual(viaHomegym.formats, []);
+});
+
+test('judge checks the format named by the keyword that found the creator', async () => {
+  const answers = {
+    topic: { choice: 'fitness', confidence: 0.9 }, niche: { choice: 'gym_strength', confidence: 0.8 },
+    genre: { choice: 'educational', confidence: 0.8 }, format: { choice: 'vlog_day_in_life', confidence: 0.85 },
+  };
+  const deps = {
+    jevKey: 'k',
+    transcribe: async () => ({ text: 'a long enough transcript about training at the gym today', language: 'english', duration: 12 }),
+    screenText: async () => ({ text: '', frames: 0 }),
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ answers }) }),
+  };
+  const cfg = { keywords: ['gym', 'workout tutorial'] };
+  const base = { username: 'c', caption: 'gym day', clip: { dataBase64: 'AA==', mimeType: 'video/mp4' } };
+  const viaTutorial = await judge({ ...base, sourceTerm: 'workout tutorial' }, cfg, deps);
+  assert.strictEqual(viaTutorial.evidence.jev.decision, 'reject', 'a vlog is not the tutorial searched for');
+  const viaGym = await judge({ ...base, sourceTerm: 'gym' }, cfg, deps);
+  assert.strictEqual(viaGym.evidence.jev.decision, 'shortlist');
+  assert.strictEqual(viaGym.evidence.jev.targets.from, 'gym');
 });
 
 // ── the questions are creator-list's ────────────────────────────────────────

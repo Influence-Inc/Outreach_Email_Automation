@@ -86,37 +86,6 @@ function asLines(v) {
   return v || '';
 }
 
-// ── Jev targets: creator-list's content taxonomy ─────────────────────────────
-
-const TARGET_SELECTS = { targetTopics: 'topic', targetNiches: 'niche', targetGenres: 'genre', targetFormats: 'format' };
-
-/** The keys picked in a multi-select. */
-function picked(id) {
-  return Array.from(el(id).selectedOptions || []).map((o) => o.value);
-}
-
-/** Select these keys in a multi-select (a list, or a comma string from older configs). */
-function pick(id, keys) {
-  const want = new Set((Array.isArray(keys) ? keys : String(keys || '').split(',')).map((k) => String(k).trim()));
-  for (const o of el(id).options) o.selected = want.has(o.value);
-}
-
-/** Fill the four pickers from the taxonomy the backend judges with. */
-async function loadTaxonomy() {
-  const tax = await api('/api/sourcing/taxonomy');
-  for (const [id, dim] of Object.entries(TARGET_SELECTS)) {
-    const sel = el(id);
-    sel.innerHTML = '';
-    for (const o of tax[dim] || []) {
-      const opt = document.createElement('option');
-      opt.value = o.key;
-      opt.textContent = o.label;
-      opt.title = o.description || '';
-      sel.appendChild(opt);
-    }
-  }
-}
-
 function readForm() {
   return {
     niche: el('niche').value.trim(),
@@ -128,11 +97,6 @@ function readForm() {
     targetCount: numOrNull('targetCount'),
     reelsWindow: numOrNull('reelsWindow'),
     maxProfiles: numOrNull('maxProfiles'),
-    // What Jev's labels are checked against; empty ones are read off the keywords.
-    targetTopics: picked('targetTopics'),
-    targetNiches: picked('targetNiches'),
-    targetGenres: picked('targetGenres'),
-    targetFormats: picked('targetFormats'),
     jevAutoConfidence: numOrNull('jevAutoConfidence'),
     jevRejectConfidence: numOrNull('jevRejectConfidence'),
     brandProduct: el('brandProduct').value.trim(),
@@ -160,10 +124,6 @@ function fillForm(cfg) {
   el('targetCount').value = cfg.targetCount ?? '';
   el('reelsWindow').value = cfg.reelsWindow ?? 12;
   el('maxProfiles').value = cfg.maxProfiles ?? '';
-  pick('targetTopics', cfg.targetTopics);
-  pick('targetNiches', cfg.targetNiches);
-  pick('targetGenres', cfg.targetGenres);
-  pick('targetFormats', cfg.targetFormats);
   el('jevAutoConfidence').value = cfg.jevAutoConfidence ?? 0.6;
   el('jevRejectConfidence').value = cfg.jevRejectConfidence ?? 0.6;
   el('brandProduct').value = cfg.brandProduct || '';
@@ -732,9 +692,7 @@ async function loadJudgeStatus() {
 
 wire();
 loadJudgeStatus();
-loadTaxonomy()
-  .catch(() => {})
-  .then(() => loadCampaigns())
+loadCampaigns()
   .then(() => loadReview())
   .catch((err) => setStatus(err.message, 'err'));
 loadHosts().catch(() => { /* non-fatal if the hosts card fails */ });

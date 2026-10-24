@@ -189,48 +189,88 @@ function wordLabel(word) {
   return words().get(stem(String(word).toLowerCase())) || null;
 }
 
-const keep = (dim, list) => {
-  const valid = new Set(optionsOf(dim));
-  return [...new Set((list || []).map((s) => String(s).trim().toLowerCase().replace(/[\s-]+/g, '_')))]
-    .filter((k) => valid.has(k) && k !== 'other');
+// Reel formats, by the words a keyword uses for them. creator_topics.json only
+// has words for topics and genres, so formats get their own list here: the
+// taxonomy's format keys in plain words, longest phrase first so "street
+// interview" is read as one format rather than also as "interview".
+const FORMAT_WORDS = {
+  talking_head: ['talking head', 'talkinghead'],
+  skit: ['skit', 'skits', 'sketch comedy'],
+  tutorial_how_to: ['tutorial', 'tutorials', 'how to', 'howto', 'step by step'],
+  review_unboxing: ['unboxing', 'unboxings', 'unbox'],
+  haul_showcase: ['haul', 'hauls'],
+  list_ranking: ['ranking', 'rankings', 'tier list', 'tierlist', 'top 10', 'top 5'],
+  comparison_versus: ['versus', 'vs', 'comparison', 'comparisons'],
+  vlog_day_in_life: ['vlog', 'vlogs', 'vlogger', 'day in the life', 'day in my life', 'dayinmylife'],
+  grwm_routine: ['grwm', 'get ready with me', 'get ready with me routine'],
+  interview_podcast_clip: ['podcast', 'podcasts', 'interview', 'interviews'],
+  street_interview: ['street interview', 'street interviews'],
+  qa_answering_comments: ['q&a', 'q a', 'qna', 'answering comments'],
+  reaction_duet_stitch: ['duet', 'duets', 'stitch'],
+  green_screen_commentary: ['green screen', 'greenscreen'],
+  dance_music_performance: ['dance', 'dances', 'dancing', 'choreography'],
+  lip_sync_trend: ['lip sync', 'lipsync'],
+  challenge_stunt: ['challenge', 'challenges'],
+  pov_text_overlay: ['pov'],
+  voiceover_broll: ['voiceover', 'voice over', 'broll', 'b roll'],
+  photo_slideshow_montage: ['slideshow', 'slideshows', 'montage', 'photo dump', 'photodump'],
+  before_after: ['before after', 'before and after'],
+  timelapse_process: ['timelapse', 'time lapse'],
+  screen_recording: ['screen recording', 'screencast'],
+  animation_graphics: ['animation', 'animations', 'animated', 'motion graphics'],
+  live_stream_clip: ['livestream', 'live stream'],
 };
+const FORMAT_PHRASES = Object.entries(FORMAT_WORDS)
+  .flatMap(([key, ws]) => ws.map((w) => ({ key, phrase: tokens(w).join(' ') })))
+  .sort((x, y) => y.phrase.length - x.phrase.length);
 
-/**
- * What a run is looking for, in taxonomy keys.
- *
- * Explicit targets set on the sourcing page win for their dimension; the rest
- * are read off the run's keywords and niche. Format is never guessed from
- * words: "tutorial" in a keyword is far more often a topic than a demand that
- * every reel be a tutorial.
- */
-function targetsOf(config = {}) {
-  const t = {
-    topics: keep('topic', config.targetTopics),
-    niches: keep('niche', config.targetNiches),
-    genres: keep('genre', config.targetGenres),
-    formats: keep('format', config.targetFormats),
-    derived: false,
-  };
-  const explicit = t.topics.length || t.niches.length;
-  if (!explicit || !t.genres.length) {
-    const seen = { topic: new Set(), niche: new Set(), genre: new Set() };
-    const text = [config.niche, ...(config.keywords || [])].join(' ');
-    for (const w of tokens(text)) {
-      const l = wordLabel(w);
-      if (l) seen[l.kind].add(l.key);
-    }
-    if (!explicit && (seen.topic.size || seen.niche.size)) {
-      t.topics = [...seen.topic];
-      t.niches = [...seen.niche];
-      t.derived = true;
-    }
-    // A genre only from words that plainly name one ("comedy", "funny").
-    if (!t.genres.length && seen.genre.size) {
-      t.genres = [...seen.genre];
-      t.derived = true;
+/** The formats a piece of text names, e.g. "gym tutorial" → ['tutorial_how_to']. */
+function formatsIn(text) {
+  let t = ` ${tokens(text).join(' ')} `;
+  const found = new Set();
+  for (const { key, phrase } of FORMAT_PHRASES) {
+    if (t.includes(` ${phrase} `)) {
+      found.add(key);
+      t = t.split(` ${phrase} `).join(' | ');
     }
   }
-  return t;
+  return [...found];
+}
+
+function labelsIn(text) {
+  const seen = { topic: new Set(), niche: new Set(), genre: new Set() };
+  for (const w of tokens(text)) {
+    const l = wordLabel(w);
+    if (l) seen[l.kind].add(l.key);
+  }
+  return { topics: [...seen.topic], niches: [...seen.niche], genres: [...seen.genre], formats: formatsIn(text) };
+}
+
+/**
+ * What a creator is checked for, in taxonomy keys — read entirely off the
+ * keywords, never picked by hand.
+ *
+ * The keyword that FOUND the creator says the most: "gym workout tutorial" →
+ * topic Fitness, format Tutorial. Whatever that keyword doesn't name (it may be
+ * a bare "homegym") is filled from the run's niche and all its keywords
+ * together — except format: a format is only asked of creators found by a
+ * keyword that names one, so "tutorial" in one search does not make every
+ * creator from every other search a tutorial. A dimension nothing names is not
+ * checked.
+ */
+function targetsOf(config = {}, sourceTerm = null) {
+  const all = labelsIn([config.niche, ...(config.keywords || [])].join(' '));
+  if (!sourceTerm) return { ...all, derived: true };
+  const own = labelsIn(sourceTerm);
+  const subject = own.topics.length || own.niches.length;
+  return {
+    topics: subject ? own.topics : all.topics,
+    niches: subject ? own.niches : all.niches,
+    genres: own.genres.length ? own.genres : all.genres,
+    formats: own.formats,
+    derived: true,
+    from: sourceTerm,
+  };
 }
 
 // ── Groq: the audio ─────────────────────────────────────────────────────────
@@ -504,7 +544,7 @@ function decideFromLabels(labels, targets, config = {}, { nothingToRead = false 
   if (!wantsSubject && !targets.genres.length && !targets.formats.length) {
     return {
       decision: 'review',
-      reasons: ['no target topic to judge against — the keywords name no topic, niche or genre, and none was picked'],
+      reasons: ['no target to judge against — the keywords name no topic, niche, genre or format'],
       fit: null,
     };
   }
@@ -548,11 +588,12 @@ function captionOf(candidate) {
  * in evidence.jev.decision for the orchestrator.
  */
 async function judge(candidate, config = {}, deps = {}) {
-  const targets = targetsOf(config);
+  const sourceTerm = (candidate && (candidate.sourceTerm || (candidate.evidence && candidate.evidence.sourceTerm))) || null;
+  const targets = targetsOf(config, sourceTerm);
   const clip = clipOf(candidate);
   const caption = captionOf(candidate);
   const jev = {
-    targets: { topics: targets.topics, niches: targets.niches, genres: targets.genres, formats: targets.formats, derived: targets.derived },
+    targets: { topics: targets.topics, niches: targets.niches, genres: targets.genres, formats: targets.formats, from: targets.from || null },
     hadVideo: !!clip,
   };
   const verdict = (decision, reasons, extra = {}) => {
@@ -639,6 +680,7 @@ module.exports = {
   toLabels,
   decideFromLabels,
   targetsOf,
+  formatsIn,
   wordLabel,
   labelOf,
   summary,
