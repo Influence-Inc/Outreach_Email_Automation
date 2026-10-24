@@ -1,0 +1,5 @@
+# Scouting reads a recorded reel's frames for on-screen text (services/jevJudge.js):
+# ffmpeg cuts the frames, Tesseract reads them. Without them the judge still runs,
+# on the transcript and caption alone.
+[phases.setup]
+aptPkgs = ["...", "ffmpeg", "tesseract-ocr"]

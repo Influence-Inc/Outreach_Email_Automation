@@ -400,7 +400,11 @@ async function handleCreator({
   // actual rules. The clip is carried across so that richer call still watches
   // and hears the reel.
   const richer = !!(candidate.shots || (Array.isArray(candidate.reels) && candidate.reels.some((r) => r && r.views != null)));
-  if (verdict && !richer) {
+  // Jev judges the one reel and nothing else, so a profile visit gives it
+  // nothing more to read — judging again would only pay Groq and Jev twice for
+  // the same answer.
+  const jev = verdict && verdict.source === 'jev';
+  if (verdict && (!richer || jev)) {
     candidate._nicheVerdict = verdict;
   } else if (verdict) {
     // Not the verdict, but worth keeping as evidence of what the feed reel alone

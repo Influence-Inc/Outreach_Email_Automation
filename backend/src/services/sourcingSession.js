@@ -196,7 +196,7 @@ async function runSession({ hostId, run, deps }) {
   if (String(config.discovery || '').toLowerCase() === 'reels') {
     const { scoutReels } = require('./sourcingReelsNavigator');
     const engagementPolicy = require('./engagementPolicy');
-    const reelJudge = require('./reelJudge');
+    const jevJudge = require('./jevJudge');
     const clipStore = require('./clipStore');
     gen = (deps.scoutReels || scoutReels)({
       driver,
@@ -222,7 +222,7 @@ async function runSession({ hostId, run, deps }) {
       },
       opts,
       deps: {
-        judge: deps.judge || reelJudge.makeClassifier(),
+        judge: deps.judge || jevJudge.makeClassifier(),
         getClip: deps.getClip || clipStore.take,
         engagement: deps.engagement || { policy: engagementPolicy.loadPolicy(), decide: engagementPolicy.decide },
         rng: deps.rng,

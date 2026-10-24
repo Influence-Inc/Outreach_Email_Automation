@@ -923,9 +923,10 @@ test('the number of clips is configurable', () => {
   assert.strictEqual(pickClipTargets(reels, 0).length, 0);
 });
 
-// The whole point of reading the window before recording: which reels are worth
-// watching is a question about the window as a whole.
-test('records the best and typical reels, not merely the first one', async () => {
+// One reel is judged per creator now (services/jevJudge.js). An Accounts row has
+// no reel behind it, so that one is taken off the creator's own grid — the best
+// performer, found by its view count once the whole window has been read.
+test('an Accounts-row creator gets ONE grid reel recorded, the best one', async () => {
   const driver = driverWithSearch();
   let clipNo = 0;
   driver.recordClip = async (s) => { clipNo += 1; driver.ops.push(['recordClip', s]); return { clipId: `c${clipNo}` }; };
@@ -933,8 +934,7 @@ test('records the best and typical reels, not merely the first one', async () =>
   const top = { views: 90000, point: { x: 100, y: 300 } };
   const mid = { views: 5000, point: { x: 300, y: 300 } };
   const low = { views: 1000, point: { x: 500, y: 300 } };
-  // Filler so the window clears minReels — the gate refuses to record a creator
-  // with too thin a grid to judge, which is the whole point of it.
+  // Filler so the window clears minReels.
   const filler = [4000, 4100, 4200, 4300].map((v, i) => ({ views: v, point: { x: 700, y: 300 + i } }));
   const gridTop = { screen: 'reels_tab', reels: [top, mid, ...filler], targets: { back: BACK } };
   const gridLow = { screen: 'reels_tab', reels: [low, ...filler], targets: { back: BACK } };
@@ -947,11 +947,8 @@ test('records the best and typical reels, not merely the first one', async () =>
     gridTop,                                        // collectReels: first screen
     gridLow,                                        // collectReels: after one scroll
     gridLow,                                        // collectReels: nothing new -> stop
-    // capture pass, starting from the bottom of the grid
-    { screen: 'reels_feed', targets: { back: BACK } }, gridLow,  // recorded `low`
-    gridTop,                                        // scrolled back up
+    gridTop,                                        // capture: scrolled back up
     { screen: 'reels_feed', targets: { back: BACK } }, gridTop,  // recorded `top`
-    { screen: 'reels_feed', targets: { back: BACK } }, gridTop,  // recorded `mid`
     { screen: 'search_results', targets: { back: BACK } },
   ];
 
@@ -967,19 +964,12 @@ test('records the best and typical reels, not merely the first one', async () =>
 
   const taps = driver.ops.filter((o) => o[0] === 'tap').map((o) => `${o[1]},${o[2]}`);
   assert.ok(taps.includes('100,300'), 'opened the best reel');
-  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 3);
-
-  assert.strictEqual(out[0].clips.length, 3);
-  // Each recording says where it came from, so the judge is told the truth:
-  // these are the creator's own grid reels, not the search result.
-  assert.deepStrictEqual(out[0].clips.map((c) => c.origin), ['grid', 'grid', 'grid']);
-  const recorded = out[0].clips.map((c) => c.views);
-  assert.deepStrictEqual(recorded.slice(0, 2), [90000, 5000], 'the two best, best first');
-  // The third is a typical reel from the middle of the window — not another top
-  // performer, which is the whole reason the third one is taken at all.
-  assert.ok(recorded[2] < 5000, `third pick ${recorded[2]} is not a top performer`);
-  assert.strictEqual(out[0].clip, out[0].clips[0], 'the single clip field is the best one');
-  assert.strictEqual(out[0].evidence.clipsCaptured, 3);
+  assert.ok(!taps.includes('300,300'), 'and no second one');
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 1);
+  assert.strictEqual(out[0].clips.length, 1);
+  assert.strictEqual(out[0].clip.views, 90000);
+  assert.strictEqual(out[0].clip.origin, 'grid');
+  assert.strictEqual(out[0].evidence.clipsCaptured, 1);
 });
 
 // A screen coordinate stops meaning anything the moment the grid scrolls, so it
@@ -1980,4 +1970,67 @@ test('a reel with no readable view count contributes nothing to the ratio', asyn
   });
 
   assert.strictEqual(profile.engagement, undefined, 'unmeasured, rather than a ratio built on a guess');
+});
+
+// ── the reel that surfaced the creator is the one judged (services/jevJudge.js) ─
+
+const { analyseThenRecordSource } = require('./sourcingNavigator');
+
+// A phone with two places: the creator's reels grid, and — one back press
+// away — the reel player we opened them from.
+function phoneOnProfile({ author = 'coach', views = [9000, 8000, 7000, 6500, 6000, 5500], player = {} } = {}) {
+  const BACKPT = { x: 30, y: 90 };
+  const grid = {
+    screen: 'reels_tab', username: author, followers: 20000, bio: 'coach',
+    reels: views.map((v) => ({ views: v })), targets: { back: BACKPT },
+  };
+  const reel = { screen: 'reels_feed', author, likes: 400, comments: 30, targets: {}, ...player };
+  let on = grid;
+  const ops = [];
+  const driver = {
+    ops,
+    tap: async (x, y) => { ops.push(['tap', x, y]); if (x === BACKPT.x && y === BACKPT.y) on = reel; },
+    swipe: async () => ops.push(['swipe']),
+    recordClip: async (s) => { ops.push(['recordClip', s]); return { clipId: 'c1' }; },
+  };
+  return { driver, read: async () => on, grid };
+}
+
+test('views cleared: goes back to the source reel and records THAT reel', async () => {
+  const { driver, read, grid } = phoneOnProfile();
+  const out = await analyseThenRecordSource({
+    driver, read, pacingMs: 0, view: grid, clipSeconds: 12, fallbackUsername: 'coach',
+    getClip: async () => ({ buf: Buffer.from('mp4'), mediaType: 'video/mp4' }),
+    config: { floor: 1000 }, caption: 'my 5 gym mistakes #fitness',
+  });
+
+  assert.deepStrictEqual(driver.ops.filter((o) => o[0] === 'recordClip'), [['recordClip', 12]]);
+  assert.strictEqual(out.clips.length, 1);
+  assert.strictEqual(out.clip.origin, 'keyword-match');
+  assert.strictEqual(out.evidence.clipSource, 'keyword-match');
+  assert.strictEqual(out.caption, 'my 5 gym mistakes #fitness', 'the caption rides along for Jev');
+  assert.deepStrictEqual(out.sourceReel, { caption: 'my 5 gym mistakes #fitness' });
+});
+
+test('below the views benchmark: rejected without recording anything', async () => {
+  const { driver, read, grid } = phoneOnProfile({ views: [900, 800, 700, 650, 600, 550] });
+  const out = await analyseThenRecordSource({
+    driver, read, pacingMs: 0, view: grid, fallbackUsername: 'coach',
+    getClip: async () => ({ buf: Buffer.from('mp4') }), config: { floor: 1000 },
+  });
+
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0);
+  assert.ok(out.evidence.notRecorded, 'says why nothing was recorded');
+  assert.strictEqual(out.clip, undefined);
+});
+
+test("someone else's reel on the player is never recorded as this creator's", async () => {
+  const { driver, read, grid } = phoneOnProfile({ player: { author: 'someone.else' } });
+  const out = await analyseThenRecordSource({
+    driver, read, pacingMs: 0, view: grid, fallbackUsername: 'coach',
+    getClip: async () => ({ buf: Buffer.from('mp4') }), config: { floor: 1000 },
+  });
+
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0);
+  assert.strictEqual(out.evidence.notRecorded, 'the source reel was no longer on screen');
 });

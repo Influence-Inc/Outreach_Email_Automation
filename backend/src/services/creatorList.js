@@ -158,10 +158,83 @@ async function sync(rawHandle, { queue = false, force = false, fetchImpl, timeou
   return view(await cached(handle));
 }
 
+// ── the admin's collection on creator-list ──────────────────────────────────
+//
+// Creators the scout shortlists (services/jevJudge.js, or an admin approving a
+// doubtful one) go to creator-list's "Curated by INFLUENCE Team" collection, the
+// admin's list on the site. That collection lives in the site (apps/web), not
+// the bench, so it has its own address:
+//
+//   CREATOR_LIST_WEB_URL   the creator-list site, e.g. https://influence-web-production.up.railway.app
+//
+// with the same CREATOR_LIST_API_KEY (DEAL_STUDIO_API_KEY on the site). The
+// creator is also queued on the bench, so the site gets their Reels, labels and
+// prices like any other indexed creator.
+
+const webUrl = () => String(process.env.CREATOR_LIST_WEB_URL || '').trim().replace(/\/+$/, '');
+
+/** One short line for the collection item: what Jev saw, and how they were found. */
+function curatedNote({ summary, sourceTerm } = {}) {
+  const parts = [];
+  if (summary) parts.push(summary);
+  if (sourceTerm) parts.push(`found searching "${sourceTerm}"`);
+  return `Scouted by Deal Studio${parts.length ? ` · ${parts.join(' · ')}` : ''}`.slice(0, 280);
+}
+
+/**
+ * Add a shortlisted creator to the "Curated by INFLUENCE Team" collection, and
+ * queue them for analysis on the bench. Returns { status, ... } and never throws:
+ *   added            in the collection (and `already: true` when they were before)
+ *   not_configured   CREATOR_LIST_WEB_URL / CREATOR_LIST_API_KEY missing
+ *   error            creator-list refused or did not answer; `error` says why
+ */
+async function addToCurated(rawHandle, { labels = null, summary = null, sourceTerm = null, by = 'Deal Studio', fetchImpl = fetch, timeoutMs = 8000 } = {}) {
+  const handle = clean(rawHandle);
+  if (!HANDLE.test(handle)) return { status: 'invalid', error: 'not a valid Instagram handle' };
+  const url = webUrl();
+  const { key } = config();
+  if (!url || !key) return { status: 'not_configured', error: 'Set CREATOR_LIST_WEB_URL and CREATOR_LIST_API_KEY on the server' };
+
+  const pick = (dim) => (labels && labels[dim] && !['unclear', 'other'].includes(labels[dim].value) ? labels[dim].value : null);
+  let out;
+  try {
+    const res = await fetchImpl(`${url}/api/partner/curated`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        handle,
+        note: curatedNote({ summary, sourceTerm }),
+        labels: { topic: pick('topic'), niche: pick('niche'), genre: pick('genre'), format: pick('format') },
+        by,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    let body = {};
+    try { body = await res.json(); } catch (_) { /* not JSON */ }
+    if (!res.ok) {
+      const why = res.status === 401 ? 'creator-list refused the API key (CREATOR_LIST_API_KEY)'
+        : res.status === 503 ? 'creator-list has no DEAL_STUDIO_API_KEY set'
+        : `creator-list answered ${res.status}${body.error ? `: ${body.error}` : ''}`;
+      return { status: 'error', error: why };
+    }
+    out = { status: 'added', collection: body.collection || null, already: !!body.already };
+  } catch (e) {
+    return { status: 'error', error: e && e.name === 'TimeoutError' ? 'creator-list did not answer in time' : (e && e.message) || String(e) };
+  }
+  // Their Reels, labels and prices come from the bench's analysis. Best-effort:
+  // the collection entry stands even if the bench is down.
+  if (configured()) {
+    try { out.analysis = (await sync(handle, { queue: true })).status; } catch (_) { /* best-effort */ }
+  }
+  return out;
+}
+
 async function status(rawHandle) {
   const handle = clean(rawHandle);
   if (!configured()) return { status: 'not_configured', error: 'Set CREATOR_LIST_API_URL and CREATOR_LIST_API_KEY on the server' };
   return view(await cached(handle)) || { handle, status: 'unknown' };
 }
 
-module.exports = { sync, status, call, pricingCopy, applyToCreators, configured, FRESH_MS, POLL_MS };
+module.exports = {
+  sync, status, call, pricingCopy, applyToCreators, configured, addToCurated, curatedNote, FRESH_MS, POLL_MS,
+};

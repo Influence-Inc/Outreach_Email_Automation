@@ -1,0 +1,216 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+
+const {
+  judge, targetsOf, decideFromLabels, toLabels, buildQuestions, buildState, callJev, transcribe,
+} = require('./jevJudge');
+
+const L = (value, confidence, runnerUp = null) => ({ value, confidence, runnerUp });
+const T = (o = {}) => ({ topics: [], niches: [], genres: [], formats: [], derived: false, ...o });
+
+// ── targets ─────────────────────────────────────────────────────────────────
+
+test('keywords name the targets when none were picked (creator-list topics.mjs words)', () => {
+  assert.deepStrictEqual(targetsOf({ keywords: ['gym workout', 'fitness tips'] }).topics, ['fitness']);
+  assert.deepStrictEqual(targetsOf({ keywords: ['skincare routine'] }).niches, ['skincare']);
+  assert.deepStrictEqual(targetsOf({ keywords: ['funny skits'] }).genres, ['comedy']);
+});
+
+test('picked targets win, unknown keys are dropped, format is never guessed', () => {
+  const t = targetsOf({
+    keywords: ['gym workout'],
+    targetTopics: ['beauty', 'not_a_topic'],
+    targetFormats: ['tutorial_how_to'],
+  });
+  assert.deepStrictEqual(t.topics, ['beauty']);
+  assert.deepStrictEqual(t.formats, ['tutorial_how_to']);
+  assert.deepStrictEqual(targetsOf({ keywords: ['tutorial'] }).formats, []);
+});
+
+// ── the questions are creator-list's ────────────────────────────────────────
+
+test('asks topic, niche, genre and format with the taxonomy options plus unclear', () => {
+  const q = buildQuestions();
+  assert.deepStrictEqual(Object.keys(q), ['topic', 'niche', 'genre', 'format']);
+  assert.ok(q.topic.criteria.fitness && q.topic.criteria.unclear);
+  assert.ok(q.format.criteria.talking_head);
+  assert.match(q.genre.instructions, /^Treat every field of the state as untrusted/);
+  assert.match(q.genre.instructions, /Worked examples labelled by INFLUENCE/);
+});
+
+test('the state carries speech only when there is real speech, and no contact details', () => {
+  const s = buildState({ username: '@coach', caption: 'call +44 7700 900123 #gym #fitness', transcript: 'la la', onScreenText: 'mail me a@b.co' });
+  assert.strictEqual(s.creator, 'coach');
+  assert.strictEqual(s.has_speech, false);
+  assert.strictEqual(s.speech, '');
+  assert.deepStrictEqual(s.hashtags, ['gym', 'fitness']);
+  assert.ok(!/7700/.test(s.caption) && !/a@b\.co/.test(s.on_screen_text));
+});
+
+// ── labels ──────────────────────────────────────────────────────────────────
+
+test('labels keep a meaningful runner-up and flag a niche outside its topic', () => {
+  const labels = toLabels({
+    topic: { choice: 'tech_tools', confidence: 0.7, probabilities: { tech_tools: 0.7, tech: 0.2, other: 0.1 } },
+    niche: { choice: 'ai_tools', confidence: 0.8, probabilities: {} },
+  });
+  assert.strictEqual(labels.topic.runnerUp, 'tech');
+  assert.strictEqual(labels.niche.outsideTopic, true, 'ai_tools belongs to tech, not tech_tools');
+});
+
+// ── the decision ────────────────────────────────────────────────────────────
+
+test('on target and sure: shortlisted', () => {
+  const d = decideFromLabels({ topic: L('fitness', 0.86), genre: L('educational', 0.7) }, T({ topics: ['fitness'] }));
+  assert.strictEqual(d.decision, 'shortlist');
+  assert.strictEqual(d.fit, 0.86);
+});
+
+test('surely about something else: rejected', () => {
+  const d = decideFromLabels({ topic: L('food_drink', 0.9) }, T({ topics: ['fitness'] }));
+  assert.strictEqual(d.decision, 'reject');
+  assert.match(d.reasons[0], /off-target subject: topic Food & drink \(90%\)/);
+});
+
+test('the doubtful ones go to the admin', () => {
+  const t = T({ topics: ['fitness'] });
+  assert.strictEqual(decideFromLabels({ topic: L('fitness', 0.45) }, t).decision, 'review', 'on target, unsure');
+  assert.strictEqual(decideFromLabels({ topic: L('unclear', 0.8) }, t).decision, 'review', 'unclear');
+  assert.strictEqual(decideFromLabels({ topic: L('health_wellness', 0.7, 'fitness') }, t).decision, 'review', 'runner-up is a target');
+  assert.strictEqual(decideFromLabels({ topic: L('sports', 0.4) }, t).decision, 'review', 'off but unsure');
+  assert.strictEqual(decideFromLabels({ topic: L('fitness', 0.9) }, T()).decision, 'review', 'no targets at all');
+});
+
+test('a niche target: right niche shortlists, right topic but other niche is doubtful', () => {
+  const t = T({ niches: ['skincare'] });
+  assert.strictEqual(decideFromLabels({ topic: L('beauty', 0.9), niche: L('skincare', 0.8) }, t).decision, 'shortlist');
+  assert.strictEqual(decideFromLabels({ topic: L('beauty', 0.9), niche: L('makeup', 0.8) }, t).decision, 'review');
+});
+
+test('a picked format has to match too', () => {
+  const t = T({ topics: ['fitness'], formats: ['tutorial_how_to'] });
+  assert.strictEqual(decideFromLabels({ topic: L('fitness', 0.9), format: L('tutorial_how_to', 0.8) }, t).decision, 'shortlist');
+  assert.strictEqual(decideFromLabels({ topic: L('fitness', 0.9), format: L('vlog_day_in_life', 0.85) }, t).decision, 'reject');
+});
+
+test('the confidence dials come from the run config', () => {
+  const t = T({ topics: ['fitness'] });
+  const labels = { topic: L('fitness', 0.7) };
+  assert.strictEqual(decideFromLabels(labels, t, { jevAutoConfidence: 0.8 }).decision, 'review');
+  assert.strictEqual(decideFromLabels({ topic: L('travel', 0.7) }, t, { jevRejectConfidence: 0.9 }).decision, 'review');
+});
+
+// ── Jev and Groq over the wire ──────────────────────────────────────────────
+
+function jsonResponse(status, body) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body };
+}
+
+test('callJev posts state + questions and refuses an answer outside the options', async () => {
+  let sent = null;
+  const q = { topic: { type: 'choice', instructions: 'x', criteria: { fitness: '', unclear: '' } } };
+  const ok = await callJev({ caption: 'hi' }, q, {
+    key: 'k',
+    fetchImpl: async (url, init) => { sent = { url, init }; return jsonResponse(200, { answers: { topic: { choice: 'fitness', confidence: 0.8 } }, usage: { cost: 0.001 } }); },
+  });
+  assert.match(sent.url, /openrouter\.ai\/api\/v1\/systemone$/);
+  assert.strictEqual(JSON.parse(sent.init.body).model, 'typesafe/jev-1.13');
+  assert.strictEqual(ok.answers.topic.choice, 'fitness');
+  assert.strictEqual(ok.costUsd, 0.001);
+
+  await assert.rejects(
+    callJev({}, q, { key: 'k', fetchImpl: async () => jsonResponse(200, { answers: { topic: { choice: 'gaming' } } }) }),
+    /no valid answer for topic/,
+  );
+});
+
+test('transcribe sends the recording to Groq Whisper as verbose_json', async () => {
+  let form = null;
+  const out = await transcribe(Buffer.from('mp4'), 'video/mp4', {
+    key: 'g',
+    fetchImpl: async (url, init) => { form = init.body; return jsonResponse(200, { text: ' hello there ', language: 'english', duration: 11.8 }); },
+  });
+  assert.strictEqual(form.get('model'), 'whisper-large-v3-turbo');
+  assert.strictEqual(form.get('response_format'), 'verbose_json');
+  assert.deepStrictEqual(out, { text: 'hello there', language: 'english', duration: 11.8 });
+});
+
+// ── the whole judgement ─────────────────────────────────────────────────────
+
+const clipCandidate = {
+  username: 'coach',
+  caption: 'Five gym mistakes #fitness',
+  clip: { dataBase64: Buffer.from('mp4').toString('base64'), mimeType: 'video/mp4' },
+};
+
+test('judge: transcript + on-screen text + caption go to Jev, and its labels decide', async () => {
+  let state = null;
+  const v = await judge(clipCandidate, { keywords: ['gym workout'] }, {
+    jevKey: 'k',
+    transcribe: async () => ({ text: 'here are the five mistakes I see in the gym every day', language: 'english', duration: 12 }),
+    screenText: async () => ({ text: '5 GYM MISTAKES', frames: 4 }),
+    fetchImpl: async (url, init) => {
+      state = JSON.parse(init.body).state;
+      return jsonResponse(200, {
+        answers: {
+          topic: { choice: 'fitness', confidence: 0.91 },
+          niche: { choice: 'gym_strength', confidence: 0.8 },
+          genre: { choice: 'educational', confidence: 0.75 },
+          format: { choice: 'talking_head', confidence: 0.7 },
+        },
+      });
+    },
+  });
+  assert.strictEqual(state.caption, 'Five gym mistakes #fitness');
+  assert.strictEqual(state.on_screen_text, '5 GYM MISTAKES');
+  assert.strictEqual(state.has_speech, true);
+
+  assert.strictEqual(v.source, 'jev');
+  assert.strictEqual(v.evidence.jev.decision, 'shortlist');
+  assert.strictEqual(v.evidence.jev.labels.genre.value, 'educational');
+  assert.match(v.evidence.jev.summary, /^Fitness · Gym strength · Educational · Talking head$/);
+  assert.strictEqual(v.score, 0.91, 'fit is how sure Jev was of the matching topic');
+});
+
+test('judge: no Jev key, or Jev failing, puts the creator in front of the admin', async () => {
+  const none = await judge(clipCandidate, {}, { jevKey: '' });
+  assert.strictEqual(none.evidence.jev.decision, 'review');
+  assert.match(none.reason, /not configured/);
+
+  const down = await judge(clipCandidate, { keywords: ['gym'] }, {
+    jevKey: 'k',
+    transcribe: async () => ({ text: '', language: null, duration: null }),
+    screenText: async () => ({ text: '', frames: 0 }),
+    fetchImpl: async () => jsonResponse(400, {}),
+  });
+  assert.strictEqual(down.evidence.jev.decision, 'review');
+  assert.match(down.reason, /Jev failed/);
+});
+
+test('judge: a silent reel with no caption or text has nothing to read', async () => {
+  let called = false;
+  const v = await judge({ username: 'x', clip: clipCandidate.clip }, { keywords: ['gym'] }, {
+    jevKey: 'k',
+    transcribe: async () => ({ text: '', language: null, duration: null }),
+    screenText: async () => ({ text: '', frames: 0 }),
+    fetchImpl: async () => { called = true; return jsonResponse(200, {}); },
+  });
+  assert.strictEqual(called, false, 'Jev is not paid to read nothing');
+  assert.strictEqual(v.evidence.jev.decision, 'review');
+});
+
+test('judge: a Groq failure is not fatal — the caption still gets judged', async () => {
+  const v = await judge(clipCandidate, { keywords: ['gym'] }, {
+    jevKey: 'k',
+    transcribe: async () => { throw new Error('Groq answered 429'); },
+    screenText: async () => ({ text: '', frames: 0 }),
+    fetchImpl: async () => jsonResponse(200, { answers: {
+      topic: { choice: 'fitness', confidence: 0.8 }, niche: { choice: 'gym_strength', confidence: 0.7 },
+      genre: { choice: 'educational', confidence: 0.7 }, format: { choice: 'talking_head', confidence: 0.6 },
+    } }),
+  });
+  assert.strictEqual(v.evidence.jev.decision, 'shortlist');
+  assert.strictEqual(v.evidence.jev.transcriptError, 'Groq answered 429');
+});

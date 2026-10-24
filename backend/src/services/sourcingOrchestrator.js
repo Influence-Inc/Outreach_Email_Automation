@@ -103,7 +103,7 @@ function sourceTag(run, config, candidate, { niche, gate } = {}) {
   const tag = {
     mode: candidate.discovery || config.discovery || 'search',
     keyword: candidate.sourceTerm || null,
-    genre: evidence.genre || (evidence.clip && evidence.clip.niche) || null,
+    genre: evidence.genre || (evidence.clip && evidence.clip.niche) || (evidence.jev && evidence.jev.summary) || null,
     nicheScore: typeof niche?.nicheScore === 'number' ? niche.nicheScore : null,
     creatorScore: gate ? gate.score : null,
     runId: run && run.id != null ? run.id : null,
@@ -217,6 +217,18 @@ async function processCandidate(run, config, candidate, deps) {
   // candidate's evidence so an admin can audit why it was matched.
   if (niche.evidence) {
     candidate.evidence = { ...(candidate.evidence || {}), niche: niche.evidence };
+  }
+
+  // JEV DECIDES. When the reel was labelled by Jev (services/jevJudge.js), its
+  // topic / genre / format against the run's targets IS the fit decision:
+  // shortlist, hold the doubtful ones for the admin, or reject. The niche-score
+  // floor is not a second opinion on that, so it is switched off here; reach
+  // (views benchmark, risk shape, bought views) still applies as before.
+  const jev = niche.source === 'jev' && niche.evidence && niche.evidence.jev;
+  if (jev) {
+    return finishJev(run, config, candidate, deps, {
+      username, niche, jev, reachUnverified, visitFailed, hadClip,
+    });
   }
 
   const verdict = reachUnverified ? decideReel(candidate, config) : decide(candidate, config);
@@ -369,6 +381,112 @@ async function processCandidate(run, config, candidate, deps) {
   });
   await deps.updateCandidate(row.id, { decision: 'added', creator_id: creator.id, decided_by: 'rule' });
   return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id, judged: true, hadClip, judge: niche.source };
+}
+
+/**
+ * The rest of processCandidate for a creator Jev labelled.
+ *
+ *   reach fails          → rejected on the rule that failed
+ *   Jev: reject          → rejected, with Jev's reason
+ *   Jev: review, or reach never measured → held for the admin
+ *   Jev: shortlist       → added, and sent to creator-list's
+ *                          "Curated by INFLUENCE Team" collection
+ */
+async function finishJev(run, config, candidate, deps, {
+  username, niche, jev, reachUnverified, visitFailed, hadClip,
+}) {
+  const campaignId = run.campaign_id;
+  const judge = 'jev';
+  const cfg = { ...config, nicheThreshold: 0 };
+  const verdict = reachUnverified ? decideReel(candidate, cfg) : decide(candidate, cfg);
+
+  // Arithmetic on counts read off the screen: bought views, a following nobody
+  // engages with, reach carried by one outlier reel.
+  const reach = checkReach({
+    reels: candidate.reels || [],
+    engagement: candidate.engagement || null,
+    followers: candidate.followers ?? null,
+  }, config);
+  candidate.evidence = { ...(candidate.evidence || {}), reachChecks: reach };
+  if (verdict.pass && !reach.pass) {
+    verdict.pass = false;
+    verdict.rejectReason = reach.rejectReason;
+  }
+  if (verdict.pass && jev.decision === 'reject') {
+    verdict.pass = false;
+    verdict.rejectReason = `Jev: ${(jev.reasons || []).join('; ') || 'off target'}`;
+  }
+
+  let holdReason = null;
+  if (verdict.pass) {
+    if (reachUnverified) holdReason = 'reach not measured — confirm their views before adding';
+    else if (jev.decision !== 'shortlist') holdReason = `doubtful — ${(jev.reasons || []).join('; ') || 'Jev was unsure'}`;
+  }
+  if (holdReason) candidate.evidence = { ...candidate.evidence, reviewHold: holdReason };
+
+  const row = await deps.persistCandidate({
+    run_id: run.id,
+    campaign_id: campaignId,
+    username,
+    full_name: candidate.full_name || candidate.fullName || null,
+    followers: candidate.followers ?? null,
+    bio: candidate.bio || null,
+    reels: candidate.reels || [],
+    niche_score: verdict.nicheScore,
+    niche_reason: candidate.nicheReason,
+    view_floor_pass: verdict.viewFloorPass,
+    risk_profile: verdict.riskProfile,
+    stability_score: verdict.stabilityScore,
+    growth_trend: verdict.growthTrend,
+    evidence: candidate.evidence || null,
+    decision: 'pending',
+  });
+  const base = { judged: true, hadClip, judge };
+  if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted', ...base };
+
+  const reject = async (reason) => {
+    await deps.updateCandidate(row.id, { decision: 'rejected', reject_reason: reason, decided_by: 'rule' });
+    return { decision: 'rejected', added: false, candidateId: row.id, rejectReason: reason, ...base };
+  };
+
+  if (!verdict.pass) {
+    return reject(visitFailed
+      ? `profile never opened — judged on the reel alone (${verdict.rejectReason})`
+      : verdict.rejectReason);
+  }
+  if (await deps.findDuplicate({ campaignId, username, email: null })) return reject('already in campaign');
+  if (deps.isUsed) {
+    try {
+      if (await deps.isUsed(username)) return reject('used creator');
+    } catch (_) {
+      /* Creator-DB unreachable — don't block sourcing on it */
+    }
+  }
+
+  if (holdReason) {
+    await deps.updateCandidate(row.id, { decision: 'review', decided_by: 'rule' });
+    return { decision: 'review', added: false, candidateId: row.id, reviewReason: holdReason, ...base };
+  }
+
+  const creator = await deps.insertCreator({
+    campaignId,
+    username,
+    fullName: candidate.full_name || candidate.fullName || null,
+    firstName: candidate.first_name || candidate.firstName || null,
+    sourcedVia: sourceTag(run, config, candidate, { niche }),
+  });
+  await deps.updateCandidate(row.id, { decision: 'added', creator_id: creator.id, decided_by: 'rule' });
+
+  // Shortlisted: into creator-list, the main page now. Best-effort — the creator
+  // is already in the campaign, and a creator-list outage must not undo that.
+  if (deps.shortlist) {
+    try {
+      await deps.shortlist({ username, candidate, jev, sourceTerm: candidate.sourceTerm || null });
+    } catch (_) {
+      /* reported by deps.shortlist itself */
+    }
+  }
+  return { decision: 'added', added: true, candidateId: row.id, creatorId: creator.id, ...base };
 }
 
 // Drive a run to completion off a candidate source. `source.next()` resolves to a
