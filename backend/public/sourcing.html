@@ -84,6 +84,10 @@
 
         <label for="keywords">Caption keywords</label>
         <input id="keywords" type="text" placeholder="comma-separated, e.g. gym, workout, homegym" />
+        <p class="scout-hint" style="grid-column:1/-1;margin:-4px 0 4px">
+          The topic, niche, genre and reel format Jev checks for are read from these keywords
+          &mdash; e.g. &ldquo;gym workout tutorial&rdquo; &rarr; Fitness, Tutorial.
+        </p>
 
         <label for="floor">Min views (floor)</label>
         <input id="floor" type="number" min="0" step="1000" placeholder="15000" />
@@ -149,35 +153,6 @@
           Scroll past feed reels whose caption is plainly about something else,
           before a clip is recorded
         </label>
-
-        <p class="scout-hint" style="grid-column:1/-1;margin:8px 0 4px">
-          <strong>How creators are judged.</strong> A creator under the views floor is rejected
-          on the spot. Otherwise the phone records the reel they were found through; Groq
-          transcribes it, its frames are read for on-screen text, and Jev labels the
-          <em>topic, genre and format</em> the way creator-list does. Jev shortlists the ones
-          that match, rejects the ones that plainly don&rsquo;t, and leaves only the doubtful
-          ones for you in the review queue. Shortlisted creators go to the Find creators page,
-          in creator-list&rsquo;s <em>Curated by INFLUENCE Team</em> collection &mdash; they are
-          not added to the campaign.
-        </p>
-
-        <label for="targetTopics">Target topics</label>
-        <select id="targetTopics" multiple size="5"></select>
-
-        <label for="targetNiches">Target niches</label>
-        <select id="targetNiches" multiple size="5"></select>
-
-        <label for="targetGenres">Target genres</label>
-        <select id="targetGenres" multiple size="5"></select>
-
-        <label for="targetFormats">Target formats</label>
-        <select id="targetFormats" multiple size="5"></select>
-
-        <p class="scout-hint" style="grid-column:1/-1;margin:-4px 0 4px">
-          Leave topics, niches and genres empty to read them from your keywords
-          (&ldquo;gym workout&rdquo; &rarr; Fitness). Format is only checked when you pick one.
-          Ctrl/Cmd-click to pick several.
-        </p>
 
         <label for="jevAutoConfidence">Shortlist when Jev is at least</label>
         <input id="jevAutoConfidence" type="number" min="0" max="1" step="0.05" value="0.6" />
@@ -277,7 +252,7 @@
         <h2 style="margin:0;font-size:16px">Pending review</h2>
         <button id="review-refresh" class="ghost small">Refresh</button>
       </div>
-      <p class="scout-hint">Creators waiting for a human decision for the selected campaign — approve to add them to the campaign, or reject. &ldquo;Held because&rdquo; says why: only just over the quality bar or the niche floor (with &ldquo;Borderline → review&rdquo; on), reach not measured, or no AI judge was available to check quality.</p>
+      <p class="scout-hint">Creators Jev was unsure about — Shortlist sends them to the Find creators page (<em>Curated by INFLUENCE Team</em>), Reject drops them. &ldquo;Held because&rdquo; says what Jev was unsure of, or that their reach was never measured.</p>
       <table class="scout-table">
         <thead>
           <tr><th>Handle</th><th>Followers</th><th>Jev labels</th><th>Fit</th><th>Transcript</th><th>Held because</th><th></th></tr>
