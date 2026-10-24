@@ -89,31 +89,27 @@ async function sendToCreatorList(candidateId, username, jev = null, sourceTerm =
   return out;
 }
 
+// The admin settles a doubtful one in the review queue: shortlisted, which
+// means creator-list's "Curated by INFLUENCE Team" collection — the Find
+// creators page — and not the campaign.
 async function approveCandidate(id) {
   const cand = await getCandidate(id);
   if (!cand) return null;
   if (cand.decision === 'added') return cand;
-  const creator = await insertPendingCreator({
-    campaignId: cand.campaign_id,
-    username: cand.username,
-    fullName: cand.full_name,
-    firstName: null,
-  });
   await db.query(
     `UPDATE sourced_candidates
-        SET decision = 'added', creator_id = $2, decided_by = 'human'
+        SET decision = 'added', decided_by = 'human'
       WHERE id = $1`,
-    [id, creator.id],
+    [id],
   );
   await db.query(
     `UPDATE sourcing_runs SET found_count = found_count + 1, updated_at = NOW() WHERE id = $1`,
     [cand.run_id],
   );
-  // The admin settled a doubtful one: it joins the shortlist on creator-list too.
   const ev = cand.evidence || {};
   const jev = (ev.niche && ev.niche.jev) || null;
-  await sendToCreatorList(id, cand.username, jev, ev.sourceTerm || null);
-  return { ...cand, decision: 'added', creator_id: creator.id };
+  const sent = await sendToCreatorList(id, cand.username, jev, ev.sourceTerm || null);
+  return { ...cand, decision: 'added', creatorList: sent };
 }
 
 async function rejectCandidate(id, reason = 'rejected in review') {

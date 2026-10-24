@@ -862,16 +862,28 @@ function jevStore(decision, reasons) {
 
 const jevCfg = { floor: 15000, ceiling: 500000, risk: 'high', keywords: ['gym'] };
 
-test('Jev shortlists: added to the campaign and sent to creator-list', async () => {
+test('Jev shortlists: sent to creator-list only, never added to the campaign', async () => {
   const { deps, creators, candidates, shortlisted } = jevStore('shortlist');
+  let inserted = false;
+  deps.insertCreator = async () => { inserted = true; return { id: 1 }; };
   const res = await processCandidate(run, jevCfg, { username: 'coach', reels: fitReels(), sourceTerm: 'gym' }, deps);
 
   assert.strictEqual(res.decision, 'added');
+  assert.strictEqual(res.added, true, 'counts toward the run target');
   assert.strictEqual(res.judge, 'jev');
-  assert.deepStrictEqual(creators.map((c) => c.username), ['coach']);
+  assert.strictEqual(inserted, false, 'no campaign creator');
+  assert.strictEqual(creators.length, 0);
   assert.deepStrictEqual(shortlisted, ['coach']);
-  assert.match(creators[0].sourcedVia.genre, /Fitness/);
   assert.strictEqual(candidates[0].decision, 'added');
+  assert.strictEqual(candidates[0].creator_id, undefined);
+});
+
+test('a creator already in the campaign is still shortlisted for creator-list', async () => {
+  const { deps, shortlisted } = jevStore('shortlist');
+  deps.findDuplicate = async () => ({ id: 9 });
+  const res = await processCandidate(run, jevCfg, { username: 'coach', reels: fitReels() }, deps);
+  assert.strictEqual(res.decision, 'added');
+  assert.deepStrictEqual(shortlisted, ['coach']);
 });
 
 test('Jev unsure: held for the admin with its reasons, not added and not sent', async () => {
@@ -907,10 +919,10 @@ test('below the views benchmark never reaches Jev at all', async () => {
   assert.strictEqual(shortlisted.length, 0);
 });
 
-test('a creator-list outage does not undo the add', async () => {
-  const { deps, creators } = jevStore('shortlist');
+test('a creator-list outage does not stop the run', async () => {
+  const { deps, candidates } = jevStore('shortlist');
   deps.shortlist = async () => { throw new Error('creator-list down'); };
   const res = await processCandidate(run, jevCfg, { username: 'coach', reels: fitReels() }, deps);
   assert.strictEqual(res.decision, 'added');
-  assert.strictEqual(creators.length, 1);
+  assert.strictEqual(candidates[0].decision, 'added');
 });
