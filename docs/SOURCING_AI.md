@@ -68,6 +68,13 @@ field). Discovery mode and device are picked from lists, and four switches are t
 default because every run needs them: warm the feed, skip off-niche reels, screenshot
 pre-check, borderline → review.
 
+There is **no campaign picker**. Scouting is not done for a campaign: every creator the scout
+shortlists goes to creator-list's *Curated by INFLUENCE Team* collection. A run started from the
+page has no `campaign_id`, uses the page's one set of saved defaults (`GET`/`PATCH
+/api/sourcing/config`, stored in `app_settings` under `sourcing_defaults`), and the review queue
+shows every creator waiting for review. `POST /api/sourcing/runs` still accepts a `campaign_id`
+from the API, and then that campaign's defaults apply as before.
+
 Everything else is decided by the backend:
 
 - **Keywords** are the one search field. The old separate niche/genre field did the same
@@ -161,7 +168,8 @@ keeps them.
   falls back to the old `min(6, reelsWindow)`.
 
 Saving from the Scout page **merges** into the stored defaults
-(`PATCH /api/sourcing/config/:campaignId`): keys the page sends replace the
+(`PATCH /api/sourcing/config`; a campaign's own, from the API, at
+`PATCH /api/sourcing/config/:campaignId`): keys the page sends replace the
 stored ones, a key sent as `null` is removed, and settings the page does not show
 (`targetAudience`, `genres`, `creatorWeights`, the engagement floors,
 `avoidExamples`, `enabled`, …) survive a save instead of being wiped by it.
@@ -239,7 +247,8 @@ of a dead run. The navigator now calls a throttled `heartbeat` (at most once a
 minute, via `sourcingStore.touchRun`, scoped to `status = 'running'` so it can
 never resurrect a stopped run) while it skips.
 
-Keyword depth is persisted per `(campaign, term)` in `sourcing_keyword_depth`, so
+Keyword depth is persisted per `(campaign, term)` in `sourcing_keyword_depth`
+(per `term` in `sourcing_term_depth` for runs with no campaign), so
 a re-run resumes where the last one stopped instead of re-reading the top of every
 results page — which, with dedupe on, is the part guaranteed to yield nobody.
 
@@ -322,7 +331,8 @@ threshold cannot express. Additive to the learned examples, never a replacement.
 ### Never scouting the same creator twice
 
 A creator this campaign has already looked at — added, rejected, in review, or
-merely seen — is skipped. `sourcingStore.scoutedHandles` loads them at run start
+merely seen — is skipped. A run with no campaign skips every creator any run has
+ever looked at, and its candidates share one unique index on `lower(username)`. `sourcingStore.scoutedHandles` loads them at run start
 and seeds the navigator's memory, so it outlives the run rather than resetting
 with it.
 

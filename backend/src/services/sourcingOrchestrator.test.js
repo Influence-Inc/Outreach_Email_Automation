@@ -224,7 +224,7 @@ test('a reels-mode candidate WITH reach is decided, not parked in review', async
   };
 
   const res = await processCandidate(
-    { id: 1 },
+    run,
     cfg,
     { username: 'mia', bio: 'home fitness coach', reels: fitReels() },
     deps,
@@ -247,7 +247,7 @@ test('a reels-mode candidate with NO reach still goes to review', async () => {
 
   // Straight off the feed: a caption, but no view counts anywhere.
   const res = await processCandidate(
-    { id: 1 },
+    run,
     cfg,
     { username: 'joe', bio: 'home fitness', reels: [{ caption: 'home fitness' }] },
     deps,
@@ -279,7 +279,7 @@ test('a repost page is rejected however well the model scored it', async () => {
   const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
 
   const res = await processCandidate(
-    { id: 1 },
+    run,
     cfg,
     { username: 'repostking', bio: 'best clips', reels: fitReels(), creatorAnalysis: { fit_score: 95, consistency_of_niche: 9 } },
     custom,
@@ -296,7 +296,7 @@ test('an unsafe brand context is rejected', async () => {
   const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
 
   const res = await processCandidate(
-    { id: 1 }, cfg,
+    run, cfg,
     { username: 'edgy', bio: 'fitness', reels: fitReels(), creatorAnalysis: { fit_score: 90, consistency_of_niche: 9 } },
     custom,
   );
@@ -312,7 +312,7 @@ test('the gate records its components on the candidate', async () => {
   const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
 
   await processCandidate(
-    { id: 1 }, cfg,
+    run, cfg,
     { username: 'good', bio: 'fitness', reels: fitReels(), creatorAnalysis: { fit_score: 88, consistency_of_niche: 9 } },
     custom,
   );
@@ -332,7 +332,7 @@ test('a creator no model could analyse is held for review, not auto-added', asyn
   const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
 
   const res = await processCandidate(
-    { id: 1 }, cfg, { username: 'plain', bio: 'home fitness', reels: fitReels() }, deps,
+    run, cfg, { username: 'plain', bio: 'home fitness', reels: fitReels() }, deps,
   );
 
   assert.strictEqual(res.decision, 'review');
@@ -352,7 +352,7 @@ test('reviewUnjudged: false adds on the reach and keyword rules alone', async ()
   };
 
   const res = await processCandidate(
-    { id: 1 }, cfg, { username: 'plain', bio: 'home fitness', reels: fitReels() }, deps,
+    run, cfg, { username: 'plain', bio: 'home fitness', reels: fitReels() }, deps,
   );
 
   assert.strictEqual(res.decision, 'added');
@@ -372,7 +372,7 @@ test('an added creator is tagged with the keyword and mode that found them', asy
   };
 
   await processCandidate(
-    { id: 42 }, cfg,
+    { id: 42, campaign_id: 'camp-1' }, cfg,
     { username: 'kim', bio: 'home fitness', reels: fitReels(), sourceTerm: 'kettlebell', discovery: 'search' },
     deps,
   );
@@ -394,7 +394,7 @@ test('a reels-feed creator is tagged with the mode and no keyword', async () => 
   };
 
   await processCandidate(
-    { id: 7 }, cfg, { username: 'sam', bio: 'home fitness', reels: fitReels(), discovery: 'reels' }, deps,
+    { id: 7, campaign_id: 'camp-1' }, cfg, { username: 'sam', bio: 'home fitness', reels: fitReels(), discovery: 'reels' }, deps,
   );
 
   assert.strictEqual(creators[0].sourcedVia.mode, 'reels');
@@ -413,7 +413,7 @@ test('the genre from the analysis rides along on the tag', async () => {
     niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5, ...DETERMINISTIC,
   };
 
-  await processCandidate({ id: 1 }, cfg, { username: 'lee', reels: fitReels() }, custom);
+  await processCandidate(run, cfg, { username: 'lee', reels: fitReels() }, custom);
   assert.strictEqual(creators[0].sourcedVia.genre, 'home workouts');
 });
 
@@ -454,7 +454,7 @@ test('all three clip analyses reach the deterministic gate', async () => {
   };
   const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
 
-  const res = await processCandidate({ id: 1 }, cfg, { username: 'reposts', reels: fitReels() }, custom);
+  const res = await processCandidate(run, cfg, { username: 'reposts', reels: fitReels() }, custom);
 
   assert.notStrictEqual(res.decision, 'added', 'two of three clips were reposts');
   assert.strictEqual(creators.length, 0);
@@ -478,7 +478,7 @@ test('the creator analysis is taken from the classifier, not only the candidate'
   };
   const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
 
-  await processCandidate({ id: 1 }, cfg, { username: 'good', reels: fitReels() }, custom);
+  await processCandidate(run, cfg, { username: 'good', reels: fitReels() }, custom);
 
   assert.ok(candidates[0].evidence.creatorScore.components.fit > 0.9);
 });
@@ -494,7 +494,7 @@ test('a creator rejected on views never reaches the classifier', async () => {
   const custom = { ...deps, nicheClassify: async () => { judged += 1; return { score: 0.99 }; } };
 
   const res = await processCandidate(
-    { id: 1 },
+    run,
     { floor: 15000, risk: 'high', targetCount: 5 },
     { username: 'lowviews', bio: 'fitness', reels: Array(12).fill({ views: 900, caption: 'gym' }) },
     custom,
@@ -515,7 +515,7 @@ test('a creator with too few reels never reaches the classifier either', async (
   const custom = { ...deps, nicheClassify: async () => { judged += 1; return { score: 0.99 }; } };
 
   const res = await processCandidate(
-    { id: 1 }, { floor: 1000, minReels: 6, risk: 'high', targetCount: 5 },
+    run, { floor: 1000, minReels: 6, risk: 'high', targetCount: 5 },
     { username: 'thin', reels: [{ views: 50000 }, { views: 60000 }] },
     custom,
   );
@@ -534,7 +534,7 @@ test('a creator who clears the view gates is still judged', async () => {
   };
 
   await processCandidate(
-    { id: 1 },
+    run,
     { floor: 15000, risk: 'high', niche: 'fitness', keywords: ['gym'], nicheThreshold: 0.4, targetCount: 5, ...DETERMINISTIC },
     { username: 'good', bio: 'fitness', reels: fitReels() },
     custom,
@@ -552,7 +552,7 @@ test('a reels-mode candidate with no reach is still judged', async () => {
   const custom = { ...deps, nicheClassify: async () => { judged += 1; return { score: 0.9 }; } };
 
   await processCandidate(
-    { id: 1 },
+    run,
     { discovery: 'reels', floor: 15000, niche: 'fitness', keywords: ['gym'], targetCount: 5 },
     { username: 'fromfeed', reels: [{ caption: 'gym day' }] },
     custom,
@@ -567,8 +567,8 @@ test('a duplicate handle rejected on views is skipped, not double-inserted', asy
   const cfg = { floor: 15000, risk: 'high', targetCount: 5 };
   const cand = () => ({ username: 'dupe', reels: Array(12).fill({ views: 900 }) });
 
-  await processCandidate({ id: 1 }, cfg, cand(), deps);
-  const second = await processCandidate({ id: 1 }, cfg, cand(), deps);
+  await processCandidate(run, cfg, cand(), deps);
+  const second = await processCandidate(run, cfg, cand(), deps);
 
   assert.strictEqual(second.decision, 'skipped');
   assert.strictEqual(candidates.length, 1);
@@ -698,7 +698,7 @@ test('a below-the-bar creator is saved with that reason', async () => {
   const cfg = { niche: 'home fitness', keywords: ['fitness'], floor: 1000, risk: 'high', targetCount: 5 };
 
   await processCandidate(
-    { id: 1 }, cfg,
+    run, cfg,
     { username: 'meh', reels: fitReels(), creatorAnalysis: { fit_score: 30, consistency_of_niche: 2 } },
     custom,
   );
@@ -793,7 +793,7 @@ test('a creator just over the quality bar goes to review with the reason', async
 
   // fit 0.5, consistency 0.4, steadiness 1, creativity 0.5, hook 0.5 -> 0.553
   const res = await processCandidate(
-    { id: 1 }, cfg,
+    run, cfg,
     { username: 'scraped', reels: fitReels(), creatorAnalysis: { fit_score: 50, consistency_of_niche: 4 } },
     custom,
   );
@@ -813,7 +813,7 @@ test('a creator well over the quality bar is still added with the dial on', asyn
   };
 
   const res = await processCandidate(
-    { id: 1 }, cfg,
+    run, cfg,
     { username: 'clear', reels: fitReels(), creatorAnalysis: { fit_score: 90, consistency_of_niche: 9 } },
     custom,
   );
@@ -975,4 +975,31 @@ test('one viral reel short is rejected when borderline creators are not reviewed
   const res = await processCandidate(run, { ...viralRunCfg, reviewBorderline: false }, { username: 'almost', reels: viralReels(4, 12) }, deps);
   assert.strictEqual(res.decision, 'rejected');
   assert.match(res.rejectReason, /^4 of 16 reels went viral/);
+});
+
+// ── runs with no campaign (the Scout page's) ────────────────────────────────
+
+const pageRun = { id: 2, campaign_id: null };
+
+test('a campaign-less run shortlists through Jev and records no campaign', async () => {
+  const { deps, candidates, shortlisted } = jevStore('shortlist');
+  const res = await processCandidate(pageRun, viralRunCfg, { username: 'breakout', reels: viralReels(6, 10) }, deps);
+  assert.strictEqual(res.decision, 'added');
+  assert.deepStrictEqual(shortlisted, ['breakout']);
+  assert.strictEqual(candidates[0].campaign_id, null);
+});
+
+test('a campaign-less run never adds a creator to a campaign, even without Jev', async () => {
+  const { deps, creators, candidates } = memStore();
+  const shortlisted = [];
+  let checkedDup = false;
+  deps.shortlist = async (x) => { shortlisted.push(x.username); return { status: 'added' }; };
+  deps.findDuplicate = async () => { checkedDup = true; return null; };
+  deps.insertCreator = async () => { throw new Error('no campaign to add to'); };
+  const res = await processCandidate(pageRun, { ...viralRunCfg, reviewUnjudged: false }, { username: 'plain', reels: viralReels(6, 10) }, deps);
+  assert.strictEqual(res.decision, 'added');
+  assert.deepStrictEqual(shortlisted, ['plain']);
+  assert.strictEqual(creators.length, 0);
+  assert.strictEqual(checkedDup, false, 'no campaign to be a duplicate in');
+  assert.strictEqual(candidates[0].creator_id, undefined);
 });

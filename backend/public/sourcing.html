@@ -28,6 +28,7 @@
     .scout-grid textarea, .scout-grid label:has(+ textarea) { align-self: start; }
     .scout-grid label:has(+ textarea) { padding-top: 9px; }
     h2.scout-section { margin: 28px 0 12px; font-size: 16px; }
+    .card > h2.scout-section:first-child { margin-top: 0; }
     .scout-row-hint { grid-column: 1 / -1; margin: -4px 0 4px; }
     .scout-check { font-weight: 400 !important; font-size: 13px; display: flex; align-items: center; gap: 8px; }
     .scout-check input { width: auto; }
@@ -79,9 +80,6 @@
     <div id="judge-banner" class="judge-banner" hidden></div>
 
     <div class="card" style="margin-top:18px">
-      <label for="campaign" style="font-weight:600;font-size:13px">Campaign</label>
-      <select id="campaign" class="scout-select" style="margin-top:6px"></select>
-
       <h2 class="scout-section">What to look for</h2>
       <div class="scout-grid">
         <label for="keywords">Keywords</label>
@@ -154,7 +152,7 @@
       </div>
 
       <div class="scout-row">
-        <button id="save-btn" class="ghost">Save as campaign defaults</button>
+        <button id="save-btn" class="ghost">Save as defaults</button>
         <button id="start-btn" class="btn-primary">Start scouting run</button>
       </div>
       <div id="status" class="scout-status"></div>

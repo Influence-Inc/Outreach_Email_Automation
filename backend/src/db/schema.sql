@@ -695,6 +695,27 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS sourced_via JSONB;
 -- already enforce. See services/nicheCalibration.js.
 ALTER TABLE sourced_candidates ADD COLUMN IF NOT EXISTS decided_by TEXT;
 
+-- Scouting is no longer done for a campaign. Every creator the scout shortlists
+-- goes to creator-list's "Curated by INFLUENCE Team" collection, so the Scout
+-- page has no campaign picker and a run started there has no campaign_id.
+-- Runs and candidates from before keep theirs.
+--
+-- Without a campaign, "never scout the same creator twice" is global: one row
+-- per handle among campaign-less candidates (the run also skips every handle
+-- scouted under a campaign before, see sourcingStore.scoutedHandles).
+ALTER TABLE sourcing_runs ALTER COLUMN campaign_id DROP NOT NULL;
+ALTER TABLE sourced_candidates ALTER COLUMN campaign_id DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sourced_candidates_global_username
+  ON sourced_candidates (LOWER(username)) WHERE campaign_id IS NULL;
+
+-- How far down each keyword's results the scout has read, for campaign-less
+-- runs (sourcing_keyword_depth is the same thing per campaign).
+CREATE TABLE IF NOT EXISTS sourcing_term_depth (
+  term       TEXT PRIMARY KEY,
+  depth      INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ---------------------------------------------------------------------------
 -- Campaign-update messaging (WhatsApp), for creators who have SIGNED.
 -- ---------------------------------------------------------------------------
