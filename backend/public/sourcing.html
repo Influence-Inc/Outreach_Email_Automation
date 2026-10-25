@@ -30,8 +30,6 @@
     h2.scout-section { margin: 28px 0 12px; font-size: 16px; }
     .card > h2.scout-section:first-child { margin-top: 0; }
     .scout-row-hint { grid-column: 1 / -1; margin: -4px 0 4px; }
-    .scout-check { font-weight: 400 !important; font-size: 13px; display: flex; align-items: center; gap: 8px; }
-    .scout-check input { width: auto; }
     .scout-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
     .scout-hint { color: #6b7280; font-size: 12px; margin: 4px 0 0; }
     .scout-status { margin: 12px 0; font-size: 13px; min-height: 18px; }
@@ -126,29 +124,6 @@
         <select id="runHost">
           <option value="">Any available device</option>
         </select>
-
-        <label for="warmFeed">Warm the feed</label>
-        <label class="scout-check">
-          <input id="warmFeed" type="checkbox" checked />
-          Like clearly on-brand reels while scouting, to steer this account's feed
-          toward the niche (reels mode only)
-        </label>
-        <label for="skipOffNicheReels">Skip off-niche reels</label>
-        <label class="scout-check">
-          <input id="skipOffNicheReels" type="checkbox" checked />
-          Scroll past feed reels whose caption is plainly about something else,
-          before a clip is recorded
-        </label>
-        <label for="prescreenNiche">Screenshot pre-check</label>
-        <label class="scout-check">
-          <input id="prescreenNiche" type="checkbox" checked />
-          Check the profile pictures before recording, and skip plainly off-niche creators
-        </label>
-        <label for="reviewBorderline">Borderline &rarr; review</label>
-        <label class="scout-check">
-          <input id="reviewBorderline" type="checkbox" checked />
-          Send creators who are one viral reel short to the review queue instead of rejecting them
-        </label>
       </div>
 
       <div class="scout-row">

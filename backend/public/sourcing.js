@@ -83,8 +83,14 @@ function numOrNull(id) {
 // Settings the page no longer shows. Sent as null so a save removes what an
 // older version of the page stored (defaults merge, and null is how a key is
 // removed): the niche and brand details now live in the keywords and "what
-// you're selling" fields, and the rest is decided by the backend.
+// you're selling" fields, and the rest is decided by the backend — including
+// the four switches every run needs (warm the feed, skip off-niche reels,
+// screenshot pre-check, borderline → review), which are on whenever unset.
 const RETIRED = {
+  warmFeed: null,
+  skipOffNicheReels: null,
+  prescreenNiche: null,
+  reviewBorderline: null,
   niche: null,
   brandBrief: null,
   floor: null,
@@ -106,10 +112,6 @@ function readForm() {
     brandName: el('brandName').value.trim(),
     brandProduct: el('brandProduct').value.trim(),
     discovery: el('discovery').value,
-    reviewBorderline: el('reviewBorderline').checked,
-    prescreenNiche: el('prescreenNiche').checked,
-    skipOffNicheReels: el('skipOffNicheReels').checked,
-    warmFeed: el('warmFeed').checked,
   };
 }
 
@@ -138,10 +140,6 @@ function fillForm(cfg) {
   // "What you're selling" and the older "Brand & product details", as one.
   el('brandProduct').value = [cfg.brandProduct, cfg.brandBrief].filter(Boolean).join('\n\n');
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
-  // Every run needs these, so they are on unless the defaults turned one off.
-  for (const id of ['warmFeed', 'skipOffNicheReels', 'prescreenNiche', 'reviewBorderline']) {
-    el(id).checked = cfg[id] !== false;
-  }
 }
 
 // Scouting is not done for a campaign: every shortlisted creator goes to

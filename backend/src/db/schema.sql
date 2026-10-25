@@ -716,6 +716,22 @@ CREATE TABLE IF NOT EXISTS sourcing_term_depth (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- The Scout page no longer shows the four switches every run needs (warm the
+-- feed, skip off-niche reels, screenshot pre-check, borderline -> review); they
+-- are on whenever unset. Remove them, once, from the page's saved defaults, in
+-- case one was saved unticked while the boxes were still on the page.
+WITH claimed AS (
+  INSERT INTO data_migrations (name) VALUES ('scout-switches-always-on')
+  ON CONFLICT (name) DO NOTHING
+  RETURNING name
+)
+UPDATE app_settings
+   SET value = (value::jsonb - ARRAY['warmFeed', 'skipOffNicheReels', 'prescreenNiche', 'reviewBorderline'])::text,
+       updated_at = NOW()
+ WHERE EXISTS (SELECT 1 FROM claimed)
+   AND key = 'sourcing_defaults'
+   AND value ~ '^\s*\{';
+
 -- ---------------------------------------------------------------------------
 -- Campaign-update messaging (WhatsApp), for creators who have SIGNED.
 -- ---------------------------------------------------------------------------
