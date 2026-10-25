@@ -732,6 +732,50 @@ UPDATE app_settings
    AND key = 'sourcing_defaults'
    AND value ~ '^\s*\{';
 
+-- Phone farming (services/phoneFarm.js): which way each phone's Instagram
+-- account scouts. 'warmup' searches the keywords and warms the feed on every
+-- creator shortlisted (like + share); after farm_goal warmed creators it moves
+-- to 'feed', scouting the account's own reel feed, and back to 'warmup' when
+-- the feed turns unreliable. A newly paired phone starts in 'warmup'. `persona`
+-- is the viewer the account has been warmed into ("27 y/o AI developer in New
+-- York"), written when it moves to the feed; farm_note says why it last moved.
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_phase    TEXT NOT NULL DEFAULT 'warmup';
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_warmed   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_goal     INTEGER;
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_note     TEXT;
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_phase_at TIMESTAMPTZ;
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS persona       TEXT;
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS persona_at    TIMESTAMPTZ;
+
+-- Every shortlisted creator a phone warmed: liked, shared (and how), and who
+-- that creator's viewers are, which is what the account's persona is built from.
+CREATE TABLE IF NOT EXISTS sourcing_warm_events (
+  id            BIGSERIAL PRIMARY KEY,
+  host_id       INTEGER REFERENCES sourcing_hosts(id) ON DELETE SET NULL,
+  run_id        INTEGER REFERENCES sourcing_runs(id) ON DELETE SET NULL,
+  username      TEXT NOT NULL,
+  liked         BOOLEAN NOT NULL DEFAULT FALSE,
+  shared        BOOLEAN NOT NULL DEFAULT FALSE,
+  how           TEXT,
+  target_viewer TEXT,
+  at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sourcing_warm_events_host ON sourcing_warm_events(host_id, at DESC);
+
+-- The Scout page no longer has a discovery mode: phoneFarm decides it. Remove a
+-- mode saved by the older page, once, so the page's runs are decided too.
+WITH claimed AS (
+  INSERT INTO data_migrations (name) VALUES ('scout-discovery-auto')
+  ON CONFLICT (name) DO NOTHING
+  RETURNING name
+)
+UPDATE app_settings
+   SET value = (value::jsonb - 'discovery')::text,
+       updated_at = NOW()
+ WHERE EXISTS (SELECT 1 FROM claimed)
+   AND key = 'sourcing_defaults'
+   AND value ~ '^\s*\{';
+
 -- ---------------------------------------------------------------------------
 -- Campaign-update messaging (WhatsApp), for creators who have SIGNED.
 -- ---------------------------------------------------------------------------

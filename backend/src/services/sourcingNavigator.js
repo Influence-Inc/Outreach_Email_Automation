@@ -245,6 +245,17 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   // the sweeper's definition of a dead run. Without this a healthy run gets
   // reaped for doing its job well.
   const heartbeat = deps.heartbeat || (() => {});
+  // The caller hands the previous creator's result back through `yield`: a
+  // shortlisted creator is warmed right there, on the reel that surfaced them,
+  // where the phone is still standing (services/creatorWarmup.js), and a result
+  // carrying `stop` ends the scout — services/phoneFarm.js moving the account
+  // to its next phase.
+  const settle = async (outcome, handle) => {
+    if (outcome && outcome.added && handle && deps.warmCreator) {
+      await deps.warmCreator({ driver, read, handle, pacingMs, jitterPx, log });
+    }
+    return !!(outcome && outcome.stop);
+  };
 
   // A long run against a real app gets interrupted, stuck, and occasionally lost.
   // See services/sourcingResilience.js — these are shared with the reels-feed
@@ -416,7 +427,8 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
         remaining: max - emitted, seen: seenCreators, stall, cap, log, config, prescreen, deviceHint,
       })) {
-        yield tag(profile);
+        const outcome = yield tag(profile);
+        if (await settle(outcome, profile && profile.username)) return;
         emitted += 1;
         if (emitted >= max) return;
       }
@@ -475,12 +487,14 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       const handle = profile && profile.username && String(profile.username).toLowerCase();
       if (profile && handle && !seenCreators.has(handle)) {
         seenCreators.add(handle);
-        yield tag(profile);
+        const outcome = yield tag(profile);
+        if (await settle(outcome, handle)) return;
         emitted += 1;
       }
-      // However deep this creator took us (reel player -> profile -> feed), come
-      // back to the results page — and no further.
-      await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 4 });
+      // However deep this creator took us (reel player -> profile -> feed, and
+      // their newest reel if warming had to open one), come back to the results
+      // page — and no further.
+      await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 5 });
     }
 
     // Fallback: an "Accounts" list of @handle rows, on builds (or with the
@@ -500,10 +514,11 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
           clipsWanted, log, config, prescreen, deviceHint,
         });
         if (profile) {
-          yield tag(profile);
+          const outcome = yield tag(profile);
+          if (await settle(outcome, profile.username || handle)) return;
           emitted += 1;
         }
-        await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 4 });
+        await backTo({ driver, read, pacingMs, jitterPx, wanted: SERP_SCREENS, maxHops: 5 });
       }
     }
 

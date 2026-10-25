@@ -153,8 +153,11 @@ function buildConfig(defaults = {}, override = {}) {
     // call failed) for review rather than adding them on the reach and keyword
     // rules alone. On unless a campaign explicitly turns it off.
     reviewUnjudged: merged.reviewUnjudged !== false && merged.reviewUnjudged !== 'false',
-    // 'reels' = explore/scroll reel-feed flow (watch+hear); else search→profile.
-    discovery: merged.discovery === 'reels' ? 'reels' : '',
+    // Which way to scout: 'auto' (the default, and what the Scout page always
+    // uses) lets services/phoneFarm.js decide per phone — warm up through
+    // search, then scout the reel feed, and back when the feed turns
+    // unreliable. 'reels' or 'search', set through the API, scouts only that way.
+    discovery: ['reels', 'search'].includes(merged.discovery) ? merged.discovery : 'auto',
     clipSeconds: clipSecondsOf(merged.clipSeconds),
     // How many of the creator's reels to actually WATCH (record + judge). This
     // config is a whitelist, so a knob missing here is silently dropped no matter

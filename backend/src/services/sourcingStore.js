@@ -13,6 +13,7 @@ const { insertPendingCreator } = require('./creatorInsert');
 const { sourceNote } = require('./sourcingOrchestrator');
 const jevJudge = require('./jevJudge');
 const creatorList = require('./creatorList');
+const audienceLabels = require('./audienceLabels');
 
 // Created as 'queued', matching services/sourcingSweep.js's autoEnqueueRuns —
 // both paths that CREATE a run agree it starts life unclaimed. A run only
@@ -67,11 +68,23 @@ async function listReview({ campaignId = null, limit = 100 } = {}) {
  * collection, and note the outcome on their candidate row so the dashboard can
  * show whether it got there. Never throws.
  */
-async function sendToCreatorList(candidateId, username, jev = null, sourceTerm = null) {
+async function sendToCreatorList(candidateId, username, jev = null, sourceTerm = null, { bio = null, caption = null } = {}) {
+  // Who this creator's reels are for ("27 y/o AI developer in New York"):
+  // kept on the row, sent with them, and what a phone's account persona is
+  // built from once it has warmed them (services/phoneFarm.js).
+  const targetViewer = await audienceLabels.targetViewer({
+    username,
+    bio,
+    caption,
+    transcript: (jev && jev.transcript) || null,
+    summary: (jev && jev.summary) || null,
+    sourceTerm,
+  }).catch(() => null);
   const out = await creatorList.addToCurated(username, {
     labels: (jev && jev.labels) || null,
     summary: (jev && jev.summary) || null,
     sourceTerm,
+    targetViewer,
   });
   if (out.status !== 'added') {
     console.warn(`[sourcing] @${username} not sent to creator-list: ${out.error || out.status}`);
@@ -80,9 +93,11 @@ async function sendToCreatorList(candidateId, username, jev = null, sourceTerm =
     try {
       await db.query(
         `UPDATE sourced_candidates
-            SET evidence = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object('creatorList', $2::jsonb)
+            SET evidence = COALESCE(evidence, '{}'::jsonb)
+                  || jsonb_build_object('creatorList', $2::jsonb)
+                  || CASE WHEN $3::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('targetViewer', $3::text) END
           WHERE id = $1`,
-        [candidateId, JSON.stringify({ ...out, at: new Date().toISOString() })],
+        [candidateId, JSON.stringify({ ...out, at: new Date().toISOString() }), targetViewer],
       );
     } catch (_) { /* the outcome note is for the dashboard only */ }
   }
@@ -108,7 +123,11 @@ async function approveCandidate(id) {
   );
   const ev = cand.evidence || {};
   const jev = (ev.niche && ev.niche.jev) || null;
-  const sent = await sendToCreatorList(id, cand.username, jev, ev.sourceTerm || null);
+  const firstCaption = Array.isArray(cand.reels) ? (cand.reels.find((r) => r && r.caption) || {}).caption : null;
+  const sent = await sendToCreatorList(id, cand.username, jev, ev.sourceTerm || null, {
+    bio: cand.bio || null,
+    caption: firstCaption || null,
+  });
   return { ...cand, decision: 'added', creatorList: sent };
 }
 
@@ -280,7 +299,10 @@ function makeDeps(run, { nicheClassify = jevJudge.makeClassifier() } = {}) {
           WHERE campaign_id IS NOT DISTINCT FROM $1 AND LOWER(username) = LOWER($2)`,
         [run.campaign_id || null, username],
       );
-      return sendToCreatorList(row ? row.id : null, username, jev, sourceTerm || (candidate && candidate.sourceTerm) || null);
+      return sendToCreatorList(row ? row.id : null, username, jev, sourceTerm || (candidate && candidate.sourceTerm) || null, {
+        bio: (candidate && candidate.bio) || null,
+        caption: (candidate && (candidate.caption || (candidate.sourceReel && candidate.sourceReel.caption))) || null,
+      });
     },
   };
 }

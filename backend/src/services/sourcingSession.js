@@ -22,6 +22,9 @@ const store = require('./sourcingStore');
 const searchTerms = require('./searchTerms');
 const nicheCalibration = require('./nicheCalibration');
 const jevCalibration = require('./jevCalibration');
+const creatorWarmup = require('./creatorWarmup');
+const phoneFarm = require('./phoneFarm');
+const audienceLabels = require('./audienceLabels');
 
 const DEFAULT_PACING_MS = 1800; // human-like pacing between IG actions (anti-flag)
 // No cap on captures by default: a run keeps scouting until it has sourced its
@@ -35,11 +38,23 @@ const HEARTBEAT_MS = 60_000;
 
 const active = new Map(); // hostId -> { runId, promise }
 
+// A navigator as a candidate source. The previous candidate's result goes back
+// in through next(), which is how the navigator warms a creator it just produced
+// (see runWithSource); finish() hands over the last one and lets it return.
 function generatorSource(gen) {
+  let started = false;
   return {
-    async next() {
-      const r = await gen.next();
-      return r.done ? null : r.value;
+    async next(last) {
+      const r = await gen.next(last);
+      if (r.done) return null;
+      started = true;
+      return r.value;
+    },
+    async finish(last) {
+      if (started) await gen.next({ ...(last || {}), stop: true });
+    },
+    async close() {
+      if (gen.return) await gen.return();
     },
   };
 }
@@ -204,15 +219,49 @@ async function runSession({ hostId, run, deps }) {
     }
   };
 
-  // `discovery: 'reels'` drives the explore/scroll reel-feed flow (watch + hear +
-  // judge + occasionally engage); otherwise the search->profile flow.
-  let gen;
-  if (String(config.discovery || '').toLowerCase() === 'reels') {
+  // Every creator shortlisted is warmed — their reel liked and shared — so the
+  // account's own reel feed learns what to serve (services/creatorWarmup.js).
+  // The navigators call this right after a creator is shortlisted, on their reel.
+  const warmPolicy = creatorWarmup.loadPolicy();
+  const warmCounters = creatorWarmup.newCounters();
+  let farm = null;
+  const warmCreator = config.warmFeed === false ? null : async (args) => {
+    const out = await (deps.warmCreator || creatorWarmup.warmCreator)({
+      ...args, policy: warmPolicy, counters: warmCounters,
+    });
+    if (out && (out.liked || out.shared)) {
+      if (farm) farm.onWarmed(out);
+      try {
+        await (deps.recordWarm || phoneFarm.recordWarm)(db, {
+          hostId, runId: run.id, username: args.handle, liked: out.liked, shared: out.shared, how: out.how || null,
+        });
+      } catch (err) {
+        log(`[sourcing-session] could not log the warm-up of @${args.handle}: ${(err && err.message) || err}`);
+      }
+    }
+    return out;
+  };
+
+  // A navigator started mid-run (phoneFarm switches between them) begins with
+  // what this run has done so far: everyone scouted, and how deep each keyword
+  // has been read. Best-effort, like the loads above.
+  const refreshMemory = async () => {
+    try {
+      opts.alreadyScouted = await (deps.scoutedHandles || store.scoutedHandles)({ campaignId: run.campaign_id });
+    } catch (_) { /* keep what we had */ }
+    try {
+      opts.keywordDepth = await (deps.keywordDepths || store.keywordDepths)({ campaignId: run.campaign_id });
+    } catch (_) { /* keep what we had */ }
+  };
+
+  // Phase 2 / the reel feed: scroll the account's own Reels feed (watch + hear +
+  // judge + occasionally engage).
+  const startFeed = () => {
     const { scoutReels } = require('./sourcingReelsNavigator');
     const engagementPolicy = require('./engagementPolicy');
     const jevJudge = require('./jevJudge');
     const clipStore = require('./clipStore');
-    gen = (deps.scoutReels || scoutReels)({
+    return (deps.scoutReels || scoutReels)({
       driver,
       // The WHOLE campaign config, not just the mechanical knobs.
       //
@@ -240,14 +289,19 @@ async function runSession({ hostId, run, deps }) {
         getClip: deps.getClip || clipStore.take,
         engagement: deps.engagement || { policy: engagementPolicy.loadPolicy(), decide: engagementPolicy.decide },
         rng: deps.rng,
+        warmCreator,
+        onReel: (e) => { if (farm) farm.feedReel(e); },
       },
     });
-  } else {
+  };
+
+  // Phase 1 / search: search the keywords and scout the creators whose reels
+  // come up.
+  const startSearch = () => {
     // getClip lets the navigator attach a recorded reel's bytes to each
-    // candidate; reelJudge then scores creative style + niche from the actual
-    // video and audio instead of falling back to the bio text.
+    // candidate, so the judge works from the actual video and audio.
     const clipStore = require('./clipStore');
-    gen = scoutFn({
+    return scoutFn({
       driver,
       // The WHOLE campaign config, for the same reason reels mode needs it.
       //
@@ -257,13 +311,11 @@ async function runSession({ hostId, run, deps }) {
       // the navigator grew gates of its own, and all of them were reading
       // `undefined`:
       //
-      //   - the on-device prefilter in analyseProfile — no floor, no ceiling, no
-      //     risk shape, so it rejected NOBODY and a clip was recorded and
-      //     uploaded for every creator, including the ones the orchestrator was
-      //     about to reject on reach a moment later;
+      //   - the on-device prefilter in analyseProfile, so it rejected NOBODY and
+      //     a clip was recorded and uploaded for every creator, including the
+      //     ones the orchestrator was about to reject on reach a moment later;
       //   - `prescreenNiche`, so the screenshot prescreen never switched on for
-      //     any campaign that asked for it;
-      //   - `floor` / `floorTolerance`, so the early reach reject never fired.
+      //     any campaign that asked for it.
       //
       // Mechanical values still win, so nothing about pacing changes.
       config: {
@@ -277,12 +329,37 @@ async function runSession({ hostId, run, deps }) {
         maxProfiles: config.maxProfiles,
       },
       opts,
-      deps: { getClip: deps.getClip || clipStore.take, heartbeat, saveDepth },
+      deps: {
+        getClip: deps.getClip || clipStore.take, heartbeat, saveDepth, warmCreator,
+      },
     });
+  };
+
+  // Which way to scout. Decided for the account (services/phoneFarm.js): warm up
+  // through search until the feed has learned what we want, then scout the feed,
+  // and back to warm-up when the feed turns unreliable. A run set to 'reels' or
+  // 'search' through the API scouts only that way.
+  let source;
+  const mode = ['reels', 'search'].includes(config.discovery) ? config.discovery : 'auto';
+  if (mode === 'auto') {
+    const state = await (deps.loadFarmState || ((id) => phoneFarm.loadState(db, id)))(hostId).catch(() => ({}));
+    farm = phoneFarm.createFarmSource({
+      state,
+      startSearch: () => (async function* fresh() { await refreshMemory(); yield* startSearch(); }()),
+      startFeed: () => (async function* fresh() { await refreshMemory(); yield* startFeed(); }()),
+      persist: (patch) => (deps.saveFarmState || ((id, p) => phoneFarm.saveState(db, id, p)))(hostId, patch),
+      labelAccount: async () => (deps.labelAccount || (async () => audienceLabels.accountPersona(
+        await phoneFarm.recentViewers(db, hostId), { keywords: config.keywords || [] },
+      )))(),
+      log,
+    });
+    source = farm;
+  } else {
+    source = generatorSource(mode === 'reels' ? startFeed() : startSearch());
   }
 
   try {
-    const result = await runWith(run, config, generatorSource(gen), buildOrchestratorDeps(run, deps));
+    const result = await runWith(run, config, source, buildOrchestratorDeps(run, deps));
     const stats = (result && result.stats) || {};
     log(
       `[sourcing-session] run #${run.id} host ${hostId}: ended status=${result && result.status} ` +
@@ -297,7 +374,7 @@ async function runSession({ hostId, run, deps }) {
       + ` judgedBy=${JSON.stringify(stats.judgedBy || {})}`,
     );
   } finally {
-    try { if (gen.return) await gen.return(); } catch (_) { /* generator already done */ }
+    try { if (source.close) await source.close(); } catch (_) { /* generator already done */ }
     chan.endSession(hostId);
   }
 }

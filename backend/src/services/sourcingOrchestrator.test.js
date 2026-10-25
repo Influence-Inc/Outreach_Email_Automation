@@ -1003,3 +1003,43 @@ test('a campaign-less run never adds a creator to a campaign, even without Jev',
   assert.strictEqual(checkedDup, false, 'no campaign to be a duplicate in');
   assert.strictEqual(candidates[0].creator_id, undefined);
 });
+
+// ── the source hears each result ────────────────────────────────────────────
+
+test('the source is handed each result, and the last one on reaching the target', async () => {
+  const { deps } = jevStore('shortlist');
+  const heard = [];
+  let finished = null;
+  const list = [
+    { username: 'a', reels: viralReels(6, 10) },
+    { username: 'b', reels: viralReels(6, 10) },
+  ];
+  let i = 0;
+  const source = {
+    async next(last) { heard.push(last ? last.decision : undefined); return list[i++] || null; },
+    async finish(last) { finished = last; },
+    info: () => ({ mode: 'auto', phase: 'warmup' }),
+  };
+  let stats = null;
+  deps.updateRun = async (p) => { stats = p.stats; };
+  const out = await runWithSource(pageRun, { ...viralRunCfg, targetCount: 2 }, source, deps);
+  assert.strictEqual(out.status, 'done');
+  assert.deepStrictEqual(heard, [undefined, 'added']);
+  assert.strictEqual(finished.decision, 'added');
+  assert.strictEqual(finished.jevDecision, 'shortlist');
+  assert.deepStrictEqual(stats.discovery, { mode: 'auto', phase: 'warmup' });
+});
+
+test('a stopped run does not hand the source its last result', async () => {
+  const { deps } = jevStore('shortlist');
+  let finished = false;
+  let calls = 0;
+  deps.shouldStop = async () => calls > 0;
+  const source = {
+    async next() { calls += 1; return { username: 'a', reels: viralReels(6, 10) }; },
+    async finish() { finished = true; },
+  };
+  const out = await runWithSource(pageRun, { ...viralRunCfg, targetCount: 5 }, source, deps);
+  assert.strictEqual(out.status, 'stopped');
+  assert.strictEqual(finished, false);
+});

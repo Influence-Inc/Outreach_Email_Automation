@@ -244,3 +244,11 @@ test('addToCurated never throws: not configured, refused, or down', () => withWe
   assert.deepStrictEqual(down, { status: 'error', error: 'ECONNREFUSED' });
   assert.strictEqual((await creatorList.addToCurated('not a handle!')).status, 'invalid');
 }));
+
+test('the curated note says who the creator\'s viewers are', () => {
+  assert.strictEqual(
+    creatorList.curatedNote({ summary: 'Technology · AI', targetViewer: '27 y/o AI developer in New York', sourceTerm: 'ai agents' }),
+    'Scouted by Deal Studio · Technology · AI · for: 27 y/o AI developer in New York · found searching "ai agents"',
+  );
+  assert.strictEqual(creatorList.curatedNote({}), 'Scouted by Deal Studio');
+});

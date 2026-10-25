@@ -29,7 +29,7 @@
 // screen stops the run immediately.
 
 const {
-  readView, IG_ANDROID_PACKAGE, analyseProfile, REELS_PER_PROFILE, resolveClip,
+  readView, IG_ANDROID_PACKAGE, analyseProfile, REELS_PER_PROFILE, resolveClip, backTo,
 } = require('./sourcingNavigator');
 const engagementPolicy = require('./engagementPolicy');
 const { looksOffNiche } = require('./sourcingFilters');
@@ -120,7 +120,7 @@ async function scrollToNextReel({ driver, size, jitterPx, pacingMs }) {
 async function collectBatch({
   driver, read, size, pacingMs, jitterPx, clipSeconds, batchSize,
   handled, queue, judge, getClip, engagement, counters, rng, config, warn,
-  stall = null, cap = null,
+  stall = null, cap = null, onReel = () => {},
 }) {
   const batch = [];
   let unreadable = 0;
@@ -178,6 +178,9 @@ async function collectBatch({
     // chance when their next reel comes round, and on a warmed feed it will.
     if (config.skipOffNicheReels !== false && looksOffNiche(view.caption, config)) {
       warn(`[reels] skipping an off-niche reel by @${view.author}`);
+      // Counted against the feed: services/phoneFarm.js sends the account back
+      // to warm-up when too much of what the feed serves is off-niche.
+      onReel({ onNiche: false, author: view.author });
       // eslint-disable-next-line no-await-in-loop
       await scrollToNextReel({ driver, size, jitterPx, pacingMs });
       continue;
@@ -446,9 +449,13 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
   const stall = createStallGuard({ timeoutMs: config.stallMs, now: deps.now });
   const cap = createProfileCap({ max: config.maxProfiles, log: warn });
 
-  // Creators already handled, for the life of the run. Checked the moment a
-  // handle is read off a reel — before recording, before opening anything.
-  const handled = new Set();
+  // Creators already handled. Checked the moment a handle is read off a reel —
+  // before recording, before opening anything. Seeded with everyone scouted
+  // before (opts.alreadyScouted), so a creator the search or an earlier run
+  // already looked at costs one swipe here rather than a recording and a judge.
+  const handled = new Set(
+    (opts.alreadyScouted || []).map((u) => String(u).toLowerCase()).filter(Boolean),
+  );
 
   await driver.openApp(IG_ANDROID_PACKAGE);
   await sleep(jitteredDelay(pacingMs));
@@ -466,7 +473,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       driver, read, size, pacingMs, jitterPx, clipSeconds,
       batchSize: Math.min(batchSize, max - emitted),
       handled, queue, judge, getClip, engagement, counters, rng, config, warn,
-      stall, cap,
+      stall, cap, onReel: deps.onReel,
     });
     if (!batch.length) break;
 
@@ -479,7 +486,21 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       });
       // No keyword here — this mode takes whoever the warmed feed serves, so the
       // mode itself IS the provenance worth recording.
-      yield { ...candidate, discovery: 'reels' };
+      //
+      // The previous creator's result comes back through the yield: a
+      // shortlisted creator is warmed (services/creatorWarmup.js opens their
+      // newest reel from the profile we are on, likes and shares it, and we step
+      // back to the profile so the bottom bar can reach the feed again), and
+      // `stop` ends the feed scout — services/phoneFarm.js moving the account
+      // back to warm-up.
+      const outcome = yield { ...candidate, discovery: 'reels' };
+      if (outcome && outcome.added && deps.warmCreator) {
+        // eslint-disable-next-line no-await-in-loop
+        await deps.warmCreator({ driver, read, handle: candidate.username, pacingMs, jitterPx, log: warn });
+        // eslint-disable-next-line no-await-in-loop
+        await backTo({ driver, read, pacingMs, jitterPx, wanted: ['profile', 'reels_tab'], maxHops: 2 });
+      }
+      if (outcome && outcome.stop) return;
       emitted += 1;
     }
 

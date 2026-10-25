@@ -87,6 +87,7 @@ function numOrNull(id) {
 // the four switches every run needs (warm the feed, skip off-niche reels,
 // screenshot pre-check, borderline → review), which are on whenever unset.
 const RETIRED = {
+  discovery: null,
   warmFeed: null,
   skipOffNicheReels: null,
   prescreenNiche: null,
@@ -111,7 +112,6 @@ function readForm() {
     targetCount: numOrNull('targetCount'),
     brandName: el('brandName').value.trim(),
     brandProduct: el('brandProduct').value.trim(),
-    discovery: el('discovery').value,
   };
 }
 
@@ -139,7 +139,6 @@ function fillForm(cfg) {
   el('brandName').value = cfg.brandName || '';
   // "What you're selling" and the older "Brand & product details", as one.
   el('brandProduct').value = [cfg.brandProduct, cfg.brandBrief].filter(Boolean).join('\n\n');
-  el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
 }
 
 // Scouting is not done for a campaign: every shortlisted creator goes to
@@ -339,6 +338,9 @@ async function refreshRun() {
   el('run-video').textContent = judged ? `${stats.withVideo || 0} of ${judged}` : '—';
   el('run-video').style.color = judged && !stats.withVideo ? '#b42318' : '';
   el('run-judges').textContent = judgesSummary(stats.judgedBy);
+  el('run-phase').textContent = phaseOf(stats.discovery);
+  const switches = (stats.discovery && stats.discovery.switches) || [];
+  el('run-phase').title = switches.map((w) => `${w.from} → ${w.to}: ${w.reason || ''}`).join('\n');
   renderCandidates(candidates);
   if (run.status === 'done' || run.status === 'stopped' || run.status === 'error') stopPolling();
 }
@@ -422,6 +424,26 @@ async function loadReview() {
 
 let latestHosts = [];
 
+/** Where a phone's account is in phone farming, and the viewer it is warmed into. */
+function farmCell(h) {
+  const phase = h.farm_phase === 'feed'
+    ? '<span class="pill added">Scouting its feed</span>'
+    : `<span class="pill review">Warming up ${Number(h.farm_warmed) || 0}/${Number(h.farm_goal) || 0}</span>`;
+  const persona = h.persona ? `<br><span class="scout-hint">Warmed for: ${escapeHtml(h.persona)}</span>` : '';
+  const why = h.farm_note ? ` title="${escapeHtml(h.farm_note)}"` : '';
+  return `<span${why}>${phase}</span>${persona}`;
+}
+
+/** The run's scouting phase, from stats.discovery (services/phoneFarm.js). */
+function phaseOf(d) {
+  if (!d) return '—';
+  if (d.mode !== 'auto') return d.mode || '—';
+  if (d.phase === 'feed') {
+    return `Reel feed${d.feedOnNiche != null ? ` · ${Math.round(d.feedOnNiche * 100)}% on-niche` : ''}`;
+  }
+  return `Warm-up · ${d.warmed || 0}/${d.goal || 0} warmed`;
+}
+
 async function loadHosts() {
   try {
     const rows = await api('/api/sourcing/hosts');
@@ -437,41 +459,25 @@ async function loadHosts() {
         ? `<span class="pill added">● scouting${h.activeRunId ? ` · run #${h.activeRunId}` : ''}</span>`
         : '<span class="scout-hint">idle</span>';
       tr.innerHTML = `
-        <td>${h.label}</td>
+        <td>${escapeHtml(h.label)}</td>
         <td>${plats}</td>
         <td><span class="pill ${h.status === 'active' ? 'added' : 'rejected'}">${h.status}</span></td>
+        <td>${farmCell(h)}</td>
         <td>${session}</td>
         <td>${seenFreshness(h.last_seen_at)}</td>
-        <td>${h.status === 'active' ? `<button data-host="${h.id}" class="ghost small warm-host">Warm feed</button> <button data-host="${h.id}" class="ghost small revoke-host">Revoke</button>` : ''}</td>`;
+        <td style="white-space:nowrap">${h.status === 'active' ? `<button data-host="${h.id}" class="ghost small restart-farm" title="A new Instagram account was signed in on this phone: warm it up from the start">Restart warm-up</button> <button data-host="${h.id}" class="ghost small revoke-host">Revoke</button>` : ''}</td>`;
       tb.appendChild(tr);
     }
-    // A warm-up pass likes reels from creators that already passed the gate, to
-    // steer this account's reels feed. Separate from a scouting run on purpose.
-    tb.querySelectorAll('.warm-host').forEach((b) => {
+    tb.querySelectorAll('.restart-farm').forEach((b) => {
       b.addEventListener('click', async () => {
-        if (!confirm(
-          'Run a feed warm-up pass on this phone?\n\n'
-          + 'It will LIKE up to 12 reels, only from creators already shortlisted by a '
-          + 'scouting run. Automated liking carries real account risk — keep these '
-          + 'passes short and occasional.',
-        )) return;
-        b.disabled = true;
-        b.textContent = 'Warming…';
+        if (!confirm('Start this phone\'s warm-up over?\n\nDo this when a new Instagram account is signed in on it: '
+          + 'it will search and warm up on shortlisted creators again before it scouts its feed.')) return;
         try {
-          const r = await api(`/api/sourcing/hosts/${b.dataset.host}/warmup`, {
-            method: 'POST',
-            body: JSON.stringify({}),
-          });
-          setStatus(
-            `Warm-up done: liked ${r.liked} of ${r.seen} reels seen`
-            + `${r.blocked ? ' — stopped early, Instagram flagged the activity' : ''}`,
-            r.blocked ? 'err' : 'ok',
-          );
+          await api(`/api/sourcing/hosts/${b.dataset.host}/farm/restart`, { method: 'POST', body: JSON.stringify({}) });
+          await loadHosts();
+          setStatus('Warm-up restarted for that phone.', 'ok');
         } catch (err) {
           setStatus(err.message, 'err');
-        } finally {
-          b.disabled = false;
-          b.textContent = 'Warm feed';
         }
       });
     });

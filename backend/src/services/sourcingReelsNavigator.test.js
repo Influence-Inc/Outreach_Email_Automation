@@ -742,3 +742,63 @@ test('disabling the check skips the extra reel open entirely', async () => {
     'no grid reel was opened',
   );
 });
+
+// ── phone farming hooks ─────────────────────────────────────────────────────
+
+const feedViews = () => [
+  { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+  { screen: 'reels_feed', author: 'mia', caption: 'gym', targets: { like: { x: 9, y: 9 } } },
+  { screen: 'reels_feed', author: 'joe', caption: 'gym', targets: { like: { x: 9, y: 9 } } },
+  { screen: 'home', targets: {} },
+];
+const feedDeps = (extra = {}) => ({
+  judge: async () => ({ score: 0.5, source: 'jev' }),
+  getClip: async () => ({ buf: Buffer.from('X'), mediaType: 'video/mp4' }),
+  engagement: { policy: { enabled: false }, decide: () => ({ like: false, save: false, share: false }) },
+  ...extra,
+});
+
+test('a shortlisted feed creator is warmed, and stop ends the feed scout', async () => {
+  const warmed = [];
+  const gen = scoutReels({
+    driver: fakeDriver(),
+    config: { pacingMs: 0 },
+    opts: { max: 5 },
+    read: scriptedRead(feedViews()),
+    deps: feedDeps({ warmCreator: async (a) => { warmed.push(a.handle); return { liked: true }; } }),
+  });
+  const first = await gen.next();
+  assert.strictEqual(first.value.username, 'mia');
+  const second = await gen.next({ decision: 'added', added: true });
+  assert.deepStrictEqual(warmed, ['mia']);
+  assert.strictEqual(second.value.username, 'joe');
+  const end = await gen.next({ decision: 'rejected', added: false, stop: true });
+  assert.strictEqual(end.done, true);
+  assert.deepStrictEqual(warmed, ['mia'], 'joe was not shortlisted');
+});
+
+test('off-niche reels skipped on sight are reported to the farm', async () => {
+  const reported = [];
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    { screen: 'reels_feed', author: 'chef', caption: 'my grandmother\'s lasagne recipe, slow cooked for six hours', targets: {} },
+    { screen: 'home', targets: {} },
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver: fakeDriver(), config: { pacingMs: 0, keywords: ['gym'] }, opts: { max: 3 }, read: scriptedRead(views),
+    deps: feedDeps({ onReel: (e) => reported.push(e) }),
+  })) out.push(c);
+  assert.strictEqual(out.length, 0);
+  assert.deepStrictEqual(reported, [{ onNiche: false, author: 'chef' }]);
+});
+
+test('creators scouted before are skipped on the feed without a recording', async () => {
+  const driver = fakeDriver();
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0 }, opts: { max: 5, alreadyScouted: ['MIA'] }, read: scriptedRead(feedViews()), deps: feedDeps(),
+  })) out.push(c.username);
+  assert.deepStrictEqual(out, ['joe']);
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'swipe').length >= 1, true);
+});

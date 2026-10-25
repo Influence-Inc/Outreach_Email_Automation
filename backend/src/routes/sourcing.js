@@ -32,6 +32,7 @@ const geminiClient = require('../services/geminiClient');
 const sourcingMetrics = require('../services/sourcingMetrics');
 const jevCalibration = require('../services/jevCalibration');
 const jevJudge = require('../services/jevJudge');
+const phoneFarm = require('../services/phoneFarm');
 const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
@@ -178,11 +179,30 @@ function annotateHostHealth(rows, session = sourcingSession) {
 
 router.get('/hosts', async (_req, res, next) => {
   try {
+    // farm_* and persona: where the phone's account is in phone farming
+    // (services/phoneFarm.js) — warming up or scouting its feed, and the viewer
+    // it has been warmed into.
     const rows = await db.many(
-      `SELECT id, label, platforms, status, last_seen_at, created_at
+      `SELECT id, label, platforms, status, last_seen_at, created_at,
+              farm_phase, farm_warmed, farm_goal, farm_note, farm_phase_at, persona
        FROM sourcing_hosts ORDER BY created_at DESC`,
     );
-    res.json(annotateHostHealth(rows));
+    const goal = phoneFarm.loadSettings().warmupGoal;
+    res.json(annotateHostHealth(rows).map((h) => ({ ...h, farm_goal: h.farm_goal || goal })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Start a phone's warm-up over — a new Instagram account was signed in on it,
+// so what the old one taught its feed no longer applies.
+router.post('/hosts/:id/farm/restart', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const host = await db.one(`SELECT id FROM sourcing_hosts WHERE id = $1`, [id]);
+    if (!host) return res.status(404).json({ error: 'not found' });
+    await phoneFarm.restart(db, id, { note: `restarted by ${(req.session && req.session.email) || 'an admin'}` });
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

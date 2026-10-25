@@ -472,7 +472,9 @@ async function finishJev(run, config, candidate, deps, {
     evidence: candidate.evidence || null,
     decision: 'pending',
   });
-  const base = { judged: true, hadClip, judge };
+  const base = {
+    judged: true, hadClip, judge, jevDecision: jev.decision || null,
+  };
   if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted', ...base };
 
   const reject = async (reason) => {
@@ -514,9 +516,14 @@ async function finishJev(run, config, candidate, deps, {
   return { decision: 'added', added: true, candidateId: row.id, ...base };
 }
 
-// Drive a run to completion off a candidate source. `source.next()` resolves to a
-// candidate or null when exhausted. Stops at targetCount, exhaustion, or when
-// deps.shouldStop() returns true. Returns { status, stats }.
+// Drive a run to completion off a candidate source. `source.next(lastResult)`
+// resolves to a candidate or null when exhausted; it is handed the previous
+// candidate's result, which is how a navigator learns to warm a creator it just
+// produced (services/creatorWarmup.js). Stops at targetCount, exhaustion, or
+// when deps.shouldStop() returns true; on reaching the target the source's
+// optional `finish(lastResult)` gets the last result too. A source's optional
+// `info()` lands in stats.discovery (services/phoneFarm.js reports its phase
+// there). Returns { status, stats }.
 async function runWithSource(run, config, source, deps) {
   const targetCount = Number(config.targetCount || run.target_count || 0);
   // withVideo / withoutVideo count JUDGEMENTS, not creators scanned — see the
@@ -532,13 +539,19 @@ async function runWithSource(run, config, source, deps) {
     withVideo: 0, withoutVideo: 0, judgedBy: {},
   };
   let stopped = false;
+  let last;
+  const describe = () => {
+    if (!source.info) return;
+    try { stats.discovery = source.info(); } catch (_) { /* informational */ }
+  };
 
   while (!targetCount || stats.added < targetCount) {
     if (deps.shouldStop && (await deps.shouldStop())) {
       stopped = true;
       break;
     }
-    const candidate = await source.next();
+    const candidate = await source.next(last);
+    last = undefined;
     if (!candidate) break;
     stats.scanned += 1;
 
@@ -549,6 +562,7 @@ async function runWithSource(run, config, source, deps) {
       res = { decision: 'error', added: false, rejectReason: err.message };
     }
 
+    last = res;
     if (res.judged) {
       if (res.hadClip) stats.withVideo += 1; else stats.withoutVideo += 1;
       const by = res.judge || 'unknown';
@@ -567,9 +581,18 @@ async function runWithSource(run, config, source, deps) {
       stats.byReason[reason] = (stats.byReason[reason] || 0) + 1;
     }
 
+    describe();
     if (deps.onProgress) await deps.onProgress({ ...stats, targetCount, last: res });
     if (deps.updateRun) await deps.updateRun({ found_count: stats.added, stats });
   }
+
+  // The last creator still gets what every other one got (warmed, if
+  // shortlisted) before the source shuts down. Not on a stop: an admin who
+  // pressed Stop wants the phone left alone.
+  if (!stopped && last && source.finish) {
+    try { await source.finish(last); } catch (_) { /* the run's result stands */ }
+  }
+  describe();
 
   const status = stopped ? 'stopped' : 'done';
   if (deps.updateRun) await deps.updateRun({ status, found_count: stats.added, stats });
