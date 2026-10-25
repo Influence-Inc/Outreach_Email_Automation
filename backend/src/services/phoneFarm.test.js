@@ -18,7 +18,7 @@ function nav(name, handles, seen) {
   };
 }
 
-function farmWith({ state = {}, search = ['s1', 's2', 's3', 's4', 's5'], feed = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6'], persona = 'viewer' } = {}) {
+function farmWith({ state = {}, search = ['s1', 's2', 's3', 's4', 's5'], feed = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6'] } = {}) {
   const seen = [];
   const saved = [];
   const farm = farmLib.createFarmSource({
@@ -27,7 +27,6 @@ function farmWith({ state = {}, search = ['s1', 's2', 's3', 's4', 's5'], feed = 
     startSearch: () => nav('search', search, seen)(),
     startFeed: () => nav('feed', feed, seen)(),
     persist: async (p) => { saved.push(p); },
-    labelAccount: async () => persona,
   });
   return { farm, seen, saved };
 }
@@ -37,32 +36,30 @@ test('a new account warms up through search, then moves to its feed at the goal'
   let c = await farm.next();
   assert.strictEqual(c.from, 'search', 'a new account starts in warm-up');
   c = await farm.next({ decision: 'added', added: true });
-  farm.onWarmed({ liked: true, shared: true }); // the navigator warmed s1
+  farm.onWarmed({ liked: true }); // the navigator liked s1's reel
   c = await farm.next({ decision: 'added', added: true });
-  farm.onWarmed({ liked: true, shared: false }); // s2
+  farm.onWarmed({ liked: true }); // s2
   assert.strictEqual(c.from, 'search');
   c = await farm.next({ decision: 'rejected', added: false });
   assert.strictEqual(c.from, 'feed', 'at 2 warmed creators the account scouts its feed');
   assert.deepStrictEqual(seen.at(-1), ['search', 's3', 'not', 'stop'], 'the search scout was told to stop, after its last result');
   const moved = saved.find((p) => p.phase === 'feed');
-  assert.strictEqual(moved.persona, 'viewer', 'labelled with the viewer it was warmed into');
   assert.match(moved.note, /2 shortlisted creators warmed/);
   assert.strictEqual(farm.info().phase, 'feed');
   assert.strictEqual(farm.info().switches.length, 1);
 });
 
-test('a warm-up that does not like or share anything does not count', async () => {
+test('a warm-up that liked nothing does not count', async () => {
   const { farm } = farmWith();
   await farm.next();
-  farm.onWarmed({ liked: false, shared: false, reason: 'no reel' });
+  farm.onWarmed({ liked: false, reason: 'no reel' });
   assert.strictEqual(farm.info().warmed, 0);
 });
 
 test('an account already in its feed phase starts there', async () => {
-  const { farm } = farmWith({ state: { phase: 'feed', persona: 'old viewer' } });
+  const { farm } = farmWith({ state: { phase: 'feed' } });
   const c = await farm.next();
   assert.strictEqual(c.from, 'feed');
-  assert.strictEqual(farm.info().persona, 'old viewer');
 });
 
 test('an unreliable feed sends the account back to a top-up warm-up', async () => {

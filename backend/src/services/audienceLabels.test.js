@@ -20,18 +20,3 @@ test('without Claude it falls back to Jev\'s labels, and to nothing when there i
   const boom = async () => { throw new Error('down'); };
   assert.strictEqual(await labels.targetViewer({ summary: 'Food' }, { call: boom }), 'Viewers into Food');
 });
-
-test('an account persona is written from its warmed creators\' viewers', async () => {
-  let asked = null;
-  const call = async (s, m) => { asked = m[0].content; return '28 y/o software engineer in NYC'; };
-  const p = await labels.accountPersona(['27 y/o AI developer in New York', 'startup founders in Brooklyn'], { keywords: ['ai agents'], call });
-  assert.strictEqual(p, '28 y/o software engineer in NYC');
-  assert.match(asked, /ai agents/);
-  assert.match(asked, /startup founders in Brooklyn/);
-});
-
-test('without Claude the persona is the most common viewer line; none without viewers', async () => {
-  const call = async () => null;
-  assert.strictEqual(await labels.accountPersona(['a', 'b', 'b'], { call }), 'b');
-  assert.strictEqual(await labels.accountPersona([], { call }), null);
-});

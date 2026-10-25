@@ -338,14 +338,12 @@ test('with no discovery set, the phone\'s phase decides: a new account warms up 
       if (outcome && outcome.added) await args.deps.warmCreator({ handle: 'coach' });
     }()),
     scoutReels: () => { usedFeed = true; return (async function* none() {}()); },
-    warmCreator: async () => ({ liked: true, shared: true, how: 'copy link' }),
+    warmCreator: async () => ({ liked: true }),
     recordWarm: async (db, row) => warmedLogged.push(row),
   };
   await session.start({ hostId: 3, run: { id: 21, campaign_id: null, config: { keywords: ['gym'] } }, deps, logger: { log() {} } }).promise;
   assert.strictEqual(usedFeed, false);
-  assert.deepStrictEqual(warmedLogged, [{
-    hostId: 3, runId: 21, username: 'coach', liked: true, shared: true, how: 'copy link',
-  }]);
+  assert.deepStrictEqual(warmedLogged, [{ hostId: 3, runId: 21, username: 'coach' }]);
   assert.deepStrictEqual(saved, [[3, { warmed: 1 }]], 'the warm-up counts toward the phone\'s goal');
 });
 

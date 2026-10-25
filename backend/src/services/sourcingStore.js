@@ -70,8 +70,7 @@ async function listReview({ campaignId = null, limit = 100 } = {}) {
  */
 async function sendToCreatorList(candidateId, username, jev = null, sourceTerm = null, { bio = null, caption = null } = {}) {
   // Who this creator's reels are for ("27 y/o AI developer in New York"):
-  // kept on the row, sent with them, and what a phone's account persona is
-  // built from once it has warmed them (services/phoneFarm.js).
+  // kept on the row and sent to creator-list in their note.
   const targetViewer = await audienceLabels.targetViewer({
     username,
     bio,

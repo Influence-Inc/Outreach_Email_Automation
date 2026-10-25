@@ -489,7 +489,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       //
       // The previous creator's result comes back through the yield: a
       // shortlisted creator is warmed (services/creatorWarmup.js opens their
-      // newest reel from the profile we are on, likes and shares it, and we step
+      // newest reel from the profile we are on and likes it, and we step
       // back to the profile so the bottom bar can reach the feed again), and
       // `stop` ends the feed scout — services/phoneFarm.js moving the account
       // back to warm-up.

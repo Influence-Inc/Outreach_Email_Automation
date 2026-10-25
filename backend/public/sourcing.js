@@ -424,14 +424,13 @@ async function loadReview() {
 
 let latestHosts = [];
 
-/** Where a phone's account is in phone farming, and the viewer it is warmed into. */
+/** Where a phone's account is in phone farming; why it last moved, on hover. */
 function farmCell(h) {
   const phase = h.farm_phase === 'feed'
     ? '<span class="pill added">Scouting its feed</span>'
     : `<span class="pill review">Warming up ${Number(h.farm_warmed) || 0}/${Number(h.farm_goal) || 0}</span>`;
-  const persona = h.persona ? `<br><span class="scout-hint">Warmed for: ${escapeHtml(h.persona)}</span>` : '';
   const why = h.farm_note ? ` title="${escapeHtml(h.farm_note)}"` : '';
-  return `<span${why}>${phase}</span>${persona}`;
+  return `<span${why}>${phase}</span>`;
 }
 
 /** The run's scouting phase, from stats.discovery (services/phoneFarm.js). */

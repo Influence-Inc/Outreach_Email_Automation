@@ -179,12 +179,11 @@ function annotateHostHealth(rows, session = sourcingSession) {
 
 router.get('/hosts', async (_req, res, next) => {
   try {
-    // farm_* and persona: where the phone's account is in phone farming
-    // (services/phoneFarm.js) — warming up or scouting its feed, and the viewer
-    // it has been warmed into.
+    // farm_*: where the phone's account is in phone farming
+    // (services/phoneFarm.js) — warming up, or scouting its feed.
     const rows = await db.many(
       `SELECT id, label, platforms, status, last_seen_at, created_at,
-              farm_phase, farm_warmed, farm_goal, farm_note, farm_phase_at, persona
+              farm_phase, farm_warmed, farm_goal, farm_note, farm_phase_at
        FROM sourcing_hosts ORDER BY created_at DESC`,
     );
     const goal = phoneFarm.loadSettings().warmupGoal;

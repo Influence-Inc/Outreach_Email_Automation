@@ -9,11 +9,10 @@
 //
 //   PHASE 1  WARM-UP  Search the run's keywords and scout the creators whose
 //                     reels come up (sourcingNavigator.scout). Every creator
-//                     shortlisted is warmed — their reel liked and shared
+//                     shortlisted is warmed — their reel liked
 //                     (services/creatorWarmup.js) — which teaches Instagram what
 //                     this account watches. After `goal` creators are warmed the
-//                     account moves to phase 2, and is labelled with the viewer
-//                     it has been warmed into (services/audienceLabels.js).
+//                     account moves to phase 2.
 //
 //   PHASE 2  FEED     Scout the account's own reel feed
 //                     (sourcingReelsNavigator.scoutReels), still warming every
@@ -22,9 +21,9 @@
 //                     creators we shortlist, it is UNRELIABLE and the account goes
 //                     back to phase 1 for a top-up warm-up.
 //
-// A new account (a newly paired phone) starts in phase 1. The phase, the count
-// warmed towards the goal and the persona live on sourcing_hosts, so they carry
-// over from run to run; every warm-up is logged in sourcing_warm_events.
+// A new account (a newly paired phone) starts in phase 1. The phase and the
+// count warmed towards the goal live on sourcing_hosts, so they carry over from
+// run to run; every warm-up is logged in sourcing_warm_events.
 //
 // A run ends when it has its target, when it is stopped, or when both ways have
 // run dry in the same run (the keywords' search results are used up AND the feed
@@ -122,21 +121,19 @@ function jevDecisionOf(candidate, res) {
  * last creator still gets warmed — before the other phase starts.
  *
  * @param {object} o
- * @param {object} o.state        { phase, warmed, goal, persona } as loaded for the host
+ * @param {object} o.state        { phase, warmed, goal } as loaded for the host
  * @param {Function} o.startSearch () => async generator (phase 1)
  * @param {Function} o.startFeed   () => async generator (phase 2)
  * @param {Function} [o.persist]   async (patch) => void   — writes the host's farm columns
- * @param {Function} [o.labelAccount] async () => persona|null — the warmed-into viewer
  */
 function createFarmSource({
-  state = {}, startSearch, startFeed, persist = async () => {}, labelAccount = async () => null,
+  state = {}, startSearch, startFeed, persist = async () => {},
   settings = loadSettings(), log = () => {}, now = () => new Date(),
 }) {
   const farm = {
     phase: PHASES.includes(state.phase) ? state.phase : 'warmup',
     warmed: Number(state.warmed) || 0,
     goal: Number(state.goal) || settings.warmupGoal,
-    persona: state.persona || null,
   };
   const switches = [];
   let gen = null;
@@ -160,15 +157,8 @@ function createFarmSource({
       farm.goal = settings.topUpGoal;
       Object.assign(patch, { warmed: 0, goal: farm.goal });
     }
-    if (phase === 'feed') {
-      const persona = await labelAccount().catch(() => null);
-      if (persona) {
-        farm.persona = persona;
-        patch.persona = persona;
-      }
-    }
     switches.push({ from, to: phase, reason: reason || null, at: now().toISOString() });
-    log(`[farm] ${from} → ${phase}${reason ? `: ${reason}` : ''}${phase === 'feed' && farm.persona ? ` (warmed for: ${farm.persona})` : ''}`);
+    log(`[farm] ${from} → ${phase}${reason ? `: ${reason}` : ''}`);
     await save(patch);
   }
 
@@ -274,9 +264,9 @@ function createFarmSource({
       gen = null;
       if (g) await g.return();
     },
-    /** A creator was warmed (liked and/or shared). */
+    /** A creator was warmed (their reel liked). */
     onWarmed(out) {
-      if (!out || !(out.liked || out.shared)) return;
+      if (!out || !out.liked) return;
       farm.warmed += 1;
       save({ warmed: farm.warmed });
     },
@@ -292,7 +282,6 @@ function createFarmSource({
         phase: farm.phase,
         warmed: farm.warmed,
         goal: farm.goal,
-        persona: farm.persona,
         feedOnNiche: v && v.share != null ? Math.round(v.share * 100) / 100 : null,
         switches,
       };
@@ -305,14 +294,14 @@ function createFarmSource({
 async function loadState(db, hostId) {
   if (hostId == null) return {};
   const row = await db.one(
-    `SELECT farm_phase, farm_warmed, farm_goal, persona FROM sourcing_hosts WHERE id = $1`,
+    `SELECT farm_phase, farm_warmed, farm_goal FROM sourcing_hosts WHERE id = $1`,
     [hostId],
   );
-  return row ? { phase: row.farm_phase, warmed: row.farm_warmed, goal: row.farm_goal, persona: row.persona } : {};
+  return row ? { phase: row.farm_phase, warmed: row.farm_warmed, goal: row.farm_goal } : {};
 }
 
 const COLUMNS = {
-  phase: 'farm_phase', warmed: 'farm_warmed', goal: 'farm_goal', note: 'farm_note', phaseAt: 'farm_phase_at', persona: 'persona',
+  phase: 'farm_phase', warmed: 'farm_warmed', goal: 'farm_goal', note: 'farm_note', phaseAt: 'farm_phase_at',
 };
 
 async function saveState(db, hostId, patch = {}) {
@@ -324,35 +313,18 @@ async function saveState(db, hostId, patch = {}) {
     vals.push(patch[key]);
     sets.push(`${col} = $${vals.length}`);
   }
-  if ('persona' in patch) sets.push('persona_at = NOW()');
   if (!sets.length) return;
   await db.query(`UPDATE sourcing_hosts SET ${sets.join(', ')} WHERE id = $1`, vals);
 }
 
-/** Log one warmed creator, with who their viewers are when that was labelled. */
-async function recordWarm(db, { hostId = null, runId = null, username, liked, shared, how = null }) {
+/** Log one creator whose reel the phone liked to warm its feed. */
+async function recordWarm(db, { hostId = null, runId = null, username }) {
   const handle = String(username || '').trim().replace(/^@/, '').toLowerCase();
   if (!handle) return;
   await db.query(
-    `INSERT INTO sourcing_warm_events (host_id, run_id, username, liked, shared, how, target_viewer)
-     VALUES ($1, $2, $3, $4, $5, $6,
-       (SELECT evidence->>'targetViewer' FROM sourced_candidates
-         WHERE LOWER(username) = $3 AND evidence ? 'targetViewer'
-         ORDER BY id DESC LIMIT 1))`,
-    [hostId, runId, handle, !!liked, !!shared, how],
+    `INSERT INTO sourcing_warm_events (host_id, run_id, username) VALUES ($1, $2, $3)`,
+    [hostId, runId, handle],
   );
-}
-
-/** Who the creators this account warmed make reels for, newest first. */
-async function recentViewers(db, hostId, limit = 30) {
-  if (hostId == null) return [];
-  const rows = await db.many(
-    `SELECT target_viewer FROM sourcing_warm_events
-      WHERE host_id = $1 AND target_viewer IS NOT NULL
-      ORDER BY at DESC LIMIT $2`,
-    [hostId, limit],
-  );
-  return rows.map((r) => r.target_viewer).filter(Boolean);
 }
 
 /** Back to phase 1 from the start: a new account was signed in on the phone. */
@@ -360,7 +332,7 @@ async function restart(db, hostId, { settings = loadSettings(), note = 'restarte
   await db.query(
     `UPDATE sourcing_hosts
         SET farm_phase = 'warmup', farm_warmed = 0, farm_goal = $2, farm_note = $3,
-            farm_phase_at = NOW(), persona = NULL, persona_at = NULL
+            farm_phase_at = NOW()
       WHERE id = $1`,
     [hostId, settings.warmupGoal, note],
   );
@@ -374,7 +346,6 @@ module.exports = {
   loadState,
   saveState,
   recordWarm,
-  recentViewers,
   restart,
   DEFAULTS,
   PHASES,

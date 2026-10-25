@@ -24,7 +24,6 @@ const nicheCalibration = require('./nicheCalibration');
 const jevCalibration = require('./jevCalibration');
 const creatorWarmup = require('./creatorWarmup');
 const phoneFarm = require('./phoneFarm');
-const audienceLabels = require('./audienceLabels');
 
 const DEFAULT_PACING_MS = 1800; // human-like pacing between IG actions (anti-flag)
 // No cap on captures by default: a run keeps scouting until it has sourced its
@@ -219,9 +218,9 @@ async function runSession({ hostId, run, deps }) {
     }
   };
 
-  // Every creator shortlisted is warmed — their reel liked and shared — so the
-  // account's own reel feed learns what to serve (services/creatorWarmup.js).
-  // The navigators call this right after a creator is shortlisted, on their reel.
+  // Every creator shortlisted is warmed — their reel liked — so the account's own
+  // reel feed learns what to serve (services/creatorWarmup.js). The navigators
+  // call this right after a creator is shortlisted, on their reel.
   const warmPolicy = creatorWarmup.loadPolicy();
   const warmCounters = creatorWarmup.newCounters();
   let farm = null;
@@ -229,12 +228,10 @@ async function runSession({ hostId, run, deps }) {
     const out = await (deps.warmCreator || creatorWarmup.warmCreator)({
       ...args, policy: warmPolicy, counters: warmCounters,
     });
-    if (out && (out.liked || out.shared)) {
+    if (out && out.liked) {
       if (farm) farm.onWarmed(out);
       try {
-        await (deps.recordWarm || phoneFarm.recordWarm)(db, {
-          hostId, runId: run.id, username: args.handle, liked: out.liked, shared: out.shared, how: out.how || null,
-        });
+        await (deps.recordWarm || phoneFarm.recordWarm)(db, { hostId, runId: run.id, username: args.handle });
       } catch (err) {
         log(`[sourcing-session] could not log the warm-up of @${args.handle}: ${(err && err.message) || err}`);
       }
@@ -348,9 +345,6 @@ async function runSession({ hostId, run, deps }) {
       startSearch: () => (async function* fresh() { await refreshMemory(); yield* startSearch(); }()),
       startFeed: () => (async function* fresh() { await refreshMemory(); yield* startFeed(); }()),
       persist: (patch) => (deps.saveFarmState || ((id, p) => phoneFarm.saveState(db, id, p)))(hostId, patch),
-      labelAccount: async () => (deps.labelAccount || (async () => audienceLabels.accountPersona(
-        await phoneFarm.recentViewers(db, hostId), { keywords: config.keywords || [] },
-      )))(),
       log,
     });
     source = farm;

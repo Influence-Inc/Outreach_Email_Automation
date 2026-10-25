@@ -99,23 +99,20 @@ kind. So `services/phoneFarm.js` moves every phone's account through two phases,
 
 ```
 new account ──► PHASE 1  WARM-UP   search the keywords, scout the creators whose reels come
-                   ▲               up; like + share every creator shortlisted
+                   ▲               up; like the reel of every creator shortlisted
                    │                    │ goal reached (15 warmed; 8 on a top-up)
-                   │                    ▼   → account labelled with the viewer it now is
+                   │                    ▼
                    └── unreliable ─ PHASE 2  FEED   scout the account's own reel feed,
-                                                   still liking + sharing every shortlist
+                                                   still liking every shortlist's reel
 ```
 
 - **Warming a creator** (`services/creatorWarmup.js`) happens right after they are
   shortlisted, on the reel that surfaced them (the phone is still on it). The navigators get
   each creator's result back through `yield` (`runWithSource` passes it to `source.next`), so
-  they know who was shortlisted. Like: the heart, unless already liked. Share: a DM of the reel
-  to `SOURCING_SHARE_TO` — an account the team owns, so nothing reaches a real person — or,
-  with that unset, *Copy link*, which sends nothing. Caps per run: 40 likes, 20 shares
-  (`SOURCING_WARM_MAX_LIKES` / `_SHARES`); an *action blocked* screen stops warming for the
-  rest of the run; `SOURCING_WARM=off` turns it off. The share sheet is matched by its words
-  (Search, the handle, Send, Copy link), which has **not been confirmed on a device**: a step
-  that misses backs out of the sheet and the like still stands.
+  they know who was shortlisted. Warming is a like and nothing else — the heart, unless the
+  reel is already liked; nothing is shared, saved or commented. Cap: 40 likes per run
+  (`SOURCING_WARM_MAX_LIKES`); an *action blocked* screen stops warming for the rest of the
+  run; `SOURCING_WARM=off` turns it off.
 - **Unreliable feed.** While phase 2 runs, the feed is watched: when fewer than 30% of the last
   30 feed reels are on-niche (an off-niche caption skipped on sight, or a creator Jev placed off
   target), or 40 creators in a row from the feed are judged with none shortlisted, the account
@@ -125,12 +122,12 @@ new account ──► PHASE 1  WARM-UP   search the keywords, scout the creators
 - **Labels.** Each shortlisted creator gets a one-line *target viewer* — who their reels are
   for, e.g. "27 y/o AI developer in New York" (`services/audienceLabels.js`, Claude, falling back
   to Jev's labels). It is kept on the candidate (`evidence.targetViewer`) and sent in the
-  creator-list note. When an account finishes a warm-up it is labelled with a *persona*: the
-  single viewer whose feed would be full of the creators it warmed. The Paired phone-hosts table
-  shows each phone's phase (*Warming up 6/15* or *Scouting its feed*) and persona; the run card
-  shows the phase the run is in and, on hover, every switch and why.
-- **State.** Phase, the count toward the goal and the persona live on `sourcing_hosts`
-  (`farm_*`, `persona`), so they carry over between runs; every warmed creator is logged in
+  creator-list note (`for: …`).
+- **On the page.** The Paired phone-hosts table shows each phone's phase (*Warming up 6/15* or
+  *Scouting its feed*, with why it last moved on hover); the run card shows the phase the run is
+  in and, on hover, every switch and why.
+- **State.** Phase and the count toward the goal live on `sourcing_hosts` (`farm_*`), so they
+  carry over between runs; every warmed creator is logged in
   `sourcing_warm_events`. A newly paired phone starts in warm-up; *Restart warm-up* on the hosts
   table (`POST /api/sourcing/hosts/:id/farm/restart`) starts over when a new account is signed in.
 - **When a run ends.** At its target, when stopped, or when both ways ran dry in the same run (the
@@ -657,10 +654,8 @@ Automated like/save is what Instagram's anti‑automation targets, so it is:
 - **never re‑likes** an already‑liked reel.
 
 Use a **dedicated** account per phone. The random feed engagement above performs
-only like/save. **Warming shortlisted creators** (*Phone farming*) does like and
-share every one of them, on purpose and on every run, within its own caps; its
-shares go to `SOURCING_SHARE_TO` (a team-owned account) or are a *Copy link*, never
-to anyone else.
+only like/save. **Warming shortlisted creators** (*Phone farming*) likes every one of
+their reels, on purpose and on every run, within its own cap; it never shares.
 
 ## Calibration
 
