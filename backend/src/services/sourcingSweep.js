@@ -89,7 +89,7 @@ async function autoEnqueueRuns({ db, buildConfig } = {}) {
   for (const c of candidates) {
     const cfg = buildConfig(c.sourcing_defaults, {});
     if (!cfg.targetCount || cfg.targetCount < 1) continue;
-    if (!cfg.niche && !cfg.keywords.length) continue;
+    if (!cfg.keywords.length) continue;
     const row = await db.one(
       `INSERT INTO sourcing_runs (campaign_id, config, status, target_count, created_by)
        VALUES ($1, $2::jsonb, 'queued', $3, 'auto-sweep')

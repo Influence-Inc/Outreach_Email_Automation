@@ -104,14 +104,9 @@ test('merging never mutates the stored object', () => {
 
 // ── which judges a run can use ──────────────────────────────────────────────
 
-test('judgeStatus says whether reels are watched, only pictured, or not judged at all', () => {
-  const gemini = (on) => ({ available: () => on, model: () => 'gemini-flash-lite-latest' });
-  const claude = (on) => ({ getClient: () => (on ? {} : null) });
-
-  assert.deepStrictEqual(sourcing.judgeStatus({ gemini: gemini(true), claude: claude(true) }), {
-    gemini: true, geminiModel: 'gemini-flash-lite-latest', claude: true, mode: 'video',
-  });
-  assert.strictEqual(sourcing.judgeStatus({ gemini: gemini(false), claude: claude(true) }).mode, 'pictures');
-  assert.strictEqual(sourcing.judgeStatus({ gemini: gemini(false), claude: claude(false) }).mode, 'none');
-  assert.strictEqual(sourcing.judgeStatus({ gemini: gemini(false), claude: claude(false) }).geminiModel, null);
+test('judgeStatus says whether Jev can label and hear reels, or not judge at all', () => {
+  const jev = (labels, speech) => ({ configured: () => labels, speechConfigured: () => speech });
+  assert.deepStrictEqual(sourcing.judgeStatus({ jev: jev(true, true) }), { jev: true, speech: true, mode: 'full' });
+  assert.strictEqual(sourcing.judgeStatus({ jev: jev(true, false) }).mode, 'no-speech');
+  assert.deepStrictEqual(sourcing.judgeStatus({ jev: jev(false, true) }), { jev: false, speech: false, mode: 'none' });
 });

@@ -27,6 +27,10 @@
     .scout-grid textarea { resize: vertical; min-height: 76px; line-height: 1.45; }
     .scout-grid textarea, .scout-grid label:has(+ textarea) { align-self: start; }
     .scout-grid label:has(+ textarea) { padding-top: 9px; }
+    h2.scout-section { margin: 28px 0 12px; font-size: 16px; }
+    .scout-row-hint { grid-column: 1 / -1; margin: -4px 0 4px; }
+    .scout-check { font-weight: 400 !important; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+    .scout-check input { width: auto; }
     .scout-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
     .scout-hint { color: #6b7280; font-size: 12px; margin: 4px 0 0; }
     .scout-status { margin: 12px 0; font-size: 13px; min-height: 18px; }
@@ -68,8 +72,9 @@
   <main class="scout-wrap">
     <h1 style="margin:0 0 4px">Scout Instagram creators</h1>
     <p class="scout-hint">
-      Automatically discover creators from the Instagram app (via a paired phone) that match a
-      campaign&rsquo;s niche and view/quality rules, and add the ones that pass into that campaign.
+      Automatically discover creators on the Instagram app (via a paired phone) who post about your
+      keywords and go viral often. Shortlisted creators go to the Find creators page
+      (<em>Curated by INFLUENCE Team</em>).
     </p>
     <div id="judge-banner" class="judge-banner" hidden></div>
 
@@ -77,58 +82,42 @@
       <label for="campaign" style="font-weight:600;font-size:13px">Campaign</label>
       <select id="campaign" class="scout-select" style="margin-top:6px"></select>
 
-      <h2 style="margin:20px 0 10px;font-size:16px">Scouting rules</h2>
+      <h2 class="scout-section">What to look for</h2>
       <div class="scout-grid">
-        <label for="niche">Niche / genre</label>
-        <input id="niche" type="text" placeholder="e.g. home fitness, skincare, budget travel" />
-
-        <label for="keywords">Caption keywords</label>
-        <input id="keywords" type="text" placeholder="comma-separated, e.g. gym, workout, homegym" />
-        <p class="scout-hint" style="grid-column:1/-1;margin:-4px 0 4px">
-          The topic, niche, genre and reel format Jev checks for are read from these keywords
-          &mdash; e.g. &ldquo;gym workout tutorial&rdquo; &rarr; Fitness, Tutorial.
+        <label for="keywords">Keywords</label>
+        <input id="keywords" type="text" placeholder="comma-separated, e.g. home workout, gym tutorial, protein recipes" />
+        <p class="scout-hint scout-row-hint">
+          Each keyword is searched on Instagram. Jev also reads from them the topic, niche, genre
+          and reel format to look for &mdash; e.g. &ldquo;gym workout tutorial&rdquo; &rarr; Fitness, Tutorial.
         </p>
 
-        <label for="floor">Min views (floor)</label>
-        <input id="floor" type="number" min="0" step="1000" placeholder="15000" />
-
-        <label for="floorTolerance">Reels allowed below floor</label>
-        <input id="floorTolerance" type="number" min="0" max="6" step="1" value="0" />
-
-        <label for="ceiling">Max of range (ceiling)</label>
-        <input id="ceiling" type="number" min="0" step="1000" placeholder="500000" />
-
-        <label for="brandName">Brand name</label>
-        <input id="brandName" type="text" placeholder="e.g. Velo Running" />
-
-        <label for="brandProduct">What you're selling</label>
-        <input id="brandProduct" type="text" placeholder="e.g. a carbon-plate racing shoe for sub-4 marathoners" />
-
-        <label for="brandBrief">Brand &amp; product details</label>
-        <textarea id="brandBrief" rows="4"
-          placeholder="Positioning, price, who it's for, and what a natural mention looks like &mdash; e.g. &quot;A GBP 280 carbon-plate shoe from a small running label. Buyers are amateur marathoners chasing a sub-4 time who train 5x a week. It fits naturally in a training-block vlog or a race recap; it would look bought in a generic gym-gear haul.&quot;"></textarea>
-
-        <label for="risk">Risk level</label>
-        <select id="risk">
-          <option value="low">Low — steady, stable views</option>
-          <option value="medium" selected>Medium — some ups and downs</option>
-          <option value="high">High — a couple can go viral, rest at the floor</option>
-          <option value="all">All — any shape, take low, medium and high</option>
-        </select>
+        <label for="viralViews">Viral at (views)</label>
+        <input id="viralViews" type="number" min="1000" step="10000" placeholder="100000" />
+        <p class="scout-hint scout-row-hint">
+          A reel counts as viral at this many views (100K if left empty). We read each creator&rsquo;s
+          newest 16 reels and keep the ones whose reels go viral often: about a third of them, and
+          at least 2 &mdash; e.g. 5 of 16, 4 of 12, 2 of 5. A creator one viral reel short goes to review.
+        </p>
 
         <label for="targetCount">Creators to source</label>
         <input id="targetCount" type="number" min="1" step="1" placeholder="20" />
-
-        <label for="reelsWindow">Recent reels to check</label>
-        <input id="reelsWindow" type="number" min="3" max="24" step="1" value="12" />
-        <p class="scout-hint" style="grid-column:1/-1;margin:-4px 0 4px">
-          A creator must have this many reels with readable views &mdash; or 6, when you check
-          more than 6. Checking fewer than 6 makes the reach and risk read less reliable.
+        <p class="scout-hint scout-row-hint">
+          The run keeps going until this many creators are shortlisted (or the keywords run out of results).
         </p>
+      </div>
 
-        <label for="maxProfiles">Max profiles to open</label>
-        <input id="maxProfiles" type="number" min="0" step="1" placeholder="200" />
+      <h2 class="scout-section">The brand</h2>
+      <div class="scout-grid">
+        <label for="brandName">Brand name</label>
+        <input id="brandName" type="text" placeholder="e.g. Velo Running" />
 
+        <label for="brandProduct">What you&rsquo;re selling</label>
+        <textarea id="brandProduct" rows="4"
+          placeholder="The product, plus anything that helps: price, who it&rsquo;s for, what a natural mention looks like &mdash; e.g. &quot;A GBP 280 carbon-plate racing shoe for amateur marathoners chasing a sub-4 time. Fits a training vlog or a race recap.&quot;"></textarea>
+      </div>
+
+      <h2 class="scout-section">How to scout</h2>
+      <div class="scout-grid">
         <label for="discovery">Discovery mode</label>
         <select id="discovery">
           <option value="">Profiles (search → profile)</option>
@@ -141,42 +130,28 @@
         </select>
 
         <label for="warmFeed">Warm the feed</label>
-        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">
-          <input id="warmFeed" type="checkbox" style="width:auto" />
+        <label class="scout-check">
+          <input id="warmFeed" type="checkbox" checked />
           Like clearly on-brand reels while scouting, to steer this account's feed
           toward the niche (reels mode only)
         </label>
-
         <label for="skipOffNicheReels">Skip off-niche reels</label>
-        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">
-          <input id="skipOffNicheReels" type="checkbox" style="width:auto" checked />
+        <label class="scout-check">
+          <input id="skipOffNicheReels" type="checkbox" checked />
           Scroll past feed reels whose caption is plainly about something else,
           before a clip is recorded
         </label>
-
-        <label for="jevAutoConfidence">Shortlist when Jev is at least</label>
-        <input id="jevAutoConfidence" type="number" min="0" max="1" step="0.05" value="0.6" />
-
-        <label for="jevRejectConfidence">Reject off-target when Jev is at least</label>
-        <input id="jevRejectConfidence" type="number" min="0" max="1" step="0.05" value="0.6" />
-
         <label for="prescreenNiche">Screenshot pre-check</label>
-        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">
-          <input id="prescreenNiche" type="checkbox" style="width:auto" />
+        <label class="scout-check">
+          <input id="prescreenNiche" type="checkbox" checked />
           Check the profile pictures before recording, and skip plainly off-niche creators
         </label>
-
-        <label for="reviewBorderline">Borderline → review</label>
-        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px">
-          <input id="reviewBorderline" type="checkbox" style="width:auto" />
-          Hold creators who only just clear the quality bar (within 0.05) or are only
-          just on-niche, for approval instead of auto-adding
+        <label for="reviewBorderline">Borderline &rarr; review</label>
+        <label class="scout-check">
+          <input id="reviewBorderline" type="checkbox" checked />
+          Send creators who are one viral reel short to the review queue instead of rejecting them
         </label>
       </div>
-      <p class="scout-hint">
-        The floor is a hard gate: every one of the recent reels must clear it. The risk level
-        decides the acceptable shape of the view distribution across those reels.
-      </p>
 
       <div class="scout-row">
         <button id="save-btn" class="ghost">Save as campaign defaults</button>
@@ -237,11 +212,11 @@
         <div>Target<b id="run-target">0</b></div>
         <div>Scanned<b id="run-scanned">0</b></div>
         <div title="Judgements where a recorded reel reached the judge. 0 means the phone is not delivering recordings — check screen capture in the app.">Judged with video<b id="run-video">—</b></div>
-        <div title="Which judge produced each verdict. No Gemini entries means no reel was watched.">Judged by<b id="run-judges" style="font-size:13px;font-weight:600">—</b></div>
+        <div title="Which judge produced each verdict: jev means Jev labelled the recorded reel.">Judged by<b id="run-judges" style="font-size:13px;font-weight:600">—</b></div>
       </div>
       <table class="scout-table">
         <thead>
-          <tr><th>Handle</th><th>Views (min–max)</th><th>Topic</th><th>Genre</th><th>Format</th><th title="How sure Jev was of the labels that matched your targets">Fit</th><th>Risk</th><th>Decision</th><th>Reason</th><th>Creator list</th></tr>
+          <tr><th>Handle</th><th>Views (min–max)</th><th>Topic</th><th>Genre</th><th>Format</th><th title="How sure Jev was of the labels that matched your targets">Fit</th><th title="Reels that reached the viral bar, of the reels read">Viral</th><th>Decision</th><th>Reason</th><th>Creator list</th></tr>
         </thead>
         <tbody id="cand-rows"></tbody>
       </table>
@@ -252,7 +227,8 @@
         <h2 style="margin:0;font-size:16px">Pending review</h2>
         <button id="review-refresh" class="ghost small">Refresh</button>
       </div>
-      <p class="scout-hint">Creators Jev was unsure about — Shortlist sends them to the Find creators page (<em>Curated by INFLUENCE Team</em>), Reject drops them. &ldquo;Held because&rdquo; says what Jev was unsure of, or that their reach was never measured.</p>
+      <p class="scout-hint">Creators Jev was unsure about — Shortlist sends them to the Find creators page (<em>Curated by INFLUENCE Team</em>), Reject drops them. &ldquo;Held because&rdquo; says what Jev was unsure of, that they were one viral reel short, or that their reach was never measured.</p>
+      <p class="scout-hint" id="jev-bars"></p>
       <table class="scout-table">
         <thead>
           <tr><th>Handle</th><th>Followers</th><th>Jev labels</th><th>Fit</th><th>Transcript</th><th>Held because</th><th></th></tr>

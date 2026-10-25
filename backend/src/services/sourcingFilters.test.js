@@ -252,16 +252,103 @@ test('the reel minimum never exceeds the window the run was asked to read', () =
 });
 
 test('a small reels window judges on that window instead of rejecting everyone', () => {
-  const { buildConfig } = require('./sourcingConfig');
   for (const w of [3, 4, 5]) {
-    const cfg = buildConfig({}, { niche: 'gym', floor: 15000, risk: 'high', reelsWindow: w });
+    const cfg = { floor: 15000, risk: 'high', reelsWindow: w };
     const full = reelsOf(Array(w).fill(50000), 'gym');
     assert.strictEqual(F.prefilter({ reels: full }, cfg).pass, true, `window ${w}: a full window passes the prefilter`);
     assert.strictEqual(F.decide({ reels: full }, cfg).pass, true, `window ${w}: and the decision`);
   }
   // It is still a minimum: a creator short of even the small window is rejected.
-  const cfg3 = buildConfig({}, { floor: 15000, risk: 'high', reelsWindow: 3 });
+  const cfg3 = { floor: 15000, risk: 'high', reelsWindow: 3 };
   assert.match(F.prefilter({ reels: reelsOf([50000, 50000], 'gym') }, cfg3).rejectReason, /only 2 reels \(need 3\)/);
+});
+
+// ── viral potential ─────────────────────────────────────────────────────────
+//
+// What the Scout page judges reach on: how many of the newest reels (up to 16)
+// reached the viral bar. About a third of them, never fewer than two.
+
+const V = 100000; // the viral bar in these tests
+const viralCfg = (extra = {}) => ({ viralViews: V, reelsWindow: 16, ...extra });
+const hits = (viral, quiet, quietViews = 8000) => reelsOf([
+  ...Array(viral).fill(V * 2), ...Array(quiet).fill(quietViews),
+], 'gym');
+
+test('how many viral reels a creator needs scales with how many reels they have', () => {
+  const need = (n) => F.viralPotential(Array(n).fill(0), viralCfg()).needed;
+  assert.strictEqual(need(16), 5);
+  assert.strictEqual(need(12), 4);
+  assert.strictEqual(need(10), 3);
+  assert.strictEqual(need(7), 3);
+  assert.strictEqual(need(6), 2);
+  assert.strictEqual(need(5), 2);
+  assert.strictEqual(need(3), 2, 'never fewer than two: one hit is luck');
+});
+
+// Example 1: a creator who usually sits in a modest range, but whose reels
+// keep breaking out, goes on to the next step.
+test('a modest creator whose reels keep going viral passes', () => {
+  const out = F.decide({ reels: hits(5, 11, 12000) }, viralCfg());
+  assert.strictEqual(out.pass, true);
+  assert.strictEqual(out.viral.viral, 5);
+  assert.strictEqual(out.viral.needed, 5);
+  assert.strictEqual(out.viewFloorPass, true);
+});
+
+// Example 2: few reels, most of them viral.
+test('a creator with only 5 reels, 3 of them viral, passes', () => {
+  const pre = F.prefilter({ reels: hits(3, 2) }, viralCfg());
+  assert.strictEqual(pre.pass, true);
+  assert.strictEqual(F.decide({ reels: hits(3, 2) }, viralCfg()).pass, true);
+});
+
+// Example 3: 12 reels. Five viral passes; one or two that did a bit better
+// than usual is not potential.
+test('12 reels: 5 viral passes, 1 or 2 is rejected', () => {
+  assert.strictEqual(F.decide({ reels: hits(5, 7) }, viralCfg()).pass, true);
+  for (const n of [1, 2]) {
+    const out = F.decide({ reels: hits(n, 12 - n) }, viralCfg({ reviewBorderline: true }));
+    assert.strictEqual(out.pass, false, `${n} of 12`);
+    assert.match(out.rejectReason, new RegExp(`^${n} of 12 reels went viral \\(100K\\+ views\\), needs 4$`));
+  }
+});
+
+test('a reel that only nears the bar is not viral', () => {
+  const out = F.decide({ reels: reelsOf([...Array(10).fill(V - 1), ...Array(6).fill(5000)], 'gym') }, viralCfg());
+  assert.strictEqual(out.viral.viral, 0);
+  assert.strictEqual(out.pass, false);
+});
+
+// One viral reel short, with at least two hits: held for review when the
+// campaign reviews borderline creators, rejected when it does not.
+test('one viral reel short is borderline: carried on for review, or rejected', () => {
+  const reels = hits(4, 12);
+  const held = F.decide({ reels }, viralCfg({ reviewBorderline: true }));
+  assert.strictEqual(held.pass, true, 'carried on, for the orchestrator to hold');
+  assert.strictEqual(held.viral.pass, false);
+  assert.strictEqual(held.viral.borderline, true);
+  assert.strictEqual(F.prefilter({ reels }, viralCfg({ reviewBorderline: true })).pass, true);
+
+  const off = F.decide({ reels }, viralCfg({ reviewBorderline: false }));
+  assert.strictEqual(off.pass, false);
+  assert.match(off.rejectReason, /4 of 16 reels went viral/);
+
+  // A single hit is never borderline, even when it is one short of two.
+  assert.strictEqual(F.viralPotential([V, 10, 10, 10, 10], viralCfg()).borderline, false);
+});
+
+test('a creator with fewer than 3 readable reels cannot be judged', () => {
+  const out = F.prefilter({ reels: hits(2, 0) }, viralCfg());
+  assert.strictEqual(out.pass, false);
+  assert.match(out.rejectReason, /only 2 reels \(need 3\)/);
+});
+
+// Breakouts are the point, so the risk shape no longer rejects them, and a
+// floor left on an old config does not either.
+test('the viral rule ignores the risk shape and any leftover floor', () => {
+  const out = F.decide({ reels: hits(6, 10, 3000) }, viralCfg({ risk: 'low', floor: 50000 }));
+  assert.strictEqual(out.pass, true);
+  assert.strictEqual(F.prefilter({ reels: hits(6, 10, 3000) }, viralCfg({ risk: 'low', floor: 50000 })).pass, true);
 });
 
 // ── the 'all' risk appetite ─────────────────────────────────────────────────

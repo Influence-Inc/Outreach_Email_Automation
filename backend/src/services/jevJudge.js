@@ -94,6 +94,11 @@ function configured() {
   return Boolean(jevKey());
 }
 
+/** Can the judge hear the reel? Without Groq it reads only captions and on-screen text. */
+function speechConfigured() {
+  return Boolean(groqKey());
+}
+
 // ── the taxonomy ────────────────────────────────────────────────────────────
 
 const QUESTIONS = TAXONOMY.questions;
@@ -471,6 +476,13 @@ function toLabels(answers) {
 
 // ── the decision ────────────────────────────────────────────────────────────
 
+// How sure Jev must be to shortlist, and to reject as off target. Not set by
+// anyone on the Scout page: services/jevCalibration.js learns them from the
+// review queue and the session puts them on the run's config.
+const numberOr = (v, dflt) => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : dflt);
+const shortlistBar = (config = {}) => numberOr(config.jevAutoConfidence, DEFAULT_AUTO_CONFIDENCE);
+const rejectBar = (config = {}) => numberOr(config.jevRejectConfidence, DEFAULT_REJECT_CONFIDENCE);
+
 /**
  * Shortlist, hold for the admin, or reject — from Jev's labels and the run's
  * targets. Pure.
@@ -481,14 +493,21 @@ function toLabels(answers) {
  *   review     anything in between: unsure, "unclear", only the runner-up is a
  *              target, only the parent topic of a target niche, nothing to read,
  *              or no targets to judge against.
+ *
+ * A review also says how close it came, for services/jevCalibration.js to learn
+ * the two bars from what admins then decide: `unsureAt`, the lowest confidence
+ * of a label that matched a target but fell short of the shortlist bar, and
+ * `probablyOffAt`, the highest confidence of an off-target label that fell
+ * short of the reject bar.
  */
 function decideFromLabels(labels, targets, config = {}, { nothingToRead = false } = {}) {
-  const auto = Number.isFinite(Number(config.jevAutoConfidence)) ? Number(config.jevAutoConfidence) : DEFAULT_AUTO_CONFIDENCE;
-  const rejectAt = Number.isFinite(Number(config.jevRejectConfidence))
-    ? Number(config.jevRejectConfidence) : DEFAULT_REJECT_CONFIDENCE;
+  const auto = shortlistBar(config);
+  const rejectAt = rejectBar(config);
   const doubts = [];
   const offs = [];
   const fits = [];
+  const unsure = [];
+  const probablyOff = [];
 
   if (nothingToRead) {
     return { decision: 'review', reasons: ['nothing to read on this reel: no speech, caption or on-screen text'], fit: null };
@@ -511,6 +530,7 @@ function decideFromLabels(labels, targets, config = {}, { nothingToRead = false 
       fits.push(Math.min(topic.confidence, niche && targets.niches.includes(niche.value) ? niche.confidence : 1));
     } else if (hit) {
       doubts.push(`unsure of the subject: ${say('topic', topic)}`);
+      unsure.push(targets.topics.includes(topic.value) ? topic.confidence : Math.min(topic.confidence, niche.confidence));
     } else if (topic.value === 'unclear') {
       doubts.push('Jev could not tell what the reel is about');
     } else if (parentsOfTargetNiches.has(topic.value)) {
@@ -521,6 +541,7 @@ function decideFromLabels(labels, targets, config = {}, { nothingToRead = false 
       offs.push(`off-target subject: ${say('topic', topic)}`);
     } else {
       doubts.push(`probably off-target: ${say('topic', topic)}`);
+      probablyOff.push(topic.confidence);
     }
   }
 
@@ -529,7 +550,10 @@ function decideFromLabels(labels, targets, config = {}, { nothingToRead = false 
     const l = labels[dim] || { value: 'unclear', confidence: 0 };
     if (list.includes(l.value)) {
       if (l.confidence >= auto) fits.push(l.confidence);
-      else doubts.push(`unsure of the ${dim}: ${say(dim, l)}`);
+      else {
+        doubts.push(`unsure of the ${dim}: ${say(dim, l)}`);
+        unsure.push(l.confidence);
+      }
     } else if (l.value === 'unclear') {
       doubts.push(`Jev could not tell the ${dim}`);
     } else if (list.includes(l.runnerUp)) {
@@ -538,6 +562,7 @@ function decideFromLabels(labels, targets, config = {}, { nothingToRead = false 
       offs.push(`off-target ${dim}: ${say(dim, l)}`);
     } else {
       doubts.push(`probably off-target ${dim}: ${say(dim, l)}`);
+      probablyOff.push(l.confidence);
     }
   }
 
@@ -549,7 +574,15 @@ function decideFromLabels(labels, targets, config = {}, { nothingToRead = false 
     };
   }
   if (offs.length) return { decision: 'reject', reasons: offs, fit: 0 };
-  if (doubts.length) return { decision: 'review', reasons: doubts, fit: fits.length ? round3(Math.min(...fits)) : 0.5 };
+  if (doubts.length) {
+    return {
+      decision: 'review',
+      reasons: doubts,
+      fit: fits.length ? round3(Math.min(...fits)) : 0.5,
+      unsureAt: unsure.length ? Math.min(...unsure) : null,
+      probablyOffAt: probablyOff.length ? Math.max(...probablyOff) : null,
+    };
+  }
   return { decision: 'shortlist', reasons: [], fit: round3(Math.min(...fits)) };
 }
 
@@ -656,6 +689,10 @@ async function judge(candidate, config = {}, deps = {}) {
     labels,
     summary: summary(labels),
     fit: d.fit,
+    unsureAt: d.unsureAt ?? null,
+    probablyOffAt: d.probablyOffAt ?? null,
+    // The bars this verdict was decided against — learned, see jevCalibration.
+    bars: { shortlistAt: shortlistBar(config), rejectAt: rejectBar(config) },
     model: res.model,
     costUsd: res.costUsd,
   });
@@ -685,6 +722,7 @@ module.exports = {
   labelOf,
   summary,
   configured,
+  speechConfigured,
   stem,
   DIMENSIONS,
   DEFAULT_AUTO_CONFIDENCE,

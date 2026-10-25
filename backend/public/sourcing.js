@@ -80,31 +80,31 @@ function numOrNull(id) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Config stores these as arrays; the textarea wants one per line.
-function asLines(v) {
-  if (Array.isArray(v)) return v.join('\n');
-  return v || '';
-}
+// Settings the page no longer shows. Sent as null so a save removes what an
+// older version of the page stored (defaults merge, and null is how a key is
+// removed): the niche and brand details now live in the keywords and "what
+// you're selling" fields, and the rest is decided by the backend.
+const RETIRED = {
+  niche: null,
+  brandBrief: null,
+  floor: null,
+  floorTolerance: null,
+  ceiling: null,
+  risk: null,
+  reelsWindow: null,
+  maxProfiles: null,
+  jevAutoConfidence: null,
+  jevRejectConfidence: null,
+};
 
 function readForm() {
   return {
-    niche: el('niche').value.trim(),
+    ...RETIRED,
     keywords: el('keywords').value.trim(),
-    floor: numOrNull('floor'),
-    floorTolerance: numOrNull('floorTolerance'),
-    ceiling: numOrNull('ceiling'),
-    risk: el('risk').value,
+    viralViews: numOrNull('viralViews'),
     targetCount: numOrNull('targetCount'),
-    reelsWindow: numOrNull('reelsWindow'),
-    maxProfiles: numOrNull('maxProfiles'),
-    jevAutoConfidence: numOrNull('jevAutoConfidence'),
-    jevRejectConfidence: numOrNull('jevRejectConfidence'),
-    brandProduct: el('brandProduct').value.trim(),
     brandName: el('brandName').value.trim(),
-    // The judge is briefed on the brand BEFORE it sees the creator, so this is
-    // the field that decides whether "could they feature this without it looking
-    // like an ad" has anything concrete to measure against.
-    brandBrief: el('brandBrief').value.trim(),
+    brandProduct: el('brandProduct').value.trim(),
     discovery: el('discovery').value,
     reviewBorderline: el('reviewBorderline').checked,
     prescreenNiche: el('prescreenNiche').checked,
@@ -113,29 +113,35 @@ function readForm() {
   };
 }
 
+const listOf = (v) => (Array.isArray(v) ? v : String(v || '').split(','))
+  .map((x) => String(x).trim())
+  .filter(Boolean);
+
+// One field, with no repeats: a campaign saved by the older page may still
+// carry a separate niche, which did the same job as the keywords.
+function keywordsOf(cfg) {
+  const seen = new Set();
+  return [...listOf(cfg.keywords), ...listOf(cfg.niche)].filter((k) => {
+    const key = k.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function fillForm(cfg) {
   cfg = cfg || {};
-  el('niche').value = cfg.niche || '';
-  el('keywords').value = Array.isArray(cfg.keywords) ? cfg.keywords.join(', ') : (cfg.keywords || '');
-  el('floor').value = cfg.floor ?? '';
-  el('floorTolerance').value = cfg.floorTolerance ?? 0;
-  el('ceiling').value = cfg.ceiling ?? '';
-  el('risk').value = ['low', 'medium', 'high', 'all'].includes(cfg.risk) ? cfg.risk : 'medium';
+  el('keywords').value = keywordsOf(cfg).join(', ');
+  el('viralViews').value = cfg.viralViews ?? '';
   el('targetCount').value = cfg.targetCount ?? '';
-  el('reelsWindow').value = cfg.reelsWindow ?? 12;
-  el('maxProfiles').value = cfg.maxProfiles ?? '';
-  el('jevAutoConfidence').value = cfg.jevAutoConfidence ?? 0.6;
-  el('jevRejectConfidence').value = cfg.jevRejectConfidence ?? 0.6;
-  el('brandProduct').value = cfg.brandProduct || '';
   el('brandName').value = cfg.brandName || '';
-  el('brandBrief').value = cfg.brandBrief || '';
+  // "What you're selling" and the older "Brand & product details", as one.
+  el('brandProduct').value = [cfg.brandProduct, cfg.brandBrief].filter(Boolean).join('\n\n');
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
-  el('reviewBorderline').checked = !!cfg.reviewBorderline;
-  el('prescreenNiche').checked = !!cfg.prescreenNiche;
-  // Defaults differ: skipping off-niche reels is on unless a campaign turned it
-  // off, warming the feed is off unless a campaign asked for it.
-  el('skipOffNicheReels').checked = cfg.skipOffNicheReels !== false;
-  el('warmFeed').checked = !!cfg.warmFeed;
+  // Every run needs these, so they are on unless a campaign turned one off.
+  for (const id of ['warmFeed', 'skipOffNicheReels', 'prescreenNiche', 'reviewBorderline']) {
+    el(id).checked = cfg[id] !== false;
+  }
 }
 
 function campaignId() { return el('campaign').value; }
@@ -217,13 +223,17 @@ async function stopRun() {
 async function feedMock() {
   if (!currentRun) return;
   const cap = 'Full home gym workout routine #homegym #fitness';
-  const reels = (v) => Array.from({ length: 12 }, () => ({ views: v, caption: cap }));
+  // `viral` reels well over the bar, then `quiet` ones well under it.
+  const reels = (viral, quiet, caption = cap) => [
+    ...Array.from({ length: viral }, () => ({ views: 400000, caption })),
+    ...Array.from({ length: quiet }, () => ({ views: 15000, caption })),
+  ];
   const batch = [
-    { username: 'home.fit.mia', full_name: 'Mia Fit', followers: 84000, bio: 'home fitness coach', reels: reels(120000) },
-    { username: 'garage.gains', full_name: 'Garage Gains', followers: 51000, bio: 'gym at home, daily workout', reels: reels(45000) },
-    { username: 'lowreach.lea', full_name: 'Lea', followers: 22000, bio: 'fitness', reels: [...Array(11).fill({ views: 60000, caption: cap }), { views: 6000, caption: cap }] },
-    { username: 'wanderjoe', full_name: 'Joe Travels', followers: 130000, bio: 'budget travel & food', reels: Array.from({ length: 12 }, () => ({ views: 90000, caption: 'cheap flights to bali' })) },
-    { username: 'viral.vic', full_name: 'Vic', followers: 60000, bio: 'home gym tips', reels: [...Array(11).fill({ views: 30000, caption: cap }), { views: 900000, caption: cap }] },
+    { username: 'home.fit.mia', full_name: 'Mia Fit', followers: 84000, bio: 'home fitness coach', reels: reels(6, 10) },
+    { username: 'garage.gains', full_name: 'Garage Gains', followers: 9000, bio: 'gym at home, daily workout', reels: reels(3, 2) },
+    { username: 'almost.ava', full_name: 'Ava', followers: 22000, bio: 'fitness', reels: reels(4, 12) },
+    { username: 'wanderjoe', full_name: 'Joe Travels', followers: 130000, bio: 'budget travel & food', reels: reels(6, 10, 'cheap flights to bali') },
+    { username: 'one.hit.vic', full_name: 'Vic', followers: 60000, bio: 'home gym tips', reels: reels(1, 11) },
   ];
   try {
     setStatus('Feeding sample captures…');
@@ -296,12 +306,19 @@ function reasonOf(c) {
   return '';
 }
 
+/** "5/16" — reels that reached the viral bar, of the reels read; the rule on hover. */
+function viralOf(c) {
+  const v = c && c.evidence && c.evidence.viral;
+  if (!v) return '—';
+  const color = v.pass ? '#067647' : (v.borderline ? '#b25e09' : '#b42318');
+  return `<span title="${escapeHtml(v.reason || '')}" style="color:${color};font-weight:600">${v.viral}/${v.reels}</span>`;
+}
+
 function renderCandidates(rows) {
   const tb = el('cand-rows');
   tb.innerHTML = '';
   for (const c of rows) {
     const tr = document.createElement('tr');
-    const risk = c.risk_profile || '—';
     tr.innerHTML = `
       <td>${handleLink(c.username)}</td>
       <td>${viewRange(c.reels)}</td>
@@ -309,7 +326,7 @@ function renderCandidates(rows) {
       <td>${labelCell(c, 'genre')}</td>
       <td>${labelCell(c, 'format')}</td>
       <td>${fitOf(c)}</td>
-      <td>${risk === '—' ? '—' : `<span class="pill ${risk}">${risk}</span>`}</td>
+      <td>${viralOf(c)}</td>
       <td><span class="pill ${c.decision}">${c.decision}</span></td>
       <td>${escapeHtml(reasonOf(c))}</td>
       <td>${creatorListOf(c)}</td>`;
@@ -400,8 +417,19 @@ async function reviewAction(path) {
   }
 }
 
+// How sure Jev has to be is learned from the decisions made in this queue.
+async function loadJevBars() {
+  try {
+    const bars = await api('/api/sourcing/jev-calibration');
+    el('jev-bars').textContent = bars.summary || '';
+  } catch (_) {
+    el('jev-bars').textContent = '';
+  }
+}
+
 async function loadReview() {
   if (!campaignId()) return;
+  loadJevBars();
   try {
     const rows = await api(`/api/sourcing/review?campaignId=${encodeURIComponent(campaignId())}`);
     renderReview(rows);
@@ -673,16 +701,14 @@ async function loadJudgeStatus() {
     return; // informational only — never block the page on it
   }
   const mode = status && status.judge && status.judge.mode;
-  if (mode === 'pictures') {
-    banner.textContent = 'The video judge (Gemini) is not configured, so no reels are watched: creators '
-      + 'are judged by Claude from their profile screenshots and captions. Set GEMINI_API_KEY on the '
-      + 'backend to judge the actual videos.';
+  if (mode === 'no-speech') {
+    banner.textContent = 'Jev cannot hear the reels (GROQ_API_KEY is not set on the backend), so it labels '
+      + 'creators from their captions and on-screen text only.';
     banner.className = 'judge-banner warn';
     banner.hidden = false;
   } else if (mode === 'none') {
-    banner.textContent = 'No AI judge is configured (GEMINI_API_KEY / ANTHROPIC_API_KEY). Nothing can check '
-      + 'quality, originality or brand safety, so creators who pass the reach and keyword rules are held in '
-      + 'Pending review instead of being added.';
+    banner.textContent = 'Jev is not configured (JEV_API_KEY is not set on the backend), so nothing can check '
+      + 'what creators post about: every creator who passes the viral rule waits in Pending review.';
     banner.className = 'judge-banner err';
     banner.hidden = false;
   } else {

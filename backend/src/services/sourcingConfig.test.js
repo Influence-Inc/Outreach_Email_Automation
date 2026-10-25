@@ -7,16 +7,46 @@ const { buildConfig, toKeywordList } = require('./sourcingConfig');
 
 test('buildConfig merges defaults + overrides and coerces types', () => {
   const cfg = buildConfig(
-    { niche: 'fitness', floor: 15000, keywords: 'gym, workout' },
-    { targetCount: '20', risk: 'high', ceiling: '500000' },
+    { keywords: 'gym, workout', viralViews: 50000 },
+    { targetCount: '20', viralViews: '250000' },
   );
-  assert.strictEqual(cfg.niche, 'fitness');
   assert.deepStrictEqual(cfg.keywords, ['gym', 'workout']);
-  assert.strictEqual(cfg.floor, 15000);
-  assert.strictEqual(cfg.ceiling, 500000);
-  assert.strictEqual(cfg.risk, 'high');
+  assert.strictEqual(cfg.viralViews, 250000);
   assert.strictEqual(cfg.targetCount, 20);
-  assert.strictEqual(cfg.reelsWindow, 12);
+  assert.strictEqual(cfg.reelsWindow, 16, '16 reels are read to judge viral potential');
+});
+
+// The Scout page has one keywords field; the niche field did the same job.
+test('a saved niche is folded into the keywords, once', () => {
+  const cfg = buildConfig({ niche: 'home fitness', keywords: 'gym, Home Fitness, workout' }, {});
+  assert.deepStrictEqual(cfg.keywords, ['gym', 'Home Fitness', 'workout']);
+  assert.strictEqual(cfg.niche, '');
+  assert.deepStrictEqual(buildConfig({ niche: 'skincare, spf' }, {}).keywords, ['skincare', 'spf']);
+});
+
+test('the viral bar defaults to 100K views', () => {
+  const { DEFAULT_VIRAL_VIEWS } = require('./sourcingConfig');
+  assert.strictEqual(DEFAULT_VIRAL_VIEWS, 100000);
+  assert.strictEqual(buildConfig({}, {}).viralViews, 100000);
+  assert.strictEqual(buildConfig({}, { viralViews: '' }).viralViews, 100000, 'a blank field is the default');
+  assert.strictEqual(buildConfig({}, { viralViews: 0 }).viralViews, 100000, 'a viral bar of 0 means nothing');
+});
+
+// The view floor, its tolerance, the ceiling and the risk shape were replaced
+// by the viral rule; a campaign that saved them does not bring them back.
+test('the old view-range knobs are no longer read', () => {
+  const cfg = buildConfig({ floor: 15000, floorTolerance: 2, ceiling: 500000, risk: 'low' }, {});
+  assert.strictEqual(cfg.floor, undefined);
+  assert.strictEqual(cfg.floorTolerance, undefined);
+  assert.strictEqual(cfg.ceiling, undefined);
+  assert.strictEqual(cfg.risk, undefined);
+});
+
+// Set by the session from the review queue (jevCalibration), never by a scout.
+test("Jev's confidence bars are not taken from saved defaults", () => {
+  const cfg = buildConfig({ jevAutoConfidence: 0.9, jevRejectConfidence: 0.2 }, {});
+  assert.strictEqual(cfg.jevAutoConfidence, undefined);
+  assert.strictEqual(cfg.jevRejectConfidence, undefined);
 });
 
 test('buildConfig carries targetAudience + genres for the reel judge', () => {
@@ -36,8 +66,8 @@ test('buildConfig parses the review-queue knobs', () => {
   const cfg = buildConfig({}, { reviewBorderline: 'true', reviewBand: '0.2' });
   assert.strictEqual(cfg.reviewBorderline, true);
   assert.strictEqual(cfg.reviewBand, 0.2);
-  const off = buildConfig({}, {});
-  assert.strictEqual(off.reviewBorderline, false);
+  assert.strictEqual(buildConfig({}, {}).reviewBorderline, true, 'on unless turned off');
+  assert.strictEqual(buildConfig({}, { reviewBorderline: false }).reviewBorderline, false);
 });
 
 // The config is a whitelist: a knob missing here is silently dropped whatever
@@ -51,10 +81,10 @@ test('buildConfig carries the quality-score review band and the unjudged hold', 
   assert.strictEqual(buildConfig({ reviewUnjudged: false }, {}).reviewUnjudged, false, 'from saved defaults too');
 });
 
-test('buildConfig defaults risk to medium and drops junk numbers', () => {
-  const cfg = buildConfig({}, { risk: 'bogus', floor: 'abc', targetCount: 5 });
-  assert.strictEqual(cfg.risk, 'medium');
-  assert.strictEqual(cfg.floor, undefined);
+test('buildConfig drops junk numbers', () => {
+  const cfg = buildConfig({}, { viralViews: 'abc', stallMs: 'soon', targetCount: 5 });
+  assert.strictEqual(cfg.viralViews, 100000);
+  assert.strictEqual(cfg.stallMs, undefined);
   assert.strictEqual(cfg.targetCount, 5);
 });
 
@@ -68,37 +98,36 @@ test('toKeywordList accepts arrays and delimited strings', () => {
 // what the dashboard sends. clipsPerProfile / maxProfiles / stallMs were added
 // to the UI and the navigator but never to this list, so all three were dead.
 test('buildConfig carries the per-run navigator knobs', () => {
-  const cfg = buildConfig({}, { clipsPerProfile: '2', maxProfiles: '50', stallMs: '30000' });
+  const cfg = buildConfig({}, { clipsPerProfile: '2', stallMs: '30000' });
   assert.strictEqual(cfg.clipsPerProfile, 2);
-  assert.strictEqual(cfg.maxProfiles, 50);
   assert.strictEqual(cfg.stallMs, 30000);
 
-  // Absent means "use the navigator's default", not 0 — a 0 cap would disable
-  // the profile budget and a 0 clip count would stop recording entirely.
+  // Absent means "use the navigator's default", not 0 — a 0 clip count would
+  // stop recording entirely.
   const bare = buildConfig({}, {});
   assert.strictEqual(bare.clipsPerProfile, undefined);
-  assert.strictEqual(bare.maxProfiles, undefined);
   assert.strictEqual(bare.stallMs, undefined);
 });
 
-test("buildConfig accepts the 'all' risk level", () => {
-  assert.strictEqual(buildConfig({}, { risk: 'all' }).risk, 'all');
-  assert.strictEqual(buildConfig({}, { risk: 'nonsense' }).risk, 'medium');
+// A run keeps going until it has sourced its target: no profile budget, even
+// for a campaign that saved one.
+test('there is no cap on profiles opened', () => {
+  assert.strictEqual(buildConfig({}, {}).maxProfiles, 0);
+  assert.strictEqual(buildConfig({ maxProfiles: 50 }, { maxProfiles: '20' }).maxProfiles, 0);
+  const { createProfileCap } = require('./sourcingResilience');
+  const cap = createProfileCap({ max: buildConfig({}, {}).maxProfiles });
+  for (let i = 0; i < 1000; i += 1) assert.ok(cap.take());
+  assert.strictEqual(cap.spent(), false);
 });
 
 test('buildConfig carries the quality dials', () => {
-  const cfg = buildConfig({}, {
-    floorTolerance: '2', creatorPassThreshold: '0.8', minCreativity: '6',
-  });
-  assert.strictEqual(cfg.floorTolerance, 2);
+  const cfg = buildConfig({}, { creatorPassThreshold: '0.8', minCreativity: '6' });
   assert.strictEqual(cfg.creatorPassThreshold, 0.8);
   assert.strictEqual(cfg.minCreativity, 6);
 
-  // 0 is a real choice for both gates — an absolute floor, and no craft gate —
-  // so it must survive rather than being coerced away as falsy.
-  const off = buildConfig({}, { floorTolerance: 0, minCreativity: 0 });
-  assert.strictEqual(off.floorTolerance, 0);
-  assert.strictEqual(off.minCreativity, 0);
+  // 0 is a real choice — no craft gate — so it must survive rather than being
+  // coerced away as falsy.
+  assert.strictEqual(buildConfig({}, { minCreativity: 0 }).minCreativity, 0);
 });
 
 test('buildConfig carries the brand product and its fit floor', () => {
@@ -113,8 +142,9 @@ test('buildConfig carries the screenshot prescreen knobs', () => {
   const on = buildConfig({}, { prescreenNiche: 'true', prescreenMinConfidence: '0.8' });
   assert.strictEqual(on.prescreenNiche, true);
   assert.strictEqual(on.prescreenMinConfidence, 0.8);
-  // Off unless asked for — it costs a call per creator.
-  assert.strictEqual(buildConfig({}, {}).prescreenNiche, false);
+  // On unless a campaign turns it off.
+  assert.strictEqual(buildConfig({}, {}).prescreenNiche, true);
+  assert.strictEqual(buildConfig({ prescreenNiche: false }, {}).prescreenNiche, false);
 });
 
 // buildConfig is a whitelist, so a knob it does not name is silently dropped no
@@ -156,24 +186,24 @@ test('every component the scorer weighs can be tuned per campaign', () => {
   );
 });
 
-// buildConfig is a whitelist: a field the dashboard sends but this does not name
-// is silently dropped, which is how three knobs and a follower band were quietly
-// dead. The brand brief is the field the whole brand-fit judgement rests on.
-test('the brand brief survives the config whitelist', () => {
+// "What you're selling" and "Brand & product details" are one field now; a
+// campaign saved with both keeps all of what it said, in the one field.
+test('a saved brand brief is folded into what the brand sells', () => {
   const cfg = buildConfig({
     brandName: '  Velo Running  ',
     brandProduct: '  a carbon-plate racing shoe  ',
     brandBrief: '  A GBP 280 shoe for sub-4 marathoners.  ',
   }, {});
   assert.strictEqual(cfg.brandName, 'Velo Running');
-  assert.strictEqual(cfg.brandProduct, 'a carbon-plate racing shoe');
-  assert.strictEqual(cfg.brandBrief, 'A GBP 280 shoe for sub-4 marathoners.');
+  assert.strictEqual(cfg.brandProduct, 'a carbon-plate racing shoe\n\nA GBP 280 shoe for sub-4 marathoners.');
+  assert.strictEqual(cfg.brandBrief, undefined);
+  assert.strictEqual(buildConfig({ brandBrief: 'only the brief' }, {}).brandProduct, 'only the brief');
 });
 
-test('an unfilled brand brief is empty, not undefined', () => {
+test('an unfilled brand is empty, not undefined', () => {
   const cfg = buildConfig({}, {});
   assert.strictEqual(cfg.brandName, '');
-  assert.strictEqual(cfg.brandBrief, '');
+  assert.strictEqual(cfg.brandProduct, '');
 });
 
 // Twelve seconds at 1 fps is twelve frames plus audio — enough to see the
@@ -193,9 +223,8 @@ test('a longer clip is honoured, up to the recorder ceiling', () => {
 
 // ── the two feed-workflow knobs ─────────────────────────────────────────────
 //
-// Different defaults on purpose: skipping plainly off-niche reels only ever
-// costs a swipe and the creator comes round again, while liking is automated
-// engagement and stays a deliberate per-run choice.
+// Both on unless a campaign turns them off: the Scout page ticks them by
+// default because every run needs them.
 
 test('off-niche reel skipping is on unless a campaign turns it off', () => {
   assert.strictEqual(buildConfig({}, {}).skipOffNicheReels, true);
@@ -203,11 +232,10 @@ test('off-niche reel skipping is on unless a campaign turns it off', () => {
   assert.strictEqual(buildConfig({ skipOffNicheReels: 'false' }, {}).skipOffNicheReels, false);
 });
 
-test('feed warming is off unless a campaign asks for it', () => {
-  assert.strictEqual(buildConfig({}, {}).warmFeed, false);
-  assert.strictEqual(buildConfig({ warmFeed: true }, {}).warmFeed, true);
-  assert.strictEqual(buildConfig({ warmFeed: 'true' }, {}).warmFeed, true);
-  assert.strictEqual(buildConfig({ warmFeed: 'yes' }, {}).warmFeed, false, 'only a real yes counts');
+test('feed warming is on unless a campaign turns it off', () => {
+  assert.strictEqual(buildConfig({}, {}).warmFeed, true);
+  assert.strictEqual(buildConfig({ warmFeed: false }, {}).warmFeed, false);
+  assert.strictEqual(buildConfig({ warmFeed: 'false' }, {}).warmFeed, false);
 });
 
 // ── example creators, as typed ──────────────────────────────────────────────
@@ -249,18 +277,14 @@ test('the niche threshold defaults low enough to leave the call to the judge', (
 // "not set" there too — never 0, and never a crash.
 test('a field sent as null is unset for the run, not zero', () => {
   const cfg = buildConfig(
-    { floor: 20000, ceiling: 500000, maxProfiles: 50, creatorPassThreshold: 0.8, reelsWindow: 9 },
+    { viralViews: 300000, creatorPassThreshold: 0.8, reelsWindow: 9 },
     {
-      floor: null, ceiling: null, floorTolerance: null, maxProfiles: null,
-      creatorPassThreshold: null, reelsWindow: null, clipsPerProfile: null, targetCount: 5,
+      viralViews: null, creatorPassThreshold: null, reelsWindow: null, clipsPerProfile: null, targetCount: 5,
     },
   );
-  assert.strictEqual(cfg.floor, undefined, 'a cleared floor means no floor, not 0');
-  assert.strictEqual(cfg.ceiling, undefined);
-  assert.strictEqual(cfg.floorTolerance, undefined);
-  assert.strictEqual(cfg.maxProfiles, undefined);
+  assert.strictEqual(cfg.viralViews, 100000, 'a cleared viral bar is the default, not 0');
   assert.strictEqual(cfg.creatorPassThreshold, undefined, 'the scorer falls back to its default bar');
-  assert.strictEqual(cfg.reelsWindow, 12, 'the window falls back to its default');
+  assert.strictEqual(cfg.reelsWindow, 16, 'the window falls back to its default');
   assert.strictEqual(cfg.clipsPerProfile, undefined);
   assert.strictEqual(cfg.targetCount, 5);
 });

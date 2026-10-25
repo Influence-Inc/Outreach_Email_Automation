@@ -48,7 +48,7 @@ model docs for current rates.
 | `SOURCING_ENGAGE_SHARE_PROB` | `0` | Share probability (share action is deferred — see below). |
 | `SOURCING_ENGAGE_MAX_LIKES` / `_SAVES` / `_SHARES` | `20` / `10` / `3` | Per‑session hard caps. |
 | `SOURCING_PACING_MS` | `1800` | Human‑like delay between actions (jittered ±40%). |
-| `SOURCING_CAPTURE_CAP` | `500` | Safety cap on captures per run. |
+| `SOURCING_CAPTURE_CAP` | *(unset = no cap)* | Optional ceiling on captures per run. Unset, a run keeps going until it has sourced its target, its keywords run out of results, or an admin stops it. |
 | `SOURCING_TAP_JITTER_PX` | `5` | Random ± pixels added to every tap (anti‑flag). |
 | `SOURCING_ACTIVE_HOURS` | *(unset = always)* | Only scout inside this local‑time window, e.g. `8-23` or overnight `22-6`. Outside it the agent idle‑polls. |
 
@@ -60,6 +60,81 @@ model docs for current rates.
 > itself. This is the fastest way to tell a Gemini misconfig from a phone/
 > navigation problem.
 
+### The Scout page
+
+A scout fills in only what they know: **keywords**, **viral at (views)**, **creators to
+source**, **brand name** and **what you're selling** (the product and any details, one
+field). Discovery mode and device are picked from lists, and four switches are ticked by
+default because every run needs them: warm the feed, skip off-niche reels, screenshot
+pre-check, borderline → review.
+
+Everything else is decided by the backend:
+
+- **Keywords** are the one search field. The old separate niche/genre field did the same
+  job; a campaign saved with one has it folded into the keywords (`sourcingConfig.keywordsOf`).
+- **Reach** is judged on viral potential (below). The minimum-view floor, its tolerance, the
+  view ceiling, the risk shape and the reels window are gone from the page and no longer read.
+- **No profile cap.** A run keeps going until it has shortlisted `targetCount` creators, its
+  keywords run out of results, or an admin stops it.
+- **Jev's confidence bars** are learned from the review queue (below).
+
+A one-time migration (`data_migrations` row `scout-page-simplified`) removed the retired keys
+from every campaign's saved defaults, including the switches the old page saved as an explicit
+`false`, so they all start ticked.
+
+### Reach: viral potential
+
+Our deals are paid on views, so the question is not "what does this creator usually get" but
+"do their reels break out". `sourcingFilters.viralPotential` reads the creator's **newest 16
+reels** and counts the ones that reached **`viralViews`** (the page's *Viral at*, default
+**100K**):
+
+```
+needed = max(2, ceil(0.3 x reels read))
+
+16 reels -> 5 viral    12 reels -> 4    7-10 reels -> 3    3-6 reels -> 2
+```
+
+| Creator | Verdict |
+| --- | --- |
+| Usually modest views, 5 of 16 reels viral | passes |
+| Only 5 reels, 3 of them viral | passes |
+| 12 reels, 5 viral | passes |
+| 12 reels, 1 or 2 did a bit better than usual | rejected (`2 of 12 reels went viral (100K+ views), needs 4`) |
+| One viral reel short, with at least 2 hits | **borderline**: held for review (`nearly viral — ...`) when *Borderline → review* is ticked, rejected otherwise |
+| Fewer than 3 reels with a readable count | rejected: too little to judge |
+
+A reel that only nears the bar does not count. The share (`viralShare`, 0.3) and the minimum
+(`minViralReels`, 2) can be changed through the API; the page does not show them.
+
+Under the viral rule the risk shape and the default one-outlier check (`maxViewSpike`) are off:
+breakout reels are what a creator is chosen for, and needing at least two of them already rules
+out a creator carried by one. The bought-views and engagement checks still apply. The run table's
+**Viral** column shows `viral/read` for every creator (green passed, amber borderline, red
+rejected), with the rule on hover.
+
+### Jev's bars are learned, not set
+
+Jev shortlists when every label it was asked about matches with at least the **shortlist bar**
+of confidence, and rejects when a label is off target with at least the **reject bar**. Both
+start at 60%, and `services/jevCalibration.js` sets them at the start of every run from what
+admins decided in the review queue:
+
+- Creators held because Jev was **unsure of a matching label** carry that confidence
+  (`evidence.niche.jev.unsureAt`). If admins shortlist at least 80% of the held creators from
+  some confidence up, the shortlist bar comes down to it.
+- Creators held as **probably off-target** carry that label's confidence (`probablyOffAt`). If
+  admins reject at least 85% of them from some confidence up, the reject bar comes down to it.
+
+Guards: at least 5 decisions at or above a bar, some of them at that bar's own level (approvals at
+55% say nothing about 45%), never below 45%, and only ever down from 60% on evidence. It is
+learned across all campaigns, since how far Jev's confidence can be trusted is a property of the
+model. Decisions made before these numbers were stored are read from Jev's reasons
+(`"unsure of the subject: topic Fitness (55%)"`). The review card shows the current bars
+(`GET /api/sourcing/jev-calibration`), each verdict records the bars it was decided against
+(`jev.bars`), and a run that sets `jevAutoConfidence` / `jevRejectConfidence` through the API
+keeps them.
+
 ### Scouting rules (per campaign)
 
 - `discovery: "reels"` — use the explore/scroll reel‑feed flow (watch + hear +
@@ -69,8 +144,9 @@ model docs for current rates.
   Only one whose reach could **not** be read is judged on the niche match alone
   and **routed to the review queue** for a human to confirm reach.
 - `targetAudience` / `genres` — fed to the Gemini judge (audience fit + on‑brand genres).
-- `reviewBorderline: true` — hold **near‑threshold** passers in the **review
-  queue** instead of auto‑adding. Near either threshold that can reject: a
+- `reviewBorderline` (default **on**) — hold creators **one viral reel short** of the
+  viral rule in the review queue instead of rejecting them and, for creators Jev did
+  not decide, **near‑threshold** passers instead of auto‑adding. Near either threshold that can reject: a
   weighted quality score within `reviewScoreBand` (default `0.05`) of
   `creatorPassThreshold` (default `0.52`), or a niche score within `reviewBand`
   (default `0.15`) of `nicheThreshold` (default `0.1`). The reason is stored on
@@ -80,9 +156,9 @@ model docs for current rates.
   originality or brand safety checked, so they are held for review rather than
   added on the reach and keyword rules alone. `reviewUnjudged: false` restores
   adding them.
-- `reelsWindow` (default `12`) — how many recent reels are read. A creator needs
-  `min(6, reelsWindow)` reels with readable views: the minimum never exceeds the
-  window the run was asked to read.
+- `reelsWindow` (default `16`) — how many recent reels are read. Under the viral
+  rule a creator needs 3 reels with readable views; a config without `viralViews`
+  falls back to the old `min(6, reelsWindow)`.
 
 Saving from the Scout page **merges** into the stored defaults
 (`PATCH /api/sourcing/config/:campaignId`): keys the page sends replace the
@@ -143,9 +219,9 @@ and its weight goes to the rest. It is never scored as `0`: an explicit `null`
 used to count as a zero, which capped every creator on a campaign with no brand
 details at 0.75.
 
-There is **no follower band**. Reach is what a campaign buys and `floor` /
-`ceiling` gate on it directly; a band on followers only ever rejected creators
-whose reach we had already measured and liked.
+There is **no follower band**. Reach is what a campaign buys and the viral rule
+gates on it directly; a band on followers only ever rejected creators whose reach
+we had already measured and liked.
 
 ### Surviving a deploy, and a long skip streak
 
