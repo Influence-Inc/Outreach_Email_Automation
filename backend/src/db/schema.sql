@@ -158,6 +158,17 @@ CREATE TABLE IF NOT EXISTS app_settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- One-time data changes. This file runs in full on every boot, so a backfill
+-- whose WHERE clause can come true again later (a value someone may choose
+-- deliberately after it ran) must not re-run: each one claims its name here
+-- first, and only the boot that inserts the name does the work. Created here, near
+-- the top, so any migration further down can use it — on a fresh database too.
+CREATE TABLE IF NOT EXISTS data_migrations (
+  name   TEXT PRIMARY KEY,
+  ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
 -- Delegation queue: replies/situations a human must handle. Set when a
 -- creator's template has AI replies off, or when Claude escalates a reply it
 -- can't confidently handle. Cleared when an admin sends a reply or dismisses it.
@@ -732,6 +743,42 @@ UPDATE app_settings
    AND key = 'sourcing_defaults'
    AND value ~ '^\s*\{';
 
+-- Phone farming (services/phoneFarm.js): which way each phone's Instagram
+-- account scouts. 'warmup' searches the keywords and warms the feed on every
+-- creator shortlisted (likes their reel); after farm_goal warmed creators it
+-- moves to 'feed', scouting the account's own reel feed, and back to 'warmup'
+-- when the feed turns unreliable. A newly paired phone starts in 'warmup'.
+-- farm_note says why it last moved.
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_phase    TEXT NOT NULL DEFAULT 'warmup';
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_warmed   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_goal     INTEGER;
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_note     TEXT;
+ALTER TABLE sourcing_hosts ADD COLUMN IF NOT EXISTS farm_phase_at TIMESTAMPTZ;
+
+-- Every shortlisted creator whose reel a phone liked to warm its feed.
+CREATE TABLE IF NOT EXISTS sourcing_warm_events (
+  id       BIGSERIAL PRIMARY KEY,
+  host_id  INTEGER REFERENCES sourcing_hosts(id) ON DELETE SET NULL,
+  run_id   INTEGER REFERENCES sourcing_runs(id) ON DELETE SET NULL,
+  username TEXT NOT NULL,
+  at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sourcing_warm_events_host ON sourcing_warm_events(host_id, at DESC);
+
+-- The Scout page no longer has a discovery mode: phoneFarm decides it. Remove a
+-- mode saved by the older page, once, so the page's runs are decided too.
+WITH claimed AS (
+  INSERT INTO data_migrations (name) VALUES ('scout-discovery-auto')
+  ON CONFLICT (name) DO NOTHING
+  RETURNING name
+)
+UPDATE app_settings
+   SET value = (value::jsonb - 'discovery')::text,
+       updated_at = NOW()
+ WHERE EXISTS (SELECT 1 FROM claimed)
+   AND key = 'sourcing_defaults'
+   AND value ~ '^\s*\{';
+
 -- ---------------------------------------------------------------------------
 -- Campaign-update messaging (WhatsApp), for creators who have SIGNED.
 -- ---------------------------------------------------------------------------
@@ -803,15 +850,6 @@ CREATE INDEX IF NOT EXISTS idx_creator_updates_creator ON creator_updates(creato
 -- in the order the events actually happened.
 CREATE INDEX IF NOT EXISTS idx_creator_updates_pending
   ON creator_updates(created_at) WHERE status = 'pending';
-
--- One-time data changes. This file runs in full on every boot, so a backfill
--- whose WHERE clause can come true again later (a value someone may choose
--- deliberately after it ran) must not re-run: each one claims its name here
--- first, and only the boot that inserts the name does the work.
-CREATE TABLE IF NOT EXISTS data_migrations (
-  name   TEXT PRIMARY KEY,
-  ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
 
 -- The default quality bar (sourcing_defaults.creatorPassThreshold) dropped from
 -- 0.72 to 0.52. The Scout page sends the bar with every save, so a campaign that

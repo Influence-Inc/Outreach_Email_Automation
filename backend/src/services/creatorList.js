@@ -173,10 +173,11 @@ async function sync(rawHandle, { queue = false, force = false, fetchImpl, timeou
 
 const webUrl = () => String(process.env.CREATOR_LIST_WEB_URL || '').trim().replace(/\/+$/, '');
 
-/** One short line for the collection item: what Jev saw, and how they were found. */
-function curatedNote({ summary, sourceTerm } = {}) {
+/** One short line for the collection item: what Jev saw, who it is for, and how they were found. */
+function curatedNote({ summary, sourceTerm, targetViewer } = {}) {
   const parts = [];
   if (summary) parts.push(summary);
+  if (targetViewer) parts.push(`for: ${targetViewer}`);
   if (sourceTerm) parts.push(`found searching "${sourceTerm}"`);
   return `Scouted by Deal Studio${parts.length ? ` · ${parts.join(' · ')}` : ''}`.slice(0, 280);
 }
@@ -188,7 +189,9 @@ function curatedNote({ summary, sourceTerm } = {}) {
  *   not_configured   CREATOR_LIST_WEB_URL / CREATOR_LIST_API_KEY missing
  *   error            creator-list refused or did not answer; `error` says why
  */
-async function addToCurated(rawHandle, { labels = null, summary = null, sourceTerm = null, by = 'Deal Studio', fetchImpl = fetch, timeoutMs = 8000 } = {}) {
+async function addToCurated(rawHandle, {
+  labels = null, summary = null, sourceTerm = null, targetViewer = null, by = 'Deal Studio', fetchImpl = fetch, timeoutMs = 8000,
+} = {}) {
   const handle = clean(rawHandle);
   if (!HANDLE.test(handle)) return { status: 'invalid', error: 'not a valid Instagram handle' };
   const url = webUrl();
@@ -203,7 +206,7 @@ async function addToCurated(rawHandle, { labels = null, summary = null, sourceTe
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         handle,
-        note: curatedNote({ summary, sourceTerm }),
+        note: curatedNote({ summary, sourceTerm, targetViewer }),
         labels: { topic: pick('topic'), niche: pick('niche'), genre: pick('genre'), format: pick('format') },
         by,
       }),

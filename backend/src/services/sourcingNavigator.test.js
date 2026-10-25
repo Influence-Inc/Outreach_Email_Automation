@@ -2034,3 +2034,60 @@ test("someone else's reel on the player is never recorded as this creator's", as
   assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0);
   assert.strictEqual(out.evidence.notRecorded, 'the source reel was no longer on screen');
 });
+
+// ── warming shortlisted creators, and stopping on request ───────────────────
+
+const accountsRowViews = () => [
+  { screen: 'search', targets: { searchTab: { x: 100, y: 900 } } },
+  { screen: 'search', targets: { searchBox: { x: 200, y: 80 } } },
+  { screen: 'search_results', results: ['mock.coach'], targets: { 'result:mock.coach': { x: 200, y: 220 }, back: { x: 30, y: 90 } } },
+  { screen: 'search_results', targets: { 'result:mock.coach': { x: 200, y: 220 } } },
+  { screen: 'profile', fullName: 'Mock Coach', followers: 84000, bio: 'coach', targets: { reelsTab: { x: 400, y: 500 }, back: { x: 30, y: 90 } } },
+  { screen: 'reels_tab', reels: [{ views: 120000 }, { views: 98000 }], targets: { back: { x: 30, y: 90 } } },
+  { screen: 'reels_tab', targets: { back: { x: 30, y: 90 } } },
+  { screen: 'search_results', targets: { back: { x: 30, y: 90 } } },
+];
+
+test('a creator the run shortlisted is warmed, where the phone is standing', async () => {
+  const warmed = [];
+  const gen = scout({
+    driver: fakeDriver(),
+    config: { pacingMs: 0 },
+    opts: { keywords: ['homegym'] },
+    read: scriptedRead(accountsRowViews()),
+    deps: { warmCreator: async (a) => { warmed.push(a.handle); return { liked: true }; } },
+  });
+  const first = await gen.next();
+  assert.strictEqual(first.value.username, 'mock.coach');
+  await gen.next({ decision: 'added', added: true });
+  assert.deepStrictEqual(warmed, ['mock.coach']);
+});
+
+test('a creator that was not shortlisted is not warmed', async () => {
+  const warmed = [];
+  const gen = scout({
+    driver: fakeDriver(),
+    config: { pacingMs: 0 },
+    opts: { keywords: ['homegym'] },
+    read: scriptedRead(accountsRowViews()),
+    deps: { warmCreator: async (a) => { warmed.push(a.handle); } },
+  });
+  await gen.next();
+  await gen.next({ decision: 'rejected', added: false });
+  assert.deepStrictEqual(warmed, []);
+});
+
+test('a result carrying stop ends the scout, after warming the last creator', async () => {
+  const warmed = [];
+  const gen = scout({
+    driver: fakeDriver(),
+    config: { pacingMs: 0 },
+    opts: { keywords: ['homegym', 'yoga'] },
+    read: scriptedRead(accountsRowViews()),
+    deps: { warmCreator: async (a) => { warmed.push(a.handle); } },
+  });
+  await gen.next();
+  const after = await gen.next({ decision: 'added', added: true, stop: true });
+  assert.strictEqual(after.done, true, 'no second keyword is searched');
+  assert.deepStrictEqual(warmed, ['mock.coach']);
+});

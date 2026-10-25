@@ -288,3 +288,12 @@ test('a field sent as null is unset for the run, not zero', () => {
   assert.strictEqual(cfg.clipsPerProfile, undefined);
   assert.strictEqual(cfg.targetCount, 5);
 });
+
+// The Scout page has no discovery mode: phoneFarm decides per phone.
+test('discovery is automatic unless the API names a mode', () => {
+  assert.strictEqual(buildConfig({}, {}).discovery, 'auto');
+  assert.strictEqual(buildConfig({ discovery: '' }, {}).discovery, 'auto', 'the old page\'s "profiles" choice');
+  assert.strictEqual(buildConfig({}, { discovery: 'reels' }).discovery, 'reels');
+  assert.strictEqual(buildConfig({}, { discovery: 'search' }).discovery, 'search');
+  assert.strictEqual(buildConfig({}, { discovery: 'bogus' }).discovery, 'auto');
+});

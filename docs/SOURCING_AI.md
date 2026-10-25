@@ -64,7 +64,8 @@ model docs for current rates.
 
 A scout fills in only what they know: **keywords**, **viral at (views)**, **creators to
 source**, **brand name** and **what you're selling** (the product and any details, one
-field). Discovery mode and device are picked from lists. The four switches every run needs
+field). The device is picked from a list; there is no discovery mode — each phone decides
+how to scout (phone farming, below). The four switches every run needs
 — warm the feed, skip off-niche reels, screenshot pre-check, borderline → review — are not on
 the page: they are always on (`buildConfig` turns each on unless a config set through the API
 turns it off).
@@ -89,6 +90,56 @@ Everything else is decided by the backend:
 A one-time migration (`data_migrations` row `scout-page-simplified`) removed the retired keys
 from every campaign's saved defaults, including the switches the old page saved as an explicit
 `false`, so they all start ticked.
+
+### Phone farming: how each phone scouts
+
+A phone's own reel feed is the cheapest place to find creators, but only once Instagram
+serves that account the creators we want — and a new account's feed serves nothing of the
+kind. So `services/phoneFarm.js` moves every phone's account through two phases, in a loop:
+
+```
+new account ──► PHASE 1  WARM-UP   search the keywords, scout the creators whose reels come
+                   ▲               up; like the reel of every creator shortlisted
+                   │                    │ goal reached (15 warmed; 8 on a top-up)
+                   │                    ▼
+                   └── unreliable ─ PHASE 2  FEED   scout the account's own reel feed,
+                                                   still liking every shortlist's reel
+```
+
+- **Warming a creator** (`services/creatorWarmup.js`) happens right after they are
+  shortlisted, on the reel that surfaced them (the phone is still on it). The navigators get
+  each creator's result back through `yield` (`runWithSource` passes it to `source.next`), so
+  they know who was shortlisted. Warming is a like and nothing else — the heart, unless the
+  reel is already liked; nothing is shared, saved or commented. Cap: 40 likes per run
+  (`SOURCING_WARM_MAX_LIKES`); an *action blocked* screen stops warming for the rest of the
+  run; `SOURCING_WARM=off` turns it off.
+- **Unreliable feed.** While phase 2 runs, the feed is watched: when fewer than 30% of the last
+  30 feed reels are on-niche (an off-niche caption skipped on sight, or a creator Jev placed off
+  target), or 40 creators in a row from the feed are judged with none shortlisted, the account
+  goes back to a top-up warm-up. All four numbers are env (`SOURCING_WARMUP_GOAL`,
+  `SOURCING_WARMUP_TOPUP`, `SOURCING_FEED_WINDOW`, `SOURCING_FEED_MIN_ON_NICHE`,
+  `SOURCING_FEED_DRY_LIMIT`).
+- **Labels.** Each shortlisted creator gets a one-line *target viewer* — who their reels are
+  for, e.g. "27 y/o AI developer in New York" (`services/audienceLabels.js`, Claude, falling back
+  to Jev's labels). It is kept on the candidate (`evidence.targetViewer`) and sent in the
+  creator-list note (`for: …`).
+- **On the page.** The Paired phone-hosts table shows each phone's phase (*Warming up 6/15* or
+  *Scouting its feed*, with why it last moved on hover); the run card shows the phase the run is
+  in and, on hover, every switch and why.
+- **State.** Phase and the count toward the goal live on `sourcing_hosts` (`farm_*`), so they
+  carry over between runs; every warmed creator is logged in
+  `sourcing_warm_events`. A newly paired phone starts in warm-up; *Restart warm-up* on the hosts
+  table (`POST /api/sourcing/hosts/:id/farm/restart`) starts over when a new account is signed in.
+- **When a run ends.** At its target, when stopped, or when both ways ran dry in the same run (the
+  keywords' search results used up AND the feed unreliable) rather than looping between two empty
+  sources. A feed that ran dry is saved as warm-up, so the next run starts by warming.
+- A navigator started mid-run begins with what the run has done so far (everyone scouted, how
+  deep each keyword was read), and the feed scout now skips creators scouted before instead of
+  recording them again.
+
+`discovery: "reels"` or `"search"` set through the API scouts only that way (warming still
+applies); anything else is `auto`. A one-time migration (`scout-discovery-auto`) removed the mode
+the old page saved.
 
 ### Reach: viral potential
 
@@ -145,7 +196,7 @@ keeps them.
 
 ### Scouting rules (per campaign)
 
-- `discovery: "reels"` — use the explore/scroll reel‑feed flow (watch + hear +
+- `discovery: "reels"` (API only; the page's runs are `auto`, see *Phone farming*) — use the explore/scroll reel‑feed flow (watch + hear +
   occasionally engage); omit for the classic search → profile flow. The feed
   navigator opens each creator's profile and reads their Reels grid, so a
   reels‑mode candidate normally gets the full deterministic rules like any other.
@@ -602,9 +653,9 @@ Automated like/save is what Instagram's anti‑automation targets, so it is:
 - **stopped immediately** when an "Action Blocked" screen is detected;
 - **never re‑likes** an already‑liked reel.
 
-Use a **dedicated, warmed‑up** account, and ramp engagement slowly. **Sharing is
-deferred** — it's multi‑step (share sheet → recipient) and the highest risk; the
-policy supports it but the navigator performs only like/save in v1.
+Use a **dedicated** account per phone. The random feed engagement above performs
+only like/save. **Warming shortlisted creators** (*Phone farming*) likes every one of
+their reels, on purpose and on every run, within its own cap; it never shares.
 
 ## Calibration
 

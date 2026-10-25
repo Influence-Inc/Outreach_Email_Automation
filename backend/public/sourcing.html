@@ -114,16 +114,15 @@
 
       <h2 class="scout-section">How to scout</h2>
       <div class="scout-grid">
-        <label for="discovery">Discovery mode</label>
-        <select id="discovery">
-          <option value="">Profiles (search → profile)</option>
-          <option value="reels">Reels feed (explore + scroll, watch &amp; hear)</option>
-        </select>
-
         <label for="runHost">Scout on device</label>
         <select id="runHost">
           <option value="">Any available device</option>
         </select>
+        <p class="scout-hint scout-row-hint">
+          Each phone decides how to scout: a new account warms up first &mdash; it searches your keywords
+          and likes the reel of every creator it shortlists &mdash; then scouts its own reel feed, and goes
+          back to warming up whenever the feed stops serving the right creators.
+        </p>
       </div>
 
       <div class="scout-row">
@@ -149,7 +148,7 @@
       </div>
       <div id="new-host-token" class="scout-status" style="font-family:ui-monospace,monospace;word-break:break-all"></div>
       <table class="scout-table" id="hosts-table">
-        <thead><tr><th>Label</th><th>Platforms</th><th>Status</th><th>Session</th><th>Last seen</th><th></th></tr></thead>
+        <thead><tr><th>Label</th><th>Platforms</th><th>Status</th><th title="Phone farming: warming the account up, or scouting its own reel feed">Account</th><th>Session</th><th>Last seen</th><th></th></tr></thead>
         <tbody id="hosts-rows"></tbody>
       </table>
     </div>
@@ -186,6 +185,7 @@
         <div>Scanned<b id="run-scanned">0</b></div>
         <div title="Judgements where a recorded reel reached the judge. 0 means the phone is not delivering recordings — check screen capture in the app.">Judged with video<b id="run-video">—</b></div>
         <div title="Which judge produced each verdict: jev means Jev labelled the recorded reel.">Judged by<b id="run-judges" style="font-size:13px;font-weight:600">—</b></div>
+        <div title="How the phone is scouting this run: warming up (search + liking shortlisted creators) or scouting its own reel feed">Scouting<b id="run-phase" style="font-size:13px;font-weight:600">—</b></div>
       </div>
       <table class="scout-table">
         <thead>

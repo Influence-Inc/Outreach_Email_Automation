@@ -118,7 +118,7 @@ test('the campaign scouting history is handed to the navigator', async () => {
     },
     scout: (args) => { opts = args.opts; return (async function* () {})(); },
   };
-  await session.start({ hostId: 1, run: { id: 3, campaign_id: 'camp-9', config: {} }, deps }).promise;
+  await session.start({ hostId: 1, run: { id: 3, campaign_id: 'camp-9', config: { discovery: 'search' } }, deps }).promise;
   assert.deepStrictEqual(opts.alreadyScouted, ['oldcreator', 'anotherone']);
 });
 
@@ -129,7 +129,7 @@ test('a failed history read still lets the run go ahead', async () => {
     scoutedHandles: async () => { throw new Error('db down'); },
     scout: (args) => { opts = args.opts; return (async function* () {})(); },
   };
-  await session.start({ hostId: 1, run: { id: 4, campaign_id: 'c', config: {} }, deps }).promise;
+  await session.start({ hostId: 1, run: { id: 4, campaign_id: 'c', config: { discovery: 'search' } }, deps }).promise;
   assert.strictEqual(opts.alreadyScouted, undefined, 'dedupes within the run as it always did');
 });
 
@@ -146,7 +146,7 @@ test('the navigator can prove a run is alive while it is only skipping', async (
     touchRun: async (id) => { touched.push(id); },
     scout: (args) => { heartbeat = args.deps.heartbeat; return (async function* () {})(); },
   };
-  await session.start({ hostId: 1, run: { id: 12, campaign_id: 'c', config: {} }, deps }).promise;
+  await session.start({ hostId: 1, run: { id: 12, campaign_id: 'c', config: { discovery: 'search' } }, deps }).promise;
 
   assert.strictEqual(typeof heartbeat, 'function', 'the navigator is given one');
   await heartbeat();
@@ -161,7 +161,7 @@ test('heartbeats are throttled, not one write per creator considered', async () 
     touchRun: async (id) => { touched.push(id); },
     scout: (args) => { heartbeat = args.deps.heartbeat; return (async function* () {})(); },
   };
-  await session.start({ hostId: 1, run: { id: 13, campaign_id: 'c', config: {} }, deps }).promise;
+  await session.start({ hostId: 1, run: { id: 13, campaign_id: 'c', config: { discovery: 'search' } }, deps }).promise;
 
   for (let i = 0; i < 50; i += 1) await heartbeat();
   assert.strictEqual(touched.length, 1, '50 skips in a row cost one write');
@@ -174,7 +174,7 @@ test('a failed heartbeat does not take the run down with it', async () => {
     touchRun: async () => { throw new Error('db down'); },
     scout: (args) => { heartbeat = args.deps.heartbeat; return (async function* () {})(); },
   };
-  await session.start({ hostId: 1, run: { id: 14, campaign_id: 'c', config: {} }, deps }).promise;
+  await session.start({ hostId: 1, run: { id: 14, campaign_id: 'c', config: { discovery: 'search' } }, deps }).promise;
   await heartbeat(); // must not throw
 });
 
@@ -188,7 +188,7 @@ test('keyword depth is loaded for the campaign and handed to the navigator', asy
     },
     scout: (args) => { opts = args.opts; return (async function* () {})(); },
   };
-  await session.start({ hostId: 1, run: { id: 15, campaign_id: 'camp-7', config: {} }, deps }).promise;
+  await session.start({ hostId: 1, run: { id: 15, campaign_id: 'camp-7', config: { discovery: 'search' } }, deps }).promise;
   assert.deepStrictEqual(opts.keywordDepth, { homegym: 3, protein: 1 });
 });
 
@@ -200,7 +200,7 @@ test('advancing a keyword persists its depth for the NEXT run', async () => {
     saveKeywordDepth: async (row) => { saved.push(row); },
     scout: (args) => { saveDepth = args.deps.saveDepth; return (async function* () {})(); },
   };
-  await session.start({ hostId: 1, run: { id: 16, campaign_id: 'camp-7', config: {} }, deps }).promise;
+  await session.start({ hostId: 1, run: { id: 16, campaign_id: 'camp-7', config: { discovery: 'search' } }, deps }).promise;
   await saveDepth('homegym', 4);
   assert.deepStrictEqual(saved, [{ campaignId: 'camp-7', term: 'homegym', depth: 4 }]);
 });
@@ -212,7 +212,7 @@ test('a campaign with no depth history behaves exactly as before', async () => {
     keywordDepths: async () => ({}),
     scout: (args) => { opts = args.opts; return (async function* () {})(); },
   };
-  await session.start({ hostId: 1, run: { id: 17, campaign_id: 'c', config: {} }, deps }).promise;
+  await session.start({ hostId: 1, run: { id: 17, campaign_id: 'c', config: { discovery: 'search' } }, deps }).promise;
   assert.strictEqual(opts.keywordDepth, undefined, 'no seed means start at the top');
 });
 
@@ -236,7 +236,7 @@ test('profiles mode forwards the campaign config to the navigator', async () => 
       id: 5,
       campaign_id: 'c',
       config: {
-        floor: 15000, ceiling: 400000, risk: 'low', niche: 'fitness',
+        discovery: 'search', floor: 15000, ceiling: 400000, risk: 'low', niche: 'fitness',
         keywords: ['gym'], prescreenNiche: true, floorTolerance: 0,
       },
     },
@@ -263,7 +263,7 @@ test('session-resolved knobs still beat the spread campaign config', async () =>
   };
   await session.start({
     hostId: 1,
-    run: { id: 6, campaign_id: 'c', config: { tapJitterPx: 999, clipSeconds: 30 } },
+    run: { id: 6, campaign_id: 'c', config: { discovery: 'search', tapJitterPx: 999, clipSeconds: 30 } },
     deps,
   }).promise;
 
@@ -309,9 +309,64 @@ test('the navigator is not capped on captures by default', async () => {
   const before = process.env.SOURCING_CAPTURE_CAP;
   delete process.env.SOURCING_CAPTURE_CAP;
   try {
-    await session.start({ hostId: 1, run: { id: 8, campaign_id: 'c', config: {} }, deps }).promise;
+    await session.start({ hostId: 1, run: { id: 8, campaign_id: 'c', config: { discovery: 'search' } }, deps }).promise;
   } finally {
     if (before !== undefined) process.env.SOURCING_CAPTURE_CAP = before;
   }
   assert.strictEqual(opts.max, Infinity);
+});
+
+// ── phone farming: the session decides how to scout ─────────────────────────
+
+test('with no discovery set, the phone\'s phase decides: a new account warms up through search', async () => {
+  const warmedLogged = [];
+  const saved = [];
+  let usedFeed = false;
+  const deps = {
+    ...baseDeps({
+      runWithSource: async (run, config, source) => {
+        const c = await source.next();
+        assert.strictEqual(c.username, 'coach');
+        await source.finish({ decision: 'added', added: true });
+        return { status: 'done', stats: {} };
+      },
+    }),
+    loadFarmState: async () => ({}),
+    saveFarmState: async (id, patch) => saved.push([id, patch]),
+    scout: (args) => (async function* search() {
+      const outcome = yield { username: 'coach' };
+      if (outcome && outcome.added) await args.deps.warmCreator({ handle: 'coach' });
+    }()),
+    scoutReels: () => { usedFeed = true; return (async function* none() {}()); },
+    warmCreator: async () => ({ liked: true }),
+    recordWarm: async (db, row) => warmedLogged.push(row),
+  };
+  await session.start({ hostId: 3, run: { id: 21, campaign_id: null, config: { keywords: ['gym'] } }, deps, logger: { log() {} } }).promise;
+  assert.strictEqual(usedFeed, false);
+  assert.deepStrictEqual(warmedLogged, [{ hostId: 3, runId: 21, username: 'coach' }]);
+  assert.deepStrictEqual(saved, [[3, { warmed: 1 }]], 'the warm-up counts toward the phone\'s goal');
+});
+
+test('an account in its feed phase scouts the reel feed', async () => {
+  let usedFeed = false;
+  const deps = {
+    ...baseDeps({
+      runWithSource: async (run, config, source) => { await source.next(); return { status: 'done', stats: {} }; },
+    }),
+    loadFarmState: async () => ({ phase: 'feed' }),
+    saveFarmState: async () => {},
+    scoutReels: () => { usedFeed = true; return (async function* feed() { yield { username: 'f' }; }()); },
+  };
+  await session.start({ hostId: 4, run: { id: 22, config: { keywords: ['gym'] } }, deps, logger: { log() {} } }).promise;
+  assert.strictEqual(usedFeed, true);
+});
+
+test('warming can be turned off for a run through the API', async () => {
+  let warmArg = 'unset';
+  const deps = {
+    ...baseDeps(),
+    scout: (args) => { warmArg = args.deps.warmCreator; return (async function* none() {}()); },
+  };
+  await session.start({ hostId: 1, run: { id: 23, config: { discovery: 'search', warmFeed: false } }, deps }).promise;
+  assert.strictEqual(warmArg, null);
 });
