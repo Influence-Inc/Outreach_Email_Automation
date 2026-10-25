@@ -926,3 +926,53 @@ test('a creator-list outage does not stop the run', async () => {
   assert.strictEqual(res.decision, 'added');
   assert.strictEqual(candidates[0].decision, 'added');
 });
+
+// ── viral potential (the Scout page's reach rule) ───────────────────────────
+
+const viralRunCfg = { viralViews: 100000, reelsWindow: 16, keywords: ['gym'], reviewBorderline: true };
+const viralReels = (viral, quiet) => [
+  ...Array(viral).fill(0).map(() => ({ views: 250000, caption: 'gym day' })),
+  ...Array(quiet).fill(0).map(() => ({ views: 9000, caption: 'gym day' })),
+];
+
+test('a creator who keeps going viral is shortlisted, with the count on the row', async () => {
+  const { deps, candidates, shortlisted } = jevStore('shortlist');
+  const res = await processCandidate(run, viralRunCfg, { username: 'breakout', reels: viralReels(6, 10) }, deps);
+  assert.strictEqual(res.decision, 'added');
+  assert.deepStrictEqual(shortlisted, ['breakout']);
+  assert.strictEqual(candidates[0].evidence.viral.viral, 6);
+  assert.strictEqual(candidates[0].evidence.viral.reels, 16);
+});
+
+test('too few viral reels is rejected before Jev, with the count as the reason', async () => {
+  const { deps, candidates } = jevStore('shortlist');
+  let judged = false;
+  deps.nicheClassify = async () => { judged = true; return null; };
+  const res = await processCandidate(run, viralRunCfg, { username: 'steady', reels: viralReels(1, 15) }, deps);
+  assert.strictEqual(res.decision, 'rejected');
+  assert.strictEqual(res.rejectReason, '1 of 16 reels went viral (100K+ views), needs 5');
+  assert.strictEqual(judged, false, 'no recording or model call for a creator the views ruled out');
+  assert.strictEqual(candidates[0].evidence.viral.viral, 1);
+});
+
+test('one viral reel short is held for review even when Jev would shortlist', async () => {
+  const { deps, shortlisted } = jevStore('shortlist');
+  const res = await processCandidate(run, viralRunCfg, { username: 'almost', reels: viralReels(4, 12) }, deps);
+  assert.strictEqual(res.decision, 'review');
+  assert.strictEqual(res.reviewReason, 'nearly viral — 4 of 16 reels went viral (100K+ views), needs 5');
+  assert.strictEqual(shortlisted.length, 0);
+});
+
+test('nearly viral and Jev unsure: both reasons are given', async () => {
+  const { deps } = jevStore('review', ['unsure of the subject: topic Fitness (45%)']);
+  const res = await processCandidate(run, viralRunCfg, { username: 'almost', reels: viralReels(4, 12) }, deps);
+  assert.strictEqual(res.decision, 'review');
+  assert.match(res.reviewReason, /^nearly viral — 4 of 16 .*; doubtful — unsure of the subject/);
+});
+
+test('one viral reel short is rejected when borderline creators are not reviewed', async () => {
+  const { deps } = jevStore('shortlist');
+  const res = await processCandidate(run, { ...viralRunCfg, reviewBorderline: false }, { username: 'almost', reels: viralReels(4, 12) }, deps);
+  assert.strictEqual(res.decision, 'rejected');
+  assert.match(res.rejectReason, /^4 of 16 reels went viral/);
+});

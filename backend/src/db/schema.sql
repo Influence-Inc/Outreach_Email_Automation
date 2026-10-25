@@ -793,6 +793,28 @@ UPDATE campaigns
    AND jsonb_typeof(sourcing_defaults) = 'object'
    AND sourcing_defaults->>'creatorPassThreshold' IN ('0.72', '.72', '0.720');
 
+-- The Scout page was simplified: the view floor, its tolerance, the ceiling, the
+-- risk shape, the reels window, the profile cap and Jev's two confidence bars
+-- are no longer fields on it (reach is judged on viral potential over 16 reels,
+-- runs go until their target, Jev's bars are learned from the review queue),
+-- and four switches are now on by default. Every save from the old page wrote
+-- all of them — the switches as an explicit false when unticked, the window as
+-- 12 — so those stored values would outlive the change. Remove them, once; what
+-- the page still shows (keywords, brand, viral bar, target, mode) is untouched.
+WITH claimed AS (
+  INSERT INTO data_migrations (name) VALUES ('scout-page-simplified')
+  ON CONFLICT (name) DO NOTHING
+  RETURNING name
+)
+UPDATE campaigns
+   SET sourcing_defaults = sourcing_defaults - ARRAY[
+     'floor', 'floorTolerance', 'ceiling', 'risk', 'reelsWindow', 'maxProfiles',
+     'jevAutoConfidence', 'jevRejectConfidence',
+     'warmFeed', 'skipOffNicheReels', 'prescreenNiche', 'reviewBorderline'
+   ]
+ WHERE EXISTS (SELECT 1 FROM claimed)
+   AND jsonb_typeof(sourcing_defaults) = 'object';
+
 -- Automated CPM + creator rate estimation (services/cpmEstimate.js, ported from the
 -- influence-creator-list repo). The estimate itself is never stored: it is recomputed on
 -- every read from these inputs and the vendored reference tables, so it can't go stale.

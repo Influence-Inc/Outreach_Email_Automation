@@ -30,6 +30,7 @@ function baseDeps({ events = [], runWithSource, getRun } = {}) {
     // Injected so the tests never reach for a database. Production loads the
     // campaign's scouting history here (services/sourcingStore.scoutedHandles).
     scoutedHandles: async () => [],
+    loadJevCalibration: async () => null,
   };
 }
 
@@ -268,4 +269,49 @@ test('session-resolved knobs still beat the spread campaign config', async () =>
 
   assert.strictEqual(got.tapJitterPx, 5, 'the session resolves jitter, not the saved config');
   assert.strictEqual(got.clipSeconds, 30, 'a real clip length still comes through');
+});
+
+// How sure Jev must be is learned from the review queue (jevCalibration), not
+// typed into the Scout page — the session puts the learned bars on the config
+// the judge reads.
+test("the learned Jev bars reach the run's config", async () => {
+  let seen = null;
+  const deps = {
+    ...baseDeps({ runWithSource: async (run, config) => { seen = config; return { status: 'done', stats: {} }; } }),
+    loadJevCalibration: async () => ({
+      shortlistAt: 0.5, rejectAt: 0.55, basis: { unsure: { decisions: 9, shortlisted: 8 }, probablyOff: { decisions: 6, rejected: 6 } },
+    }),
+  };
+  await session.start({ hostId: 1, run: { id: 6, campaign_id: 'c', config: { keywords: ['x'] } }, deps, logger: { log() {} } }).promise;
+  assert.strictEqual(seen.jevAutoConfidence, 0.5);
+  assert.strictEqual(seen.jevRejectConfidence, 0.55);
+});
+
+test('a bar set on the run itself is kept', async () => {
+  let seen = null;
+  const deps = {
+    ...baseDeps({ runWithSource: async (run, config) => { seen = config; return { status: 'done', stats: {} }; } }),
+    loadJevCalibration: async () => ({ shortlistAt: 0.5, rejectAt: 0.5, basis: { unsure: { decisions: 0, shortlisted: 0 }, probablyOff: { decisions: 0, rejected: 0 } } }),
+  };
+  await session.start({ hostId: 1, run: { id: 7, campaign_id: 'c', config: { jevAutoConfidence: 0.7 } }, deps, logger: { log() {} } }).promise;
+  assert.strictEqual(seen.jevAutoConfidence, 0.7);
+  assert.strictEqual(seen.jevRejectConfidence, 0.5);
+});
+
+// A run keeps going until it has sourced its target: no default cap on how many
+// creators the navigator may hand over.
+test('the navigator is not capped on captures by default', async () => {
+  let opts = null;
+  const deps = {
+    ...baseDeps(),
+    scout: (args) => { opts = args.opts; return (async function* () {})(); },
+  };
+  const before = process.env.SOURCING_CAPTURE_CAP;
+  delete process.env.SOURCING_CAPTURE_CAP;
+  try {
+    await session.start({ hostId: 1, run: { id: 8, campaign_id: 'c', config: {} }, deps }).promise;
+  } finally {
+    if (before !== undefined) process.env.SOURCING_CAPTURE_CAP = before;
+  }
+  assert.strictEqual(opts.max, Infinity);
 });

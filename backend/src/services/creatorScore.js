@@ -19,7 +19,9 @@
 // Reach steadiness is what separates "consistently performs" from "got one
 // lucky hit", which a single reel off a feed can never tell you.
 
-const { reelViews, median, stability, round3, clamp01 } = require('./sourcingFilters');
+const {
+  reelViews, median, stability, round3, clamp01, viralMode,
+} = require('./sourcingFilters');
 
 // Weights sum to 1. Fit carries the most, but never a majority — a creator the
 // model loves who posts wildly inconsistent reels should not sail through.
@@ -215,7 +217,12 @@ function reelStats(reels) {
 /** The limits the reach checks apply: the campaign's own, else the defaults. */
 function reachLimits(config = {}) {
   return {
-    maxSpike: config.maxViewSpike != null ? config.maxViewSpike : DEFAULT_MAX_SPIKE,
+    // Under the viral rule (sourcingFilters.viralPotential) breakout reels are
+    // what a creator is chosen for, and that rule already asks for at least two
+    // of them, so "carried by a single outlier" cannot pass it. The spike check
+    // would only reject the creators it is meant to find, so it is off there
+    // unless a campaign set one itself.
+    maxSpike: config.maxViewSpike != null ? config.maxViewSpike : (viralMode(config) ? 0 : DEFAULT_MAX_SPIKE),
     minViewEngagement: config.minViewEngagementRate != null
       ? config.minViewEngagementRate
       : DEFAULT_MIN_VIEW_ENGAGEMENT,
@@ -265,8 +272,8 @@ function reachRejectReason({ stats, rate, viewRate }, limits) {
   }
 
   // No follower-band reject. Follower count is a vanity number that reach
-  // already answers better: what a campaign buys is views, and `floor` /
-  // `ceiling` gate on those directly. A band on followers only ever rejected
+  // already answers better: what a campaign buys is views, and the viral rule
+  // gates on those directly. A band on followers only ever rejected
   // creators whose reach we had actually measured and liked.
 
   // Carried by one outlier rather than a real audience.

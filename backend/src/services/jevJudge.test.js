@@ -249,3 +249,27 @@ test('judge: a Groq failure is not fatal — the caption still gets judged', asy
   assert.strictEqual(v.evidence.jev.decision, 'shortlist');
   assert.strictEqual(v.evidence.jev.transcriptError, 'Groq answered 429');
 });
+
+// What jevCalibration learns the two bars from: how close a doubtful verdict came.
+test('a review says how close it came to each bar', () => {
+  const t = T({ topics: ['fitness'], genres: ['educational'] });
+  const unsure = decideFromLabels({ topic: L('fitness', 0.52), genre: L('educational', 0.48) }, t);
+  assert.strictEqual(unsure.decision, 'review');
+  assert.strictEqual(unsure.unsureAt, 0.48, 'the least sure of the matching labels');
+  assert.strictEqual(unsure.probablyOffAt, null);
+
+  const off = decideFromLabels({ topic: L('fitness', 0.9), genre: L('comedy', 0.41) }, t);
+  assert.strictEqual(off.decision, 'review');
+  assert.strictEqual(off.probablyOffAt, 0.41);
+  assert.strictEqual(off.unsureAt, null);
+
+  // The bars it was decided against are the ones on the config.
+  const strict = decideFromLabels({ topic: L('fitness', 0.7) }, T({ topics: ['fitness'] }), { jevAutoConfidence: 0.75 });
+  assert.strictEqual(strict.decision, 'review');
+  assert.strictEqual(strict.unsureAt, 0.7);
+});
+
+test('a blank bar on the config means the default, not zero', () => {
+  const d = decideFromLabels({ topic: L('fitness', 0.3) }, T({ topics: ['fitness'] }), { jevAutoConfidence: null, jevRejectConfidence: '' });
+  assert.strictEqual(d.decision, 'review', 'not shortlisted at 30% on a bar of 0');
+});

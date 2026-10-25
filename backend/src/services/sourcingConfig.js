@@ -2,12 +2,9 @@
 
 // Merge a campaign's saved scouting defaults with per-run overrides into the
 // frozen config the scouting rules (services/sourcingFilters.js) consume. Coerces
-// numbers, splits comma/newline keyword strings, defaults risk to 'medium' and
-// the reels window to 12.
-
-// 'all' takes every shape rather than raising a tolerance ceiling — see
-// sourcingFilters.matchesRisk.
-const RISKS = ['low', 'medium', 'high', 'all'];
+// numbers, splits comma/newline keyword strings, and fills in the defaults the
+// Scout page no longer asks a scout for: 16 reels read, the viral bar, no
+// profile cap, and the four safety/quality switches on.
 
 function toKeywordList(v) {
   if (Array.isArray(v)) return v.map((s) => String(s).trim()).filter(Boolean);
@@ -15,6 +12,36 @@ function toKeywordList(v) {
     .split(/[,\n]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+// What a reel needs to count as viral when the campaign has not said. Deals are
+// priced on views, and 100K is where a reel has clearly left its creator's own
+// followers behind for most of the creators we scout.
+const DEFAULT_VIRAL_VIEWS = 100000;
+
+// How many of a creator's newest reels are read to judge whether they go viral.
+const REELS_WINDOW = 16;
+
+/** On unless explicitly switched off — for the switches every run needs. */
+const onUnlessOff = (v) => v !== false && v !== 'false';
+
+/** Keywords, with the old separate niche field folded in: they did the same job. */
+function keywordsOf(merged) {
+  const seen = new Set();
+  return [...toKeywordList(merged.keywords), ...toKeywordList(merged.niche)].filter((k) => {
+    const key = k.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** What the brand sells, with the old separate brand-details field folded in. */
+function brandProductOf(merged) {
+  const parts = [merged.brandProduct, merged.brandBrief]
+    .map((v) => (v ? String(v).trim() : ''))
+    .filter(Boolean);
+  return [...new Set(parts)].join('\n\n');
 }
 
 function num(v) {
@@ -81,8 +108,10 @@ function clipSecondsOf(v) {
 function buildConfig(defaults = {}, override = {}) {
   const merged = { ...(defaults || {}), ...(override || {}) };
   return {
-    niche: merged.niche ? String(merged.niche).trim() : '',
-    keywords: toKeywordList(merged.keywords),
+    // One field on the Scout page now. A campaign saved with a separate niche
+    // has it searched and judged as one more keyword.
+    niche: '',
+    keywords: keywordsOf(merged),
     // Free-text description of who the brand wants to reach — fed to the Gemini
     // reel judge so it scores audience fit, not just topic.
     targetAudience: merged.targetAudience ? String(merged.targetAudience).trim() : '',
@@ -90,38 +119,34 @@ function buildConfig(defaults = {}, override = {}) {
     // judge needs this to answer "could THIS creator put THIS product in a reel
     // and have it look native" — a different question from "are they in the right
     // niche", and the one that decides whether an outreach is worth sending.
-    brandProduct: merged.brandProduct ? String(merged.brandProduct).trim() : '',
+    //
+    // One field on the Scout page, "What you're selling": the product and
+    // whatever a one-liner cannot say — positioning, price, who it is for.
+    brandProduct: brandProductOf(merged),
     // Who the brand IS. "A carbon-plate racing shoe" and "a £280 carbon-plate
     // racing shoe from a niche running label" call for different creators, and
     // only the second says which.
     brandName: merged.brandName ? String(merged.brandName).trim() : '',
-    // Room to actually describe the brand and product — positioning, price tier,
-    // who it is for, and what a natural mention would look like. The one-line
-    // product field cannot carry any of that, and "could this look native rather
-    // than bought" is exactly the judgement that needs it.
-    brandBrief: merged.brandBrief ? String(merged.brandBrief).trim() : '',
     // Optional allow-list of genres the reel judge should treat as on-brand.
     genres: toKeywordList(merged.genres),
-    // How sure Jev must be to shortlist on its own (default 0.6), and to reject
-    // as off target (default 0.6). Anything less sure goes to the admin.
-    jevAutoConfidence: num(merged.jevAutoConfidence),
-    jevRejectConfidence: num(merged.jevRejectConfidence),
-    floor: num(merged.floor),
-    // How many of the recent reels may sit BELOW the floor. 0 by default: the
-    // floor is the campaign's minimum, and a "minimum" that eleven of twelve
-    // reels satisfy is not a minimum. Raise it only for a campaign that
-    // deliberately wants slack.
-    floorTolerance: num(merged.floorTolerance),
-    ceiling: num(merged.ceiling),
-    risk: RISKS.includes(merged.risk) ? merged.risk : 'medium',
+    // How sure Jev must be to shortlist and to reject are not set here: the
+    // session learns them from the review queue (services/jevCalibration.js).
+    //
+    // Reach is judged on VIRAL POTENTIAL (sourcingFilters.viralPotential): how
+    // many of the newest reels reached this many views. It replaces the old
+    // minimum-view floor, its tolerance, the view ceiling and the risk shape,
+    // which are no longer read.
+    viralViews: num(merged.viralViews) || DEFAULT_VIRAL_VIEWS,
     targetCount: num(merged.targetCount) || 0,
-    reelsWindow: num(merged.reelsWindow) || 12,
+    reelsWindow: num(merged.reelsWindow) || REELS_WINDOW,
     nicheThreshold: num(merged.nicheThreshold),
     // Route borderline passers to a human review queue instead of auto-adding.
     // Borderline means close to EITHER threshold that can reject: the quality
     // bar (creatorPassThreshold) within reviewScoreBand (default 0.05), or the
     // niche floor (nicheThreshold) within reviewBand (default 0.15).
-    reviewBorderline: merged.reviewBorderline === true || merged.reviewBorderline === 'true',
+    // On unless a campaign turns it off; it also holds creators one viral reel
+    // short of the rule, instead of rejecting them.
+    reviewBorderline: onUnlessOff(merged.reviewBorderline),
     reviewBand: num(merged.reviewBand),
     reviewScoreBand: num(merged.reviewScoreBand),
     // Hold a creator no model could analyse (no Gemini, no Claude, or every
@@ -135,8 +160,9 @@ function buildConfig(defaults = {}, override = {}) {
     // config is a whitelist, so a knob missing here is silently dropped no matter
     // what the dashboard sends — which is exactly what happened to these three.
     clipsPerProfile: num(merged.clipsPerProfile),
-    // Ceiling on profiles opened per run, independent of targetCount.
-    maxProfiles: num(merged.maxProfiles),
+    // No ceiling on profiles opened: a run keeps going until it has sourced
+    // targetCount creators (or its keywords run out of results). 0 = no cap.
+    maxProfiles: 0,
     // How long an unchanging screen counts as stuck rather than slow.
     stallMs: num(merged.stallMs),
     // The deterministic gate's bar (services/creatorScore.js, default 0.52) —
@@ -169,19 +195,19 @@ function buildConfig(defaults = {}, override = {}) {
     // creator the pictures say is plainly in another line of work. Costs one
     // small image call; saves a recording, an upload and a video call every time
     // it fires. See services/nichePrescreen.js.
-    prescreenNiche: merged.prescreenNiche === true || merged.prescreenNiche === 'true',
+    prescreenNiche: onUnlessOff(merged.prescreenNiche),
     // Feed mode: skip a reel whose caption plainly has nothing to do with the
     // campaign, before a clip is recorded for it. On unless explicitly turned
     // off — the test is deliberately timid (a short caption is never evidence)
     // and a skipped creator is NOT marked handled, so a warmed feed brings them
     // back round. See sourcingFilters.looksOffNiche.
-    skipOffNicheReels: merged.skipOffNicheReels !== false && merged.skipOffNicheReels !== 'false',
+    skipOffNicheReels: onUnlessOff(merged.skipOffNicheReels),
     // Feed mode: like the clearly on-brand reels as we go, to steer this
-    // account's Reels ranking toward the niche we are sourcing for. OFF unless
-    // asked for — automated engagement is what IG's anti-bot systems look for,
-    // so it stays a deliberate choice per run. Every safety rail (min score,
-    // per-reel probability, per-session caps) is env-tuned, not set from here.
-    warmFeed: merged.warmFeed === true || merged.warmFeed === 'true',
+    // account's Reels ranking toward the niche we are sourcing for. On unless a
+    // campaign turns it off. Every safety rail (min score, per-reel
+    // probability, per-session caps, stopping on "action blocked") is
+    // env-tuned, not set from here.
+    warmFeed: onUnlessOff(merged.warmFeed),
     // How sure the prescreen must be before it drops a creator. A skipped
     // creator is never looked at again, so this is deliberately high.
     prescreenMinConfidence: num(merged.prescreenMinConfidence),
@@ -200,5 +226,5 @@ function buildConfig(defaults = {}, override = {}) {
 
 module.exports = {
   buildConfig, toKeywordList, toLineList, weightsOf, clipSecondsOf,
-  RISKS, WEIGHT_KEYS, MIN_CLIP_SECONDS, DEFAULT_CLIP_SECONDS,
+  WEIGHT_KEYS, MIN_CLIP_SECONDS, DEFAULT_CLIP_SECONDS, DEFAULT_VIRAL_VIEWS, REELS_WINDOW,
 };

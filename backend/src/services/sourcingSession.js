@@ -21,9 +21,13 @@ const commands = require('./hostCommands');
 const store = require('./sourcingStore');
 const searchTerms = require('./searchTerms');
 const nicheCalibration = require('./nicheCalibration');
+const jevCalibration = require('./jevCalibration');
 
 const DEFAULT_PACING_MS = 1800; // human-like pacing between IG actions (anti-flag)
-const DEFAULT_CAPTURE_CAP = 500; // safety cap on captures per run
+// No cap on captures by default: a run keeps scouting until it has sourced its
+// target, the keywords run out of results, or an admin stops it.
+// SOURCING_CAPTURE_CAP still sets one for an operator who wants a ceiling.
+const DEFAULT_CAPTURE_CAP = Infinity;
 // Comfortably inside sourcingSweep's 15-minute stale-run window, and rare
 // enough that a long skip streak costs a handful of writes rather than one per
 // creator considered.
@@ -65,7 +69,7 @@ async function runSession({ hostId, run, deps }) {
   const pacingMs = Number(
     (run.config && run.config.pacingMs) || deps.pacingMs || process.env.SOURCING_PACING_MS || DEFAULT_PACING_MS,
   );
-  const captureCap = Number(deps.captureCap || process.env.SOURCING_CAPTURE_CAP || DEFAULT_CAPTURE_CAP);
+  const captureCap = Number(deps.captureCap || process.env.SOURCING_CAPTURE_CAP) || DEFAULT_CAPTURE_CAP;
   // Small tap-coordinate jitter so taps aren't pixel-perfect (anti-flag).
   const tapJitterPx = Number(deps.tapJitterPx != null ? deps.tapJitterPx : process.env.SOURCING_TAP_JITTER_PX || 5);
   const log = (deps.logger && deps.logger.log) ? deps.logger.log.bind(deps.logger) : console.log;
@@ -104,6 +108,16 @@ async function runSession({ hostId, run, deps }) {
       `[sourcing-session] calibrating on ${calibration.counts.approved} approved `
       + `+ ${calibration.counts.rejected} rejected creators`,
     );
+  }
+
+  // How sure Jev must be to shortlist and to reject — learned from the review
+  // queue (services/jevCalibration.js), never typed in by a scout. A config
+  // that already carries a bar (set through the API) keeps it.
+  const bars = await (deps.loadJevCalibration || jevCalibration.load)({ db, logger: deps.logger || console });
+  if (bars) {
+    if (config.jevAutoConfidence == null) config.jevAutoConfidence = bars.shortlistAt;
+    if (config.jevRejectConfidence == null) config.jevRejectConfidence = bars.rejectAt;
+    log(`[sourcing-session] run #${run.id}: ${jevCalibration.describe(bars)}`);
   }
 
   const opts = {

@@ -65,6 +65,12 @@ function borderlineReason(verdict, config = {}, gate = null) {
   return null;
 }
 
+/** Why a creator who only just missed the viral rule is held, or null. */
+function nearlyViralReason(verdict) {
+  const viral = verdict && verdict.viral;
+  return viral && !viral.pass ? `nearly viral — ${viral.reason}` : null;
+}
+
 // A passing candidate is either auto-added or held for human review — the
 // reviewBorderline trust dial for AI-sourced adds. Pure + exported for tests.
 function reviewDecision(verdict, config = {}, gate = null) {
@@ -81,10 +87,14 @@ function reviewDecision(verdict, config = {}, gate = null) {
  *      safety never ran. On by default: without it, a missing or failing AI
  *      judge silently turned the scout into a keyword matcher that auto-adds.
  *      `reviewUnjudged: false` restores adding on the reach and keyword rules.
- *   3. Borderline on quality or niche, when reviewBorderline is on.
+ *   3. Nearly viral: one viral reel short of the rule (only reaches here when
+ *      reviewBorderline is on — otherwise the rule rejected them).
+ *   4. Borderline on quality or niche, when reviewBorderline is on.
  */
 function reviewHoldReason(verdict, config = {}, { gate = null, reachUnverified = false } = {}) {
   if (reachUnverified) return 'reach not measured — confirm their views before adding';
+  const nearly = nearlyViralReason(verdict);
+  if (nearly) return nearly;
   if (!gate && config.reviewUnjudged !== false) {
     return 'not quality-judged — no AI analysis was available, so only the reach and keyword rules ran';
   }
@@ -187,7 +197,7 @@ async function processCandidate(run, config, candidate, deps) {
         risk_profile: pre.riskProfile,
         stability_score: null,
         growth_trend: null,
-        evidence: candidate.evidence || null,
+        evidence: pre.viral ? { ...(candidate.evidence || {}), viral: pre.viral } : (candidate.evidence || null),
         decision: 'pending',
       });
       if (!row) return { decision: 'skipped', added: false, rejectReason: 'already scouted' };
@@ -232,6 +242,7 @@ async function processCandidate(run, config, candidate, deps) {
   }
 
   const verdict = reachUnverified ? decideReel(candidate, config) : decide(candidate, config);
+  if (verdict.viral) candidate.evidence = { ...(candidate.evidence || {}), viral: verdict.viral };
 
   // The model's fit_score is an INPUT, never the decision. When the analyses are
   // present, a deterministic gate combines it with reach steadiness, the
@@ -400,6 +411,7 @@ async function finishJev(run, config, candidate, deps, {
   const judge = 'jev';
   const cfg = { ...config, nicheThreshold: 0 };
   const verdict = reachUnverified ? decideReel(candidate, cfg) : decide(candidate, cfg);
+  if (verdict.viral) candidate.evidence = { ...(candidate.evidence || {}), viral: verdict.viral };
 
   // Arithmetic on counts read off the screen: bought views, a following nobody
   // engages with, reach carried by one outlier reel.
@@ -421,7 +433,11 @@ async function finishJev(run, config, candidate, deps, {
   let holdReason = null;
   if (verdict.pass) {
     if (reachUnverified) holdReason = 'reach not measured — confirm their views before adding';
-    else if (jev.decision !== 'shortlist') holdReason = `doubtful — ${(jev.reasons || []).join('; ') || 'Jev was unsure'}`;
+    else {
+      const holds = [nearlyViralReason(verdict)];
+      if (jev.decision !== 'shortlist') holds.push(`doubtful — ${(jev.reasons || []).join('; ') || 'Jev was unsure'}`);
+      holdReason = holds.filter(Boolean).join('; ') || null;
+    }
   }
   if (holdReason) candidate.evidence = { ...candidate.evidence, reviewHold: holdReason };
 
@@ -564,6 +580,7 @@ module.exports = {
   arraySource,
   reviewDecision,
   reviewHoldReason,
+  nearlyViralReason,
   sourceTag,
   sourceNote,
   REVIEW_BAND_DEFAULT,

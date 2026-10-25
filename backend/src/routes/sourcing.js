@@ -8,6 +8,7 @@
 //   Admin:
 //     GET   /api/sourcing/config/:campaignId     current scouting defaults
 //     PATCH /api/sourcing/config/:campaignId      save scouting defaults
+//     GET   /api/sourcing/jev-calibration         Jev's learned shortlist / reject bars
 //     POST  /api/sourcing/runs                    start a run for a campaign
 //     GET   /api/sourcing/runs/:id                run status + captured candidates
 //     POST  /api/sourcing/runs/:id/stop           halt a run
@@ -26,8 +27,9 @@ const sourcingSession = require('../services/sourcingSession');
 const clipStore = require('../services/clipStore');
 const humanize = require('../services/humanize');
 const geminiClient = require('../services/geminiClient');
-const claudeClient = require('../services/claudeClient');
 const sourcingMetrics = require('../services/sourcingMetrics');
+const jevCalibration = require('../services/jevCalibration');
+const jevJudge = require('../services/jevJudge');
 const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
@@ -68,26 +70,22 @@ router.get('/gemini/health', async (_req, res, next) => {
 });
 
 /**
- * Which judges this deployment can use, and what that means for a run.
+ * Whether this deployment can judge the creators it scouts, and what that means
+ * for a run.
  *
- * Without Gemini nothing watches the reels; without Claude too, nothing judges
- * quality at all, and every creator who passes the reach rules waits in review.
- * That used to be invisible — a run just looked normal — so the Scout page
- * states it. Configuration only, no network call (GET /gemini/health is the one
- * that proves the key and model actually work). Pure + exported for tests.
+ * Jev (services/jevJudge.js) labels each creator's reel. Without its key every
+ * creator who passes the viral rule waits in review; without Groq it cannot
+ * hear the reel and reads only the caption and on-screen text. A run looks
+ * normal either way, so the Scout page states it. Configuration only, no
+ * network call. Pure + exported for tests.
  */
-function judgeStatus({ gemini = geminiClient, claude = claudeClient } = {}) {
-  const video = !!(gemini.available && gemini.available());
-  const pictures = !!(claude.getClient && claude.getClient());
+function judgeStatus({ jev = jevJudge } = {}) {
+  const labels = !!jev.configured();
+  const speech = labels && !!jev.speechConfigured();
   let mode = 'none';
-  if (video) mode = 'video';
-  else if (pictures) mode = 'pictures';
-  return {
-    gemini: video,
-    geminiModel: video && gemini.model ? gemini.model() : null,
-    claude: pictures,
-    mode,
-  };
+  if (speech) mode = 'full';
+  else if (labels) mode = 'no-speech';
+  return { jev: labels, speech, mode };
 }
 
 // GET /api/sourcing/status — admin-only via the top-level siteAuth gate.
@@ -114,6 +112,18 @@ router.get('/metrics', async (req, res, next) => {
   try {
     const campaignId = req.query.campaignId || req.query.campaign || null;
     res.json(await sourcingMetrics.campaignReport({ db, campaignId }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/sourcing/jev-calibration — how sure Jev currently has to be to
+// shortlist and to reject, as learned from the review queue, with one line
+// saying so for the Scout page. Admin-only via the top-level siteAuth gate.
+router.get('/jev-calibration', async (_req, res, next) => {
+  try {
+    const bars = await jevCalibration.load({ db });
+    res.json({ ...bars, summary: jevCalibration.describe(bars) });
   } catch (err) {
     next(err);
   }
@@ -306,8 +316,8 @@ router.post('/runs', async (req, res, next) => {
         .status(400)
         .json({ error: 'targetCount (number of creators to source) is required' });
     }
-    if (!config.niche && !config.keywords.length) {
-      return res.status(400).json({ error: 'a niche or at least one keyword is required' });
+    if (!config.keywords.length) {
+      return res.status(400).json({ error: 'add at least one keyword to search for' });
     }
 
     // Which phone should scout this run. Optional: a run left unpinned is

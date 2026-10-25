@@ -8,10 +8,13 @@
 // campaign. The five rules from the spec map to:
 //
 //   Rule 1  niche/genre match      -> nicheMatch()   (AI, keyword fallback)
-//   Rule 2  minimum view floor     -> passesViewFloor()
+//   Rule 2  viral potential        -> viralPotential()   (the Scout page's rule;
+//           the old minimum view floor, passesViewFloor(), only runs for a
+//           config that still sets `floor` through the API)
 //   Rule 3  caption-keyword search -> keywordNicheScore() feeds Rule 1 + discovery
 //   Rule 4  stable growth          -> stability() + growthTrend()
-//   Rule 5  risk profile           -> classifyRisk() + matchesRisk()
+//   Rule 5  risk profile           -> classifyRisk() + matchesRisk()  (not under
+//           the viral rule, where breakout reels are the point)
 //
 // Everything here is deterministic and side-effect-free EXCEPT nicheMatch(), which
 // optionally calls Claude and degrades to the deterministic keyword score when no
@@ -49,6 +52,10 @@ const DEFAULTS = {
   mediumCv: 0.9,     // ...and for "moderate swings" (medium)
   viralMultiple: 3,  // a reel is "viral" at > viralMultiple x median when no ceiling is set
   trendBand: 0.03,   // |per-step fractional slope| within this = "flat"
+  // Viral potential — see viralPotential().
+  viralShare: 0.3,   // share of the reels read that must have gone viral
+  minViralReels: 2,  // and never fewer than this: one hit is luck, not potential
+  minViralWindow: 3, // reels with a readable count needed to judge it at all
 };
 
 const RISK_RANK = { low: 0, medium: 1, high: 2 };
@@ -116,6 +123,59 @@ function passesViewFloor(views, floor, tolerance = 0) {
   if (!views.length) return false;
   const below = views.filter((v) => v < floor).length;
   return below <= tolerance;
+}
+
+// ── Rule 2: viral potential ─────────────────────────────────────────────────
+
+/**
+ * Has this creator shown they can go viral?
+ *
+ * Our deals are paid on views, so what matters is not a creator's typical reel
+ * but whether their reels break out. A creator who usually sits in a modest
+ * range and keeps landing hits is worth more to a view deal than one who is
+ * steady at a number that never moves, and a creator with only a handful of
+ * reels can prove it as well as one with hundreds.
+ *
+ * A reel is VIRAL when its views reach `viralViews` (the Scout page's "a reel
+ * counts as viral at"). The creator passes when roughly a third of the reels
+ * read are viral, and never fewer than two:
+ *
+ *   needed = max(minViralReels, ceil(viralShare x reels read))
+ *
+ *   16 reels -> 5 viral    12 reels -> 4    7-10 reels -> 3    3-6 reels -> 2
+ *
+ * One short of that, with at least two hits, is BORDERLINE: a creator who has
+ * clearly broken out more than once but not quite often enough. The caller
+ * holds them for review when the campaign asks for borderline cases to be
+ * reviewed, and rejects them otherwise.
+ *
+ * Returns { viralViews, reels, viral, needed, pass, borderline, reason }.
+ */
+function viralPotential(views, cfg = {}) {
+  const bar = Number(cfg.viralViews);
+  const n = views.length;
+  const share = Number(cfg.viralShare) > 0 ? Number(cfg.viralShare) : DEFAULTS.viralShare;
+  const least = Number(cfg.minViralReels) > 0 ? Math.round(Number(cfg.minViralReels)) : DEFAULTS.minViralReels;
+  const viral = views.filter((v) => v >= bar).length;
+  const needed = Math.max(least, Math.ceil(share * n));
+  const pass = viral >= needed;
+  const borderline = !pass && viral >= 2 && viral === needed - 1;
+  const reason = `${viral} of ${n} reels went viral (${compactCount(bar)}+ views), needs ${needed}`;
+  return {
+    viralViews: bar, reels: n, viral, needed, pass, borderline, reason,
+  };
+}
+
+/** 100000 -> "100K", 1500000 -> "1.5M": for reasons a scout reads. */
+function compactCount(n) {
+  if (n >= 1e6) return `${round3(n / 1e6)}M`;
+  if (n >= 1e3) return `${round3(n / 1e3)}K`;
+  return String(n);
+}
+
+/** Is the viral rule in force for this config? */
+function viralMode(cfg = {}) {
+  return Number(cfg.viralViews) > 0;
 }
 
 // ── Rule 4: stable growth ───────────────────────────────────────────────────
@@ -366,6 +426,12 @@ function clamp01(n) {
  * deliberate choice to judge on fewer reels, and it is honoured as one.
  */
 function requiredReels(cfg = {}) {
+  // The viral rule judges a creator on however many reels they have: five reels
+  // with three hits is a pass. It only needs enough to be more than one reel.
+  if (viralMode(cfg)) {
+    const least = Number(cfg.minViralWindow);
+    return Number.isFinite(least) && least > 0 ? Math.round(least) : DEFAULTS.minViralWindow;
+  }
   const min = Number(cfg.minReels);
   const floor = Number.isFinite(min) && min > 0 ? min : DEFAULTS.minReels;
   const window = Number(cfg.reelsWindow);
@@ -379,33 +445,47 @@ function prefilter(candidate, config = {}) {
   const viewFloorPass = passesViewFloor(views, cfg.floor, cfg.floorTolerance || 0);
   const riskProfile = classifyRisk(views, cfg);
   const needed = requiredReels(cfg);
+  const viral = viralMode(cfg) ? viralPotential(views, cfg) : null;
 
   let rejectReason = null;
   if (reelCount < needed) {
     rejectReason = `only ${reelCount} reels (need ${needed})`;
-  } else if (!viewFloorPass) {
+  } else if (viral && !viralPasses(viral, cfg)) {
+    rejectReason = viral.reason;
+  } else if (!viral && !viewFloorPass) {
     const low = views.filter((v) => v < cfg.floor).length;
     rejectReason = low === reelCount
       ? `all ${reelCount} reels below floor ${cfg.floor}`
       : `${low} of ${reelCount} reels below floor ${cfg.floor}`;
-  } else if (!matchesRisk(riskProfile, cfg.risk)) {
+  } else if (!viral && !matchesRisk(riskProfile, cfg.risk)) {
     rejectReason = `risk ${riskProfile} exceeds appetite ${cfg.risk}`;
   }
 
   return {
-    views, reelCount, viewFloorPass, riskProfile,
+    views, reelCount, viewFloorPass: viral ? viral.pass : viewFloorPass, riskProfile, viral,
     pass: !rejectReason,
     rejectReason,
   };
 }
 
+/**
+ * Does the viral verdict let the creator carry on? A pass does; a borderline
+ * one does only when the campaign holds borderline creators for review, and the
+ * orchestrator then holds them rather than shortlisting.
+ */
+function viralPasses(viral, cfg = {}) {
+  return viral.pass || (viral.borderline && cfg.reviewBorderline === true);
+}
+
 function decide(candidate, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
   const views = reelViews(candidate.reels);
+  const viral = viralMode(cfg) ? viralPotential(views, cfg) : null;
   const evalResult = {
     views,
     reelCount: views.length,
-    viewFloorPass: passesViewFloor(views, cfg.floor, cfg.floorTolerance || 0),
+    viral,
+    viewFloorPass: viral ? viral.pass : passesViewFloor(views, cfg.floor, cfg.floorTolerance || 0),
     riskProfile: classifyRisk(views, cfg),
     stabilityScore: stability(views),
     growthTrend: growthTrend(views, cfg),
@@ -422,12 +502,14 @@ function decide(candidate, config = {}) {
   const needed = requiredReels(cfg);
   if (evalResult.reelCount < needed) {
     evalResult.rejectReason = `only ${evalResult.reelCount} reels (need ${needed})`;
-  } else if (!evalResult.viewFloorPass) {
+  } else if (viral && !viralPasses(viral, cfg)) {
+    evalResult.rejectReason = viral.reason;
+  } else if (!viral && !evalResult.viewFloorPass) {
     const low = views.filter((v) => v < cfg.floor).length;
     evalResult.rejectReason = low === views.length
       ? `all ${views.length} reels below floor ${cfg.floor}`
       : `${low} of ${views.length} reels below floor ${cfg.floor}`;
-  } else if (!matchesRisk(evalResult.riskProfile, cfg.risk)) {
+  } else if (!viral && !matchesRisk(evalResult.riskProfile, cfg.risk)) {
     evalResult.rejectReason = `risk ${evalResult.riskProfile} exceeds appetite ${cfg.risk}`;
   } else if (
     evalResult.nicheScore != null &&
@@ -480,6 +562,9 @@ module.exports = {
   stdev,
   cv,
   passesViewFloor,
+  viralPotential,
+  viralPasses,
+  viralMode,
   stability,
   growthTrend,
   classifyRisk,
