@@ -64,9 +64,10 @@ model docs for current rates.
 
 A scout fills in only what they know: **keywords**, **viral at (views)**, **creators to
 source**, **brand name** and **what you're selling** (the product and any details, one
-field). Discovery mode and device are picked from lists, and four switches are ticked by
-default because every run needs them: warm the feed, skip off-niche reels, screenshot
-pre-check, borderline → review.
+field). Discovery mode and device are picked from lists. The four switches every run needs
+— warm the feed, skip off-niche reels, screenshot pre-check, borderline → review — are not on
+the page: they are always on (`buildConfig` turns each on unless a config set through the API
+turns it off).
 
 There is **no campaign picker**. Scouting is not done for a campaign: every creator the scout
 shortlists goes to creator-list's *Curated by INFLUENCE Team* collection. A run started from the
