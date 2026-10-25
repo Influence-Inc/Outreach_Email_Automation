@@ -6,8 +6,10 @@
 // /runs/:id/candidates.
 //
 //   Admin:
-//     GET   /api/sourcing/config/:campaignId     current scouting defaults
-//     PATCH /api/sourcing/config/:campaignId      save scouting defaults
+//     GET   /api/sourcing/config                 the Scout page's saved defaults
+//     PATCH /api/sourcing/config                 save them
+//     GET   /api/sourcing/config/:campaignId     a campaign's scouting defaults (API only)
+//     PATCH /api/sourcing/config/:campaignId      save a campaign's scouting defaults (API only)
 //     GET   /api/sourcing/jev-calibration         Jev's learned shortlist / reject bars
 //     POST  /api/sourcing/runs                    start a run for a campaign
 //     GET   /api/sourcing/runs/:id                run status + captured candidates
@@ -201,6 +203,59 @@ router.delete('/hosts/:id', async (req, res, next) => {
   }
 });
 
+// The Scout page's own defaults. Scouting is not done for a campaign any more —
+// every shortlisted creator goes to creator-list — so the page keeps one set of
+// defaults, in app_settings, rather than one per campaign.
+const GLOBAL_DEFAULTS_KEY = 'sourcing_defaults';
+
+function parseDefaults(text) {
+  try {
+    const v = JSON.parse(text || '{}');
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+async function globalDefaults() {
+  const row = await db.one(`SELECT value FROM app_settings WHERE key = $1`, [GLOBAL_DEFAULTS_KEY]);
+  return parseDefaults(row && row.value);
+}
+
+router.get('/config', async (_req, res, next) => {
+  try {
+    res.json(await globalDefaults());
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/config', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    if (typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'body must be an object' });
+    }
+    // Same merge semantics as a campaign's defaults, under a row lock.
+    const saved = await db.withTransaction(async (client) => {
+      await client.query(
+        `INSERT INTO app_settings (key, value) VALUES ($1, '{}') ON CONFLICT (key) DO NOTHING`,
+        [GLOBAL_DEFAULTS_KEY],
+      );
+      const cur = await client.query(`SELECT value FROM app_settings WHERE key = $1 FOR UPDATE`, [GLOBAL_DEFAULTS_KEY]);
+      const merged = mergeSourcingDefaults(parseDefaults(cur.rows[0] && cur.rows[0].value), body);
+      await client.query(
+        `UPDATE app_settings SET value = $2, updated_at = NOW() WHERE key = $1`,
+        [GLOBAL_DEFAULTS_KEY, JSON.stringify(merged)],
+      );
+      return merged;
+    });
+    res.json(saved);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/config/:campaignId', async (req, res, next) => {
   try {
     const row = await db.one(`SELECT sourcing_defaults FROM campaigns WHERE id = $1`, [
@@ -300,17 +355,26 @@ router.post('/candidates/:id/reject', async (req, res, next) => {
 });
 
 // Start a scouting run. Freezes the merged (defaults + overrides) config onto the
-// run so later edits to the campaign defaults never change an in-flight run.
+// run so later edits to the defaults never change an in-flight run.
+//
+// No campaign: the Scout page's runs are not for one (shortlisted creators go to
+// creator-list) and use the page's saved defaults. A campaign_id is still
+// accepted from the API, and then that campaign's defaults apply.
 router.post('/runs', async (req, res, next) => {
   try {
     const { campaign_id, host_id, config: override } = req.body || {};
-    if (!campaign_id) return res.status(400).json({ error: 'campaign_id is required' });
-    const campaign = await db.one(`SELECT id, sourcing_defaults FROM campaigns WHERE id = $1`, [
-      campaign_id,
-    ]);
-    if (!campaign) return res.status(404).json({ error: 'campaign not found' });
+    let defaults;
+    if (campaign_id) {
+      const campaign = await db.one(`SELECT id, sourcing_defaults FROM campaigns WHERE id = $1`, [
+        campaign_id,
+      ]);
+      if (!campaign) return res.status(404).json({ error: 'campaign not found' });
+      defaults = campaign.sourcing_defaults;
+    } else {
+      defaults = await globalDefaults();
+    }
 
-    const config = buildConfig(campaign.sourcing_defaults, override);
+    const config = buildConfig(defaults, override);
     if (!config.targetCount || config.targetCount < 1) {
       return res
         .status(400)
@@ -343,7 +407,7 @@ router.post('/runs', async (req, res, next) => {
     }
 
     const run = await store.createRun({
-      campaignId: campaign_id,
+      campaignId: campaign_id || null,
       config,
       targetCount: config.targetCount,
       createdBy: (req.session && req.session.email) || null,

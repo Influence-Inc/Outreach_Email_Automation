@@ -153,20 +153,28 @@ async function touchRun(id) {
  * Returns a plain { term: depth } map. Empty on any failure — a run that cannot
  * read its history simply starts at the top, which is what it always did.
  */
-async function keywordDepths({ campaignId }) {
-  if (!campaignId) return {};
-  const rows = await db.many(
-    `SELECT term, depth FROM sourcing_keyword_depth WHERE campaign_id = $1`,
-    [campaignId],
-  );
+async function keywordDepths({ campaignId = null } = {}) {
+  // A campaign-less run (the Scout page's) reads the shared depth table.
+  const rows = campaignId
+    ? await db.many(`SELECT term, depth FROM sourcing_keyword_depth WHERE campaign_id = $1`, [campaignId])
+    : await db.many(`SELECT term, depth FROM sourcing_term_depth`);
   const out = {};
   for (const r of rows || []) out[r.term] = Number(r.depth) || 0;
   return out;
 }
 
 /** Remember that a keyword has now been read to `depth` screens. */
-async function saveKeywordDepth({ campaignId, term, depth }) {
-  if (!campaignId || !term) return;
+async function saveKeywordDepth({ campaignId = null, term, depth }) {
+  if (!term) return;
+  if (!campaignId) {
+    await db.query(
+      `INSERT INTO sourcing_term_depth (term, depth, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (term) DO UPDATE SET depth = EXCLUDED.depth, updated_at = NOW()`,
+      [term, Math.max(0, Number(depth) || 0)],
+    );
+    return;
+  }
   await db.query(
     `INSERT INTO sourcing_keyword_depth (campaign_id, term, depth, updated_at)
      VALUES ($1, $2, $3, NOW())
@@ -197,17 +205,20 @@ function makeDeps(run, { nicheClassify = jevJudge.makeClassifier() } = {}) {
   return {
     nicheClassify,
 
-    // ON CONFLICT DO NOTHING enforces the (campaign, LOWER(username)) unique index
-    // — a duplicate capture returns no row, which the orchestrator treats as
-    // "already scouted" (skipped).
+    // ON CONFLICT DO NOTHING enforces the unique index — per campaign, or across
+    // every campaign-less run — so a duplicate capture returns no row, which the
+    // orchestrator treats as "already scouted" (skipped).
     async persistCandidate(rec) {
+      const conflict = rec.campaign_id
+        ? '(campaign_id, LOWER(username))'
+        : '(LOWER(username)) WHERE campaign_id IS NULL';
       return db.one(
         `INSERT INTO sourced_candidates
            (run_id, campaign_id, username, full_name, followers, bio, reels,
             niche_score, niche_reason, view_floor_pass, risk_profile,
             stability_score, growth_trend, decision, evidence)
          VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
-         ON CONFLICT (campaign_id, LOWER(username)) DO NOTHING
+         ON CONFLICT ${conflict} DO NOTHING
          RETURNING *`,
         [
           rec.run_id,
@@ -265,8 +276,9 @@ function makeDeps(run, { nicheClassify = jevJudge.makeClassifier() } = {}) {
     // Jev shortlisted them: into creator-list's admin collection.
     async shortlist({ username, candidate, jev, sourceTerm }) {
       const row = await db.one(
-        `SELECT id FROM sourced_candidates WHERE campaign_id = $1 AND LOWER(username) = LOWER($2)`,
-        [run.campaign_id, username],
+        `SELECT id FROM sourced_candidates
+          WHERE campaign_id IS NOT DISTINCT FROM $1 AND LOWER(username) = LOWER($2)`,
+        [run.campaign_id || null, username],
       );
       return sendToCreatorList(row ? row.id : null, username, jev, sourceTerm || (candidate && candidate.sourceTerm) || null);
     },

@@ -2,7 +2,7 @@
 
 // Scout Creators — companion page for automated Instagram sourcing. Talks to the
 // /api/sourcing/* endpoints (behind the same Slack/site-auth cookie as the
-// dashboard). Set the target campaign, the scouting rules, start a run, and watch
+// dashboard). Set the scouting rules, start a run, and watch
 // candidates get scored + added. In Phase 1 (no phone yet) the "Feed sample
 // captures" button exercises the whole pipeline in the browser.
 
@@ -117,7 +117,7 @@ const listOf = (v) => (Array.isArray(v) ? v : String(v || '').split(','))
   .map((x) => String(x).trim())
   .filter(Boolean);
 
-// One field, with no repeats: a campaign saved by the older page may still
+// One field, with no repeats: defaults saved by the older page may still
 // carry a separate niche, which did the same job as the keywords.
 function keywordsOf(cfg) {
   const seen = new Set();
@@ -138,33 +138,17 @@ function fillForm(cfg) {
   // "What you're selling" and the older "Brand & product details", as one.
   el('brandProduct').value = [cfg.brandProduct, cfg.brandBrief].filter(Boolean).join('\n\n');
   el('discovery').value = cfg.discovery === 'reels' ? 'reels' : '';
-  // Every run needs these, so they are on unless a campaign turned one off.
+  // Every run needs these, so they are on unless the defaults turned one off.
   for (const id of ['warmFeed', 'skipOffNicheReels', 'prescreenNiche', 'reviewBorderline']) {
     el(id).checked = cfg[id] !== false;
   }
 }
 
-function campaignId() { return el('campaign').value; }
-
-async function loadCampaigns() {
-  const campaigns = await api('/api/campaigns');
-  const sel = el('campaign');
-  sel.innerHTML = '';
-  for (const c of campaigns) {
-    const opt = document.createElement('option');
-    opt.value = c.id;
-    opt.textContent = `${c.brand_name} — ${c.name}`;
-    sel.appendChild(opt);
-  }
-  const preset = new URLSearchParams(location.search).get('campaign');
-  if (preset && campaigns.some((c) => c.id === preset)) sel.value = preset;
-  await loadConfig();
-}
-
+// Scouting is not done for a campaign: every shortlisted creator goes to
+// creator-list, so the page keeps one set of saved defaults.
 async function loadConfig() {
-  if (!campaignId()) return;
   try {
-    const cfg = await api(`/api/sourcing/config/${encodeURIComponent(campaignId())}`);
+    const cfg = await api('/api/sourcing/config');
     fillForm(cfg);
   } catch (err) {
     setStatus(err.message, 'err');
@@ -173,11 +157,11 @@ async function loadConfig() {
 
 async function saveDefaults() {
   try {
-    await api(`/api/sourcing/config/${encodeURIComponent(campaignId())}`, {
+    await api('/api/sourcing/config', {
       method: 'PATCH',
       body: JSON.stringify(readForm()),
     });
-    setStatus('Saved as campaign defaults.', 'ok');
+    setStatus('Saved as defaults.', 'ok');
   } catch (err) {
     setStatus(err.message, 'err');
   }
@@ -189,7 +173,6 @@ async function startRun() {
     const run = await api('/api/sourcing/runs', {
       method: 'POST',
       body: JSON.stringify({
-        campaign_id: campaignId(),
         // Empty means "any available device" — the run stays unpinned and the
         // first phone to ask for work takes it, which is how every run behaved
         // before the picker existed.
@@ -428,10 +411,9 @@ async function loadJevBars() {
 }
 
 async function loadReview() {
-  if (!campaignId()) return;
   loadJevBars();
   try {
-    const rows = await api(`/api/sourcing/review?campaignId=${encodeURIComponent(campaignId())}`);
+    const rows = await api('/api/sourcing/review');
     renderReview(rows);
   } catch (err) {
     setStatus(err.message, 'err');
@@ -469,10 +451,9 @@ async function loadHosts() {
     // steer this account's reels feed. Separate from a scouting run on purpose.
     tb.querySelectorAll('.warm-host').forEach((b) => {
       b.addEventListener('click', async () => {
-        const campaign = campaignId();
         if (!confirm(
           'Run a feed warm-up pass on this phone?\n\n'
-          + 'It will LIKE up to 12 reels, only from creators already added by a '
+          + 'It will LIKE up to 12 reels, only from creators already shortlisted by a '
           + 'scouting run. Automated liking carries real account risk — keep these '
           + 'passes short and occasional.',
         )) return;
@@ -481,7 +462,7 @@ async function loadHosts() {
         try {
           const r = await api(`/api/sourcing/hosts/${b.dataset.host}/warmup`, {
             method: 'POST',
-            body: JSON.stringify({ campaignId: campaign || null }),
+            body: JSON.stringify({}),
           });
           setStatus(
             `Warm-up done: liked ${r.liked} of ${r.seen} reels seen`
@@ -673,7 +654,6 @@ function onFrameClick(ev) {
 }
 
 function wire() {
-  el('campaign').addEventListener('change', () => { currentRun = null; el('run-card').hidden = true; stopPolling(); loadConfig(); loadReview(); });
   const reviewRefresh = el('review-refresh');
   if (reviewRefresh) reviewRefresh.addEventListener('click', loadReview);
   el('save-btn').addEventListener('click', saveDefaults);
@@ -718,7 +698,7 @@ async function loadJudgeStatus() {
 
 wire();
 loadJudgeStatus();
-loadCampaigns()
+loadConfig()
   .then(() => loadReview())
   .catch((err) => setStatus(err.message, 'err'));
 loadHosts().catch(() => { /* non-fatal if the hosts card fails */ });

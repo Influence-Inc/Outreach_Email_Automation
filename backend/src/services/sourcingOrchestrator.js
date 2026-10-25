@@ -351,7 +351,8 @@ async function processCandidate(run, config, candidate, deps) {
 
   // Passed the rules — guard against creators we're already contacting in this
   // campaign (reuses the same duplicateGuard the manual add path uses)...
-  const dup = await deps.findDuplicate({ campaignId, username, email: null });
+  // A run with no campaign (the Scout page's) has no campaign to be in.
+  const dup = campaignId ? await deps.findDuplicate({ campaignId, username, email: null }) : null;
   if (dup) {
     await deps.updateCandidate(row.id, {
       decision: 'rejected', reject_reason: 'already in campaign', decided_by: 'rule',
@@ -381,6 +382,19 @@ async function processCandidate(run, config, candidate, deps) {
     return {
       decision: 'review', added: false, candidateId: row.id, reviewReason: holdReason, judged: true, hadClip, judge: niche.source,
     };
+  }
+
+  // No campaign to add them to: shortlisted for creator-list, as Jev's are.
+  if (!campaignId) {
+    await deps.updateCandidate(row.id, { decision: 'added', decided_by: 'rule' });
+    if (deps.shortlist) {
+      try {
+        await deps.shortlist({ username, candidate, jev: null, sourceTerm: candidate.sourceTerm || null });
+      } catch (_) {
+        /* reported by deps.shortlist itself */
+      }
+    }
+    return { decision: 'added', added: true, candidateId: row.id, judged: true, hadClip, judge: niche.source };
   }
 
   const creator = await deps.insertCreator({
