@@ -331,3 +331,44 @@ test('when ffmpeg cannot read the recording, Groq still gets the mp4 and the fai
   assert.strictEqual(sentMime, 'video/mp4');
   assert.deepStrictEqual(v.evidence.jev.media.errors, ['could not read the recording: ffprobe is not installed']);
 });
+
+// ── the creator, from many Reels (services/creatorLabels.js) ────────────────
+
+test('judge decides from the creator\'s Reels when they can be labelled, and records how', async () => {
+  let given = null;
+  const v = await judge({ ...clipCandidate, caption: 'leg day' }, { keywords: ['gym workout'] }, {
+    jevKey: 'k',
+    split: fakeSplit(),
+    transcribe: async () => ({ text: 'five moves for strong legs every day', language: 'english', duration: 12 }),
+    readFrames: async () => ({ text: '', frames: 1 }),
+    labelCreator: async (args) => {
+      given = args;
+      return {
+        source: 'reels', reels: 12, labelled: 11,
+        shares: { topic: { fitness: 0.82, food_drink: 0.18 }, niche: { gym_strength: 0.6 }, genre: { educational: 0.5 }, format: { tutorial_how_to: 0.4 } },
+        own: { topics: ['fitness'], niches: ['gym_strength'], genres: ['educational'] },
+        audience: { gender: { lean: 'male-leaning' }, age: { main: ['18-24', '25-34'] }, geography: { primary_country: 'US' } },
+        perReel: [], costUsd: 0.012, errors: [],
+      };
+    },
+  });
+  assert.strictEqual(given.handle, 'coach');
+  assert.strictEqual(given.recorded.state.speech, 'five moves for strong legs every day', 'the recording goes in as one more Reel');
+  assert.strictEqual(v.evidence.jev.decision, 'shortlist');
+  assert.deepStrictEqual(v.evidence.jev.labels.topic, { value: 'fitness', confidence: 0.82, runnerUp: 'food_drink', share: true });
+  assert.strictEqual(v.evidence.jev.audienceSummary, 'male-leaning · 18-24, 25-34 · mostly United States');
+  assert.strictEqual(v.evidence.jev.creator.labelled, 11);
+});
+
+test('without creator-list or MONID_API_KEY, judge falls back to the one reel and says why', async () => {
+  const v = await judge(clipCandidate, { keywords: ['gym workout'] }, {
+    jevKey: 'k',
+    split: fakeSplit(),
+    transcribe: async () => ({ text: 'here are the five mistakes I see in the gym every day', language: 'english', duration: 12 }),
+    readFrames: async () => ({ text: '', frames: 1 }),
+    labelCreator: async () => ({ source: null, reason: 'MONID_API_KEY is not set' }),
+    fetchImpl: async () => jsonResponse(200, { answers: { topic: { choice: 'fitness', confidence: 0.9 } } }),
+  });
+  assert.strictEqual(v.evidence.jev.creatorNotLabelled, 'MONID_API_KEY is not set');
+  assert.ok(!v.evidence.jev.creator);
+});

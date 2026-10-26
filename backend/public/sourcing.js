@@ -244,14 +244,32 @@ function jevOf(c) {
 
 const labelText = (k) => (k ? String(k).replace(/_/g, ' ').replace(/^./, (ch) => ch.toUpperCase()) : '');
 
-/** One Jev label with its confidence, e.g. "Fitness 82%" — the runner-up on hover. */
+/**
+ * One label, e.g. "Fitness 75%". Judged from the creator's Reels (creator-list's way) the
+ * percentage is the share of their Reels; judged from one recorded reel it is Jev's
+ * confidence. The next value is on hover.
+ */
 function labelCell(c, dim) {
   const j = jevOf(c);
   const l = j && j.labels && j.labels[dim];
   if (!l) return '—';
   const pct = l.confidence != null ? ` ${Math.round(l.confidence * 100)}%` : '';
-  const title = l.runnerUp ? ` title="runner-up: ${escapeHtml(labelText(l.runnerUp))}"` : '';
-  return `<span${title}>${escapeHtml(labelText(l.value))}${pct}</span>`;
+  const what = l.share ? 'of their reels' : 'sure';
+  const next = l.runnerUp ? `; next: ${labelText(l.runnerUp)}` : '';
+  return `<span title="${escapeHtml(`${pct.trim()} ${what}${next}`)}">${escapeHtml(labelText(l.value))}${pct}</span>`;
+}
+
+/** What the labels were judged from, and the estimated audience — one hint line. */
+function basisOf(c) {
+  const j = jevOf(c);
+  if (!j) return '';
+  const cr = j.creator;
+  const from = cr
+    ? (cr.source === 'creator-list' ? `from creator-list (${cr.reels} reels)` : `from ${cr.labelled} of ${cr.reels} reels`)
+    : 'from 1 recorded reel';
+  const why = !cr && j.creatorNotLabelled ? ` title="${escapeHtml(j.creatorNotLabelled)}"` : '';
+  const aud = j.audienceSummary ? ` · audience: ${escapeHtml(j.audienceSummary)}` : '';
+  return `<br><span class="scout-hint"${why}>${escapeHtml(from)}${aud}</span>`;
 }
 
 /** Topic, with the niche under it when Jev placed one inside that topic. */
@@ -324,7 +342,7 @@ function renderCandidates(rows) {
     tr.innerHTML = `
       <td>${handleLink(c.username)}</td>
       <td>${viewRange(c.reels)}</td>
-      <td>${topicCell(c)}</td>
+      <td>${topicCell(c)}${basisOf(c)}</td>
       <td>${labelCell(c, 'genre')}</td>
       <td>${labelCell(c, 'format')}</td>
       <td>${fitOf(c)}</td>
@@ -395,7 +413,7 @@ function renderReview(rows) {
   }
   for (const c of rows) {
     const j = jevOf(c) || {};
-    const labels = [topicCell(c), labelCell(c, 'genre'), labelCell(c, 'format')].join(' · ');
+    const labels = [topicCell(c), labelCell(c, 'genre'), labelCell(c, 'format')].join(' · ') + basisOf(c);
     // Transcript text came from a public reel: escaped like everything else.
     const heard = j.transcript || j.onScreenText || '';
     const held = (c.evidence && c.evidence.reviewHold) || '';

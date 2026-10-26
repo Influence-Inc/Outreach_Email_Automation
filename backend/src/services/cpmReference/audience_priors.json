@@ -1,0 +1,155 @@
+{
+ "version": "1.0",
+ "as_of": "2026-10-08",
+ "calibrated": false,
+ "note": "Estimated target audience from the creator's own content (docs/AUDIENCE_PLAN.md). Every number here is a provisional starting value set by hand, not measured: it is replaced once INFLUENCE has real Instagram audience Insights from creators it works with. Shares are fractions (0-1).",
+ "age_buckets": ["13-17", "18-24", "25-34", "35-44", "45+"],
+ "weights": {
+  "gender": {"topic": 0.7, "addressed_to": 0.3},
+  "age": {"topic": 0.6, "life_stage": 0.4},
+  "min_answers": 3,
+  "min_answer_confidence": 0.5
+ },
+ "topics": {
+  "beauty": {"female": 0.8, "age": [0.08, 0.36, 0.34, 0.14, 0.08]},
+  "fashion": {"female": 0.75, "age": [0.07, 0.36, 0.35, 0.14, 0.08]},
+  "food_drink": {"female": 0.55, "age": [0.04, 0.26, 0.36, 0.2, 0.14]},
+  "fitness": {"female": 0.45, "age": [0.04, 0.3, 0.38, 0.18, 0.1]},
+  "health_wellness": {"female": 0.6, "age": [0.03, 0.22, 0.35, 0.22, 0.18]},
+  "tech": {"female": 0.25, "age": [0.06, 0.34, 0.36, 0.16, 0.08]},
+  "gaming": {"female": 0.2, "age": [0.15, 0.45, 0.28, 0.09, 0.03]},
+  "science_education": {"female": 0.45, "age": [0.08, 0.34, 0.32, 0.15, 0.11]},
+  "finance_business": {"female": 0.3, "age": [0.02, 0.26, 0.4, 0.2, 0.12]},
+  "travel": {"female": 0.55, "age": [0.03, 0.26, 0.38, 0.19, 0.14]},
+  "home_diy": {"female": 0.65, "age": [0.02, 0.16, 0.36, 0.25, 0.21]},
+  "family_parenting": {"female": 0.8, "age": [0.01, 0.12, 0.45, 0.3, 0.12]},
+  "relationships_dating": {"female": 0.6, "age": [0.06, 0.4, 0.34, 0.13, 0.07]},
+  "sports": {"female": 0.25, "age": [0.08, 0.36, 0.32, 0.15, 0.09]},
+  "auto": {"female": 0.15, "age": [0.05, 0.34, 0.34, 0.17, 0.1]},
+  "pets_animals": {"female": 0.65, "age": [0.06, 0.28, 0.32, 0.18, 0.16]},
+  "music_dance": {"female": 0.55, "age": [0.12, 0.42, 0.28, 0.11, 0.07]},
+  "entertainment_pop_culture": {"female": 0.55, "age": [0.1, 0.4, 0.3, 0.12, 0.08]},
+  "lifestyle_daily_life": {"female": 0.65, "age": [0.06, 0.36, 0.34, 0.15, 0.09]},
+  "people_stories": {"female": 0.55, "age": [0.05, 0.3, 0.33, 0.18, 0.14]}
+ },
+ "default_topic": {"female": 0.5, "age": [0.06, 0.32, 0.34, 0.17, 0.11]},
+ "addressed_to": {"women": 0.88, "men": 0.12, "everyone": 0.5},
+ "life_stage": {
+  "teens": [0.45, 0.4, 0.1, 0.03, 0.02],
+  "students": [0.08, 0.62, 0.24, 0.04, 0.02],
+  "young_adults": [0.03, 0.4, 0.42, 0.11, 0.04],
+  "parents": [0.0, 0.08, 0.47, 0.33, 0.12],
+  "professionals": [0.0, 0.18, 0.44, 0.26, 0.12],
+  "older_adults": [0.0, 0.04, 0.14, 0.27, 0.55]
+ },
+ "questions": {
+  "audience_gender": {
+   "question": "Who is this Reel mainly made for? Judge from who it speaks to and what it is about (e.g. 'for the girls', women's or men's products), not from who appears in it.",
+   "options": {
+    "women": "Made mainly for women or girls",
+    "men": "Made mainly for men or boys",
+    "everyone": "Made for anyone; no gender focus"
+   }
+  },
+  "audience_life_stage": {
+   "question": "Which life stage is this Reel mainly made for? Use the topic, the problems it addresses and the vocabulary (e.g. exams, first job, kids, retirement).",
+   "options": {
+    "teens": "School-age teenagers",
+    "students": "College students or people starting their careers",
+    "young_adults": "Young adults in general (roughly 20s to early 30s)",
+    "parents": "Parents or people with young children",
+    "professionals": "Working professionals, business owners or mid-career adults",
+    "older_adults": "Older adults or retirees",
+    "everyone": "Any age; no life-stage focus"
+   }
+  },
+  "audience_scope": {
+   "question": "How local is this Reel? Use places, prices, brands, events, news and language it refers to.",
+   "options": {
+    "local": "Made for people in one city or region (local places, stores or events)",
+    "national": "Made for people in one country (its prices, brands, news, exams or language)",
+    "international": "Made for anyone anywhere; nothing ties it to one country"
+   }
+  }
+ },
+ "geo": {
+  "home_share": {
+   "home_language": 0.85,
+   "home_references": 0.75,
+   "national_scope": 0.75,
+   "international_scope": {"US": 0.45, "IN": 0.4, "GB": 0.35, "PH": 0.35, "NG": 0.35, "CA": 0.3, "AU": 0.3, "default": 0.2},
+   "default": 0.6
+  },
+  "thresholds": {"home_language": 0.5, "home_references": 0.2, "scope": 0.6},
+  "top_n": 5,
+  "spillover": {
+   "IN": {"AE": 0.22, "US": 0.2, "GB": 0.1, "CA": 0.08, "SA": 0.08, "BD": 0.07, "NP": 0.07, "PK": 0.06, "AU": 0.06, "QA": 0.06},
+   "US": {"CA": 0.18, "GB": 0.14, "IN": 0.12, "AU": 0.08, "PH": 0.08, "MX": 0.08, "BR": 0.07, "DE": 0.05, "NG": 0.05, "FR": 0.05, "ZA": 0.05, "IT": 0.05},
+   "GB": {"US": 0.3, "IN": 0.12, "IE": 0.1, "AU": 0.1, "CA": 0.08, "NG": 0.08, "DE": 0.06, "FR": 0.06, "ES": 0.05, "ZA": 0.05},
+   "CA": {"US": 0.45, "IN": 0.12, "GB": 0.1, "PH": 0.08, "FR": 0.08, "AU": 0.06, "MX": 0.06, "DE": 0.05},
+   "AU": {"US": 0.3, "GB": 0.15, "NZ": 0.15, "IN": 0.12, "CA": 0.08, "PH": 0.08, "ZA": 0.06, "SG": 0.06},
+   "PH": {"US": 0.35, "AE": 0.12, "CA": 0.1, "SA": 0.1, "AU": 0.08, "GB": 0.07, "JP": 0.06, "SG": 0.06, "HK": 0.06},
+   "PK": {"AE": 0.2, "SA": 0.18, "GB": 0.15, "US": 0.15, "IN": 0.12, "CA": 0.08, "QA": 0.06, "OM": 0.06},
+   "BR": {"PT": 0.25, "US": 0.25, "IT": 0.1, "GB": 0.1, "AR": 0.08, "ES": 0.08, "MX": 0.07, "JP": 0.07},
+   "MX": {"US": 0.45, "CO": 0.1, "ES": 0.1, "AR": 0.08, "GT": 0.07, "PE": 0.07, "CL": 0.07, "VE": 0.06},
+   "NG": {"GB": 0.25, "US": 0.25, "GH": 0.15, "CA": 0.1, "ZA": 0.1, "KE": 0.08, "AE": 0.07},
+   "ID": {"MY": 0.3, "SG": 0.15, "US": 0.12, "TW": 0.1, "AU": 0.1, "JP": 0.08, "SA": 0.08, "NL": 0.07},
+   "AE": {"IN": 0.3, "PK": 0.15, "SA": 0.12, "GB": 0.1, "EG": 0.1, "PH": 0.08, "US": 0.08, "QA": 0.07},
+   "VN": {"US": 0.3, "AU": 0.12, "JP": 0.1, "KR": 0.1, "TW": 0.1, "CA": 0.1, "FR": 0.1, "DE": 0.08}
+  },
+  "spillover_default": {"US": 0.3, "IN": 0.15, "GB": 0.12, "CA": 0.08, "PH": 0.08, "AU": 0.07, "NG": 0.06, "PK": 0.05, "AE": 0.05, "ZA": 0.04},
+  "home_languages": {
+   "IN": ["hindi", "urdu", "tamil", "telugu", "bengali", "marathi", "kannada", "malayalam", "gujarati", "punjabi", "assamese"],
+   "PK": ["urdu", "punjabi", "sindhi", "pashto"],
+   "BD": ["bengali"],
+   "NP": ["nepali"],
+   "LK": ["sinhala", "tamil"],
+   "BR": ["portuguese"],
+   "PT": ["portuguese"],
+   "MX": ["spanish"], "ES": ["spanish"], "AR": ["spanish"], "CO": ["spanish"], "CL": ["spanish"], "PE": ["spanish"],
+   "FR": ["french"], "DE": ["german"], "IT": ["italian"], "NL": ["dutch"], "TR": ["turkish"], "RU": ["russian"],
+   "ID": ["indonesian"], "MY": ["malay"], "PH": ["tagalog"], "VN": ["vietnamese"], "TH": ["thai"],
+   "JP": ["japanese"], "KR": ["korean"], "CN": ["chinese"], "TW": ["chinese"],
+   "AE": ["arabic"], "SA": ["arabic"], "EG": ["arabic"],
+   "NG": ["yoruba", "hausa", "igbo"]
+  },
+  "language_home": {
+   "hindi": "IN", "tamil": "IN", "telugu": "IN", "marathi": "IN", "kannada": "IN", "malayalam": "IN", "gujarati": "IN",
+   "bengali": "IN", "punjabi": "IN", "urdu": "PK", "portuguese": "BR", "spanish": "MX", "french": "FR", "german": "DE",
+   "italian": "IT", "indonesian": "ID", "malay": "MY", "tagalog": "PH", "vietnamese": "VN", "thai": "TH",
+   "japanese": "JP", "korean": "KR", "arabic": "SA", "turkish": "TR", "russian": "RU", "dutch": "NL"
+  },
+  "currencies": {
+   "₹|\\brs\\.?\\s?\\d|\\binr\\b|\\brupees?\\b|\\blakhs?\\b|\\bcrores?\\b": ["IN", "PK", "LK", "NP"],
+   "£|\\bgbp\\b|\\bquid\\b": ["GB"],
+   "\\$|\\bdollars?\\b|\\busd\\b": ["US", "CA", "AU", "NZ", "SG"],
+   "€|\\beuros?\\b": ["DE", "FR", "IT", "ES", "NL", "IE", "PT", "BE", "AT", "FI", "GR"],
+   "\\baed\\b|\\bdirhams?\\b": ["AE"],
+   "r\\$|\\breais\\b": ["BR"],
+   "₦|\\bnaira\\b": ["NG"],
+   "₱": ["PH"],
+   "\\bringgit\\b|\\brm\\s?\\d": ["MY"],
+   "\\brupiah\\b|\\brp\\s?\\d": ["ID"]
+  },
+  "places": {
+   "IN": ["india", "indian", "mumbai", "delhi", "bangalore", "bengaluru", "chennai", "hyderabad", "kolkata", "pune", "jaipur", "ahmedabad", "kerala", "punjab", "desi"],
+   "US": ["usa", "united states", "new york", "nyc", "los angeles", "chicago", "texas", "california", "florida", "miami", "seattle", "boston", "atlanta", "las vegas"],
+   "GB": ["uk", "united kingdom", "britain", "british", "london", "manchester", "birmingham", "england", "scotland", "wales"],
+   "CA": ["canada", "canadian", "toronto", "vancouver", "montreal", "calgary"],
+   "AU": ["australia", "australian", "sydney", "melbourne", "brisbane", "perth"],
+   "NZ": ["new zealand", "auckland"],
+   "AE": ["uae", "dubai", "abu dhabi", "emirates"],
+   "PK": ["pakistan", "pakistani", "karachi", "lahore", "islamabad"],
+   "PH": ["philippines", "filipino", "pinoy", "manila", "cebu"],
+   "NG": ["nigeria", "nigerian", "lagos", "abuja", "naija"],
+   "SG": ["singapore"],
+   "MY": ["malaysia", "kuala lumpur"],
+   "ID": ["indonesia", "jakarta"],
+   "BR": ["brazil", "brasil", "sao paulo", "são paulo", "rio de janeiro"],
+   "MX": ["mexico", "méxico", "mexican", "cdmx"],
+   "VN": ["vietnam", "việt nam", "hanoi", "saigon", "ho chi minh"],
+   "SA": ["saudi", "riyadh", "jeddah"],
+   "ZA": ["south africa", "johannesburg", "cape town"]
+  }
+ }
+}

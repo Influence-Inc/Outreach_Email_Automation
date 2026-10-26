@@ -77,6 +77,7 @@ async function sendToCreatorList(candidateId, username, jev = null, sourceTerm =
     caption,
     transcript: (jev && jev.transcript) || null,
     summary: (jev && jev.summary) || null,
+    audience: (jev && jev.audienceSummary) || null,
     sourceTerm,
   }).catch(() => null);
   const out = await creatorList.addToCurated(username, {

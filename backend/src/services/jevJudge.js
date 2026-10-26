@@ -37,6 +37,8 @@
 // Nothing here is persisted: the recording is read, labelled and dropped.
 
 const reelMedia = require('./reelMedia');
+const creatorLabels = require('./creatorLabels');
+const audienceEstimate = require('./audienceEstimate');
 
 const TAXONOMY = require('./cpmReference/content_taxonomy.json');
 const TOPIC_RULES = require('./cpmReference/creator_topics.json');
@@ -636,6 +638,42 @@ async function judge(candidate, config = {}, deps = {}) {
     media: media || undefined,
   });
 
+  // THE CREATOR, NOT ONE REEL. creator-list labels a creator from many of their Reels
+  // (services/creatorLabels.js): its own labels when it has the creator, else their newest
+  // Reels collected and labelled the same way, plus this recording. One 12-second recording
+  // of one reel is too little to go on — that is what left most creators "unclear" — so it
+  // only decides alone when neither is available.
+  const recordedReel = clip || caption ? { state, language: transcript.language } : null;
+  const creator = await (deps.labelCreator || creatorLabels.labelCreator)({
+    handle: candidate.username,
+    recorded: recordedReel,
+    deps: { fetchImpl: deps.fetchImpl, jevKey: key, ...(deps.creatorDeps || {}) },
+  }).catch((err) => ({ source: null, reason: err.message }));
+  if (creator && creator.source) {
+    const d = creatorLabels.decideFromCreator(creator, targets);
+    const labels = creatorLabels.labelsOf(creator);
+    return verdict(d.decision, d.reasons, {
+      labels,
+      summary: summary(labels),
+      fit: d.fit,
+      audienceSummary: audienceEstimate.summarise(creator.audience) || undefined,
+      creator: {
+        source: creator.source,
+        as_of: creator.as_of || undefined,
+        reels: creator.reels,
+        labelled: creator.labelled,
+        shares: creator.shares,
+        own: creator.own,
+        audience: creator.audience,
+        perReel: creator.perReel,
+        costUsd: creator.costUsd,
+        errors: creator.errors && creator.errors.length ? creator.errors : undefined,
+      },
+    });
+  }
+  // Judged on the one recorded reel: say why the creator could not be.
+  if (creator && creator.reason) jev.creatorNotLabelled = creator.reason;
+
   const nothingToRead = !state.has_speech && !state.caption && !state.on_screen_text && !state.hashtags.length;
   if (nothingToRead) {
     return verdict('review', [nothingToReadReason(clip, media)]);
@@ -691,4 +729,5 @@ module.exports = {
   DIMENSIONS,
   DEFAULT_AUTO_CONFIDENCE,
   DEFAULT_REJECT_CONFIDENCE,
+  GUARD,
 };

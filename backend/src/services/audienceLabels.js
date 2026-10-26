@@ -30,11 +30,13 @@ function fallbackViewer(summary) {
  * One line on who this creator's reels are for, or null when there is nothing
  * to go on. Never throws.
  *
- * @param {object} c  { username, bio, caption, transcript, summary (Jev's labels), sourceTerm }
+ * @param {object} c  { username, bio, caption, transcript, summary (Jev's labels), sourceTerm,
+ *                     audience (the estimated audience, creator-list's way) }
  */
 async function targetViewer(c = {}, { call = claude.callClaudeMessages } = {}) {
   const facts = [
-    c.summary ? `What the reel is (labels): ${clip(c.summary, 200)}` : '',
+    c.summary ? `What their reels are (labels): ${clip(c.summary, 200)}` : '',
+    c.audience ? `Estimated audience from their content: ${clip(c.audience, 160)}` : '',
     c.sourceTerm ? `Found by searching: ${clip(c.sourceTerm, 80)}` : '',
     c.bio ? `Bio: ${clip(c.bio, 300)}` : '',
     c.caption ? `Caption: ${clip(c.caption, 400)}` : '',
