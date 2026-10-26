@@ -244,14 +244,32 @@ function jevOf(c) {
 
 const labelText = (k) => (k ? String(k).replace(/_/g, ' ').replace(/^./, (ch) => ch.toUpperCase()) : '');
 
-/** One Jev label with its confidence, e.g. "Fitness 82%" — the runner-up on hover. */
+/**
+ * One label, e.g. "Fitness 75%". Judged from the creator's Reels (creator-list's way) the
+ * percentage is the share of their Reels; judged from one recorded reel it is Jev's
+ * confidence. The next value is on hover.
+ */
 function labelCell(c, dim) {
   const j = jevOf(c);
   const l = j && j.labels && j.labels[dim];
   if (!l) return '—';
   const pct = l.confidence != null ? ` ${Math.round(l.confidence * 100)}%` : '';
-  const title = l.runnerUp ? ` title="runner-up: ${escapeHtml(labelText(l.runnerUp))}"` : '';
-  return `<span${title}>${escapeHtml(labelText(l.value))}${pct}</span>`;
+  const what = l.share ? 'of their reels' : 'sure';
+  const next = l.runnerUp ? `; next: ${labelText(l.runnerUp)}` : '';
+  return `<span title="${escapeHtml(`${pct.trim()} ${what}${next}`)}">${escapeHtml(labelText(l.value))}${pct}</span>`;
+}
+
+/** What the labels were judged from, and the estimated audience — one hint line. */
+function basisOf(c) {
+  const j = jevOf(c);
+  if (!j) return '';
+  const cr = j.creator;
+  const from = cr
+    ? (cr.source === 'creator-list' ? `from creator-list (${cr.reels} reels)` : `from ${cr.labelled} of ${cr.reels} reels`)
+    : 'from 1 recorded reel';
+  const why = !cr && j.creatorNotLabelled ? ` title="${escapeHtml(j.creatorNotLabelled)}"` : '';
+  const aud = j.audienceSummary ? ` · audience: ${escapeHtml(j.audienceSummary)}` : '';
+  return `<br><span class="scout-hint"${why}>${escapeHtml(from)}${aud}</span>`;
 }
 
 /** Topic, with the niche under it when Jev placed one inside that topic. */
@@ -286,6 +304,28 @@ function reasonOf(c) {
   return '';
 }
 
+/**
+ * What the judge got from the recorded reel: words heard and frames read, or
+ * why not — "34 words · 6 frames", "silent · 6 frames", "no recording".
+ */
+function reelOf(c) {
+  const j = jevOf(c);
+  if (!j) return '—';
+  if (!j.hadVideo) return '<span style="color:#b42318" title="The phone did not deliver a recording of the reel">no recording</span>';
+  const m = j.media;
+  if (!m) return '—';
+  const heard = m.audio === 'none' ? 'no audio'
+    : m.audio === 'silent' ? 'silent'
+      : `${m.words || 0} words`;
+  const bad = m.audio === 'none' || m.audio === 'silent' || !m.framesRead || (m.errors && m.errors.length);
+  const title = [
+    `audio: ${m.audio}${m.maxVolumeDb != null ? ` (peak ${m.maxVolumeDb} dB)` : ''}`,
+    `frames read: ${m.framesRead || 0} of ${m.framesCut || 0}`,
+    ...(m.errors || []),
+  ].join('\n');
+  return `<span title="${escapeHtml(title)}"${bad ? ' style="color:#b25e09"' : ''}>${heard} · ${m.framesRead || 0} frames</span>`;
+}
+
 /** "5/16" — reels that reached the viral bar, of the reels read; the rule on hover. */
 function viralOf(c) {
   const v = c && c.evidence && c.evidence.viral;
@@ -302,11 +342,12 @@ function renderCandidates(rows) {
     tr.innerHTML = `
       <td>${handleLink(c.username)}</td>
       <td>${viewRange(c.reels)}</td>
-      <td>${topicCell(c)}</td>
+      <td>${topicCell(c)}${basisOf(c)}</td>
       <td>${labelCell(c, 'genre')}</td>
       <td>${labelCell(c, 'format')}</td>
       <td>${fitOf(c)}</td>
       <td>${viralOf(c)}</td>
+      <td>${reelOf(c)}</td>
       <td><span class="pill ${c.decision}">${c.decision}</span></td>
       <td>${escapeHtml(reasonOf(c))}</td>
       <td>${creatorListOf(c)}</td>`;
@@ -339,6 +380,12 @@ async function refreshRun() {
   el('run-video').style.color = judged && !stats.withVideo ? '#b42318' : '';
   el('run-judges').textContent = judgesSummary(stats.judgedBy);
   el('run-phase').textContent = phaseOf(stats.discovery);
+  const rec = stats.recordings;
+  const recTotal = rec ? rec.heard + rec.silent + rec.noAudio + rec.unchecked : 0;
+  el('run-heard').textContent = recTotal
+    ? `${rec.heard} of ${recTotal}${rec.silent ? ` · ${rec.silent} silent` : ''}${rec.noAudio ? ` · ${rec.noAudio} no audio` : ''} · frames ${rec.framesRead}`
+    : '—';
+  el('run-heard').style.color = recTotal && !rec.heard ? '#b42318' : '';
   const switches = (stats.discovery && stats.discovery.switches) || [];
   el('run-phase').title = switches.map((w) => `${w.from} → ${w.to}: ${w.reason || ''}`).join('\n');
   renderCandidates(candidates);
@@ -366,7 +413,7 @@ function renderReview(rows) {
   }
   for (const c of rows) {
     const j = jevOf(c) || {};
-    const labels = [topicCell(c), labelCell(c, 'genre'), labelCell(c, 'format')].join(' · ');
+    const labels = [topicCell(c), labelCell(c, 'genre'), labelCell(c, 'format')].join(' · ') + basisOf(c);
     // Transcript text came from a public reel: escaped like everything else.
     const heard = j.transcript || j.onScreenText || '';
     const held = (c.evidence && c.evidence.reviewHold) || '';
@@ -376,7 +423,7 @@ function renderReview(rows) {
       <td>${fmt(c.followers)}</td>
       <td>${labels}</td>
       <td>${fitOf(c)}</td>
-      <td style="max-width:280px">${heard ? escapeHtml(heard.slice(0, 200)) : '—'}</td>
+      <td style="max-width:280px">${heard ? escapeHtml(heard.slice(0, 200)) : '—'}<br><span class="scout-hint">${reelOf(c)}</span></td>
       <td>${escapeHtml(held) || '—'}</td>
       <td style="white-space:nowrap">
         <button data-approve="${c.id}" class="btn-primary small">Shortlist</button>
@@ -696,6 +743,17 @@ async function loadJudgeStatus() {
     banner.hidden = false;
   } else {
     banner.hidden = true;
+  }
+  // Without ffmpeg the recording is never split into audio and frames; without
+  // Tesseract the frames are never read.
+  const m = status && status.media;
+  if (m && banner.hidden && (!m.ffmpeg || !m.ffprobe || !m.tesseract)) {
+    const missing = [!m.ffmpeg && 'ffmpeg', !m.ffprobe && 'ffprobe', !m.tesseract && 'tesseract'].filter(Boolean);
+    banner.textContent = `The server is missing ${missing.join(', ')}, so the recorded reels are `
+      + `${!m.ffmpeg || !m.ffprobe ? 'not split into audio and frames — Groq gets the whole video and no on-screen text is read' : 'not read for on-screen text'}. `
+      + 'Redeploy the backend with nixpacks.toml, which installs them.';
+    banner.className = 'judge-banner warn';
+    banner.hidden = false;
   }
 }
 

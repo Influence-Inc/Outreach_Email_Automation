@@ -3,8 +3,9 @@
 // Judging a scouted creator from the ONE reel that surfaced them, the way the
 // creator-list project judges every Reel it indexes.
 //
-//   the phone records the reel ──► Groq (Whisper) transcribes its audio
-//                               └► frames of the recording, read by Tesseract
+//   the phone records the reel ──► split (services/reelMedia.js):
+//                                    audio track ─► Groq (Whisper) transcribes it
+//                                    frames      ─► Tesseract reads the on-screen text
 //   transcript + on-screen text + caption ──► Jev (TypeSafe, via OpenRouter)
 //                                          answers topic / niche / genre / format
 //   those answers, against the run's targets ──► shortlist | review | reject
@@ -15,11 +16,16 @@
 // its enrichment/classify/content.py asks them — so a creator Deal Studio
 // shortlists carries the same labels creator-list would give them.
 //
-// Jev is text-only. "Screenshots" reach it as the words on them: a few frames are
-// cut from the recording and read with Tesseract, the same way creator-list reads
-// a Reel's cover. Instagram's own player chrome (handle, like counts, the caption
+// Jev is text-only. "Screenshots" reach it as the words on them: frames are cut
+// from the recording and read with Tesseract, the same way creator-list reads a
+// Reel's cover. Instagram's own player chrome (top bar, the handle and caption
 // strip) is cropped off first; the caption arrives separately from the phone's
 // accessibility tree, which reads it exactly.
+//
+// What the judge actually got from the recording — audio present, silent or
+// missing, how many frames were read, any step that failed — is kept on the
+// verdict (evidence.jev.media), so a judgement made without speech or text says
+// why.
 //
 //   GROQ_API_KEY                     Groq, for Whisper
 //   JEV_API_KEY (or OPENROUTER_API_KEY / TYPESAFE_API_KEY)
@@ -30,10 +36,9 @@
 //
 // Nothing here is persisted: the recording is read, labelled and dropped.
 
-const fs = require('fs/promises');
-const os = require('os');
-const path = require('path');
-const { execFile } = require('child_process');
+const reelMedia = require('./reelMedia');
+const creatorLabels = require('./creatorLabels');
+const audienceEstimate = require('./audienceEstimate');
 
 const TAXONOMY = require('./cpmReference/content_taxonomy.json');
 const TOPIC_RULES = require('./cpmReference/creator_topics.json');
@@ -63,13 +68,6 @@ const DEFAULT_AUTO_CONFIDENCE = 0.6;
 // How sure Jev must be that a creator is OFF target before they are rejected
 // without a human look.
 const DEFAULT_REJECT_CONFIDENCE = 0.6;
-
-// Frames read for on-screen text, and the part of each frame kept: Instagram's
-// top bar, its right-hand action column and the bottom caption strip are cut off,
-// so what Tesseract reads is the creator's own overlay text.
-const FRAMES = 4;
-const CROP = 'crop=iw*0.82:ih*0.62:0:ih*0.12';
-const TOOL_TIMEOUT_MS = 60_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -281,14 +279,15 @@ function targetsOf(config = {}, sourceTerm = null) {
 // ── Groq: the audio ─────────────────────────────────────────────────────────
 
 /**
- * Transcribe a recording with Groq's Whisper. Groq takes the mp4 as it is, so no
- * audio extraction is needed. Returns { text, language, duration } — text empty
- * for a reel with no speech — or throws with a reason.
+ * Transcribe audio with Groq's Whisper: the mp3 reelMedia took out of the
+ * recording, or the mp4 itself when ffmpeg could not. Returns
+ * { text, language, duration } — text empty for a reel with no speech — or
+ * throws with a reason.
  */
 async function transcribe(buf, mimeType = 'video/mp4', { fetchImpl = fetch, key = groqKey(), retries = 2 } = {}) {
   if (!key) throw new Error('GROQ_API_KEY is not set');
   const model = process.env.GROQ_TRANSCRIBE_MODEL || DEFAULT_GROQ_MODEL;
-  const ext = /webm/.test(mimeType) ? 'webm' : 'mp4';
+  const ext = /webm/.test(mimeType) ? 'webm' : /mpeg|mp3/.test(mimeType) ? 'mp3' : 'mp4';
   for (let attempt = 0; ; attempt += 1) {
     const form = new FormData();
     form.append('file', new Blob([buf], { type: mimeType }), `reel.${ext}`);
@@ -323,68 +322,6 @@ async function transcribe(buf, mimeType = 'video/mp4', { fetchImpl = fetch, key 
       language: body.language || null,
       duration: Number.isFinite(Number(body.duration)) ? Number(body.duration) : null,
     };
-  }
-}
-
-// ── frames: the screen ──────────────────────────────────────────────────────
-
-function run(cmd, args, { timeout = TOOL_TIMEOUT_MS, env } = {}) {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, env, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-      if (err) reject(err); else resolve(String(stdout || ''));
-    });
-  });
-}
-
-/** Keep lines with a real word in them; Tesseract emits noise on photos (creator-list's ocr.py). */
-function cleanOcr(raw) {
-  return String(raw || '')
-    .split(/\r?\n/)
-    .map((l) => l.split(/\s+/).filter(Boolean).join(' '))
-    .filter((l) => (l.match(/\p{L}/gu) || []).length >= 3);
-}
-
-/**
- * The words on screen during the recording: a few frames, cropped to the
- * creator's own picture, read by Tesseract. Overlay text usually stays up for
- * several frames, so lines are kept once each, in the order they first appear.
- *
- * Returns { text, frames } — text empty, never an error, when ffmpeg or
- * tesseract is missing or the video cannot be read: on-screen text sharpens the
- * labels, it is never a reason to lose the judgement.
- */
-async function screenText(buf, { exec = run, frames = FRAMES } = {}) {
-  let dir = null;
-  try {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'jev-reel-'));
-    const video = path.join(dir, 'reel.mp4');
-    await fs.writeFile(video, buf);
-    // One frame every few seconds across a 12-60s recording, starting a second
-    // in so the first frame is not the player still loading.
-    await exec('ffmpeg', [
-      '-hide_banner', '-loglevel', 'error', '-ss', '1', '-i', video,
-      '-vf', `fps=1/3,${CROP},scale=720:-2`, '-frames:v', String(frames),
-      path.join(dir, 'f%02d.jpg'),
-    ]);
-    const shots = (await fs.readdir(dir)).filter((f) => f.endsWith('.jpg')).sort();
-    const seen = new Set();
-    const lines = [];
-    for (const f of shots) {
-      // One thread per process: parallel runs otherwise oversubscribe the CPU.
-      // eslint-disable-next-line no-await-in-loop
-      const out = await exec('tesseract', [path.join(dir, f), 'stdout', '-l', 'eng', '--psm', '11'], {
-        env: { ...process.env, OMP_THREAD_LIMIT: '1' },
-      });
-      for (const l of cleanOcr(out)) {
-        const k = l.toLowerCase();
-        if (!seen.has(k)) { seen.add(k); lines.push(l); }
-      }
-    }
-    return { text: lines.join('\n'), frames: shots.length };
-  } catch (_) {
-    return { text: '', frames: 0 };
-  } finally {
-    if (dir) fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -611,6 +548,19 @@ function captionOf(candidate) {
 }
 
 /**
+ * Why a reel gave Jev nothing to read — the recording's fault, said plainly,
+ * or genuinely a reel with no words in it.
+ */
+function nothingToReadReason(clip, media) {
+  if (!clip) return 'no recording of the reel and no caption — nothing for Jev to read';
+  const m = media || {};
+  if (m.audio === 'none') return 'the recording has no audio track (check audio capture in the phone app) and no caption or on-screen text';
+  if (m.audio === 'silent') return 'the recording is silent (the reel was muted, or the phone app captured no sound) and has no caption or on-screen text';
+  if (m.errors && m.errors.length) return `could not read the recording (${m.errors[0]}) and there is no caption`;
+  return 'nothing to read on this reel: no speech, caption or on-screen text';
+}
+
+/**
  * Judge one creator from their recorded reel. Never throws: a failure is a
  * `review` verdict naming what went wrong, so a missing key or a provider outage
  * puts creators in front of the admin instead of silently passing or dropping
@@ -644,15 +594,32 @@ async function judge(candidate, config = {}, deps = {}) {
 
   let transcript = { text: '', language: null, duration: null };
   let screen = { text: '', frames: 0 };
+  let media = null;
   if (clip) {
-    const buf = Buffer.from(clip.dataBase64, 'base64');
-    const [t, s] = await Promise.all([
-      (deps.transcribe || transcribe)(buf, clip.mimeType || 'video/mp4', { fetchImpl: deps.fetchImpl })
-        .catch((err) => ({ text: '', language: null, duration: null, error: err.message })),
-      (deps.screenText || screenText)(buf),
-    ]);
-    transcript = t;
-    screen = s;
+    const split = await (deps.split || reelMedia.split)(Buffer.from(clip.dataBase64, 'base64'), {
+      mimeType: clip.mimeType || 'video/mp4',
+    });
+    try {
+      const audio = split.audio || { state: 'unchecked' };
+      const hear = ['ok', 'unchecked'].includes(audio.state) && audio.buf
+        ? (deps.transcribe || transcribe)(audio.buf, audio.mimeType || 'video/mp4', { fetchImpl: deps.fetchImpl })
+          .catch((err) => ({ text: '', language: null, duration: null, error: err.message }))
+        : Promise.resolve({ text: '', language: null, duration: null });
+      const [t, s] = await Promise.all([hear, (deps.readFrames || reelMedia.readFrames)(split.frames || [])]);
+      transcript = t;
+      screen = s;
+      media = {
+        audio: audio.state,
+        maxVolumeDb: Number.isFinite(audio.maxVolumeDb) ? audio.maxVolumeDb : null,
+        seconds: split.seconds || null,
+        framesCut: (split.frames || []).length,
+        framesRead: s.frames || 0,
+        words: String(t.text || '').split(/\s+/).filter(Boolean).length,
+        errors: [...(split.errors || []), ...(s.error ? [s.error] : []), ...(t.error ? [`Groq: ${t.error}`] : [])],
+      };
+    } finally {
+      if (split.cleanup) await split.cleanup();
+    }
   }
   const state = buildState({
     username: candidate.username,
@@ -668,13 +635,48 @@ async function judge(candidate, config = {}, deps = {}) {
     transcript: state.speech ? state.speech.slice(0, 600) : '',
     onScreenText: state.on_screen_text ? state.on_screen_text.slice(0, 300) : '',
     framesRead: screen.frames,
+    media: media || undefined,
   });
+
+  // THE CREATOR, NOT ONE REEL. creator-list labels a creator from many of their Reels
+  // (services/creatorLabels.js): its own labels when it has the creator, else their newest
+  // Reels collected and labelled the same way, plus this recording. One 12-second recording
+  // of one reel is too little to go on — that is what left most creators "unclear" — so it
+  // only decides alone when neither is available.
+  const recordedReel = clip || caption ? { state, language: transcript.language } : null;
+  const creator = await (deps.labelCreator || creatorLabels.labelCreator)({
+    handle: candidate.username,
+    recorded: recordedReel,
+    deps: { fetchImpl: deps.fetchImpl, jevKey: key, ...(deps.creatorDeps || {}) },
+  }).catch((err) => ({ source: null, reason: err.message }));
+  if (creator && creator.source) {
+    const d = creatorLabels.decideFromCreator(creator, targets);
+    const labels = creatorLabels.labelsOf(creator);
+    return verdict(d.decision, d.reasons, {
+      labels,
+      summary: summary(labels),
+      fit: d.fit,
+      audienceSummary: audienceEstimate.summarise(creator.audience) || undefined,
+      creator: {
+        source: creator.source,
+        as_of: creator.as_of || undefined,
+        reels: creator.reels,
+        labelled: creator.labelled,
+        shares: creator.shares,
+        own: creator.own,
+        audience: creator.audience,
+        perReel: creator.perReel,
+        costUsd: creator.costUsd,
+        errors: creator.errors && creator.errors.length ? creator.errors : undefined,
+      },
+    });
+  }
+  // Judged on the one recorded reel: say why the creator could not be.
+  if (creator && creator.reason) jev.creatorNotLabelled = creator.reason;
 
   const nothingToRead = !state.has_speech && !state.caption && !state.on_screen_text && !state.hashtags.length;
   if (nothingToRead) {
-    const why = clip ? 'nothing to read on this reel: no speech, caption or on-screen text'
-      : 'no recording of the reel and no caption — nothing for Jev to read';
-    return verdict('review', [why]);
+    return verdict('review', [nothingToReadReason(clip, media)]);
   }
 
   let res;
@@ -710,7 +712,7 @@ module.exports = {
   judge,
   makeClassifier,
   transcribe,
-  screenText,
+  nothingToReadReason,
   callJev,
   buildQuestions,
   buildState,
@@ -727,4 +729,5 @@ module.exports = {
   DIMENSIONS,
   DEFAULT_AUTO_CONFIDENCE,
   DEFAULT_REJECT_CONFIDENCE,
+  GUARD,
 };

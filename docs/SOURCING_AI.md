@@ -141,6 +141,74 @@ new account ──► PHASE 1  WARM-UP   search the keywords, scout the creators
 applies); anything else is `auto`. A one-time migration (`scout-discovery-auto`) removed the mode
 the old page saved.
 
+### The recording, split for Groq and Jev
+
+The reel that led to the creator is recorded on the phone (screen + Instagram's audio, one mp4):
+in search the reel the keyword surfaced, recorded after their views pass; on the feed the feed
+reel. The backend then splits it (`services/reelMedia.js`) before anything is judged:
+
+| Step | Tool | Goes to |
+| --- | --- | --- |
+| Which streams are in it, and how long | ffprobe | the checks below |
+| Audio track → mono 16 kHz mp3, after a loudness check | ffmpeg (`volumedetect`) | Groq Whisper → transcript |
+| Frames from 1s in, one every 2s (up to 6), timestamps normalised, top bar and bottom caption strip cropped | ffmpeg | Tesseract → on-screen text |
+
+Transcript, on-screen text and caption go to Jev together. What came out of every recording is
+kept on the verdict (`evidence.niche.jev.media`: `audio` ok / silent / none / unchecked, peak dB,
+frames cut and read, words heard, and every step that failed) and shown in the run table's
+**Reel** column (*34 words · 6 frames*, *silent · 6 frames*, *no audio*, *no recording*; why on
+hover). The run card's **Heard** counts them for the run, and the run log ends with
+`recordings={heard, silent, noAudio, unchecked, framesRead}`.
+
+- A recording with **no audio track** or a **silent** one is not sent to Groq; Jev labels it from
+  the caption and on-screen text, and a reel left with nothing to read says which it was. A run full
+  of these is the phone app not capturing Instagram's sound.
+- If ffmpeg cannot read the recording, Groq gets the whole mp4 as before and the failure is kept.
+- The Scout page warns when the server is missing ffmpeg, ffprobe or tesseract
+  (`GET /api/sourcing/status` → `media`); `nixpacks.toml` installs all three.
+- Two fixes behind this: frames used to be cropped 18% from the right, which cut overlay text in
+  half ("5 GYM MISTAK"); and the agent app stamped audio from zero but video on the system clock,
+  so the video track sat days after the audio in the mp4. The app now stamps both on one clock
+  (needs the new APK); the backend reads either kind.
+
+### Labelling the creator from their Reels, as creator-list does
+
+One recorded reel of a few seconds is too little to say what a creator makes: most came back
+*Unclear*, with an empty transcript. So the judge now labels the **creator**, the way creator-list
+labels every creator it indexes (`services/creatorLabels.js`), and only falls back to the recorded
+reel when it can't:
+
+1. **creator-list already has them** → its labels through the partner API: topic, niche, genre and
+   format shares over the Reels it analysed, and its estimated audience. Free and instant.
+2. **otherwise, creator-list's pipeline run here** (needs `MONID_API_KEY`):
+   - TikHub via Monid (`services/monid.js`): the creator's card (country) and their newest 12
+     Reels, pinned and trial Reels left out — $0.002 a call.
+   - Each Reel's video is downloaded from Instagram's CDN and split like the recording above:
+     audio → Groq, 2 frames → Tesseract.
+   - One Jev call per Reel with creator-list's questions: the four content ones (taxonomy 2.3, with
+     its worked examples) and the three audience ones (who it is addressed to, life stage, scope).
+   - The phone's recording is added as one more Reel.
+3. **creator level**, as creator-list builds its creator documents: the share of Reels per topic /
+   niche / genre / format ('unclear' and 'other' left out; a niche only where it belongs to the
+   Reel's topic), and which are the creator's **own** — a dedicated topic (fitness, gaming…) in at
+   least half their Reels, a broad one (beauty, fashion…) in a fifth (`creator_topics.json`). The
+   **estimated audience** (gender lean, main ages, countries, with confidence) is creator-list's
+   `audience.py`, ported to `services/audienceEstimate.js` with the same priors
+   (`cpmReference/audience_priors.json`); both are checked against creator-list's Python output
+   (`__fixtures__/*.parity.json`).
+
+The decision then compares the targets with the creator's own labels: **shortlist** when the target
+topic/niche (and genre) is their own and a target format is in at least a fifth of their Reels;
+**review** when it is only some of their Reels; **reject** as off-target only when at least 5 Reels
+were labelled and none is on target. Fewer than 3 labelled Reels goes to review.
+
+The run table and the review queue show what a label stands on (*from creator-list (30 reels)*,
+*from 11 of 12 reels*, *from 1 recorded reel*, with why on hover) and the audience estimate, which is
+also given to the one-line target-viewer label. A creator labelled from their Reels costs about a
+cent (2 TikHub calls, up to 13 Groq + Jev calls), and only creators who passed the viral rule get
+there. Without `MONID_API_KEY`, a creator creator-list doesn't have is judged from the recorded reel
+as before.
+
 ### Reach: viral potential
 
 Our deals are paid on views, so the question is not "what does this creator usually get" but

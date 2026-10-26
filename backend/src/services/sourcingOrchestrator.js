@@ -537,6 +537,12 @@ async function runWithSource(run, config, source, deps) {
   const stats = {
     scanned: 0, added: 0, rejected: 0, skipped: 0, review: 0, byReason: {},
     withVideo: 0, withoutVideo: 0, judgedBy: {},
+    // What the recordings gave the judge (services/reelMedia.js): audio heard,
+    // silent, or missing, and recordings whose frames were read for text. A run
+    // of silent or audio-less recordings is the phone's audio capture failing.
+    recordings: {
+      heard: 0, silent: 0, noAudio: 0, unchecked: 0, framesRead: 0,
+    },
   };
   let stopped = false;
   let last;
@@ -563,6 +569,16 @@ async function runWithSource(run, config, source, deps) {
     }
 
     last = res;
+    const media = candidate.evidence && candidate.evidence.niche && candidate.evidence.niche.jev
+      && candidate.evidence.niche.jev.media;
+    if (res.judged && media) {
+      const r = stats.recordings;
+      if (media.audio === 'ok') r.heard += 1;
+      else if (media.audio === 'silent') r.silent += 1;
+      else if (media.audio === 'none') r.noAudio += 1;
+      else r.unchecked += 1;
+      if (media.framesRead > 0) r.framesRead += 1;
+    }
     if (res.judged) {
       if (res.hadClip) stats.withVideo += 1; else stats.withoutVideo += 1;
       const by = res.judge || 'unknown';
