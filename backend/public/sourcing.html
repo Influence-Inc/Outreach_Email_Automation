@@ -185,11 +185,12 @@
         <div>Scanned<b id="run-scanned">0</b></div>
         <div title="Judgements where a recorded reel reached the judge. 0 means the phone is not delivering recordings — check screen capture in the app.">Judged with video<b id="run-video">—</b></div>
         <div title="Which judge produced each verdict: jev means Jev labelled the recorded reel.">Judged by<b id="run-judges" style="font-size:13px;font-weight:600">—</b></div>
+        <div title="Recordings whose audio Groq heard, of those judged. Silent or no-audio recordings mean the phone app is not capturing Instagram's sound; frames read is how many had on-screen text read.">Heard<b id="run-heard" style="font-size:13px;font-weight:600">—</b></div>
         <div title="How the phone is scouting this run: warming up (search + liking shortlisted creators) or scouting its own reel feed">Scouting<b id="run-phase" style="font-size:13px;font-weight:600">—</b></div>
       </div>
       <table class="scout-table">
         <thead>
-          <tr><th>Handle</th><th>Views (min–max)</th><th>Topic</th><th>Genre</th><th>Format</th><th title="How sure Jev was of the labels that matched your targets">Fit</th><th title="Reels that reached the viral bar, of the reels read">Viral</th><th>Decision</th><th>Reason</th><th>Creator list</th></tr>
+          <tr><th>Handle</th><th>Views (min–max)</th><th>Topic</th><th>Genre</th><th>Format</th><th title="How sure Jev was of the labels that matched your targets">Fit</th><th title="Reels that reached the viral bar, of the reels read">Viral</th><th title="What the judge got from the recorded reel: words heard (Groq) and frames read for on-screen text (Tesseract) — hover for why">Reel</th><th>Decision</th><th>Reason</th><th>Creator list</th></tr>
         </thead>
         <tbody id="cand-rows"></tbody>
       </table>

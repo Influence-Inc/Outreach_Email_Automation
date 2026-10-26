@@ -141,6 +141,36 @@ new account ──► PHASE 1  WARM-UP   search the keywords, scout the creators
 applies); anything else is `auto`. A one-time migration (`scout-discovery-auto`) removed the mode
 the old page saved.
 
+### The recording, split for Groq and Jev
+
+The reel that led to the creator is recorded on the phone (screen + Instagram's audio, one mp4):
+in search the reel the keyword surfaced, recorded after their views pass; on the feed the feed
+reel. The backend then splits it (`services/reelMedia.js`) before anything is judged:
+
+| Step | Tool | Goes to |
+| --- | --- | --- |
+| Which streams are in it, and how long | ffprobe | the checks below |
+| Audio track → mono 16 kHz mp3, after a loudness check | ffmpeg (`volumedetect`) | Groq Whisper → transcript |
+| Frames from 1s in, one every 2s (up to 6), timestamps normalised, top bar and bottom caption strip cropped | ffmpeg | Tesseract → on-screen text |
+
+Transcript, on-screen text and caption go to Jev together. What came out of every recording is
+kept on the verdict (`evidence.niche.jev.media`: `audio` ok / silent / none / unchecked, peak dB,
+frames cut and read, words heard, and every step that failed) and shown in the run table's
+**Reel** column (*34 words · 6 frames*, *silent · 6 frames*, *no audio*, *no recording*; why on
+hover). The run card's **Heard** counts them for the run, and the run log ends with
+`recordings={heard, silent, noAudio, unchecked, framesRead}`.
+
+- A recording with **no audio track** or a **silent** one is not sent to Groq; Jev labels it from
+  the caption and on-screen text, and a reel left with nothing to read says which it was. A run full
+  of these is the phone app not capturing Instagram's sound.
+- If ffmpeg cannot read the recording, Groq gets the whole mp4 as before and the failure is kept.
+- The Scout page warns when the server is missing ffmpeg, ffprobe or tesseract
+  (`GET /api/sourcing/status` → `media`); `nixpacks.toml` installs all three.
+- Two fixes behind this: frames used to be cropped 18% from the right, which cut overlay text in
+  half ("5 GYM MISTAK"); and the agent app stamped audio from zero but video on the system clock,
+  so the video track sat days after the audio in the mp4. The app now stamps both on one clock
+  (needs the new APK); the backend reads either kind.
+
 ### Reach: viral potential
 
 Our deals are paid on views, so the question is not "what does this creator usually get" but

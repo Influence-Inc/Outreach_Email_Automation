@@ -33,6 +33,7 @@ const sourcingMetrics = require('../services/sourcingMetrics');
 const jevCalibration = require('../services/jevCalibration');
 const jevJudge = require('../services/jevJudge');
 const phoneFarm = require('../services/phoneFarm');
+const reelMedia = require('../services/reelMedia');
 const { readScreen } = require('../services/screenVision');
 
 const router = express.Router();
@@ -92,10 +93,14 @@ function judgeStatus({ jev = jevJudge } = {}) {
 }
 
 // GET /api/sourcing/status — admin-only via the top-level siteAuth gate.
-router.get('/status', (_req, res, next) => {
+router.get('/status', async (_req, res, next) => {
   try {
     res.json({
       judge: judgeStatus(),
+      // ffmpeg / ffprobe split each recording into audio and frames, Tesseract
+      // reads the frames (services/reelMedia.js). Missing on the server, the
+      // judge hears less and reads nothing off the screen.
+      media: await reelMedia.tools(),
       remoteControl: hostCommands.enabled(),
       liveMirror: hostChannel.enabled(),
     });

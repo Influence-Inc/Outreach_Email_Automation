@@ -11,7 +11,6 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.projection.MediaProjection
-import android.os.SystemClock
 import android.util.Log
 import java.io.File
 import java.nio.ByteBuffer
@@ -212,7 +211,15 @@ class ClipRecorder(
         return AudioPipeline(record, encoder)
     }
 
-    /** Feed captured PCM into the AAC encoder, then drain it into the muxer. */
+    /**
+     * Feed captured PCM into the AAC encoder, then drain it into the muxer.
+     *
+     * Audio is stamped on the same clock as the video: frames from the
+     * VirtualDisplay carry System.nanoTime() timestamps, so audio does too.
+     * Stamped from zero instead, the muxer put the video track hours or days
+     * after the audio (an edit list the length of the phone's uptime), and the
+     * mp4 was hard to read as one recording.
+     */
     private fun pumpAudio(
         record: AudioRecord,
         encoder: MediaCodec,
@@ -221,7 +228,6 @@ class ClipRecorder(
         stopping: AtomicBoolean,
     ) {
         val buffer = ByteArray(4 * 1024)
-        val startedAt = SystemClock.elapsedRealtime()
         var sawEos = false
 
         try {
@@ -232,7 +238,7 @@ class ClipRecorder(
                         val input: ByteBuffer = encoder.getInputBuffer(index)!!
                         input.clear()
                         val read = record.read(buffer, 0, minOf(buffer.size, input.remaining()))
-                        val ptsUs = (SystemClock.elapsedRealtime() - startedAt) * 1000L
+                        val ptsUs = System.nanoTime() / 1000L
                         if (read > 0) {
                             input.put(buffer, 0, read)
                             encoder.queueInputBuffer(index, 0, read, ptsUs, 0)
@@ -243,7 +249,7 @@ class ClipRecorder(
                 } else {
                     val index = encoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US)
                     if (index >= 0) {
-                        val ptsUs = (SystemClock.elapsedRealtime() - startedAt) * 1000L
+                        val ptsUs = System.nanoTime() / 1000L
                         encoder.queueInputBuffer(
                             index, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM,
                         )

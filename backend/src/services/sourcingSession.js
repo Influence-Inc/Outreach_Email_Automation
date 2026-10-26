@@ -365,7 +365,10 @@ async function runSession({ hostId, run, deps }) {
       // And which judge gave each verdict. No `gemini-*` entries on a run means
       // the video judge never answered — a missing key, a bad model name, or a
       // quota — and every creator was judged by a fallback.
-      + ` judgedBy=${JSON.stringify(stats.judgedBy || {})}`,
+      + ` judgedBy=${JSON.stringify(stats.judgedBy || {})}`
+      // And what the recordings held: audio heard / silent / missing, and how
+      // many had frames read for on-screen text.
+      + ` recordings=${JSON.stringify(stats.recordings || {})}`,
     );
   } finally {
     try { if (source.close) await source.close(); } catch (_) { /* generator already done */ }
