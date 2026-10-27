@@ -706,6 +706,11 @@ ALTER TABLE creators ADD COLUMN IF NOT EXISTS sourced_via JSONB;
 -- already enforce. See services/nicheCalibration.js.
 ALTER TABLE sourced_candidates ADD COLUMN IF NOT EXISTS decided_by TEXT;
 
+-- Why an admin shortlisted or rejected a creator in the review queue, in their own
+-- words. services/reviewLessons.js turns these notes into labels the scout holds
+-- or rejects creators for, with the admin's reason.
+ALTER TABLE sourced_candidates ADD COLUMN IF NOT EXISTS review_note TEXT;
+
 -- Scouting is no longer done for a campaign. Every creator the scout shortlists
 -- goes to creator-list's "Curated by INFLUENCE Team" collection, so the Scout
 -- page has no campaign picker and a run started there has no campaign_id.

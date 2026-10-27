@@ -31,6 +31,7 @@ function baseDeps({ events = [], runWithSource, getRun } = {}) {
     // campaign's scouting history here (services/sourcingStore.scoutedHandles).
     scoutedHandles: async () => [],
     loadJevCalibration: async () => null,
+    loadReviewLessons: async () => null,
   };
 }
 

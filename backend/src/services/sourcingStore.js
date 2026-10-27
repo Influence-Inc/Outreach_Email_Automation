@@ -107,15 +107,21 @@ async function sendToCreatorList(candidateId, username, jev = null, sourceTerm =
 // The admin settles a doubtful one in the review queue: shortlisted, which
 // means creator-list's "Curated by INFLUENCE Team" collection — the Find
 // creators page — and not the campaign.
-async function approveCandidate(id) {
+// `note` is the admin's reason, in their own words (services/reviewLessons.js).
+const cleanNote = (note) => {
+  const s = String(note || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+  return s || null;
+};
+
+async function approveCandidate(id, note = null) {
   const cand = await getCandidate(id);
   if (!cand) return null;
   if (cand.decision === 'added') return cand;
   await db.query(
     `UPDATE sourced_candidates
-        SET decision = 'added', decided_by = 'human'
+        SET decision = 'added', decided_by = 'human', review_note = $2
       WHERE id = $1`,
-    [id],
+    [id, cleanNote(note)],
   );
   await db.query(
     `UPDATE sourcing_runs SET found_count = found_count + 1, updated_at = NOW() WHERE id = $1`,
@@ -131,13 +137,14 @@ async function approveCandidate(id) {
   return { ...cand, decision: 'added', creatorList: sent };
 }
 
-async function rejectCandidate(id, reason = 'rejected in review') {
+async function rejectCandidate(id, reason = 'rejected in review', note = null) {
+  const n = cleanNote(note);
   return db.one(
     `UPDATE sourced_candidates
-        SET decision = 'rejected', reject_reason = $2, decided_by = 'human'
+        SET decision = 'rejected', reject_reason = $2, decided_by = 'human', review_note = $3
       WHERE id = $1
       RETURNING *`,
-    [id, reason],
+    [id, n ? `rejected in review: ${n}` : reason, n],
   );
 }
 

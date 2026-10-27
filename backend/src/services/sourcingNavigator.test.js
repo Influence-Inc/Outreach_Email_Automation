@@ -2246,3 +2246,33 @@ test('a results page with nothing to open says what it was read as', async () =>
   for await (const _c of gen) { /* drain */ }
   assert.ok(lines.some((l) => /"coach": no reels to open — the results page read as "search_results" on the "all" tab/.test(l)), lines.join('\n'));
 });
+
+// The run's keywords grow: an on-target creator's recurring hashtags come back
+// with their result and are searched later in the same run — what keeps a long
+// run finding creators instead of ending once the typed keywords are used up.
+test('search terms learned from an on-target creator are searched later in the run', async () => {
+  const driver = driverWithSearch();
+  const lines = [];
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', activeTab: 'for you', results: ['coach'], targets: { back: BACK } },
+    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
+    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
+    { screen: 'search_results', targets: { back: BACK } },
+    ...Array(40).fill({ screen: 'search', targets: { searchTab: { x: 1, y: 1 }, searchBox: { x: 1, y: 1 }, back: BACK } }),
+  ];
+  const opts = { keywords: ['coach'], max: 2, learnedTerms: [] };
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts, read: scriptedRead(views), deps: { log: (l) => lines.push(l) },
+  });
+  const first = await gen.next();
+  assert.strictEqual(first.value.username, 'coach');
+  for (let r = await gen.next({ decision: 'review', relatedTerms: ['#Calisthenics', 'coach'] }); !r.done; r = await gen.next()) { /* drain */ }
+
+  const typed = driver.ops.filter((o) => o[0] === 'type').map((o) => o[1]);
+  assert.deepStrictEqual(typed.slice(0, 2), ['coach', 'calisthenics'], 'the learned term was searched next');
+  assert.deepStrictEqual(opts.learnedTerms, ['calisthenics'], 'kept for the rest of the run');
+  assert.ok(lines.some((l) => /new search terms from @coach's reels: calisthenics/.test(l)));
+});

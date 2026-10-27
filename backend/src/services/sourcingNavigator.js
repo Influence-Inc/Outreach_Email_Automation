@@ -147,6 +147,10 @@ const REELS_PER_PROFILE = 12;
 // each costs a recording plus a Gemini call, so it does not grow past that.
 const CLIPS_PER_PROFILE = 3;
 
+// Most search terms one run may hold, typed keywords and ones learned from
+// on-target creators' hashtags together.
+const MAX_RUN_TERMS = 40;
+
 // How far a keyword's stored depth may grow.
 //
 // Depth persists per (campaign, keyword) so a re-run resumes instead of
@@ -298,6 +302,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     if (outcome && outcome.added && handle && deps.warmCreator) {
       await deps.warmCreator({ driver, read, handle, pacingMs, jitterPx, log });
     }
+    if (outcome && Array.isArray(outcome.relatedTerms)) addTerms(outcome.relatedTerms, handle);
     return !!(outcome && outcome.stop);
   };
 
@@ -326,6 +331,9 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
 
   const screen = await deviceSize(driver);
   const terms = pickSearchTerms(opts);
+  // Terms an earlier search in this run learned (opts.learnedTerms is the run's).
+  const learned = Array.isArray(opts.learnedTerms) ? opts.learnedTerms : null;
+  for (const t of learned || []) if (!terms.includes(t) && terms.length < MAX_RUN_TERMS) terms.push(t);
   let emitted = 0;
   // Creators already analysed, across every keyword AND every pass — a results
   // page re-surfaces the same popular accounts, and re-opening one burns a slot
@@ -365,6 +373,22 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   // page opens on the same popular accounts every time and dedupe now skips all
   // of them, so starting at 0 spent the opening minutes of every re-run
   // re-walking ground already covered before reaching anyone new.
+  // The run's keywords grow as it goes: an on-target creator's recurring hashtags
+  // come back with their result (sourcingOrchestrator, relatedTerms) and join the
+  // list, searched from the top later in this pass. That is what keeps a long run
+  // finding new creators instead of ending once the typed keywords are scrolled out.
+  const addTerms = (list, from) => {
+    const fresh = [];
+    for (const raw of list) {
+      const t = String(raw || '').trim().toLowerCase().replace(/^#/, '');
+      if (!t || terms.length >= MAX_RUN_TERMS || terms.some((x) => x.toLowerCase() === t)) continue;
+      terms.push(t);
+      depthOf.set(t, 0);
+      if (learned && !learned.includes(t)) learned.push(t);
+      fresh.push(t);
+    }
+    if (fresh.length) log(`[sourcing] new search terms from @${from || 'an on-target creator'}'s reels: ${fresh.join(', ')} — ${terms.length} terms now`);
+  };
   const startDepth = opts.keywordDepth || {};
   const depthOf = new Map(terms.map((t) => {
     // Clamp on the way IN as well: a campaign that ran before the ceiling

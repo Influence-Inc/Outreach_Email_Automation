@@ -103,6 +103,7 @@ test('when the search runs dry the feed gets a go, and when both are dry the run
   assert.match(reasons[0], /search results are used up/);
   assert.match(reasons[1], /stopped serving reels/);
   assert.strictEqual(saved.at(-1).phase, 'warmup', 'the next run starts by warming up');
+  assert.match(farm.info().endReason, /reel feed stopped serving reels and the keywords' search results are used up/, 'the run card says why it ended');
 });
 
 test('reaching the target lets the last creator be warmed before the scout stops', async () => {

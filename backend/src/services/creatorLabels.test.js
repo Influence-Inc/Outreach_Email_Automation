@@ -235,3 +235,52 @@ test('only Instagram CDN video links are downloaded', () => {
   assert.strictEqual(cl.cdnUrl('https://evil.example.com/cdninstagram.com.mp4'), null);
   assert.strictEqual(cl.cdnUrl('http://scontent.cdninstagram.com/x.mp4'), null);
 });
+
+// ── what the admin's review notes teach (services/reviewLessons.js) ─────────
+
+const LESSONS = { rules: [{ dim: 'genre', value: 'comedy', why: 'only memes, no real tutorials' }], basis: 3 };
+
+test('a creator mostly making what the admin passes on is rejected with their reason', () => {
+  const p = profile({ topic: { fitness: 0.9 }, genre: { comedy: 0.6, educational: 0.4 } });
+  const t = targets({ topics: ['fitness'] });
+  assert.strictEqual(cl.decideFromCreator(p, t).decision, 'shortlist', 'on target without the lesson');
+  const d = cl.decideFromCreator(p, t, LESSONS);
+  assert.strictEqual(d.decision, 'reject');
+  assert.deepStrictEqual(d.reasons, ['you passed on creators like this — "only memes, no real tutorials" (Comedy in 60% of their reels)']);
+  assert.strictEqual(d.lesson, true);
+});
+
+test('a lesson holds, not rejects, when too few Reels say so', () => {
+  const d = cl.decideFromCreator(profile({ topic: { fitness: 1 }, genre: { comedy: 1 } }, 3), targets({ topics: ['fitness'] }), LESSONS);
+  assert.strictEqual(d.decision, 'review');
+  assert.match(d.reasons[0], /^you passed on creators like this/);
+  assert.strictEqual(d.lesson, true);
+});
+
+test('a lesson only applies to what MOST of their Reels are', () => {
+  const d = cl.decideFromCreator(profile({ topic: { fitness: 0.9 }, genre: { educational: 0.6, comedy: 0.4 } }), targets({ topics: ['fitness'] }), LESSONS);
+  assert.strictEqual(d.decision, 'shortlist');
+});
+
+// ── new search terms from what an on-target creator tags ────────────────────
+
+test('hashtags an on-target creator keeps using become search terms; generic and searched ones do not', () => {
+  const p = {
+    perReel: [
+      { topic: 'fitness', hashtags: ['homeworkout', 'fyp', 'calisthenics', 'gym'] },
+      { topic: 'fitness', hashtags: ['homeworkout', 'calisthenics', 'viral', 'gym'] },
+      { topic: 'fitness', hashtags: ['homeworkout', 'mealprep'] },
+      { topic: 'food_drink', hashtags: ['mealprep', 'recipe', 'recipe'] },
+      { topic: 'food_drink', hashtags: ['recipe'] },
+    ],
+  };
+  const terms = cl.relatedTerms(p, targets({ topics: ['fitness'] }), { existing: ['gym', 'Home Workout'] });
+  assert.deepStrictEqual(terms, ['calisthenics'], 'homeworkout is already searched, mealprep is on one on-target reel, recipe is off target');
+  assert.deepStrictEqual(cl.relatedTerms({ perReel: [] }, targets({ topics: ['fitness'] })), []);
+});
+
+test('each labelled Reel keeps its hashtags for that', async () => {
+  const { deps } = fakes();
+  const p = await cl.labelCreator({ handle: 'coach', deps });
+  assert.deepStrictEqual(p.perReel.find((r) => r.code === 'a').hashtags, ['fitness']);
+});

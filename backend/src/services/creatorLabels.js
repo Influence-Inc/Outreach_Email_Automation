@@ -34,6 +34,7 @@ const monid = require('./monid');
 const reelMedia = require('./reelMedia');
 const audience = require('./audienceEstimate');
 const creatorList = require('./creatorList');
+const reviewLessons = require('./reviewLessons');
 const TAXONOMY = require('./cpmReference/content_taxonomy.json');
 const TOPIC_RULES = require('./cpmReference/creator_topics.json');
 
@@ -186,6 +187,9 @@ async function labelReel(row, { handle, deps = {} } = {}) {
   if (!row.state && row.originalAudio != null) state.uses_original_audio = row.originalAudio;
   out.usedSpeech = !!state.has_speech;
   out.words = String(state.speech || '').split(/\s+/).filter(Boolean).length;
+  // The creator's own hashtags on this Reel: on-target Reels' tags become new search
+  // terms for the run (relatedTerms below).
+  out.hashtags = (state.hashtags || []).map((t) => String(t).replace(/^#/, '').toLowerCase()).filter(Boolean).slice(0, 15);
   out.signals = audience.textSignals({
     caption: state.caption, transcript: state.speech, onScreenText: state.on_screen_text, language: transcript.language,
   });
@@ -347,10 +351,55 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
       code: r.code,
       ...Object.fromEntries(DIMENSIONS.map((d) => [d, r.labels && r.labels[d] ? r.labels[d].value : null])),
       words: r.words,
+      hashtags: r.hashtags && r.hashtags.length ? r.hashtags : undefined,
     })),
     costUsd: Math.round(costUsd * 10000) / 10000,
     errors,
   };
+}
+
+// ── new search terms from what an on-target creator tags ────────────────────
+
+// Hashtags that say nothing about a subject: searching them finds everyone.
+const GENERIC_TAGS = new Set([
+  'fyp', 'foryou', 'foryoupage', 'fypシ', 'viral', 'viralreels', 'viralvideo', 'viralpost', 'trending',
+  'trendingreels', 'trend', 'reels', 'reel', 'reelsinstagram', 'instareels', 'reelitfeelit', 'reelkarofeelkaro',
+  'explore', 'explorepage', 'explorepage✨', 'instagood', 'instagram', 'insta', 'instadaily', 'love', 'like',
+  'likeforlikes', 'likes', 'follow', 'followme', 'followforfollowback', 'follow4follow', 'tiktok', 'video',
+  'videos', 'photooftheday', 'picoftheday', 'daily', 'new', 'shorts', 'youtube', 'content', 'contentcreator',
+  'creator', 'influencer', 'growth', 'india', 'usa',
+]);
+// A tag must recur in this many on-target Reels to be a search term.
+const TAG_MIN_REELS = 2;
+// New terms one creator may add.
+const TAGS_PER_CREATOR = 5;
+
+/**
+ * Hashtags this creator keeps using on their on-target Reels — the words they file
+ * that content under, so searching them finds more creators like them. A Reel is
+ * on target when its topic or niche is one the run is after (or, when the keywords
+ * name no subject, its genre or format is). Generic tags (#fyp, #viral…) and terms
+ * already searched are left out. Most-used first.
+ */
+function relatedTerms(p, targets, { existing = [] } = {}) {
+  const rows = (p && p.perReel) || [];
+  const subject = targets.topics.length || targets.niches.length;
+  const onTarget = rows.filter((r) => (subject
+    ? targets.topics.includes(r.topic) || targets.niches.includes(r.niche)
+    : targets.genres.includes(r.genre) || targets.formats.includes(r.format)));
+  const seen = new Set(existing.map((t) => String(t).toLowerCase().replace(/^#/, '').replace(/\s+/g, '')));
+  const counts = new Map();
+  for (const r of onTarget) {
+    for (const t of new Set(r.hashtags || [])) {
+      if (t.length < 3 || t.length > 30 || GENERIC_TAGS.has(t) || seen.has(t) || !/\p{L}/u.test(t)) continue;
+      counts.set(t, (counts.get(t) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, n]) => n >= TAG_MIN_REELS)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, TAGS_PER_CREATOR)
+    .map(([t]) => t);
 }
 
 // ── deciding against the run's targets ──────────────────────────────────────
@@ -362,9 +411,10 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
  *              rules), and every targeted format is in at least a fifth of their Reels;
  *   review     some of their Reels are on target but not enough to be their own, too few
  *              Reels could be labelled, or nothing to judge against;
- *   reject     at least MIN_TO_REJECT labelled Reels, and none on a targeted subject or genre.
+ *   reject     at least MIN_TO_REJECT labelled Reels, and none on a targeted subject or genre;
+ *              or mostly something the admin's review notes pass on (`lessons`).
  */
-function decideFromCreator(p, targets) {
+function decideFromCreator(p, targets, lessons = null) {
   const { labelOf } = jevLib();
   const pct = (x) => `${Math.round(x * 100)}%`;
   const share = (dim, key) => (p.shares[dim] || {})[key] || 0;
@@ -427,6 +477,17 @@ function decideFromCreator(p, targets) {
   else if (doubts.length) d = { decision: 'review', reasons: doubts, fit: fits.length ? round2(Math.min(...fits)) : null };
   else d = { decision: 'shortlist', reasons: [], fit: round2(Math.min(...fits)) };
 
+  // What the admin's review notes taught (services/reviewLessons.js): a creator
+  // whose Reels are mostly something the admin keeps passing on is rejected with
+  // the admin's own reason — or held, when too few Reels say so to reject.
+  const passed = reviewLessons.matches(lessons, p.shares);
+  if (passed.length && d.decision !== 'reject') {
+    const said = passed.map(({ rule, share }) => `you passed on creators like this — "${rule.why}" (${labelOf(rule.dim, rule.value)} in ${pct(share)} of their reels)`);
+    d = p.labelled >= MIN_TO_REJECT
+      ? { decision: 'reject', reasons: said, fit: 0, lesson: true }
+      : { decision: 'review', reasons: [...said, ...d.reasons], fit: d.fit, lesson: true };
+  }
+
   // Too few Reels to decide on: always a person's call, but say plainly why, and
   // what the Reels there are show — with a provisional fit (0 when nothing matched).
   if (p.labelled < MIN_LABELLED) {
@@ -466,6 +527,7 @@ module.exports = {
   aggregate,
   fromCreatorList,
   decideFromCreator,
+  relatedTerms,
   labelsOf,
   nicheOf,
   qualifies,
