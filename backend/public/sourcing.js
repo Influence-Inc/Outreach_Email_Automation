@@ -417,7 +417,7 @@ function renderReview(rows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${handleLink(c.username)}</td>
-      <td>${fmt(c.followers)}</td>
+      <td>${viewRange(c.reels)}</td>
       <td>${labels}</td>
       <td>${fitOf(c)}</td>
       <td style="max-width:280px">${heard ? escapeHtml(heard.slice(0, 200)) : '—'}<br><span class="scout-hint">${reelOf(c)}</span></td>
