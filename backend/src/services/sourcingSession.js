@@ -142,6 +142,13 @@ async function runSession({ hostId, run, deps }) {
 
   // What the admin's review notes teach — labels they keep passing on, held or
   // rejected with their own reason (services/reviewLessons.js). Learned once per run.
+  // Shortlisted creators that never reached creator-list's collection (its settings
+  // were missing, or it did not answer) are sent again — in the background.
+  Promise.resolve()
+    .then(() => (deps.resendToCreatorList || require('./sourcingStore').resendToCreatorList)())
+    .then((r) => { if (r && r.pending) log(`[sourcing-session] run #${run.id}: re-sent ${r.sent} of ${r.pending} shortlisted creators to creator-list${r.failed ? ` (${r.failed} still failing)` : ''}`); })
+    .catch((err) => log(`[sourcing-session] re-sending shortlisted creators to creator-list failed: ${(err && err.message) || err}`));
+
   const lessons = await (deps.loadReviewLessons || reviewLessons.load)({ db, logger: deps.logger || console });
   if (lessons) {
     config.reviewLessons = lessons;
@@ -305,6 +312,7 @@ async function runSession({ hostId, run, deps }) {
         rng: deps.rng,
         warmCreator,
         onReel: (e) => { if (farm) farm.feedReel(e); },
+        onSkip: () => { if (farm) farm.feedSkipped(); },
       },
     });
   };

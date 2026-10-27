@@ -144,6 +144,7 @@ function createFarmSource({
   let searchDry = false;
   let feedFailed = false;
   let endReason = null;
+  let notViral = 0;
 
   const save = async (patch) => {
     try { await persist(patch); } catch (err) { log(`[farm] could not save the account's phase: ${(err && err.message) || err}`); }
@@ -282,6 +283,10 @@ function createFarmSource({
     feedReel({ onNiche }) {
       if (running === 'feed' && monitor) monitor.reel(onNiche);
     },
+    /** A feed reel scrolled past because its likes and comments put it well under the viral bar. */
+    feedSkipped() {
+      notViral += 1;
+    },
     /** For the run's stats: where the account is, and how it got there. */
     info() {
       const v = monitor ? monitor.verdict() : null;
@@ -293,6 +298,7 @@ function createFarmSource({
         feedOnNiche: v && v.share != null ? Math.round(v.share * 100) / 100 : null,
         switches,
         endReason: endReason || undefined,
+        feedNotViral: notViral || undefined,
       };
     },
   };

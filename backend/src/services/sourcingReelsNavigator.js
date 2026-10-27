@@ -3,13 +3,27 @@
 // Reels-feed navigator — scroll the account's own warmed feed, collect creators,
 // then work through them.
 //
+// Each creator goes through three checks, one after another, cheapest first:
+//
+//   a. VIRALITY  on the feed reel itself: its views estimated from its likes and
+//                comments (services/feedVirality.js). A reel that is nowhere near
+//                the viral bar is scrolled past — nothing is spent on its creator.
+//   b. NICHE     from their own newest Reels, the way creator-list labels creators:
+//                Monid fetches them, each is split (Groq hears it, Qwen3-VL
+//                describes its frames) and Jev labels it (services/jevJudge.js).
+//                Submitted while the phone keeps scrolling; a creator Jev rejects
+//                is never opened.
+//   c. PROFILE   opened only for the rest: pictures of the profile and bio, and
+//                the views on their Reels tab for the viral rule.
+//
 // Three phases per batch, and the order is the point:
 //
 //   1. COLLECT  stay on the feed. Read each reel, skip anyone already handled in
-//               a single swipe, record a short clip, hand it off for analysis,
-//               scroll on. Around a dozen creators.
-//   2. HANDLE   the feed is out of the picture. Each profile is opened DIRECTLY
-//               from its handle, so nothing has to navigate back through a reel.
+//               a single swipe, check (a), submit (b), scroll on. Around a dozen
+//               creators.
+//   2. HANDLE   the feed is out of the picture. Collect each verdict (b); open the
+//               profile (c) DIRECTLY from its handle, so nothing has to navigate
+//               back through a reel.
 //   3. RETURN   once, at the end of the batch.
 //
 // Getting back into the feed and finding a place is the least reliable thing
@@ -35,6 +49,7 @@ const engagementPolicy = require('./engagementPolicy');
 const { looksOffNiche } = require('./sourcingFilters');
 const { jitteredDelay, jitterTap } = require('./humanize');
 const { createAnalysisQueue } = require('./analysisQueue');
+const feedVirality = require('./feedVirality');
 const {
   clearDialogs, arriveAt, createStallGuard, recoverFromStall, createProfileCap,
 } = require('./sourcingResilience');
@@ -96,6 +111,11 @@ const DEFAULT_BATCH_SIZE = 12;
 // Only waited for when engagement is enabled — see collectBatch.
 const ENGAGEMENT_VERDICT_WAIT_MS = 8_000;
 
+// How long the handle phase waits for a creator's verdict before opening their
+// profile anyway. Labelling 10 Reels takes a while; most verdicts are in by the
+// time the batch is collected.
+const VERDICT_WAIT_MS = 120_000;
+
 // Swipe up to the next reel (jittered endpoints so the gesture isn't identical).
 async function scrollToNextReel({ driver, size, jitterPx, pacingMs }) {
   const jx = jitterTap({ x: Math.round(size.width / 2), y: 0 }, jitterPx).x;
@@ -120,7 +140,7 @@ async function scrollToNextReel({ driver, size, jitterPx, pacingMs }) {
 async function collectBatch({
   driver, read, size, pacingMs, jitterPx, clipSeconds, batchSize,
   handled, queue, judge, getClip, engagement, counters, rng, config, warn,
-  stall = null, cap = null, onReel = () => {},
+  stall = null, cap = null, onReel = () => {}, onSkip = () => {},
 }) {
   const batch = [];
   let unreadable = 0;
@@ -198,6 +218,20 @@ async function collectBatch({
       await scrollToNextReel({ driver, size, jitterPx, pacingMs });
       continue;
     }
+
+    // (a) VIRALITY, off the reel itself: views estimated from its likes and
+    // comments. Not marked handled — their next reel gets its own chance.
+    const feedViews = feedVirality.check(
+      { likes: view.likes, comments: view.comments, views: view.views },
+      { viralViews: config.viralViews },
+    );
+    if (!feedViews.pass) {
+      warn(`[reels] skipping @${view.author}: their reel has ${feedViews.reason}`);
+      onSkip({ author: view.author, reason: feedViews.reason });
+      // eslint-disable-next-line no-await-in-loop
+      await scrollToNextReel({ driver, size, jitterPx, pacingMs });
+      continue;
+    }
     handled.add(key);
     if (cap && !cap.take()) return { batch, blocked: false };
 
@@ -242,10 +276,13 @@ async function collectBatch({
       // cannot be compared, and "half a million views, 150 likes" reads as a
       // hit rather than as bought reach.
       views: view.views ?? null,
+      // What (a) made of this reel.
+      feedViews: feedViews.estimate ? { ...feedViews.estimate, reason: feedViews.reason } : null,
     };
-    if (clip) {
-      queue.submit(key, () => judge({ username: entry.username, caption: entry.caption, clip }, config));
-    }
+    // (b) NICHE, from their own Reels — in the background, while the phone scrolls.
+    queue.submit(key, () => judge({
+      username: entry.username, caption: entry.caption, discovery: 'reels', ...(clip ? { clip } : {}),
+    }, config));
 
     // Engagement stays on the feed, where the like/save affordances are — and it
     // needs a score, which means waiting for the judge. Engagement is OFF by
@@ -253,7 +290,7 @@ async function collectBatch({
     // accepts a short wait, because liking an off-brand reel actively mis-trains
     // the very feed this mode depends on.
     let score = 0;
-    if (engagement.policy && engagement.policy.enabled && clip) {
+    if (engagement.policy && engagement.policy.enabled) {
       // eslint-disable-next-line no-await-in-loop
       const early = await queue.take(key, { timeoutMs: ENGAGEMENT_VERDICT_WAIT_MS });
       if (early) {
@@ -305,6 +342,7 @@ async function collectBatch({
  */
 async function handleCreator({
   driver, read, entry, queue, size, pacingMs, jitterPx, reelsWindow, warn, config = {},
+  verdictWaitMs = VERDICT_WAIT_MS,
 }) {
   const candidate = {
     username: entry.username,
@@ -312,10 +350,28 @@ async function handleCreator({
     engagement: (entry.likes != null || entry.comments != null || entry.views != null)
       ? { likes: entry.likes, comments: entry.comments, views: entry.views }
       : undefined,
-    evidence: { capturedAt: new Date().toISOString(), source: 'reels-feed' },
+    evidence: {
+      capturedAt: new Date().toISOString(),
+      source: 'reels-feed',
+      ...(entry.feedViews ? { feedViews: entry.feedViews } : {}),
+    },
   };
   if (entry.clip) candidate.clip = entry.clip;
 
+  // (b) The verdict from their Reels, before anything else: a creator Jev rejects
+  // is never opened. One still in flight after the wait is opened anyway, and
+  // its verdict collected afterwards.
+  const key = String(entry.username).toLowerCase();
+  let verdict = entry.verdict || await queue.take(key, { timeoutMs: verdictWaitMs });
+  const jevDecision = (v) => v && v.source === 'jev' && v.evidence && v.evidence.jev && v.evidence.jev.decision;
+  if (jevDecision(verdict) === 'reject') {
+    warn(`[reels] @${entry.username}: their Reels are off target — profile not opened`);
+    candidate._nicheVerdict = verdict;
+    candidate.evidence = { ...candidate.evidence, profileVisit: 'skipped' };
+    return candidate;
+  }
+
+  // (c) The profile: pictures of it and the bio, and the views for the viral rule.
   if (driver.openProfile) {
     try {
       // A deep link can land on a login wall, an interstitial, or simply not
@@ -393,9 +449,10 @@ async function handleCreator({
     }
   }
 
-  // Collect the verdict if it has landed. A creator whose analysis is still in
-  // flight is kept and marked incomplete rather than stalling the run.
-  const verdict = entry.verdict || await queue.take(String(entry.username).toLowerCase());
+  // Collect the verdict if it landed during the profile visit. A creator whose
+  // analysis is still in flight is kept and marked incomplete rather than
+  // stalling the run.
+  if (!verdict) verdict = await queue.take(key);
 
   // `_nicheVerdict` tells the orchestrator "already judged, do not judge again".
   // The queued verdict was written from the FEED reel alone — one clip, one
@@ -417,7 +474,7 @@ async function handleCreator({
     // Not the verdict, but worth keeping as evidence of what the feed reel alone
     // looked like next to the fuller judgement.
     candidate.evidence = { ...candidate.evidence, feedReelVerdict: verdict.evidence || null };
-  } else if (entry.clip) {
+  } else {
     candidate.evidence = { ...candidate.evidence, analysis: 'incomplete' };
   }
   return candidate;
@@ -477,7 +534,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       driver, read, size, pacingMs, jitterPx, clipSeconds,
       batchSize: Math.min(batchSize, max - emitted),
       handled, queue, judge, getClip, engagement, counters, rng, config, warn,
-      stall, cap, onReel: deps.onReel,
+      stall, cap, onReel: deps.onReel, onSkip: deps.onSkip,
     });
     if (!batch.length) break;
 
@@ -487,6 +544,7 @@ async function* scoutReels({ driver, config = {}, opts = {}, read = readView, de
       // eslint-disable-next-line no-await-in-loop
       const candidate = await handleCreator({
         driver, read, entry, queue, size, pacingMs, jitterPx, reelsWindow, warn, config,
+        verdictWaitMs: config.verdictWaitMs ?? VERDICT_WAIT_MS,
       });
       // No keyword here — this mode takes whoever the warmed feed serves, so the
       // mode itself IS the provenance worth recording.

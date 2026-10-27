@@ -148,7 +148,9 @@ async function processCandidate(run, config, candidate, deps) {
   // candidate can be decided like any other. Falling back to the niche-only
   // path only when the grid gave us nothing keeps the old behaviour for the
   // cases it was written for.
-  const reelsMode = String(config.discovery || '').toLowerCase() === 'reels';
+  // A creator off the reel feed is reels mode whatever the run was set to: in the
+  // automatic mode (services/phoneFarm.js) the feed and the search share one run.
+  const reelsMode = String(config.discovery || '').toLowerCase() === 'reels' || candidate.discovery === 'reels';
   // `views != null` first: Number(null) is 0, which would count a reel whose
   // views were never read as measured reach.
   const hasReach = Array.isArray(candidate.reels)

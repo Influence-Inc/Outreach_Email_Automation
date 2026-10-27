@@ -225,6 +225,50 @@ calls), and only creators who passed the viral rule get there. The server needs
 ffmpeg, ffprobe and tesseract (`nixpacks.toml`); the Scout page warns when one is
 missing.
 
+### Scouting the reel feed: virality, niche, profile — in that order
+
+On the feed (phase 2 of phone farming) each creator goes through three checks,
+cheapest first, and stops at the first one they fail:
+
+1. **Virality, off the feed reel itself** (`services/feedVirality.js`). The player
+   shows likes and comments but usually not views, so views are estimated from
+   them with the engagement rate of creator-list's indexed creators —
+   (likes + comments) ÷ views, median **3.2%** (middle half 2.3%–5.6%). The reel
+   passes when even its generous estimate (at 2.3%) reaches the viral bar
+   (100K), e.g. 2,400 likes and comments. A reel well under it is scrolled past
+   with nothing spent; the creator is not marked handled, so their next reel
+   gets its own chance. Hidden likes go on to the next check.
+   `SOURCING_FEED_ENGAGEMENT_RATE` overrides the median.
+2. **Niche, from their own Reels** — the same labelling as everywhere else
+   (Monid's 10 Reels; Groq, Qwen3-VL and Tesseract on each; Jev), submitted while
+   the phone keeps scrolling. A creator Jev rejects is **never opened**; their
+   row says *profile not opened*.
+3. **Profile**: opened only for the rest — pictures of the profile and bio, and
+   the views on their Reels tab for the viral rule.
+
+The run log says `skipping @x: their reel has about 48K views (28K–66K) from 1.5K
+likes and 50 comments — below the 100K viral bar`, and the run's stats count
+those skips (`discovery.feedNotViral`). The handle phase waits up to 2 minutes
+for a verdict before opening a profile anyway.
+
+In the search phase the order stays as before: the profile's 16 Reels are read
+first (free) and only creators who pass the viral rule are labelled; the run
+table says *not judged — too few viral reels* for the others.
+
+### Shortlisted creators → creator-list
+
+Every shortlisted creator is sent to creator-list's **Curated by INFLUENCE Team**
+collection. That needs, on Deal Studio's backend, `CREATOR_LIST_WEB_URL` (the
+creator-list site's address) and `CREATOR_LIST_API_KEY`, and on the creator-list
+site `DEAL_STUDIO_API_KEY` set to the same key. Without them the run table's
+*Creator list* column says *not sent — settings missing* (the reason on hover)
+and the Scout page shows a red banner naming what is missing.
+
+Nothing is lost meanwhile: at the start of every run, every shortlisted creator
+who never reached the collection is sent again (`POST
+/api/sourcing/creator-list/resend`, also behind the column's *send again*
+button).
+
 ### Long runs: the search terms grow as the run goes
 
 A run keeps scouting until it has shortlisted its target. It used to end once its

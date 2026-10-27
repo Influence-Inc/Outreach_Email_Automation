@@ -370,7 +370,10 @@ test('a creator already handled costs one swipe and no recording', async () => {
 });
 
 // §6's stated test: throughput must not depend on the analysis service.
-test('collecting runs at the same speed when analysis never returns', async () => {
+// Collecting never waits on the judge. The handle phase does — a creator's
+// verdict from their Reels decides whether their profile is opened — but only
+// up to verdictWaitMs, after which the profile is opened anyway.
+test('a judge that never returns costs at most the verdict wait, and the creator is still opened', async () => {
   const driver = batchDriver();
   const views = [
     { screen: 'home', targets: { reelsNavTab: { x: 1, y: 1 } } },
@@ -389,7 +392,7 @@ test('collecting runs at the same speed when analysis never returns', async () =
   const began = Date.now();
   const out = [];
   for await (const c of scoutReels({
-    driver, config: { pacingMs: 0, batchSize: 2 }, opts: { keywords: ['x'], max: 2 },
+    driver, config: { pacingMs: 0, batchSize: 2, verdictWaitMs: 50 }, opts: { keywords: ['x'], max: 2 },
     read: scriptedRead(views), deps,
   })) {
     out.push(c);
@@ -397,7 +400,7 @@ test('collecting runs at the same speed when analysis never returns', async () =
   const elapsed = Date.now() - began;
 
   assert.strictEqual(out.length, 2, 'both creators still sourced');
-  assert.ok(elapsed < 4000, `never blocked on the judge, took ${elapsed}ms`);
+  assert.ok(elapsed < 4000, `waited only the verdict wait, took ${elapsed}ms`);
   assert.strictEqual(out[0]._nicheVerdict, undefined, 'no verdict yet');
   assert.strictEqual(out[0].evidence.analysis, 'incomplete', 'and it says so');
 });
@@ -676,7 +679,8 @@ test('feed mode opens one grid reel to pair its likes with its view count', asyn
   const views = [
     { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
     // The feed reel: likes and comments, but no view count on this build.
-    { screen: 'reels_feed', author: 'mia', caption: 'gym', likes: 150, comments: 35, views: null, targets: { like: { x: 9, y: 9 } } },
+    // (5,000 likes clears the views estimate on the feed: about 166K views.)
+    { screen: 'reels_feed', author: 'mia', caption: 'gym', likes: 5000, comments: 300, views: null, targets: { like: { x: 9, y: 9 } } },
     // The profile visit.
     { screen: 'profile', followers: 10000, targets: { reelsTab: { x: 4, y: 5 }, back: { x: 3, y: 3 } } },
     grid, grid,
@@ -801,4 +805,65 @@ test('creators scouted before are skipped on the feed without a recording', asyn
   })) out.push(c.username);
   assert.deepStrictEqual(out, ['joe']);
   assert.strictEqual(driver.ops.filter((o) => o[0] === 'swipe').length >= 1, true);
+});
+
+// ── the feed's three checks, in order: virality, niche, profile ─────────────
+
+const jevVerdict = (decision) => ({
+  score: decision === 'reject' ? 0 : 0.8, reason: 'x', source: 'jev',
+  evidence: { jev: { decision, reasons: decision === 'reject' ? ['their reels are about cooking'] : [], labels: {} } },
+});
+
+test('(a) a feed reel whose likes put it far under the viral bar is scrolled past, unjudged and unopened', async () => {
+  const driver = fakeDriver();
+  driver.openProfile = async () => { throw new Error('must not open'); };
+  const judged = [];
+  const skipped = [];
+  const lines = [];
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    { screen: 'reels_feed', author: 'small', caption: 'gym', likes: 120, comments: 4, targets: { like: { x: 9, y: 9 } } },
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0, viralViews: 100000 }, opts: { max: 1 }, read: scriptedRead(views),
+    deps: {
+      judge: async (c) => { judged.push(c.username); return null; },
+      onSkip: (e) => skipped.push(e.author),
+      logger: { warn: (l) => lines.push(l) },
+    },
+  })) out.push(c);
+  assert.deepStrictEqual(out, []);
+  assert.deepStrictEqual(judged, []);
+  assert.deepStrictEqual(skipped, ['small']);
+  assert.ok(lines.some((l) => /skipping @small: their reel has about 4K views \(2K–5K\) from 120 likes and 4 comments — below the 100K viral bar/.test(l)), lines.join('\n'));
+});
+
+test('(b) a creator Jev rejects from their Reels is never opened; (c) the rest are, with the verdict kept', async () => {
+  const driver = fakeDriver();
+  const opened = [];
+  driver.openProfile = async (h) => { opened.push(h); };
+  const viral = { likes: 9000, comments: 400 };
+  const views = [
+    { screen: 'home', targets: { reelsNavTab: { x: 540, y: 2300 } } },
+    { screen: 'reels_feed', author: 'chef', caption: 'pasta', ...viral, targets: { like: { x: 9, y: 9 } } },
+    { screen: 'reels_feed', author: 'coach', caption: 'gym', ...viral, targets: { like: { x: 9, y: 9 } } },
+    ...profileViews(20000),
+    ...Array(10).fill({ screen: 'reels_tab', reels: [{ views: 20000 }], targets: { back: { x: 3, y: 3 } } }),
+  ];
+  const out = [];
+  for await (const c of scoutReels({
+    driver, config: { pacingMs: 0, batchSize: 2, viralViews: 100000 }, opts: { max: 2 }, read: scriptedRead(views),
+    deps: { judge: async (c) => jevVerdict(c.username === 'chef' ? 'reject' : 'shortlist') },
+  })) out.push(c);
+
+  assert.deepStrictEqual(opened, ['coach'], 'only the on-target creator was opened');
+  const chef = out.find((c) => c.username === 'chef');
+  assert.strictEqual(chef.evidence.profileVisit, 'skipped');
+  assert.strictEqual(chef._nicheVerdict.evidence.jev.decision, 'reject');
+  assert.strictEqual(chef.discovery, 'reels');
+  assert.match(chef.evidence.feedViews.reason, /about 294K views/);
+  const coach = out.find((c) => c.username === 'coach');
+  assert.strictEqual(coach._nicheVerdict.evidence.jev.decision, 'shortlist');
+  assert.ok(coach.reels.some((r) => r.views != null), 'the profile visit read their views');
 });

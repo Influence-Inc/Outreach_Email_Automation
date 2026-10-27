@@ -104,6 +104,36 @@ async function sendToCreatorList(candidateId, username, jev = null, sourceTerm =
   return out;
 }
 
+/**
+ * Send again every shortlisted creator who never reached creator-list's collection
+ * (`not_configured` before the settings were there, or an `error`). Run at the start
+ * of every run and from the Scout page. Returns { sent, failed, pending }.
+ */
+async function resendToCreatorList({ limit = 100 } = {}) {
+  if (!creatorList.curatedConfigured()) return { sent: 0, failed: 0, pending: null, skipped: 'not configured' };
+  const rows = await db.many(
+    `SELECT id, username, bio, reels, evidence
+       FROM sourced_candidates
+      WHERE decision = 'added'
+        AND evidence ? 'creatorList'
+        AND COALESCE(evidence->'creatorList'->>'status', '') <> 'added'
+      ORDER BY id ASC
+      LIMIT $1`,
+    [Math.max(1, Math.min(500, Number(limit) || 100))],
+  );
+  let sent = 0;
+  let failed = 0;
+  for (const r of rows) {
+    const ev = r.evidence || {};
+    const jev = (ev.niche && ev.niche.jev) || null;
+    const caption = Array.isArray(r.reels) ? (r.reels.find((x) => x && x.caption) || {}).caption : null;
+    // eslint-disable-next-line no-await-in-loop
+    const out = await sendToCreatorList(r.id, r.username, jev, ev.sourceTerm || null, { bio: r.bio || null, caption: caption || null });
+    if (out.status === 'added') sent += 1; else failed += 1;
+  }
+  return { sent, failed, pending: rows.length };
+}
+
 // The admin settles a doubtful one in the review queue: shortlisted, which
 // means creator-list's "Curated by INFLUENCE Team" collection — the Find
 // creators page — and not the campaign.
@@ -364,6 +394,7 @@ module.exports = {
   getRun,
   listCandidates,
   listReview,
+  resendToCreatorList,
   approveCandidate,
   rejectCandidate,
   sendToCreatorList,

@@ -63,3 +63,50 @@ test('the admin\'s reason is saved with a shortlist or a reject', async () => {
     db.one = orig.one; db.query = orig.query; creatorList.addToCurated = orig.add;
   }
 });
+
+// Shortlisted creators who never reached creator-list's collection — its settings
+// were missing (not_configured) or it did not answer — are sent again.
+test('shortlisted creators that never reached creator-list are sent again once it is configured', async () => {
+  const orig = {
+    many: db.many, query: db.query, add: creatorList.addToCurated, ok: creatorList.curatedConfigured,
+  };
+  const sql = [];
+  const sent = [];
+  db.many = async (q, params) => {
+    sql.push({ q, params });
+    return [
+      { id: 1, username: 'coach', bio: 'gym', reels: [{ caption: 'leg day' }], evidence: { sourceTerm: 'gym', creatorList: { status: 'not_configured' }, niche: { jev: { summary: 'Fitness' } } } },
+      { id: 2, username: 'chef', bio: null, reels: [], evidence: { creatorList: { status: 'error' } } },
+    ];
+  };
+  db.query = async () => ({ rows: [], rowCount: 1 });
+  creatorList.addToCurated = async (handle) => { sent.push(handle); return handle === 'coach' ? { status: 'added' } : { status: 'error', error: 'down' }; };
+  try {
+    creatorList.curatedConfigured = () => false;
+    assert.deepStrictEqual(await store.resendToCreatorList(), { sent: 0, failed: 0, pending: null, skipped: 'not configured' });
+    assert.strictEqual(sql.length, 0, 'nothing read while it cannot be sent');
+
+    creatorList.curatedConfigured = () => true;
+    assert.deepStrictEqual(await store.resendToCreatorList(), { sent: 1, failed: 1, pending: 2 });
+    assert.deepStrictEqual(sent, ['coach', 'chef']);
+    assert.match(sql[0].q, /decision = 'added'/);
+    assert.match(sql[0].q, /<> 'added'/);
+  } finally {
+    db.many = orig.many; db.query = orig.query; creatorList.addToCurated = orig.add; creatorList.curatedConfigured = orig.ok;
+  }
+});
+
+test('creator-list names which of its two settings are missing', () => {
+  const env = { url: process.env.CREATOR_LIST_WEB_URL, key: process.env.CREATOR_LIST_API_KEY };
+  try {
+    delete process.env.CREATOR_LIST_WEB_URL;
+    process.env.CREATOR_LIST_API_KEY = 'k';
+    assert.strictEqual(creatorList.curatedConfigured(), false);
+    assert.deepStrictEqual(creatorList.curatedMissing(), ['CREATOR_LIST_WEB_URL']);
+    process.env.CREATOR_LIST_WEB_URL = 'https://site.example';
+    assert.strictEqual(creatorList.curatedConfigured(), true);
+  } finally {
+    if (env.url === undefined) delete process.env.CREATOR_LIST_WEB_URL; else process.env.CREATOR_LIST_WEB_URL = env.url;
+    if (env.key === undefined) delete process.env.CREATOR_LIST_API_KEY; else process.env.CREATOR_LIST_API_KEY = env.key;
+  }
+});

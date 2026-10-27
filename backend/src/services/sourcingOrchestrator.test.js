@@ -1103,3 +1103,15 @@ test('related search terms ride back with the result, and the run lists them', a
   assert.deepStrictEqual(handed, [['calisthenics', 'homegym'], ['homegym', 'mobility']]);
   assert.deepStrictEqual(stats.newTerms, ['calisthenics', 'homegym', 'mobility']);
 });
+
+// A feed creator Jev rejected from their Reels is never opened, so they arrive
+// with no views. In the automatic mode the run is not set to 'reels', and the
+// reach gate used to reject them as "no reels"; the reason is Jev's.
+test('a feed creator rejected before their profile was opened is rejected for Jev\'s reason', async () => {
+  const { deps } = jevStore('reject', ['their reels are about cooking, not fitness']);
+  const res = await processCandidate(run, { ...jevCfg, discovery: 'auto' }, {
+    username: 'chef', discovery: 'reels', reels: [{ caption: 'pasta' }], evidence: { profileVisit: 'skipped' },
+  }, deps);
+  assert.strictEqual(res.decision, 'rejected');
+  assert.match(res.rejectReason, /^Jev: their reels are about cooking/);
+});
