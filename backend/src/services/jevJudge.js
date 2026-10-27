@@ -18,7 +18,8 @@
 //
 // Jev is text-only. "Screenshots" reach it as the words on them: frames are cut
 // from the recording and read with Tesseract, the same way creator-list reads a
-// Reel's cover. Instagram's own player chrome (top bar, the handle and caption
+// Reel's cover. A creator's own Reels (services/creatorLabels.js) also reach it as
+// what they show: Qwen3-VL describes frames of each video (services/reelVision.js). Instagram's own player chrome (top bar, the handle and caption
 // strip) is cropped off first; the caption arrives separately from the phone's
 // accessibility tree, which reads it exactly.
 //
@@ -37,6 +38,7 @@
 // Nothing here is persisted: the recording is read, labelled and dropped.
 
 const reelMedia = require('./reelMedia');
+const reelVision = require('./reelVision');
 const creatorLabels = require('./creatorLabels');
 const audienceEstimate = require('./audienceEstimate');
 
@@ -321,6 +323,10 @@ async function transcribe(buf, mimeType = 'video/mp4', { fetchImpl = fetch, key 
       text: String(body.text || '').trim(),
       language: body.language || null,
       duration: Number.isFinite(Number(body.duration)) ? Number(body.duration) : null,
+      // Timed segments: the vision step (services/reelVision.js) shows Qwen what is said when.
+      segments: (Array.isArray(body.segments) ? body.segments : [])
+        .filter((x) => x && Number.isFinite(Number(x.start)) && Number.isFinite(Number(x.end)) && String(x.text || '').trim())
+        .map((x) => ({ start: Number(x.start), end: Number(x.end), text: String(x.text).trim() })),
     };
   }
 }
@@ -329,12 +335,16 @@ async function transcribe(buf, mimeType = 'video/mp4', { fetchImpl = fetch, key 
 
 const HASHTAG = /#([\p{L}\p{N}_]+)/gu;
 
-/** What Jev reads about one reel — creator-list's `state()`, from what the phone saw. */
-function buildState({ username, caption, transcript, onScreenText, durationSeconds }) {
+/**
+ * What Jev reads about one reel — creator-list's `state()`, from what the phone saw.
+ * `visual` is Qwen3-VL's description of the video's frames (services/reelVision.js);
+ * a reel without one is asked exactly as before.
+ */
+function buildState({ username, caption, transcript, onScreenText, durationSeconds, visual }) {
   const speech = String(transcript || '').trim();
   const hasSpeech = speech.split(/\s+/).filter(Boolean).length >= MIN_SPEECH_WORDS;
   const cap = String(caption || '');
-  return {
+  const state = {
     creator: username ? String(username).replace(/^@/, '') : null,
     caption: scrub(cap).slice(0, CAPTION_CHARS),
     hashtags: [...cap.matchAll(HASHTAG)].map((m) => m[1]).slice(0, 30),
@@ -344,6 +354,9 @@ function buildState({ username, caption, transcript, onScreenText, durationSecon
     duration_seconds: durationSeconds ? Math.round(durationSeconds) : null,
     uses_original_audio: null,
   };
+  const seen = reelVision.jevText(visual);
+  if (seen) state.video_frames_description = seen;
+  return state;
 }
 
 /**
@@ -679,6 +692,7 @@ async function judge(candidate, config = {}, deps = {}) {
         perReel: creator.perReel,
         costUsd: creator.costUsd,
         errors: creator.errors && creator.errors.length ? creator.errors : undefined,
+        visionError: creator.visionError || undefined,
       },
     });
   }

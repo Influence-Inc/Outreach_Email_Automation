@@ -933,7 +933,7 @@ test('the run counts creators judged from their Reels, and from too few', async 
     { username: 'coachB', kind: 'thin', bio: 'fitness', reels: fitReels() },
   ]);
   const { stats } = await runWithSource(run, { ...goodCfg, keywords: ['gym'] }, source, deps);
-  assert.deepStrictEqual(stats.reels, { full: 1, thin: 1, labelled: 10, heard: 2, failed: 1 });
+  assert.deepStrictEqual(stats.reels, { full: 1, thin: 1, labelled: 10, heard: 2, seen: 0, failed: 1 });
 });
 
 test('Jev off target: rejected with its reason', async () => {
