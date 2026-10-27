@@ -449,7 +449,11 @@ async function finishJev(run, config, candidate, deps, {
     if (reachUnverified) holdReason = 'reach not measured — confirm their views before adding';
     else {
       const holds = [nearlyViralReason(verdict)];
-      if (jev.decision !== 'shortlist') holds.push(`doubtful — ${(jev.reasons || []).join('; ') || 'Jev was unsure'}`);
+      // Too few Reels is not doubt about the creator: its reasons say what was missing.
+      if (jev.decision !== 'shortlist') {
+        const why = (jev.reasons || []).join('; ') || 'Jev was unsure';
+        holds.push(jev.thin ? why : `doubtful — ${why}`);
+      }
       holdReason = holds.filter(Boolean).join('; ') || null;
     }
   }
@@ -543,6 +547,13 @@ async function runWithSource(run, config, source, deps) {
     recordings: {
       heard: 0, silent: 0, noAudio: 0, unchecked: 0, framesRead: 0,
     },
+    // What the creators were judged from (services/creatorLabels.js): `full` judged
+    // from enough of their Reels (creator-list's labels or Monid's), `thin` from too
+    // few to decide on; `labelled` Reels labelled in all and `heard` those with speech.
+    // A run of thin judgements with `failed` climbing is Monid not answering.
+    reels: {
+      full: 0, thin: 0, labelled: 0, heard: 0, failed: 0,
+    },
   };
   let stopped = false;
   let last;
@@ -578,6 +589,15 @@ async function runWithSource(run, config, source, deps) {
       else if (media.audio === 'none') r.noAudio += 1;
       else r.unchecked += 1;
       if (media.framesRead > 0) r.framesRead += 1;
+    }
+    const jevEv = candidate.evidence && candidate.evidence.niche && candidate.evidence.niche.jev;
+    const creator = jevEv && jevEv.creator;
+    if (res.judged && creator) {
+      const r = stats.reels;
+      if (jevEv.thin) r.thin += 1; else r.full += 1;
+      r.labelled += Number(creator.labelled) || 0;
+      r.heard += (creator.perReel || []).filter((x) => x.words > 0).length;
+      if (creator.errors && creator.errors.length) r.failed += 1;
     }
     if (res.judged) {
       if (res.hadClip) stats.withVideo += 1; else stats.withoutVideo += 1;

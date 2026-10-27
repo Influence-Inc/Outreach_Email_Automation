@@ -370,3 +370,18 @@ test('warming can be turned off for a run through the API', async () => {
   await session.start({ hostId: 1, run: { id: 23, config: { discovery: 'search', warmFeed: false } }, deps }).promise;
   assert.strictEqual(warmArg, null);
 });
+
+// Scouting records nothing: the navigator is handed a phone without recordClip,
+// so it reads the profile, goes back to the reel, and never asks for a recording.
+test('the navigator gets a phone that cannot record', async () => {
+  let given = null;
+  const deps = {
+    ...baseDeps(),
+    makeDriver: () => ({ ...fakeDriver(), recordClip: async () => { throw new Error('must not record'); }, tap: async () => {} }),
+    scout: (args) => { given = args.driver; return (async function* () {})(); },
+  };
+  await session.start({ hostId: 1, run: { id: 5, config: { discovery: 'search', keywords: ['gym'] } }, deps }).promise;
+  assert.ok(given, 'the navigator ran');
+  assert.strictEqual(given.recordClip, undefined);
+  assert.strictEqual(typeof given.tap, 'function', 'everything else is still there');
+});

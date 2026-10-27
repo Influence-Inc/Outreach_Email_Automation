@@ -53,13 +53,17 @@ test("the creator's own keyword decides; a format in another keyword is not aske
   assert.deepStrictEqual(viaHomegym.formats, []);
 });
 
+// The judge's own single-reel path: what runs when the creator could not be
+// labelled at all (creatorLabels.labelCreator failing). These tests drive it.
+const noCreator = async () => ({ source: null, reason: 'not labelled in this test' });
+
 test('judge checks the format named by the keyword that found the creator', async () => {
   const answers = {
     topic: { choice: 'fitness', confidence: 0.9 }, niche: { choice: 'gym_strength', confidence: 0.8 },
     genre: { choice: 'educational', confidence: 0.8 }, format: { choice: 'vlog_day_in_life', confidence: 0.85 },
   };
   const deps = {
-    jevKey: 'k',
+    jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => ({ text: 'a long enough transcript about training at the gym today', language: 'english', duration: 12 }),
     split: fakeSplit(), readFrames: async () => ({ text: '', frames: 0 }),
     fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ answers }) }),
@@ -192,7 +196,7 @@ const clipCandidate = {
 test('judge: transcript + on-screen text + caption go to Jev, and its labels decide', async () => {
   let state = null;
   const v = await judge(clipCandidate, { keywords: ['gym workout'] }, {
-    jevKey: 'k',
+    jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => ({ text: 'here are the five mistakes I see in the gym every day', language: 'english', duration: 12 }),
     split: fakeSplit(), readFrames: async () => ({ text: '5 GYM MISTAKES', frames: 4 }),
     fetchImpl: async (url, init) => {
@@ -224,7 +228,7 @@ test('judge: no Jev key, or Jev failing, puts the creator in front of the admin'
   assert.match(none.reason, /not configured/);
 
   const down = await judge(clipCandidate, { keywords: ['gym'] }, {
-    jevKey: 'k',
+    jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => ({ text: '', language: null, duration: null }),
     split: fakeSplit(), readFrames: async () => ({ text: '', frames: 0 }),
     fetchImpl: async () => jsonResponse(400, {}),
@@ -236,7 +240,7 @@ test('judge: no Jev key, or Jev failing, puts the creator in front of the admin'
 test('judge: a silent reel with no caption or text has nothing to read', async () => {
   let called = false;
   const v = await judge({ username: 'x', clip: clipCandidate.clip }, { keywords: ['gym'] }, {
-    jevKey: 'k',
+    jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => ({ text: '', language: null, duration: null }),
     split: fakeSplit(), readFrames: async () => ({ text: '', frames: 0 }),
     fetchImpl: async () => { called = true; return jsonResponse(200, {}); },
@@ -247,7 +251,7 @@ test('judge: a silent reel with no caption or text has nothing to read', async (
 
 test('judge: a Groq failure is not fatal — the caption still gets judged', async () => {
   const v = await judge(clipCandidate, { keywords: ['gym'] }, {
-    jevKey: 'k',
+    jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => { throw new Error('Groq answered 429'); },
     split: fakeSplit(), readFrames: async () => ({ text: '', frames: 0 }),
     fetchImpl: async () => jsonResponse(200, { answers: {
@@ -289,7 +293,7 @@ test('judge sends Groq the audio taken out of the recording, and records what it
   let sent = null;
   let cleaned = false;
   const v = await judge(clipCandidate, { keywords: ['gym workout'] }, {
-    jevKey: 'k',
+    jevKey: 'k', labelCreator: noCreator,
     split: fakeSplit({ cleanup: async () => { cleaned = true; } }),
     transcribe: async (buf, mime) => { sent = [buf.toString(), mime]; return { text: 'five gym mistakes every beginner makes', language: 'english', duration: 12 }; },
     readFrames: async (files) => ({ text: '5 GYM MISTAKES', frames: files.length }),
@@ -307,7 +311,7 @@ test('a silent or audio-less recording is not sent to Groq, and says so', async 
     let called = false;
     // eslint-disable-next-line no-await-in-loop
     const v = await judge({ ...clipCandidate, caption: '' }, { keywords: ['gym'] }, {
-      jevKey: 'k',
+      jevKey: 'k', labelCreator: noCreator,
       split: fakeSplit({ audio: { state }, frames: [] }),
       transcribe: async () => { called = true; return { text: '' }; },
       readFrames: async () => ({ text: '', frames: 0 }),
@@ -322,7 +326,7 @@ test('a silent or audio-less recording is not sent to Groq, and says so', async 
 test('when ffmpeg cannot read the recording, Groq still gets the mp4 and the failure is kept', async () => {
   let sentMime = null;
   const v = await judge(clipCandidate, { keywords: ['gym'] }, {
-    jevKey: 'k',
+    jevKey: 'k', labelCreator: noCreator,
     split: fakeSplit({ audio: { state: 'unchecked', buf: Buffer.from('mp4'), mimeType: 'video/mp4' }, frames: [], errors: ['could not read the recording: ffprobe is not installed'] }),
     transcribe: async (buf, mime) => { sentMime = mime; return { text: 'five gym mistakes every beginner makes', language: 'english', duration: 12 }; },
     readFrames: async () => ({ text: '', frames: 0 }),
@@ -353,14 +357,14 @@ test('judge decides from the creator\'s Reels when they can be labelled, and rec
     },
   });
   assert.strictEqual(given.handle, 'coach');
-  assert.strictEqual(given.recorded.state.speech, 'five moves for strong legs every day', 'the recording goes in as one more Reel');
+  assert.strictEqual(given.recorded.state.speech, 'five moves for strong legs every day', 'the reel that surfaced them is passed on, for when no Reels can be collected');
   assert.strictEqual(v.evidence.jev.decision, 'shortlist');
   assert.deepStrictEqual(v.evidence.jev.labels.topic, { value: 'fitness', confidence: 0.82, runnerUp: 'food_drink', share: true });
   assert.strictEqual(v.evidence.jev.audienceSummary, 'male-leaning · 18-24, 25-34 · mostly United States');
   assert.strictEqual(v.evidence.jev.creator.labelled, 11);
 });
 
-test('without creator-list or MONID_API_KEY, judge falls back to the one reel and says why', async () => {
+test('when the creator cannot be labelled at all, judge falls back to the one reel and says why', async () => {
   const v = await judge(clipCandidate, { keywords: ['gym workout'] }, {
     jevKey: 'k',
     split: fakeSplit(),
@@ -371,4 +375,29 @@ test('without creator-list or MONID_API_KEY, judge falls back to the one reel an
   });
   assert.strictEqual(v.evidence.jev.creatorNotLabelled, 'MONID_API_KEY is not set');
   assert.ok(!v.evidence.jev.creator);
+});
+
+// The phone records nothing now. With their Reels uncollectable (Monid's wallet
+// empty here), the caption of the reel that surfaced them is all there is: held
+// for review, saying so plainly, with a provisional fit — never "doubtful".
+test('caption only and Monid failing: review, "only 1 reel to judge", provisional fit', async () => {
+  const fail = async () => { throw new Error('Monid wallet is empty (HTTP 402): top it up'); };
+  const v = await judge({ username: 'coach', caption: 'five gym mistakes beginners make', sourceTerm: 'gym workout' }, { keywords: ['gym workout'] }, {
+    jevKey: 'k',
+    creatorDeps: {
+      fromCreatorList: async () => null,
+      monid: { fetchCard: fail, fetchReels: fail },
+      callJev: async () => ({ answers: { topic: { choice: 'fitness', confidence: 0.9 }, niche: { choice: 'gym_strength', confidence: 0.8 } }, costUsd: 0.001 }),
+    },
+  });
+  const j = v.evidence.jev;
+  assert.strictEqual(j.hadVideo, false);
+  assert.strictEqual(j.decision, 'review');
+  assert.strictEqual(j.thin, true);
+  assert.strictEqual(j.provisional, true);
+  assert.strictEqual(j.fit, 1);
+  assert.strictEqual(j.reasons[0], 'only 1 reel to judge (the one that surfaced them) — their Reels could not be collected: card: Monid wallet is empty (HTTP 402): top it up');
+  assert.strictEqual(j.reasons[1], 'that reel is on target');
+  assert.strictEqual(j.creator.fallback, true);
+  assert.strictEqual(j.labels.topic.value, 'fitness');
 });

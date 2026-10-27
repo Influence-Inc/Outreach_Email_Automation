@@ -2015,6 +2015,24 @@ test('views cleared: goes back to the source reel and records THAT reel', async 
   assert.deepStrictEqual(out.sourceReel, { caption: 'my 5 gym mistakes #fitness' });
 });
 
+// Scouting records nothing now (the session hands over a phone without
+// recordClip): the phone still goes back to the source reel — for its likes and
+// comments, and so a shortlisted creator's like lands on it.
+test('a phone that does not record still goes back to the source reel and reads it', async () => {
+  const { driver, read, grid } = phoneOnProfile({ player: { views: 52000 } });
+  delete driver.recordClip;
+  const out = await analyseThenRecordSource({
+    driver, read, pacingMs: 0, view: grid, fallbackUsername: 'coach', config: { floor: 1000 }, caption: 'my 5 gym mistakes',
+  });
+
+  assert.ok(driver.ops.some((o) => o[0] === 'tap' && o[1] === 30 && o[2] === 90), 'went back to the reel');
+  assert.strictEqual((await read()).screen, 'reels_feed', 'and is standing on it, for the like');
+  assert.strictEqual(out.clip, undefined);
+  assert.strictEqual(out.evidence.notRecorded, 'not recorded — judged from their Reels');
+  assert.deepStrictEqual(out.engagement, { likes: 400, comments: 30, views: 52000 }, 'likes and comments read off the player');
+  assert.strictEqual(out.caption, 'my 5 gym mistakes', 'the caption still rides along');
+});
+
 test('below the views benchmark: rejected without recording anything', async () => {
   const { driver, read, grid } = phoneOnProfile({ views: [900, 800, 700, 650, 600, 550] });
   const out = await analyseThenRecordSource({

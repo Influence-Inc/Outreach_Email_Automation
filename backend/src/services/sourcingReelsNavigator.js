@@ -204,25 +204,29 @@ async function collectBatch({
     // Recording is a device action, so it is awaited. Judging the recording is
     // not, so it is not.
     let clip = null;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const rec = await driver.recordClip(clipSeconds);
-      // eslint-disable-next-line no-await-in-loop
-      const resolved = await resolveClip(rec, getClip);
-      // `origin` tells the judge this is the reel the feed served us — the one
-      // we found the creator by, not a pick from their own grid.
-      clip = resolved.clip
-        ? { ...resolved.clip, origin: 'feed', ...(view.views != null ? { views: view.views } : {}) }
-        : null;
-      // The quiet half of the same failure: the phone recorded and uploaded, and
-      // the bytes never made it back here. Indistinguishable from a granted
-      // recorder until it is said out loud.
-      if (!clip) warn(`[reels] recording failed — judging without video: ${resolved.reason}`);
-    } catch (err) {
-      // The usual cause is screen capture not being granted on the phone, which
-      // fails instantly and every time — so the scout looks like it is scrolling
-      // past reels without watching them, and every creator is judged on text.
-      warn(`[reels] recording failed — judging without video: ${err.message}`);
+    // A phone without recordClip (scouting no longer records: the creator is
+    // judged from their Reels collected through Monid) skips straight on.
+    if (driver.recordClip) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const rec = await driver.recordClip(clipSeconds);
+        // eslint-disable-next-line no-await-in-loop
+        const resolved = await resolveClip(rec, getClip);
+        // `origin` tells the judge this is the reel the feed served us — the one
+        // we found the creator by, not a pick from their own grid.
+        clip = resolved.clip
+          ? { ...resolved.clip, origin: 'feed', ...(view.views != null ? { views: view.views } : {}) }
+          : null;
+        // The quiet half of the same failure: the phone recorded and uploaded, and
+        // the bytes never made it back here. Indistinguishable from a granted
+        // recorder until it is said out loud.
+        if (!clip) warn(`[reels] recording failed — judging without video: ${resolved.reason}`);
+      } catch (err) {
+        // The usual cause is screen capture not being granted on the phone, which
+        // fails instantly and every time — so the scout looks like it is scrolling
+        // past reels without watching them, and every creator is judged on text.
+        warn(`[reels] recording failed — judging without video: ${err.message}`);
+      }
     }
 
     // Likes and comments live only on this screen, so they are read here or not

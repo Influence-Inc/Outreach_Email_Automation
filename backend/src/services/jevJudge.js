@@ -640,9 +640,9 @@ async function judge(candidate, config = {}, deps = {}) {
 
   // THE CREATOR, NOT ONE REEL. creator-list labels a creator from many of their Reels
   // (services/creatorLabels.js): its own labels when it has the creator, else their newest
-  // Reels collected and labelled the same way, plus this recording. One 12-second recording
-  // of one reel is too little to go on — that is what left most creators "unclear" — so it
-  // only decides alone when neither is available.
+  // 10 Reels collected through Monid by username and labelled the same way. The phone no
+  // longer records, so the reel that surfaced them is only its caption, labelled when none
+  // of their Reels can be collected.
   const recordedReel = clip || caption ? { state, language: transcript.language } : null;
   const creator = await (deps.labelCreator || creatorLabels.labelCreator)({
     handle: candidate.username,
@@ -656,9 +656,13 @@ async function judge(candidate, config = {}, deps = {}) {
       labels,
       summary: summary(labels),
       fit: d.fit,
+      // Too few Reels to decide on: the fit is what the few there are show.
+      provisional: d.provisional || undefined,
+      thin: d.thin || undefined,
       audienceSummary: audienceEstimate.summarise(creator.audience) || undefined,
       creator: {
         source: creator.source,
+        fallback: creator.fallback || undefined,
         as_of: creator.as_of || undefined,
         reels: creator.reels,
         labelled: creator.labelled,

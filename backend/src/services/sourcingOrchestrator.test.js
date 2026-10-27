@@ -897,6 +897,45 @@ test('Jev unsure: held for the admin with its reasons, not added and not sent', 
   assert.strictEqual(candidates[0].evidence.reviewHold, res.reviewReason);
 });
 
+// Too few Reels is not doubt about the creator: the hold says what was missing.
+test('too few Reels to judge: held with that reason, not as "doubtful"', async () => {
+  const s = memStore();
+  s.shortlisted = [];
+  s.deps.shortlist = async (x) => { s.shortlisted.push(x.username); return { status: 'added' }; };
+  const thin = ['only 1 reel to judge (the one that surfaced them) — their Reels could not be collected: Reels: Monid wallet is empty (HTTP 402): top it up', 'that reel is on target'];
+  s.deps.nicheClassify = async () => ({
+    score: 1, reason: thin.join('; '), source: 'jev',
+    evidence: { jev: { decision: 'review', reasons: thin, fit: 1, provisional: true, thin: true, labels: {} } },
+  });
+  const res = await processCandidate(run, jevCfg, { username: 'coach', reels: fitReels() }, s.deps);
+  assert.strictEqual(res.decision, 'review');
+  assert.strictEqual(res.reviewReason, thin.join('; '));
+  assert.strictEqual(s.shortlisted.length, 0);
+});
+
+// What each creator was judged from, for the run card: enough of their Reels, or
+// too few — and how many Reels were labelled and heard.
+test('the run counts creators judged from their Reels, and from too few', async () => {
+  const { deps } = memStore();
+  const creator = (labelled, words, errors) => ({
+    source: 'reels', reels: 10, labelled, perReel: words.map((w) => ({ words: w })), errors,
+  });
+  const verdicts = {
+    full: { decision: 'shortlist', reasons: [], fit: 0.8, creator: creator(9, [12, 0, 30], undefined) },
+    thin: { decision: 'review', reasons: ['only 1 reel to judge'], fit: 1, thin: true, provisional: true, creator: creator(1, [0], ['Reels: Monid wallet is empty']) },
+  };
+  deps.nicheClassify = async (c) => ({
+    score: 0.8, reason: 'x', source: 'jev', evidence: { jev: { ...verdicts[c.kind], labels: {} } },
+  });
+  deps.shortlist = async () => ({ status: 'added' });
+  const source = arraySource([
+    { username: 'coachA', kind: 'full', bio: 'fitness', reels: fitReels() },
+    { username: 'coachB', kind: 'thin', bio: 'fitness', reels: fitReels() },
+  ]);
+  const { stats } = await runWithSource(run, { ...goodCfg, keywords: ['gym'] }, source, deps);
+  assert.deepStrictEqual(stats.reels, { full: 1, thin: 1, labelled: 10, heard: 2, failed: 1 });
+});
+
 test('Jev off target: rejected with its reason', async () => {
   const { deps, creators, candidates } = jevStore('reject', ['off-target subject: topic Food & drink (90%)']);
   const res = await processCandidate(run, jevCfg, { username: 'chef', reels: fitReels() }, deps);
