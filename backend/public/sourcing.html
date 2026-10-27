@@ -42,6 +42,11 @@
     table.scout-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
     table.scout-table th, table.scout-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #eee; }
     table.scout-table th { color: #6b7280; font-weight: 600; }
+    /* The run and review tables have more columns than the card is wide: they
+       scroll sideways inside the card instead of spilling out of it. */
+    .scout-table-wrap { overflow-x: auto; max-width: 100%; margin-top: 10px; -webkit-overflow-scrolling: touch; }
+    .scout-table-wrap > table.scout-table { margin-top: 0; min-width: 1180px; }
+    .scout-table-wrap th { white-space: nowrap; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
     .pill.added { background: #e7f6ee; color: #067647; }
     .pill.rejected { background: #fdecea; color: #b42318; }
@@ -188,12 +193,14 @@
         <div title="Reels whose speech Groq transcribed, of the Reels labelled this run.">Reels heard<b id="run-heard" style="font-size:13px;font-weight:600">—</b></div>
         <div title="How the phone is scouting this run: warming up (search + liking shortlisted creators) or scouting its own reel feed">Scouting<b id="run-phase" style="font-size:13px;font-weight:600">—</b></div>
       </div>
+      <div class="scout-table-wrap">
       <table class="scout-table">
         <thead>
           <tr><th>Handle</th><th>Views (min–max)</th><th>Topic</th><th>Genre</th><th>Format</th><th title="Share of their Reels on your targets. ~ marks a provisional fit, from too few Reels to decide on">Fit</th><th title="Reels that reached the viral bar, of the reels read">Viral</th><th title="The Reels they were judged from: labelled, of collected, and how many had speech (Groq) — hover for why any are missing">Reels</th><th>Decision</th><th>Reason</th><th>Creator list</th></tr>
         </thead>
         <tbody id="cand-rows"></tbody>
       </table>
+      </div>
     </div>
 
     <div class="card" id="review-card" style="margin-top:18px">
@@ -204,12 +211,14 @@
       <p class="scout-hint">Creators Jev was unsure about — Shortlist sends them to the Find creators page (<em>Curated by INFLUENCE Team</em>), Reject drops them. &ldquo;Held because&rdquo; says what Jev was unsure of, that they were one viral reel short, or that their reach was never measured.</p>
       <p class="scout-hint" id="jev-bars"></p>
       <p class="scout-hint" id="review-lessons"></p>
+      <div class="scout-table-wrap">
       <table class="scout-table">
         <thead>
           <tr><th>Handle</th><th title="Lowest and highest views across the Reels read off their profile">Views (min–max)</th><th>Jev labels</th><th>Fit</th><th title="The Reels they were judged from — hover for why any are missing">Reels</th><th>Held because</th><th title="Why you shortlist or reject them, in your own words. Jev learns what to pass on from these.">Your reason</th><th></th></tr>
         </thead>
         <tbody id="review-rows"></tbody>
       </table>
+      </div>
     </div>
   </main>
 
