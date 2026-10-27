@@ -22,6 +22,7 @@ const store = require('./sourcingStore');
 const searchTerms = require('./searchTerms');
 const nicheCalibration = require('./nicheCalibration');
 const jevCalibration = require('./jevCalibration');
+const reviewLessons = require('./reviewLessons');
 const creatorWarmup = require('./creatorWarmup');
 const phoneFarm = require('./phoneFarm');
 
@@ -139,12 +140,23 @@ async function runSession({ hostId, run, deps }) {
     log(`[sourcing-session] run #${run.id}: ${jevCalibration.describe(bars)}`);
   }
 
+  // What the admin's review notes teach — labels they keep passing on, held or
+  // rejected with their own reason (services/reviewLessons.js). Learned once per run.
+  const lessons = await (deps.loadReviewLessons || reviewLessons.load)({ db, logger: deps.logger || console });
+  if (lessons) {
+    config.reviewLessons = lessons;
+    log(`[sourcing-session] run #${run.id}: ${reviewLessons.describe(lessons)}`);
+  }
+
   const opts = {
     keywords: config.keywords || [],
     hashtags: config.hashtags || [],
     seedAccounts: config.seedAccounts || [],
     niche: config.niche || '',
     max: captureCap,
+    // Search terms learned from on-target creators' hashtags during this run. Shared
+    // across the run's searches, so a warm-up after a stretch on the feed keeps them.
+    learnedTerms: [],
   };
 
   // Everyone this campaign has already looked at. Without this the scout's memory

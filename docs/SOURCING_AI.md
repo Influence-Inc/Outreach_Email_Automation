@@ -208,6 +208,48 @@ A creator costs about a cent (2 TikHub calls, up to 10 Groq + Jev calls), and on
 creators who passed the viral rule get there. The server needs ffmpeg, ffprobe
 and tesseract (`nixpacks.toml`); the Scout page warns when one is missing.
 
+### Long runs: the search terms grow as the run goes
+
+A run keeps scouting until it has shortlisted its target. It used to end once its
+typed keywords' results were scrolled out — a run of 8 could finish after judging
+13 creators and shortlisting none. Now every creator who is on target (shortlisted
+or held, not rejected) also teaches the run **new search terms**: the hashtags
+they keep using on their on-target Reels (`creatorLabels.relatedTerms`, from the
+Reels collected through Monid).
+
+- A tag counts when it is on at least 2 of their on-target Reels; generic tags
+  (#fyp, #viral, #reels, #explore…) and terms already searched are left out; at
+  most 5 per creator, and 40 terms per run.
+- New terms are searched later in the same pass, and kept for the whole run —
+  a stretch on the feed and back to warm-up keeps them (`opts.learnedTerms`).
+- The run log says `new search terms from @coach's reels: calisthenics, homegym`,
+  the run card's *Scouting* tile lists them on hover, and the run's stats keep
+  them (`newTerms`).
+
+When a run still ends short of its target, the run card says why on its status
+(e.g. *done — the keywords' search results are used up and the reel feed is not
+serving on-target reels*).
+
+### Teaching the scout with review reasons
+
+The Pending review queue has a **Your reason** box on every row. Type why you
+shortlist or reject a creator (*only memes, no real tutorials*), and it is saved
+with the decision (`sourced_candidates.review_note`).
+
+At the start of every run (`services/reviewLessons.js`), Claude reads the reviewed
+creators that have a reason — the decision, the reason, and what Jev saw (their
+top topic, niche, genre and format shares) — and names the labels you keep
+passing on, in the taxonomy's own terms, each with your reason. It may only use
+real taxonomy labels, only what your reasons say, and never a label you also
+shortlist for. Claude is asked again only when the reasons change.
+
+A creator whose Reels are **mostly** (half or more) one of those labels is then
+**rejected** with your reason — *you passed on creators like this — "only memes,
+no real tutorials" (Comedy in 70% of their reels)* — or held for review when fewer
+than 5 Reels say so. The line under the queue's title shows what has been learned
+so far. Needs `ANTHROPIC_API_KEY`; without it the reasons are still saved, and
+nothing is applied.
+
 ### Reach: viral potential
 
 Our deals are paid on views, so the question is not "what does this creator usually get" but

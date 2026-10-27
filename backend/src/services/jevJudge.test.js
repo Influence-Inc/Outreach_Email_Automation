@@ -401,3 +401,27 @@ test('caption only and Monid failing: review, "only 1 reel to judge", provisiona
   assert.strictEqual(j.creator.fallback, true);
   assert.strictEqual(j.labels.topic.value, 'fitness');
 });
+
+// The admin's review notes (services/reviewLessons.js) reach the decision through
+// the run's config, and a related-terms list comes back for the navigator.
+test('judge applies what the review notes taught, and suggests search terms', async () => {
+  const creator = {
+    source: 'reels', reels: 10, labelled: 10,
+    shares: { topic: { fitness: 1 }, niche: {}, genre: { comedy: 0.7, educational: 0.3 }, format: {} },
+    own: { topics: ['fitness'], niches: [], genres: ['comedy', 'educational'] },
+    perReel: Array.from({ length: 3 }, () => ({ topic: 'fitness', hashtags: ['calisthenics'] })),
+    audience: null, costUsd: 0, errors: [],
+  };
+  const deps = { jevKey: 'k', labelCreator: async () => creator };
+  const plain = await judge({ username: 'coach', caption: 'gym' }, { keywords: ['gym workout'] }, deps);
+  assert.strictEqual(plain.evidence.jev.decision, 'shortlist');
+  assert.deepStrictEqual(plain.evidence.jev.relatedTerms, ['calisthenics']);
+  const taught = await judge({ username: 'coach', caption: 'gym' }, {
+    keywords: ['gym workout'],
+    reviewLessons: { rules: [{ dim: 'genre', value: 'comedy', why: 'only memes' }], basis: 2 },
+  }, deps);
+  assert.strictEqual(taught.evidence.jev.decision, 'reject');
+  assert.strictEqual(taught.evidence.jev.lesson, true);
+  assert.match(taught.evidence.jev.reasons[0], /you passed on creators like this — "only memes"/);
+  assert.strictEqual(taught.evidence.jev.relatedTerms, undefined, 'a rejected creator suggests no terms');
+});

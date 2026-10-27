@@ -449,10 +449,11 @@ async function finishJev(run, config, candidate, deps, {
     if (reachUnverified) holdReason = 'reach not measured — confirm their views before adding';
     else {
       const holds = [nearlyViralReason(verdict)];
-      // Too few Reels is not doubt about the creator: its reasons say what was missing.
+      // Too few Reels, or the admin's own notes, are not doubt about the creator:
+      // their reasons say what was missing or what the admin passes on.
       if (jev.decision !== 'shortlist') {
         const why = (jev.reasons || []).join('; ') || 'Jev was unsure';
-        holds.push(jev.thin ? why : `doubtful — ${why}`);
+        holds.push(jev.thin || jev.lesson ? why : `doubtful — ${why}`);
       }
       holdReason = holds.filter(Boolean).join('; ') || null;
     }
@@ -554,6 +555,8 @@ async function runWithSource(run, config, source, deps) {
     reels: {
       full: 0, thin: 0, labelled: 0, heard: 0, failed: 0,
     },
+    // Search terms the run picked up from on-target creators' hashtags.
+    newTerms: [],
   };
   let stopped = false;
   let last;
@@ -579,6 +582,15 @@ async function runWithSource(run, config, source, deps) {
       res = { decision: 'error', added: false, rejectReason: err.message };
     }
 
+    // Search terms from what an on-target creator tags their Reels with: handed
+    // back to the navigator with this result, so the search keeps finding more
+    // creators like them rather than running out of keywords.
+    const related = candidate.evidence && candidate.evidence.niche && candidate.evidence.niche.jev
+      && candidate.evidence.niche.jev.relatedTerms;
+    if (Array.isArray(related) && related.length && res && res.decision !== 'rejected') {
+      res.relatedTerms = related;
+      for (const t of related) if (!stats.newTerms.includes(t)) stats.newTerms.push(t);
+    }
     last = res;
     const media = candidate.evidence && candidate.evidence.niche && candidate.evidence.niche.jev
       && candidate.evidence.niche.jev.media;

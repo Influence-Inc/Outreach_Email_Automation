@@ -143,6 +143,7 @@ function createFarmSource({
   let lastCandidate = null;
   let searchDry = false;
   let feedFailed = false;
+  let endReason = null;
 
   const save = async (patch) => {
     try { await persist(patch); } catch (err) { log(`[farm] could not save the account's phase: ${(err && err.message) || err}`); }
@@ -213,11 +214,11 @@ function createFarmSource({
       if (!gen) {
         // Both ways ran dry in this run: stop rather than loop between them.
         if (farm.phase === 'warmup' && searchDry) {
-          if (feedFailed) return null;
+          if (feedFailed) return end('the keywords\' search results are used up and the reel feed is not serving on-target reels');
           await enter('feed', 'the keywords\' search results are used up');
           continue;
         }
-        if (farm.phase === 'feed' && feedFailed && searchDry) return null;
+        if (farm.phase === 'feed' && feedFailed && searchDry) return end('the keywords\' search results are used up and the reel feed is not serving on-target reels');
         running = farm.phase;
         gen = running === 'warmup' ? startSearch() : startFeed();
         started = false;
@@ -237,17 +238,24 @@ function createFarmSource({
       gen = null;
       if (running === 'warmup') {
         searchDry = true;
-        if (feedFailed) return null;
+        if (feedFailed) return end('the keywords\' search results are used up and the reel feed is not serving on-target reels');
         await enter('feed', 'the keywords\' search results are used up');
       } else {
         // Saved as warm-up even when the run ends here, so the next run starts
         // by warming the account rather than on the feed that just ran dry.
         feedFailed = true;
         await enter('warmup', 'the reel feed stopped serving reels');
-        if (searchDry) return null;
+        if (searchDry) return end('the reel feed stopped serving reels and the keywords\' search results are used up');
       }
     }
     log('[farm] switched phases too often in a row — ending the run');
+    return end('it switched between search and the feed too often in a row');
+  }
+
+  /** The run is over: say why, for the run card. */
+  function end(reason) {
+    endReason = reason;
+    log(`[farm] ending the run: ${reason}`);
     return null;
   }
 
@@ -284,6 +292,7 @@ function createFarmSource({
         goal: farm.goal,
         feedOnNiche: v && v.share != null ? Math.round(v.share * 100) / 100 : null,
         switches,
+        endReason: endReason || undefined,
       };
     },
   };

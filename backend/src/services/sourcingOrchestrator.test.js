@@ -1082,3 +1082,24 @@ test('a stopped run does not hand the source its last result', async () => {
   assert.strictEqual(out.status, 'stopped');
   assert.strictEqual(finished, false);
 });
+
+// Search terms an on-target creator's Reels suggest go back to the navigator with
+// their result, and the run keeps a list of them for its card.
+test('related search terms ride back with the result, and the run lists them', async () => {
+  const { deps } = memStore();
+  deps.nicheClassify = async (c) => ({
+    score: 0.8, reason: 'x', source: 'jev',
+    evidence: { jev: { decision: c.kind, reasons: [], fit: 0.8, labels: {}, relatedTerms: c.terms } },
+  });
+  deps.shortlist = async () => ({ status: 'added' });
+  const handed = [];
+  const items = [
+    { username: 'coachA', kind: 'shortlist', terms: ['calisthenics', 'homegym'], bio: 'fitness', reels: fitReels() },
+    { username: 'coachB', kind: 'review', terms: ['homegym', 'mobility'], bio: 'fitness', reels: fitReels() },
+  ];
+  let i = 0;
+  const source = { next: async (last) => { if (last) handed.push(last.relatedTerms); return items[i++] || null; } };
+  const { stats } = await runWithSource(run, { ...goodCfg, keywords: ['gym'] }, source, deps);
+  assert.deepStrictEqual(handed, [['calisthenics', 'homegym'], ['homegym', 'mobility']]);
+  assert.deepStrictEqual(stats.newTerms, ['calisthenics', 'homegym', 'mobility']);
+});

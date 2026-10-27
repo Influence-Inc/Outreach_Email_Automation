@@ -33,3 +33,33 @@ test('approving a doubtful creator shortlists them on creator-list only', async 
     db.one = orig.one; db.query = orig.query; creatorList.addToCurated = orig.add;
   }
 });
+
+// The reason typed in the review queue is saved with the decision: it is what
+// services/reviewLessons.js learns from.
+test('the admin\'s reason is saved with a shortlist or a reject', async () => {
+  const orig = { one: db.one, query: db.query, add: creatorList.addToCurated };
+  const sql = [];
+  db.one = async (q, params) => {
+    sql.push({ q, params });
+    if (/^SELECT/.test(q.trim())) return { id: 7, run_id: 3, username: 'coach', decision: 'review', evidence: {} };
+    return { id: 7, decision: 'rejected' };
+  };
+  db.query = async (q, params) => { sql.push({ q, params }); return { rows: [], rowCount: 1 }; };
+  creatorList.addToCurated = async () => ({ status: 'added' });
+  try {
+    await store.approveCandidate(7, '  explains every   step ');
+    const approve = sql.find((s) => /SET decision = 'added'/.test(s.q));
+    assert.match(approve.q, /review_note = \$2/);
+    assert.deepStrictEqual(approve.params, [7, 'explains every step']);
+
+    await store.rejectCandidate(7, 'rejected in review', 'only memes');
+    const reject = sql.find((s) => /SET decision = 'rejected'/.test(s.q));
+    assert.deepStrictEqual(reject.params, [7, 'rejected in review: only memes', 'only memes']);
+
+    await store.rejectCandidate(7, 'rejected in review', '   ');
+    const bare = sql.filter((s) => /SET decision = 'rejected'/.test(s.q)).at(-1);
+    assert.deepStrictEqual(bare.params, [7, 'rejected in review', null], 'no reason typed: nothing saved');
+  } finally {
+    db.one = orig.one; db.query = orig.query; creatorList.addToCurated = orig.add;
+  }
+});

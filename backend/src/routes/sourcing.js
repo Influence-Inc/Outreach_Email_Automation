@@ -11,6 +11,7 @@
 //     GET   /api/sourcing/config/:campaignId     a campaign's scouting defaults (API only)
 //     PATCH /api/sourcing/config/:campaignId      save a campaign's scouting defaults (API only)
 //     GET   /api/sourcing/jev-calibration         Jev's learned shortlist / reject bars
+//     GET   /api/sourcing/review-lessons          what the review notes taught the scout
 //     POST  /api/sourcing/runs                    start a run for a campaign
 //     GET   /api/sourcing/runs/:id                run status + captured candidates
 //     POST  /api/sourcing/runs/:id/stop           halt a run
@@ -31,6 +32,7 @@ const humanize = require('../services/humanize');
 const geminiClient = require('../services/geminiClient');
 const sourcingMetrics = require('../services/sourcingMetrics');
 const jevCalibration = require('../services/jevCalibration');
+const reviewLessons = require('../services/reviewLessons');
 const jevJudge = require('../services/jevJudge');
 const phoneFarm = require('../services/phoneFarm');
 const reelMedia = require('../services/reelMedia');
@@ -132,6 +134,17 @@ router.get('/jev-calibration', async (_req, res, next) => {
   try {
     const bars = await jevCalibration.load({ db });
     res.json({ ...bars, summary: jevCalibration.describe(bars) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/sourcing/review-lessons — what the admins' review notes have taught:
+// labels the scout now holds or rejects creators for, with the admins' reasons.
+router.get('/review-lessons', async (_req, res, next) => {
+  try {
+    const lessons = await reviewLessons.load({ db });
+    res.json({ ...lessons, summary: reviewLessons.describe(lessons, jevJudge.labelOf) });
   } catch (err) {
     next(err);
   }
@@ -359,7 +372,7 @@ router.get('/review', async (req, res, next) => {
 
 router.post('/candidates/:id/approve', async (req, res, next) => {
   try {
-    const row = await store.approveCandidate(Number(req.params.id));
+    const row = await store.approveCandidate(Number(req.params.id), req.body && req.body.note);
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(row);
   } catch (err) {
@@ -370,7 +383,7 @@ router.post('/candidates/:id/approve', async (req, res, next) => {
 router.post('/candidates/:id/reject', async (req, res, next) => {
   try {
     const reason = (req.body && req.body.reason) || 'rejected in review';
-    const row = await store.rejectCandidate(Number(req.params.id), reason);
+    const row = await store.rejectCandidate(Number(req.params.id), reason, req.body && req.body.note);
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(row);
   } catch (err) {

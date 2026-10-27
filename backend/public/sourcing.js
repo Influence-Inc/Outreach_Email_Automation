@@ -384,7 +384,17 @@ async function refreshRun() {
   el('run-heard').textContent = reels.labelled ? `${reels.heard || 0} of ${reels.labelled}` : '—';
   el('run-heard').style.color = reels.labelled && !reels.heard ? '#b42318' : '';
   const switches = (stats.discovery && stats.discovery.switches) || [];
-  el('run-phase').title = switches.map((w) => `${w.from} → ${w.to}: ${w.reason || ''}`).join('\n');
+  const learnedTerms = stats.newTerms || [];
+  el('run-phase').title = [
+    ...switches.map((w) => `${w.from} → ${w.to}: ${w.reason || ''}`),
+    ...(learnedTerms.length ? [`search terms learned from on-target creators: ${learnedTerms.join(', ')}`] : []),
+  ].join('\n');
+  // Why a run ended short of its target, when it did.
+  const endReason = stats.discovery && stats.discovery.endReason;
+  el('run-status').title = endReason ? `ended: ${endReason}` : '';
+  if (endReason && run.status === 'done' && (run.found_count || 0) < (run.target_count || 0)) {
+    el('run-status').textContent = `${run.status} — ${endReason}`;
+  }
   renderCandidates(candidates);
   if (run.status === 'done' || run.status === 'stopped' || run.status === 'error') stopPolling();
 }
@@ -405,14 +415,12 @@ function renderReview(rows) {
   if (!tb) return;
   tb.innerHTML = '';
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="7" class="scout-hint">Nothing waiting for review.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="8" class="scout-hint">Nothing waiting for review.</td></tr>';
     return;
   }
   for (const c of rows) {
     const j = jevOf(c) || {};
     const labels = [topicCell(c), labelCell(c, 'genre'), labelCell(c, 'format')].join(' · ') + basisOf(c);
-    // Transcript text came from a public reel: escaped like everything else.
-    const heard = j.transcript || j.onScreenText || '';
     const held = (c.evidence && c.evidence.reviewHold) || '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -420,23 +428,29 @@ function renderReview(rows) {
       <td>${viewRange(c.reels)}</td>
       <td>${labels}</td>
       <td>${fitOf(c)}</td>
-      <td style="max-width:280px">${heard ? escapeHtml(heard.slice(0, 200)) : '—'}<br><span class="scout-hint">${reelOf(c)}</span></td>
+      <td>${reelOf(c)}</td>
       <td>${escapeHtml(held) || '—'}</td>
+      <td><textarea data-note="${c.id}" rows="2" maxlength="500" placeholder="e.g. only memes, no real tutorials" style="width:100%;min-width:180px;font:inherit;font-size:13px"></textarea></td>
       <td style="white-space:nowrap">
         <button data-approve="${c.id}" class="btn-primary small">Shortlist</button>
         <button data-reject="${c.id}" class="ghost small">Reject</button>
       </td>`;
     tb.appendChild(tr);
   }
+  // The reason typed in the row goes with the decision: it is what Jev learns from.
+  const noteOf = (id) => {
+    const box = tb.querySelector(`[data-note="${id}"]`);
+    return box ? box.value.trim() : '';
+  };
   tb.querySelectorAll('[data-approve]').forEach((b) =>
-    b.addEventListener('click', () => reviewAction(`/api/sourcing/candidates/${b.dataset.approve}/approve`)));
+    b.addEventListener('click', () => reviewAction(`/api/sourcing/candidates/${b.dataset.approve}/approve`, noteOf(b.dataset.approve))));
   tb.querySelectorAll('[data-reject]').forEach((b) =>
-    b.addEventListener('click', () => reviewAction(`/api/sourcing/candidates/${b.dataset.reject}/reject`)));
+    b.addEventListener('click', () => reviewAction(`/api/sourcing/candidates/${b.dataset.reject}/reject`, noteOf(b.dataset.reject))));
 }
 
-async function reviewAction(path) {
+async function reviewAction(path, note = '') {
   try {
-    await api(path, { method: 'POST', body: JSON.stringify({}) });
+    await api(path, { method: 'POST', body: JSON.stringify(note ? { note } : {}) });
     await loadReview();
     if (currentRun) await refreshRun().catch(() => {});
   } catch (err) {
@@ -454,8 +468,19 @@ async function loadJevBars() {
   }
 }
 
+// What the reasons typed in this queue have taught the scout.
+async function loadReviewLessons() {
+  try {
+    const l = await api('/api/sourcing/review-lessons');
+    el('review-lessons').textContent = l.summary || '';
+  } catch (_) {
+    el('review-lessons').textContent = '';
+  }
+}
+
 async function loadReview() {
   loadJevBars();
+  loadReviewLessons();
   try {
     const rows = await api('/api/sourcing/review');
     renderReview(rows);
