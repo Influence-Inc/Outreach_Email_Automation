@@ -33,6 +33,7 @@ const geminiClient = require('../services/geminiClient');
 const sourcingMetrics = require('../services/sourcingMetrics');
 const jevCalibration = require('../services/jevCalibration');
 const reviewLessons = require('../services/reviewLessons');
+const creatorList = require('../services/creatorList');
 const jevJudge = require('../services/jevJudge');
 const phoneFarm = require('../services/phoneFarm');
 const reelMedia = require('../services/reelMedia');
@@ -103,6 +104,8 @@ router.get('/status', async (_req, res, next) => {
       // reads the frames (services/reelMedia.js). Missing on the server, the
       // judge hears less and reads nothing off the screen.
       media: await reelMedia.tools(),
+      // Whether shortlisted creators can reach creator-list's collection.
+      creatorList: { curated: creatorList.curatedConfigured(), missing: creatorList.curatedMissing() },
       remoteControl: hostCommands.enabled(),
       liveMirror: hostChannel.enabled(),
     });
@@ -134,6 +137,16 @@ router.get('/jev-calibration', async (_req, res, next) => {
   try {
     const bars = await jevCalibration.load({ db });
     res.json({ ...bars, summary: jevCalibration.describe(bars) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/sourcing/creator-list/resend — send again every shortlisted creator
+// who never reached creator-list's collection (not configured then, or an error).
+router.post('/creator-list/resend', async (_req, res, next) => {
+  try {
+    res.json(await store.resendToCreatorList());
   } catch (err) {
     next(err);
   }

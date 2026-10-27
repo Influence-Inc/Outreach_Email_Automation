@@ -269,13 +269,21 @@ function basisOf(c) {
       : cr.fallback ? 'from 1 caption (their Reels not collected)'
         : `from ${cr.labelled} of ${cr.reels} reels`;
   const why = !cr && j.creatorNotLabelled ? j.creatorNotLabelled : ((cr && cr.errors) || []).join('\n');
+  const skipped = c.evidence && c.evidence.profileVisit === 'skipped' ? ' · profile not opened' : '';
   const aud = j.audienceSummary ? ` · audience: ${escapeHtml(j.audienceSummary)}` : '';
-  return `<br><span class="scout-hint"${why ? ` title="${escapeHtml(why)}"` : ''}>${escapeHtml(from)}${aud}</span>`;
+  return `<br><span class="scout-hint"${why ? ` title="${escapeHtml(why)}"` : ''}>${escapeHtml(from)}${skipped}${aud}</span>`;
 }
 
 /** Topic, with the niche under it when Jev placed one inside that topic. */
 function topicCell(c) {
   const j = jevOf(c);
+  // Rejected on views before anything was spent on them: say so, rather than a
+  // row of dashes that reads as a judgement that failed.
+  const v = c && c.evidence && c.evidence.viral;
+  if (!j && v && !v.pass) {
+    return '<span class="scout-hint" title="The viral rule runs first and costs nothing; only creators who pass it are labelled from their Reels (Monid, Groq, Qwen3-VL, Jev).">'
+      + 'not judged — too few viral reels</span>';
+  }
   const n = j && j.labels && j.labels.niche;
   const niche = n && !n.outsideTopic && !['unclear', 'other'].includes(n.value)
     ? `<br><span class="scout-hint">${escapeHtml(labelText(n.value))}</span>` : '';
@@ -295,7 +303,9 @@ function creatorListOf(c) {
   const cl = c && c.evidence && c.evidence.creatorList;
   if (!cl) return c.decision === 'added' ? '—' : '';
   if (cl.status === 'added') return cl.already ? 'in collection' : 'added';
-  return `<span title="${escapeHtml(cl.error || '')}" style="color:#b42318">${escapeHtml(cl.status)}</span>`;
+  const label = cl.status === 'not_configured' ? 'not sent — settings missing' : 'not sent';
+  return `<span title="${escapeHtml(cl.error || cl.status)}" style="color:#b42318">${label}</span>`
+    + ' <button data-resend class="ghost small" title="Send every shortlisted creator who never reached creator-list">send again</button>';
 }
 
 /**
@@ -332,6 +342,9 @@ function reelOf(c) {
 /** "5/16" — reels that reached the viral bar, of the reels read; the rule on hover. */
 function viralOf(c) {
   const v = c && c.evidence && c.evidence.viral;
+  // A feed creator whose profile was not opened: what their feed reel's likes said.
+  const fv = c && c.evidence && c.evidence.feedViews;
+  if (!v && fv) return `<span title="${escapeHtml(`feed reel: ${fv.reason || ''}`)}">~${fmt(fv.views)}</span>`;
   if (!v) return '—';
   const color = v.pass ? '#067647' : (v.borderline ? '#b25e09' : '#b42318');
   return `<span title="${escapeHtml(v.reason || '')}" style="color:${color};font-weight:600">${v.viral}/${v.reels}</span>`;
@@ -355,6 +368,19 @@ function renderCandidates(rows) {
       <td>${escapeHtml(reasonOf(c))}</td>
       <td>${creatorListOf(c)}</td>`;
     tb.appendChild(tr);
+  }
+  tb.querySelectorAll('[data-resend]').forEach((b) => b.addEventListener('click', resendToCreatorList));
+}
+
+// Send again every shortlisted creator who never reached creator-list's collection.
+async function resendToCreatorList() {
+  try {
+    const r = await api('/api/sourcing/creator-list/resend', { method: 'POST', body: '{}' });
+    if (r.skipped) setStatus('Not sent: set CREATOR_LIST_WEB_URL and CREATOR_LIST_API_KEY on Deal Studio first.', 'err');
+    else setStatus(`Sent ${r.sent} of ${r.pending} to creator-list${r.failed ? ` — ${r.failed} still failing (hover for why)` : ''}.`, r.failed ? 'err' : 'ok');
+    if (currentRun) await refreshRun().catch(() => {});
+  } catch (err) {
+    setStatus(err.message, 'err');
   }
 }
 
@@ -771,6 +797,16 @@ async function loadJudgeStatus() {
     banner.hidden = false;
   } else {
     banner.hidden = true;
+  }
+  // Shortlisted creators go to creator-list's "Curated by INFLUENCE Team" — only
+  // when Deal Studio knows the site and its key.
+  const cl = status && status.creatorList;
+  if (cl && !cl.curated && banner.hidden) {
+    banner.textContent = `Shortlisted creators are not reaching creator-list: set ${cl.missing.join(' and ')} on Deal Studio's backend `
+      + '(the creator-list site\'s address, and the same key as DEAL_STUDIO_API_KEY on the site). '
+      + 'They are sent automatically at the start of the next run once it is set.';
+    banner.className = 'judge-banner err';
+    banner.hidden = false;
   }
   // Without ffmpeg the recording is never split into audio and frames; without
   // Tesseract the frames are never read.

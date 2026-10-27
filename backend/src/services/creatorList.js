@@ -232,6 +232,16 @@ async function addToCurated(rawHandle, {
   return out;
 }
 
+/** Whether shortlisted creators can reach the "Curated by INFLUENCE Team" collection. */
+function curatedConfigured() {
+  return Boolean(webUrl() && config().key);
+}
+
+/** Which of the two creator-list settings are missing, for the Scout page. */
+function curatedMissing() {
+  return [!webUrl() && 'CREATOR_LIST_WEB_URL', !config().key && 'CREATOR_LIST_API_KEY'].filter(Boolean);
+}
+
 async function status(rawHandle) {
   const handle = clean(rawHandle);
   if (!configured()) return { status: 'not_configured', error: 'Set CREATOR_LIST_API_URL and CREATOR_LIST_API_KEY on the server' };
@@ -239,5 +249,6 @@ async function status(rawHandle) {
 }
 
 module.exports = {
-  sync, status, call, pricingCopy, applyToCreators, configured, addToCurated, curatedNote, FRESH_MS, POLL_MS,
+  sync, status, call, pricingCopy, applyToCreators, configured, addToCurated, curatedNote, curatedConfigured, curatedMissing,
+  FRESH_MS, POLL_MS,
 };

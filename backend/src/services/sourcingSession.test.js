@@ -32,6 +32,7 @@ function baseDeps({ events = [], runWithSource, getRun } = {}) {
     scoutedHandles: async () => [],
     loadJevCalibration: async () => null,
     loadReviewLessons: async () => null,
+    resendToCreatorList: async () => ({}),
   };
 }
 
