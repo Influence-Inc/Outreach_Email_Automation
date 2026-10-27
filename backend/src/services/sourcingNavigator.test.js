@@ -2,7 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { scout, scrollResults, MAX_KEYWORD_DEPTH, resolveClip } = require('./sourcingNavigator');
+const {
+  scout, scrollResults, MAX_KEYWORD_DEPTH, resolveClip, openResultsReelsChip,
+} = require('./sourcingNavigator');
 
 function fakeDriver() {
   const ops = [];
@@ -713,10 +715,11 @@ test('back uses a real key press, never an edge swipe, when the driver has one',
   assert.strictEqual(edgeSwipes.length, 0, 'no left-edge gesture that IG would read as a tab swipe');
 });
 
-// Current IG's results strip is `For you | Accounts | Audio | Tags` — there is no
-// "Reels" tab to find. Paging sideways looking for one is what walked live runs
-// into Accounts and then Audio, where a "creator" is a song.
-test('never pages the results tab strip sideways', async () => {
+// Paging the strip sideways looking for a tab is what once walked live runs from
+// For you into Accounts and then Audio, where a "creator" is a song. The strip is
+// only ever dragged back toward its start, and only when the reader says we are
+// off the content tabs with none in reach (tests below).
+test('never pages the results tab strip sideways when nothing says we are off the reels', async () => {
   const driver = driverWithSearch();
   const empty = { screen: 'search_results', targets: {} };
   const views = [...OPEN_SEARCH, empty, empty, empty, empty, empty, empty];
@@ -2090,4 +2093,108 @@ test('a result carrying stop ends the scout, after warming the last creator', as
   const after = await gen.next({ decision: 'added', added: true, stop: true });
   assert.strictEqual(after.done, true, 'no second keyword is searched');
   assert.deepStrictEqual(warmed, ['mock.coach']);
+});
+
+// ── the results strip: All | Reels | Accounts | Audio | Tags | Places ──────
+
+const chipDriver = () => {
+  const ops = [];
+  return {
+    ops,
+    tap: async (x, y) => ops.push(['tap', x, y]),
+    swipe: async (o) => ops.push(['swipe', o]),
+  };
+};
+const SCREEN = { width: 1080, height: 2400 };
+
+// The current strip: a search that opens on the remembered Audio tab is moved
+// to Reels before anything is scouted.
+test('a search that lands on Audio switches to the Reels tab', async () => {
+  const driver = chipDriver();
+  const audio = { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 300, y: 250 }, serpTabStrip: { x: 700, y: 250 } } };
+  const out = await openResultsReelsChip({
+    driver, view: audio, read: scriptedRead([{ screen: 'search_results', activeTab: 'reels', targets: {} }]), pacingMs: 0, screen: SCREEN,
+  });
+  assert.strictEqual(out.onForYou, true);
+  assert.strictEqual(out.view.activeTab, 'reels');
+  assert.deepStrictEqual(driver.ops, [['tap', 300, 250]]);
+});
+
+for (const tab of ['reels', 'all', 'for you', 'top']) {
+  test(`"${tab}" counts as a reels tab: nothing is tapped`, async () => {
+    const driver = chipDriver();
+    const out = await openResultsReelsChip({
+      driver, view: { screen: 'search_results', activeTab: tab, targets: {} }, read: scriptedRead([]), pacingMs: 0, screen: SCREEN,
+    });
+    assert.strictEqual(out.onForYou, true);
+    assert.strictEqual(driver.ops.length, 0);
+  });
+}
+
+// Selecting Audio scrolls the strip so Audio is in view, which can push All and
+// Reels off the left edge. The strip is dragged back to its start (finger left to
+// right, starting away from the Back edge) and the tab is then tapped.
+test('content tabs scrolled out of reach: drags the strip back, then taps Reels', async () => {
+  const driver = chipDriver();
+  const audio = { screen: 'search_results', activeTab: 'audio', targets: { serpTabStrip: { x: 500, y: 260 } } };
+  const views = [
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 320, y: 260 }, serpTabStrip: { x: 700, y: 260 } } },
+    { screen: 'search_results', activeTab: 'reels', targets: {} },
+  ];
+  const out = await openResultsReelsChip({ driver, view: audio, read: scriptedRead(views), pacingMs: 0, screen: SCREEN });
+
+  assert.strictEqual(out.onForYou, true);
+  const [swipe, tap] = driver.ops;
+  assert.strictEqual(swipe[0], 'swipe');
+  assert.ok(swipe[1].x2 > swipe[1].x1, 'dragged toward the start of the strip');
+  assert.ok(swipe[1].x1 >= SCREEN.width * 0.1, 'not from the edge, so never read as Back');
+  assert.strictEqual(swipe[1].y1, 260);
+  assert.strictEqual(swipe[1].y2, 260);
+  assert.deepStrictEqual(tap, ['tap', 320, 260]);
+});
+
+test('a tap that did not take is tried once more', async () => {
+  const driver = chipDriver();
+  const audio = { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 300, y: 250 } } };
+  const views = [
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 300, y: 250 } } },
+    { screen: 'search_results', activeTab: 'all', targets: {} },
+  ];
+  const out = await openResultsReelsChip({ driver, view: audio, read: scriptedRead(views), pacingMs: 0, screen: SCREEN });
+  assert.strictEqual(out.onForYou, true);
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'tap').length, 2);
+});
+
+test('the strip is dragged at most twice, and the keyword is then skipped', async () => {
+  const driver = chipDriver();
+  const audio = { screen: 'search_results', activeTab: 'audio', targets: { serpTabStrip: { x: 500, y: 260 } } };
+  const out = await openResultsReelsChip({
+    driver, view: audio, read: scriptedRead([audio, audio, audio]), pacingMs: 0, screen: SCREEN,
+  });
+  assert.strictEqual(out.onForYou, false);
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'swipe').length, 2);
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'tap').length, 0, 'never tapped an Audio row');
+});
+
+// End to end through scout: opens on Audio, the Reels tab is tapped, and the
+// first reel on the grid is opened — the creator's profile is visited.
+test('a keyword that opens on Audio goes to Reels and opens the first reel', async () => {
+  const driver = driverWithSearch();
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', activeTab: 'audio', targets: { forYouTab: { x: 310, y: 250 }, back: BACK } },
+    // Read after the switch, then again by the card opener.
+    { screen: 'search_results', activeTab: 'reels', reelResults: [{ index: 0, author: 'Coach' }], targets: { 'reelResult:0': { x: 200, y: 900 }, back: BACK } },
+    { screen: 'search_results', activeTab: 'reels', reelResults: [{ index: 0, author: 'Coach' }], targets: { 'reelResult:0': { x: 200, y: 900 }, back: BACK } },
+    ...Array(30).fill({ screen: 'search_results', activeTab: 'reels', targets: { back: BACK } }),
+  ];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const _c of gen) { /* drain */ }
+
+  const taps = driver.ops.filter((o) => o[0] === 'tap').map((o) => `${o[1]},${o[2]}`);
+  const tabAt = taps.indexOf('310,250');
+  assert.ok(tabAt >= 0, 'tapped the Reels tab');
+  assert.ok(taps.indexOf('200,900') > tabAt, 'then opened the first reel on the grid');
 });

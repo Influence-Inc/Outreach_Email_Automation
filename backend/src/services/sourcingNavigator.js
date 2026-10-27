@@ -167,54 +167,95 @@ const MAX_REEL_SCROLLS = 6;
 // without producing a candidate; the run's own target count stops it first.
 const MAX_FEED_SCROLLS = 60;
 
-// The results strip is `For you | Accounts | Audio | Tags`. Only the first is
-// reel content; the rest are songs, hashtags and handle-string matches.
-const FOR_YOU_TABS = ['for you', 'top'];
+// The results strip has been `All | Reels | Accounts | Audio | Tags | Places`,
+// `For you | Accounts | Audio | Tags` and `Top | …` across builds. Reels, All,
+// For you and Top lead with reels; the rest are songs, hashtags, places and
+// handle-string matches.
+const FOR_YOU_TABS = ['reels', 'all', 'for you', 'top'];
+
+// Times the strip is dragged back toward its start looking for a content tab.
+const MAX_STRIP_DRAGS = 2;
 
 /**
- * Force the results page onto its "For you" content tab.
+ * Drag the results strip toward its START (finger left → right), where the
+ * content tabs sit. Selecting Audio scrolls the strip so Audio is in view, which
+ * can leave All and Reels off the left edge. This only ever moves toward the
+ * content tabs — paging the other way is what once walked the scout from For you
+ * into Accounts and Audio. Starts away from the edge, so it is never read as Back.
+ */
+async function dragStripToStart({ driver, view, screen, pacingMs }) {
+  const at = view && view.targets && view.targets.serpTabStrip;
+  if (!at || !driver.swipe) return false;
+  const width = (screen && screen.width) || 1080;
+  await driver.swipe({
+    x1: Math.round(width * 0.2), y1: at.y, x2: Math.round(width * 0.9), y2: at.y, durationMs: 300,
+  });
+  await sleep(jitteredDelay(pacingMs));
+  return true;
+}
+
+/**
+ * Force the results page onto a reel-content tab (Reels, else All / For you /
+ * Top) before anything is scouted.
  *
  * Instagram REMEMBERS the last-used search tab, so a fresh keyword search
- * regularly opens on Audio (a page of songs) rather than For you. "For you is the
- * default" was wrong — landing on Audio is normal, and it must be corrected every
- * time, not accepted because the page happens to have rows on it.
+ * regularly opens on Audio (a page of songs). Landing on Audio is normal, and it
+ * must be corrected every time, not accepted because the page happens to have
+ * rows on it.
  *
- * The tab is the leftmost chip on the strip and effectively always on screen, so
- * the switch is a single tap. Returns { view, onForYou } — the caller must NOT
- * scout results when onForYou is false, or it sources songs and hashtags.
+ *   1. already on a content tab → done
+ *   2. a content tab in reach → tap it, re-read, tap once more if it didn't take
+ *   3. none in reach → drag the strip back to its start and look again
+ *
+ * Returns { view, onForYou } — the caller must NOT scout results when onForYou
+ * is false, or it sources songs and hashtags.
  */
-async function openResultsReelsChip({ driver, view, read, pacingMs, jitterPx = 0, log = () => {} }) {
+async function openResultsReelsChip({
+  driver, view, read, pacingMs, jitterPx = 0, screen = null, log = () => {},
+}) {
   const forYouTab = (v) => v && v.targets && v.targets.forYouTab;
   const onForYou = (v) => v && FOR_YOU_TABS.includes(v.activeTab);
+  const offTab = (v) => v && v.activeTab && !FOR_YOU_TABS.includes(v.activeTab);
 
-  // Already on For you (the reader could read the selected tab and it is ours).
+  // Already on a content tab (the reader could read the selected tab and it is ours).
   if (onForYou(view)) return { view, onForYou: true };
 
-  // Not on For you — or the reader could not tell. Tap the tab and re-read. A
-  // redundant tap on an already-selected For you tab is a harmless no-op, so
-  // "could not tell" is treated the same as "on the wrong tab": switch anyway.
-  const tab = forYouTab(view);
-  if (tab) {
-    log(`[sourcing] results landed on "${view.activeTab || 'an unknown tab'}" — switching to For you`);
-    await humanTap(driver, tab, jitterPx, pacingMs);
-    const after = await read(driver);
-    // Trust the switch even if the reader still cannot name the active tab: what
-    // matters is that we tapped For you and did not stay on Audio. But if it CAN
-    // name it and it is still not ours, say so and refuse to scout it.
-    if (after.activeTab && !FOR_YOU_TABS.includes(after.activeTab)) {
+  let current = view;
+  for (let drags = 0; ; drags += 1) {
+    const tab = forYouTab(current);
+    if (tab) {
+      log(`[sourcing] results landed on "${current.activeTab || 'an unknown tab'}" — switching to the reels tab`);
+      let after = current;
+      // A tap during the strip's own animation can miss; one retry.
+      for (let tries = 0; tries < 2; tries += 1) {
+        const target = forYouTab(after) || tab;
+        // eslint-disable-next-line no-await-in-loop
+        await humanTap(driver, target, jitterPx, pacingMs);
+        // eslint-disable-next-line no-await-in-loop
+        after = await read(driver);
+        // Trust the switch when the reader cannot name the active tab: what
+        // matters is that we tapped the content tab and did not stay on Audio.
+        if (!offTab(after)) return { view: after, onForYou: true };
+      }
       log(`[sourcing] still on "${after.activeTab}" after switching — not scouting it`);
       return { view: after, onForYou: false };
     }
-    return { view: after, onForYou: true };
-  }
 
-  // No tab to tap. If the reader knows we are on a non-For-you tab, do not scout
-  // it; otherwise assume For you (a full-screen reels player has no strip at all).
-  if (view && view.activeTab && !FOR_YOU_TABS.includes(view.activeTab)) {
-    log(`[sourcing] on "${view.activeTab}" with no For you tab in reach — skipping this keyword`);
-    return { view, onForYou: false };
+    // No content tab to tap. A full-screen reels player has no strip at all, and
+    // a reader that cannot tell the tab is given the benefit of the doubt.
+    if (!offTab(current)) return { view: current, onForYou: true };
+
+    // On Audio/Accounts/Tags with the content tabs scrolled out of reach.
+    // eslint-disable-next-line no-await-in-loop
+    if (drags >= MAX_STRIP_DRAGS || !await dragStripToStart({ driver, view: current, screen, pacingMs })) {
+      log(`[sourcing] on "${current.activeTab}" with no reels tab in reach — skipping this keyword`);
+      return { view: current, onForYou: false };
+    }
+    log(`[sourcing] on "${current.activeTab}" — dragging the tab strip back to find Reels / All`);
+    // eslint-disable-next-line no-await-in-loop
+    current = await read(driver);
+    if (onForYou(current)) return { view: current, onForYou: true };
   }
-  return { view, onForYou: true };
 }
 
 // Real device pixels, for scroll geometry. Shares the per-driver cache with
@@ -405,12 +446,12 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       await sleep(jitteredDelay(pacingMs));
     }
 
-    // Force the results onto the "For you" content tab. IG remembers the
-    // last-used tab, so a fresh search can open on Audio (songs) — sourcing from
-    // there is meaningless, so if we cannot get onto For you we skip the keyword
+    // Force the results onto a reels tab (Reels, else All / For you). IG remembers
+    // the last-used tab, so a fresh search can open on Audio (songs) — sourcing from
+    // there is meaningless, so if we cannot get onto a reels tab we skip the keyword
     // rather than scout the wrong tab.
     view = await read(driver);
-    const onFor = await openResultsReelsChip({ driver, view, read, pacingMs, jitterPx, log });
+    const onFor = await openResultsReelsChip({ driver, view, read, pacingMs, jitterPx, screen, log });
     view = onFor.view;
     if (!onFor.onForYou) {
       await ensureInInstagram({ driver, read, pacingMs, jitterPx });
@@ -436,7 +477,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       continue;
     }
 
-    // SURFACE B — a "For you" reels GRID. A reel proves the creator is actively
+    // SURFACE B — a reels GRID (the Reels / All / For you tab). A reel proves the creator is actively
     // posting the content we searched for, where an Accounts row only proves the
     // handle matched the string. Tap a card → the reels_feed player exposes the
     // real @handle + an authorProfile target → open the profile → analyse.
@@ -1733,6 +1774,7 @@ module.exports = {
   backTo,
   pickClipTargets,
   scrollResults,
+  openResultsReelsChip,
   REELS_PER_PROFILE,
   CLIPS_PER_PROFILE,
   MAX_KEYWORD_DEPTH,

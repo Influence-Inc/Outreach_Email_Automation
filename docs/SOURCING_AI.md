@@ -654,6 +654,15 @@ searched for; an "Accounts" row only proves the handle matched the string. The
 Accounts list is used as a fallback, and only when the reels path found nothing,
 so one keyword is never scouted twice.
 
+**The results tab.** Instagram remembers the last-used results tab, so a search
+often opens on **Audio** (songs). Before scouting, the navigator moves the page
+to a reels tab: **Reels** first, else **All** (the current strip is
+`All | Reels | Accounts | Audio | Tags | Places`; older builds had `For you` or
+`Top`). If those tabs have scrolled off the left of the strip, it drags the strip
+back to its start (never the other way, toward Audio) up to twice, then taps the
+tab, and taps again if the first tap didn't take. Only when no reels tab can be
+reached is the keyword skipped for this visit, with the reason in the run log.
+
 ### Review queue
 
 A creator who passed every rule gets `decision = "review"` instead of being
