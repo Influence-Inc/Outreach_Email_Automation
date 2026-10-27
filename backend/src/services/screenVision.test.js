@@ -639,3 +639,69 @@ test('a described play count is read too', () => {
   ];
   assert.strictEqual(sv.readScreen({ elements }).views, 1200000);
 });
+
+// ── the current strip: All | Reels | Accounts | Audio | Tags | Places ───────
+
+const currentStrip = (selected) => [
+  node({ rid: 'serp_journey_header_container', bounds: { x: 0, y: 100, w: 1080, h: 60 } }),
+  ...['All', 'Reels', 'Accounts', 'Audio', 'Tags', 'Places'].map((label, i) => node({
+    desc: label, clickable: true, selected: label === selected, bounds: { x: 20 + i * 180, y: 200, w: 160, h: 70 },
+  })),
+];
+
+test('current strip: Audio is read as active and Reels is the tab to switch to', () => {
+  const r = sv.readScreen({ elements: currentStrip('Audio'), width: 1080, height: 2400 });
+  assert.strictEqual(r.screen, 'search_results');
+  assert.strictEqual(r.activeTab, 'audio');
+  assert.deepStrictEqual(r.targets.forYouTab, { x: 280, y: 235 }, 'Reels, not All, is preferred');
+  assert.deepStrictEqual(r.targets.serpTabStrip, { x: 640, y: 235 }, 'the strip is where the selected tab is');
+});
+
+test('current strip: All and Reels are read as active tabs', () => {
+  assert.strictEqual(sv.readScreen({ elements: currentStrip('All'), width: 1080, height: 2400 }).activeTab, 'all');
+  assert.strictEqual(sv.readScreen({ elements: currentStrip('Reels'), width: 1080, height: 2400 }).activeTab, 'reels');
+});
+
+test('All is the tab to switch to when Reels is not on the strip', () => {
+  const el = sv.findForYouTab(
+    [
+      node({ desc: 'All', bounds: { x: 20, y: 200, w: 160, h: 70 } }),
+      node({ desc: 'Audio', bounds: { x: 200, y: 200, w: 160, h: 70 } }),
+    ],
+    2400,
+    'search_results',
+  );
+  assert.strictEqual(el.desc, 'All');
+});
+
+test('tab labels with a "tab N of M" suffix are still read', () => {
+  const strip = [
+    node({ rid: 'serp_journey_header_container', bounds: { x: 0, y: 100, w: 1080, h: 60 } }),
+    node({ desc: 'Reels, Tab 2 of 6', bounds: { x: 200, y: 200, w: 160, h: 70 } }),
+    node({ desc: 'Audio, Tab 4 of 6', selected: true, bounds: { x: 560, y: 200, w: 160, h: 70 } }),
+  ];
+  const r = sv.readScreen({ elements: strip, width: 1080, height: 2400 });
+  assert.strictEqual(r.activeTab, 'audio');
+  assert.deepStrictEqual(r.targets.forYouTab, { x: 280, y: 235 });
+});
+
+test('a reel card labelled "Reel by …" is never taken for the Reels tab', () => {
+  const el = sv.findForYouTab(
+    [node({ desc: 'Reel by Coach at row 1, column 1', bounds: { x: 20, y: 400, w: 300, h: 500 } })],
+    2400,
+    'search_results',
+  );
+  assert.strictEqual(el, null);
+});
+
+test('a Reels label in a row that also offers Explore is not the results tab', () => {
+  const el = sv.findForYouTab(
+    [
+      node({ desc: 'Explore', bounds: { x: 20, y: 200, w: 160, h: 70 } }),
+      node({ desc: 'Reels', bounds: { x: 200, y: 200, w: 160, h: 70 } }),
+    ],
+    2400,
+    'search_results',
+  );
+  assert.strictEqual(el, null);
+});
