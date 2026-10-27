@@ -178,11 +178,25 @@ test('transcribe sends the recording to Groq Whisper as verbose_json', async () 
   let form = null;
   const out = await transcribe(Buffer.from('mp4'), 'video/mp4', {
     key: 'g',
-    fetchImpl: async (url, init) => { form = init.body; return jsonResponse(200, { text: ' hello there ', language: 'english', duration: 11.8 }); },
+    fetchImpl: async (url, init) => {
+      form = init.body;
+      return jsonResponse(200, {
+        text: ' hello there ',
+        language: 'english',
+        duration: 11.8,
+        segments: [{ start: 0, end: 1.4, text: ' hello ' }, { start: 1.4, end: 2.2, text: 'there' }, { start: 3, end: 4, text: ' ' }],
+      });
+    },
   });
   assert.strictEqual(form.get('model'), 'whisper-large-v3-turbo');
   assert.strictEqual(form.get('response_format'), 'verbose_json');
-  assert.deepStrictEqual(out, { text: 'hello there', language: 'english', duration: 11.8 });
+  // The timed segments are kept for the vision step; empty ones are dropped.
+  assert.deepStrictEqual(out, {
+    text: 'hello there',
+    language: 'english',
+    duration: 11.8,
+    segments: [{ start: 0, end: 1.4, text: 'hello' }, { start: 1.4, end: 2.2, text: 'there' }],
+  });
 });
 
 // ── the whole judgement ─────────────────────────────────────────────────────

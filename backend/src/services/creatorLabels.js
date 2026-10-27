@@ -12,9 +12,13 @@
 //                            hashtags, video link                      (services/monid.js)
 //        each Reel         → video downloaded from Instagram's CDN, split: audio to Groq
 //                            (Whisper), frames to Tesseract           (services/reelMedia.js)
+//                          → 3 frames of the first 3 s and up to 8 more (one per 4 s) to
+//                            Qwen3-VL, which describes what the video shows
+//                                                                     (services/reelVision.js)
 //                          → one Jev call: creator-list's four content questions (taxonomy 2.3)
 //                            and its three audience questions        (classify/content.py)
-//      Jev reads text only, so the frames reach it as the words on them, as in creator-list.
+//      Jev reads text only, so the frames reach it as the words on them and as Qwen3-VL's
+//      description of them, as in creator-list (enrichment/classify/visual.py).
 //      When no Reels can be collected, the caption of the reel that surfaced them is labelled
 //      instead — one reel, said as much, with a provisional fit.
 //   3. creator level, as creator-list builds its creator documents:
@@ -24,14 +28,16 @@
 //        (beauty, fashion…) in a fifth (creator_topics.py, reference/creator_topics.json);
 //        and the estimated target audience (services/audienceEstimate.js, audience.py).
 //
-// Path 2 costs about $0.004 of TikHub calls plus Groq and Jev for up to 10 Reels — about a
-// cent a creator — and only runs for creators who already passed the viral rule.
+// Path 2 costs about $0.004 of TikHub calls plus Groq, Qwen3-VL (~$0.001 a Reel) and Jev for
+// up to 10 Reels — about 2 cents a creator — and only runs for creators who already passed the
+// viral rule.
 //
 //   MONID_API_KEY   path 2 (the same key creator-list's worker uses); without it, a creator
 //                   creator-list does not have is labelled from one caption.
 
 const monid = require('./monid');
 const reelMedia = require('./reelMedia');
+const reelVision = require('./reelVision');
 const audience = require('./audienceEstimate');
 const creatorList = require('./creatorList');
 const reviewLessons = require('./reviewLessons');
@@ -137,15 +143,19 @@ function reelQuestions() {
 
 /**
  * Label one Reel the way creator-list does. Never throws: a failed step leaves that Reel
- * with what it has (a Reel that cannot be downloaded is still judged on its caption).
- * Returns { code, labels, usedSpeech, signals, words, error? }.
+ * with what it has (a Reel that cannot be downloaded is still judged on its caption, and one
+ * Qwen3-VL could not describe on its words alone).
+ * Returns { code, labels, usedSpeech, signals, words, seen, visionError?, error? }.
  */
 async function labelReel(row, { handle, deps = {} } = {}) {
   const jev = jevLib();
   const out = { code: row.code || null, labels: null, usedSpeech: false, signals: {}, words: 0 };
   let transcript = { text: '', language: null, duration: row.durationS || null };
   let screen = { text: '' };
+  let visual = null;
   const errors = [];
+  // What the video shows (Qwen3-VL): on with the OpenRouter key Jev uses, unless REEL_VISION=off.
+  const see = deps.describe || (reelVision.configured() ? reelVision.describe : null);
 
   if (row.state) {
     // The phone's recording, already heard and read.
@@ -166,6 +176,14 @@ async function labelReel(row, { handle, deps = {} } = {}) {
       ]);
       transcript = { ...t, duration: t.duration || row.durationS || null };
       screen = s;
+      if (see) {
+        const v = await see(buf, {
+          handle, caption: row.caption, transcript: t.text, segments: t.segments, seconds: transcript.duration,
+        }, { fetchImpl: deps.fetchImpl });
+        visual = v.cues || null;
+        out.costUsd = (out.costUsd || 0) + (v.costUsd || 0);
+        if (v.error) out.visionError = v.error;
+      }
     } catch (err) {
       errors.push(err.message);
     } finally {
@@ -180,7 +198,9 @@ async function labelReel(row, { handle, deps = {} } = {}) {
     transcript: transcript.text,
     onScreenText: screen.text,
     durationSeconds: transcript.duration,
+    visual,
   });
+  out.seen = !!visual;
   if (!row.state && Array.isArray(row.hashtags) && row.hashtags.length) {
     state.hashtags = [...new Set([...state.hashtags, ...row.hashtags])].slice(0, 30);
   }
@@ -194,14 +214,14 @@ async function labelReel(row, { handle, deps = {} } = {}) {
     caption: state.caption, transcript: state.speech, onScreenText: state.on_screen_text, language: transcript.language,
   });
 
-  if (!state.has_speech && !state.caption && !state.on_screen_text && !state.hashtags.length) {
+  if (!state.has_speech && !state.caption && !state.on_screen_text && !state.hashtags.length && !state.video_frames_description) {
     out.error = errors[0] || 'nothing to read';
     return out;
   }
   try {
     const res = await (deps.callJev || jev.callJev)(state, reelQuestions(), { fetchImpl: deps.fetchImpl, key: deps.jevKey });
     out.labels = jev.toLabels(res.answers);
-    out.costUsd = res.costUsd;
+    out.costUsd = (out.costUsd || 0) + (res.costUsd || 0);
   } catch (err) {
     errors.push(err.message);
   }
@@ -342,6 +362,10 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
   const agg = aggregate(perReel, { country, countrySource: country ? 'instagram' : 'unknown' });
   const failed = perReel.filter((r) => r.error && !r.labels).length;
   if (failed) errors.push(`${failed} of ${perReel.length} Reels could not be labelled (${perReel.find((r) => r.error && !r.labels).error})`);
+  // Kept apart from `errors`: a Reel Qwen3-VL could not describe is still labelled from its
+  // words, so the creator is not thin for it — but the page says why nothing was "seen".
+  const unseen = perReel.filter((r) => r.visionError);
+  const visionError = unseen.length ? `${unseen.length} of ${perReel.length} Reels not seen by Qwen3-VL (${unseen[0].visionError})` : undefined;
   return {
     source: 'reels',
     // Labelled from the caption of the reel that surfaced them, their Reels not collected.
@@ -351,10 +375,14 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
       code: r.code,
       ...Object.fromEntries(DIMENSIONS.map((d) => [d, r.labels && r.labels[d] ? r.labels[d].value : null])),
       words: r.words,
+      // Whether Qwen3-VL described the video (and why not, when it tried and failed).
+      seen: r.seen || undefined,
+      visionError: r.visionError || undefined,
       hashtags: r.hashtags && r.hashtags.length ? r.hashtags : undefined,
     })),
     costUsd: Math.round(costUsd * 10000) / 10000,
     errors,
+    visionError,
   };
 }
 

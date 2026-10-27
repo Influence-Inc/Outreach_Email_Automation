@@ -550,10 +550,11 @@ async function runWithSource(run, config, source, deps) {
     },
     // What the creators were judged from (services/creatorLabels.js): `full` judged
     // from enough of their Reels (creator-list's labels or Monid's), `thin` from too
-    // few to decide on; `labelled` Reels labelled in all and `heard` those with speech.
+    // few to decide on; `labelled` Reels labelled in all, `heard` those with speech and
+    // `seen` those whose video Qwen3-VL described (services/reelVision.js).
     // A run of thin judgements with `failed` climbing is Monid not answering.
     reels: {
-      full: 0, thin: 0, labelled: 0, heard: 0, failed: 0,
+      full: 0, thin: 0, labelled: 0, heard: 0, seen: 0, failed: 0,
     },
     // Search terms the run picked up from on-target creators' hashtags.
     newTerms: [],
@@ -609,6 +610,7 @@ async function runWithSource(run, config, source, deps) {
       if (jevEv.thin) r.thin += 1; else r.full += 1;
       r.labelled += Number(creator.labelled) || 0;
       r.heard += (creator.perReel || []).filter((x) => x.words > 0).length;
+      r.seen += (creator.perReel || []).filter((x) => x.seen).length;
       if (creator.errors && creator.errors.length) r.failed += 1;
     }
     if (res.judged) {

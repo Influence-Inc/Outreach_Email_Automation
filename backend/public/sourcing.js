@@ -309,7 +309,7 @@ function reasonOf(c) {
 }
 
 /**
- * The Reels a creator was judged from: "9 of 10 · 6 heard", "creator-list · 30",
+ * The Reels a creator was judged from: "9 of 10 · 6 heard · 9 seen", "creator-list · 30",
  * or why there were too few — "1 caption" in amber, Monid's error on hover.
  */
 function reelOf(c) {
@@ -318,12 +318,15 @@ function reelOf(c) {
   const cr = j.creator;
   if (!cr) return '—';
   const errors = (cr.errors || []).join('\n');
-  const title = errors ? ` title="${escapeHtml(errors)}"` : '';
+  const hover = [errors, cr.visionError].filter(Boolean).join('\n');
+  const title = hover ? ` title="${escapeHtml(hover)}"` : '';
   if (cr.source === 'creator-list') return `<span title="Labels from creator-list's index">creator-list · ${cr.reels}</span>`;
   if (cr.fallback) return `<span style="color:#b42318"${title}>1 caption — Reels not collected</span>`;
   const heard = (cr.perReel || []).filter((r) => r.words > 0).length;
+  // Reels whose video Qwen3-VL described; why it could not, on hover with the rest.
+  const seen = (cr.perReel || []).filter((r) => r.seen).length;
   const thin = j.thin || errors;
-  return `<span${title}${thin ? ' style="color:#b25e09"' : ''}>${cr.labelled} of ${cr.reels} · ${heard} heard</span>`;
+  return `<span${title}${thin ? ' style="color:#b25e09"' : ''}>${cr.labelled} of ${cr.reels} · ${heard} heard · ${seen} seen</span>`;
 }
 
 /** "5/16" — reels that reached the viral bar, of the reels read; the rule on hover. */
@@ -383,6 +386,9 @@ async function refreshRun() {
   el('run-phase').textContent = phaseOf(stats.discovery);
   el('run-heard').textContent = reels.labelled ? `${reels.heard || 0} of ${reels.labelled}` : '—';
   el('run-heard').style.color = reels.labelled && !reels.heard ? '#b42318' : '';
+  // "0 of N" on a live run: Qwen3-VL is not describing the videos (key, model, or ffmpeg).
+  el('run-seen').textContent = reels.labelled ? `${reels.seen || 0} of ${reels.labelled}` : '—';
+  el('run-seen').style.color = reels.labelled && !reels.seen ? '#b42318' : '';
   const switches = (stats.discovery && stats.discovery.switches) || [];
   const learnedTerms = stats.newTerms || [];
   el('run-phase').title = [
