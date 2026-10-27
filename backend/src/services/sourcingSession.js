@@ -94,7 +94,12 @@ async function runSession({ hostId, run, deps }) {
   );
 
   chan.beginSession(hostId);
-  const driver = makeDriver({ hostId, channel: chan });
+  // The phone never records a reel: a creator is judged from their newest Reels,
+  // collected through Monid by their username and split here (services/
+  // creatorLabels.js). Without `recordClip` the navigators read the profile, go
+  // back to the reel that surfaced the creator (so a shortlisted creator's like
+  // lands on it), and move on.
+  const { recordClip: _noRecording, ...driver } = makeDriver({ hostId, channel: chan });
   // Ready the phone (agent maps these to adb). Best-effort — but surface a
   // failure instead of swallowing it: a keepAwake/wake timeout here is the
   // earliest sign the command channel isn't round-tripping (the agent executes
@@ -358,10 +363,9 @@ async function runSession({ hostId, run, deps }) {
     log(
       `[sourcing-session] run #${run.id} host ${hostId}: ended status=${result && result.status} ` +
       `scanned=${stats.scanned || 0} added=${stats.added || 0} review=${stats.review || 0} rejected=${stats.rejected || 0} ` +
-      // How many verdicts actually had a reel to watch. `withVideo=0` on a run
-      // that judged anyone at all means no recording reached the judge, whatever
-      // the phone appeared to be doing.
-      `judged=${(stats.withVideo || 0) + (stats.withoutVideo || 0)} withVideo=${stats.withVideo || 0} withoutVideo=${stats.withoutVideo || 0}`
+      // What the creators were judged from: enough of their Reels (`full`) or too few
+      // (`thin`); `failed` counts creators whose Reels could not be collected.
+      `judged=${(stats.withVideo || 0) + (stats.withoutVideo || 0)} reels=${JSON.stringify(stats.reels || {})}`
       // And which judge gave each verdict. No `gemini-*` entries on a run means
       // the video judge never answered — a missing key, a bad model name, or a
       // quota — and every creator was judged by a fallback.

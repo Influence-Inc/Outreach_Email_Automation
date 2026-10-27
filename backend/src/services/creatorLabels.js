@@ -6,14 +6,17 @@
 //   1. creator-list already has them  → its labels (topic / niche / genre / format shares
 //      over the Reels it analysed, and its estimated audience), through the partner API.
 //      Free and instant.
-//   2. otherwise, creator-list's own pipeline, run here for this creator:
-//        TikHub via Monid  → their newest 12 Reels (pinned and trial Reels left out): caption,
+//   2. otherwise, creator-list's own pipeline, run here for this creator. The username is the
+//      one the phone read off their profile; the phone records nothing.
+//        TikHub via Monid  → their newest 10 Reels (pinned and trial Reels left out): caption,
 //                            hashtags, video link                      (services/monid.js)
 //        each Reel         → video downloaded from Instagram's CDN, split: audio to Groq
 //                            (Whisper), frames to Tesseract           (services/reelMedia.js)
 //                          → one Jev call: creator-list's four content questions (taxonomy 2.3)
 //                            and its three audience questions        (classify/content.py)
-//      plus the reel the phone recorded, when it is not one of those 12.
+//      Jev reads text only, so the frames reach it as the words on them, as in creator-list.
+//      When no Reels can be collected, the caption of the reel that surfaced them is labelled
+//      instead — one reel, said as much, with a provisional fit.
 //   3. creator level, as creator-list builds its creator documents:
 //        shares of Reels per topic / niche / genre / format ('unclear' and 'other' left out;
 //        a niche only where it belongs to the Reel's topic), and which are the creator's OWN —
@@ -21,12 +24,11 @@
 //        (beauty, fashion…) in a fifth (creator_topics.py, reference/creator_topics.json);
 //        and the estimated target audience (services/audienceEstimate.js, audience.py).
 //
-// Path 2 costs about $0.004 of TikHub calls plus Groq and Jev for up to 13 Reels — a cent or
-// two a creator — and only runs for creators who already passed the viral rule.
+// Path 2 costs about $0.004 of TikHub calls plus Groq and Jev for up to 10 Reels — about a
+// cent a creator — and only runs for creators who already passed the viral rule.
 //
-//   MONID_API_KEY   path 2 (the same key creator-list's worker uses); without it, and for a
-//                   creator creator-list does not have, the judge falls back to the one
-//                   recorded reel.
+//   MONID_API_KEY   path 2 (the same key creator-list's worker uses); without it, a creator
+//                   creator-list does not have is labelled from one caption.
 
 const monid = require('./monid');
 const reelMedia = require('./reelMedia');
@@ -39,12 +41,12 @@ const DIMENSIONS = ['topic', 'niche', 'genre', 'format'];
 const NICHE_PARENTS = (TAXONOMY.questions.niche && TAXONOMY.questions.niche.parents) || {};
 const EPS = 1e-9;
 
-// Reels labelled per creator: one TikHub page, as creator-list's stage B.
-const REELS = 12;
+// Reels labelled per creator, from one TikHub page.
+const REELS = 10;
 // Reels worked on at once.
 const CONCURRENCY = 4;
-// Frames read per Reel for on-screen text (the phone's recording gets more; see reelMedia).
-const FRAMES_PER_REEL = 2;
+// Frames read per Reel for on-screen text: one every 2s from 1s in (reelMedia.split).
+const FRAMES_PER_REEL = 4;
 // Fewer Reels with a known topic than this and the creator cannot be judged from their Reels.
 const MIN_LABELLED = 3;
 // A creator is only rejected as off-target when at least this many Reels say so.
@@ -293,8 +295,9 @@ async function fromCreatorList(handle, { call = creatorList.call, configured = c
  *
  * @param {object} o
  * @param {string} o.handle
- * @param {object} [o.recorded]  the phone's recording of the reel that led to them, as
- *                               { state (jevJudge.buildState), language }
+ * @param {object} [o.recorded]  the reel that led to them, as { state (jevJudge.buildState),
+ *                               language } — labelled only when none of their Reels can be
+ *                               collected
  */
 async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
   const who = String(handle || '').replace(/^@/, '').trim().toLowerCase();
@@ -304,28 +307,29 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
   if (indexed) return indexed;
 
   const configured = deps.monid ? true : monid.configured();
-  if (!configured) {
-    return { source: null, reason: 'creator-list has not analysed them yet and MONID_API_KEY is not set to collect their Reels' };
-  }
-  const tikhub = deps.monid || monid;
-  const opts = { fetchImpl: deps.fetchImpl };
   const errors = [];
   let costUsd = 0;
-  const [card, page] = await Promise.all([
-    tikhub.fetchCard(who, opts).catch((err) => { errors.push(`card: ${err.message}`); return null; }),
-    tikhub.fetchReels(who, { ...opts, limit: REELS }).catch((err) => { errors.push(`Reels: ${err.message}`); return null; }),
-  ]);
-  if (card) costUsd += card.costUsd || 0;
-  if (page) costUsd += page.costUsd || 0;
-  const rows = page ? page.reels : [];
-
-  // The recorded reel counts too, unless it is one of the Reels just collected.
-  const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 120);
-  if (recorded && recorded.state) {
-    const cap = norm(recorded.state.caption);
-    const dup = cap && rows.some((r) => norm(r.caption) === cap);
-    if (!dup) rows.push({ code: 'recorded', state: recorded.state, language: recorded.language || null });
+  let card = null;
+  let rows = [];
+  if (!configured) {
+    errors.push('MONID_API_KEY is not set, so their Reels could not be collected');
+  } else {
+    const tikhub = deps.monid || monid;
+    const opts = { fetchImpl: deps.fetchImpl };
+    let page;
+    [card, page] = await Promise.all([
+      tikhub.fetchCard(who, opts).catch((err) => { errors.push(`card: ${err.message}`); return null; }),
+      tikhub.fetchReels(who, { ...opts, limit: REELS }).catch((err) => { errors.push(`Reels: ${err.message}`); return null; }),
+    ]);
+    if (card) costUsd += card.costUsd || 0;
+    if (page) costUsd += page.costUsd || 0;
+    rows = page ? page.reels : [];
+    if (page && !rows.length) errors.push('Monid found no Reels on their account');
   }
+
+  // No Reels of theirs: the reel that surfaced them is all there is.
+  const fallback = !rows.length && !!(recorded && recorded.state);
+  if (fallback) rows = [{ code: 'source', state: recorded.state, language: recorded.language || null }];
   if (!rows.length) return { source: null, reason: errors[0] || 'no Reels to label' };
 
   const perReel = await pool(rows, CONCURRENCY, (row) => labelReel(row, { handle: who, deps }));
@@ -336,6 +340,8 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
   if (failed) errors.push(`${failed} of ${perReel.length} Reels could not be labelled (${perReel.find((r) => r.error && !r.labels).error})`);
   return {
     source: 'reels',
+    // Labelled from the caption of the reel that surfaced them, their Reels not collected.
+    fallback: fallback || undefined,
     ...agg,
     perReel: perReel.map((r) => ({
       code: r.code,
@@ -372,8 +378,8 @@ function decideFromCreator(p, targets) {
   if (!wantsSubject && !targets.genres.length && !targets.formats.length) {
     return { decision: 'review', reasons: ['no target to judge against — the keywords name no topic, niche, genre or format'], fit: null };
   }
-  if (p.labelled < MIN_LABELLED) {
-    return { decision: 'review', reasons: [`only ${p.labelled} of their ${p.reels} reels could be labelled`], fit: null };
+  if (!p.labelled) {
+    return { decision: 'review', reasons: [thinReason(p)], fit: null, thin: true };
   }
   const canReject = p.labelled >= MIN_TO_REJECT;
 
@@ -416,9 +422,31 @@ function decideFromCreator(p, targets) {
     else doubts.push(`no ${names('format', targets.formats)} reels among them (mostly ${mix('format')})`);
   }
 
-  if (offs.length) return { decision: 'reject', reasons: offs, fit: 0 };
-  if (doubts.length) return { decision: 'review', reasons: doubts, fit: fits.length ? round2(Math.min(...fits)) : null };
-  return { decision: 'shortlist', reasons: [], fit: round2(Math.min(...fits)) };
+  let d;
+  if (offs.length) d = { decision: 'reject', reasons: offs, fit: 0 };
+  else if (doubts.length) d = { decision: 'review', reasons: doubts, fit: fits.length ? round2(Math.min(...fits)) : null };
+  else d = { decision: 'shortlist', reasons: [], fit: round2(Math.min(...fits)) };
+
+  // Too few Reels to decide on: always a person's call, but say plainly why, and
+  // what the Reels there are show — with a provisional fit (0 when nothing matched).
+  if (p.labelled < MIN_LABELLED) {
+    const those = p.labelled === 1 ? 'that reel' : 'those reels';
+    const shows = d.decision === 'shortlist' ? `${those} ${p.labelled === 1 ? 'is' : 'are'} on target` : `${those}: ${d.reasons.join('; ')}`;
+    return {
+      decision: 'review', reasons: [thinReason(p), shows], fit: d.fit != null ? d.fit : 0, provisional: true, thin: true,
+    };
+  }
+  return d;
+}
+
+/** "only 1 reel to judge (the one that surfaced them) — their Reels could not be collected: …" */
+function thinReason(p) {
+  const n = p.labelled;
+  const what = !n ? 'no reel could be labelled' : `only ${n} reel${n === 1 ? '' : 's'} to judge`;
+  const which = p.fallback ? ' (the one that surfaced them)' : (p.reels > n ? ` of ${p.reels} collected` : '');
+  const err = (p.errors || [])[0];
+  const why = p.fallback ? ` — their Reels could not be collected${err ? `: ${err}` : ''}` : (err ? ` — ${err}` : '');
+  return `${what}${which}${why}`;
 }
 
 /** The profile's top value per dimension, shaped like Jev's per-reel labels, for the page. */

@@ -957,25 +957,32 @@ async function analyseThenRecordSource({ caption = null, ...opts }) {
 
 /**
  * Back from the profile to the reel player we came from, check it is still this
- * creator's reel, and record it. Returns { clip, engagement, reason }.
+ * creator's reel, read its likes and comments, and — on a phone that records —
+ * record it. Returns { clip, engagement, reason }.
+ *
+ * Scouting no longer records (services/sourcingSession.js hands the navigator a
+ * phone without `recordClip`): the creator is judged from their Reels collected
+ * through Monid. The phone still goes back to the reel, for its likes and
+ * comments and so that a shortlisted creator's like lands on the reel that
+ * surfaced them.
  */
 async function recordSourceReel({
   driver, read = readView, pacingMs, jitterPx = 0, clipSeconds = 12, getClip, log = () => {}, author,
 }) {
-  if (!driver.recordClip) return { clip: null, engagement: null, reason: 'this phone agent cannot record' };
   const view = await backTo({ driver, read, pacingMs, jitterPx, wanted: ['reels_feed'], maxHops: 3 });
   if (!view || view.screen !== 'reels_feed') {
-    log(`[sourcing] @${author}: could not get back to the reel that surfaced them — not recording`);
+    log(`[sourcing] @${author}: could not get back to the reel that surfaced them`);
     return { clip: null, engagement: null, reason: 'could not get back to the source reel' };
   }
   if (view.author && author && String(view.author).toLowerCase() !== author) {
-    log(`[sourcing] @${author}: the player now shows @${view.author} — not recording someone else's reel`);
+    log(`[sourcing] @${author}: the player now shows @${view.author} — not their reel`);
     return { clip: null, engagement: null, reason: 'the source reel was no longer on screen' };
   }
   // The player is the only screen with likes and comments; read them while here.
   const engagement = (view.likes != null || view.comments != null || view.views != null)
     ? { likes: view.likes ?? null, comments: view.comments ?? null, views: view.views ?? null }
     : null;
+  if (!driver.recordClip) return { clip: null, engagement, reason: 'not recorded — judged from their Reels' };
   try {
     const resolved = await resolveClip(await driver.recordClip(clipSeconds), getClip);
     if (!resolved.clip) log(`[sourcing] recording failed — judging without video: ${resolved.reason}`);

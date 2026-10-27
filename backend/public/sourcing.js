@@ -264,12 +264,13 @@ function basisOf(c) {
   const j = jevOf(c);
   if (!j) return '';
   const cr = j.creator;
-  const from = cr
-    ? (cr.source === 'creator-list' ? `from creator-list (${cr.reels} reels)` : `from ${cr.labelled} of ${cr.reels} reels`)
-    : 'from 1 recorded reel';
-  const why = !cr && j.creatorNotLabelled ? ` title="${escapeHtml(j.creatorNotLabelled)}"` : '';
+  const from = !cr ? 'from 1 reel'
+    : cr.source === 'creator-list' ? `from creator-list (${cr.reels} reels)`
+      : cr.fallback ? 'from 1 caption (their Reels not collected)'
+        : `from ${cr.labelled} of ${cr.reels} reels`;
+  const why = !cr && j.creatorNotLabelled ? j.creatorNotLabelled : ((cr && cr.errors) || []).join('\n');
   const aud = j.audienceSummary ? ` · audience: ${escapeHtml(j.audienceSummary)}` : '';
-  return `<br><span class="scout-hint"${why}>${escapeHtml(from)}${aud}</span>`;
+  return `<br><span class="scout-hint"${why ? ` title="${escapeHtml(why)}"` : ''}>${escapeHtml(from)}${aud}</span>`;
 }
 
 /** Topic, with the niche under it when Jev placed one inside that topic. */
@@ -281,9 +282,12 @@ function topicCell(c) {
   return labelCell(c, 'topic') + niche;
 }
 
+/** The fit, "~0.80" when provisional — from too few Reels to decide on. */
 function fitOf(c) {
   const j = jevOf(c);
-  return j && typeof j.fit === 'number' ? j.fit.toFixed(2) : '—';
+  if (!j || typeof j.fit !== 'number') return '—';
+  if (!j.provisional) return j.fit.toFixed(2);
+  return `<span title="Provisional: from too few Reels to decide on" style="color:#b25e09">~${j.fit.toFixed(2)}</span>`;
 }
 
 /** Whether a shortlisted creator reached creator-list's admin collection. */
@@ -305,25 +309,21 @@ function reasonOf(c) {
 }
 
 /**
- * What the judge got from the recorded reel: words heard and frames read, or
- * why not — "34 words · 6 frames", "silent · 6 frames", "no recording".
+ * The Reels a creator was judged from: "9 of 10 · 6 heard", "creator-list · 30",
+ * or why there were too few — "1 caption" in amber, Monid's error on hover.
  */
 function reelOf(c) {
   const j = jevOf(c);
   if (!j) return '—';
-  if (!j.hadVideo) return '<span style="color:#b42318" title="The phone did not deliver a recording of the reel">no recording</span>';
-  const m = j.media;
-  if (!m) return '—';
-  const heard = m.audio === 'none' ? 'no audio'
-    : m.audio === 'silent' ? 'silent'
-      : `${m.words || 0} words`;
-  const bad = m.audio === 'none' || m.audio === 'silent' || !m.framesRead || (m.errors && m.errors.length);
-  const title = [
-    `audio: ${m.audio}${m.maxVolumeDb != null ? ` (peak ${m.maxVolumeDb} dB)` : ''}`,
-    `frames read: ${m.framesRead || 0} of ${m.framesCut || 0}`,
-    ...(m.errors || []),
-  ].join('\n');
-  return `<span title="${escapeHtml(title)}"${bad ? ' style="color:#b25e09"' : ''}>${heard} · ${m.framesRead || 0} frames</span>`;
+  const cr = j.creator;
+  if (!cr) return '—';
+  const errors = (cr.errors || []).join('\n');
+  const title = errors ? ` title="${escapeHtml(errors)}"` : '';
+  if (cr.source === 'creator-list') return `<span title="Labels from creator-list's index">creator-list · ${cr.reels}</span>`;
+  if (cr.fallback) return `<span style="color:#b42318"${title}>1 caption — Reels not collected</span>`;
+  const heard = (cr.perReel || []).filter((r) => r.words > 0).length;
+  const thin = j.thin || errors;
+  return `<span${title}${thin ? ' style="color:#b25e09"' : ''}>${cr.labelled} of ${cr.reels} · ${heard} heard</span>`;
 }
 
 /** "5/16" — reels that reached the viral bar, of the reels read; the rule on hover. */
@@ -373,19 +373,16 @@ async function refreshRun() {
   el('run-found').textContent = run.found_count ?? 0;
   el('run-target').textContent = run.target_count ?? 0;
   el('run-scanned').textContent = stats.scanned || candidates.length || 0;
-  // withVideo of all judgements. "0 of 12" on a live run means the phone is
-  // recording nothing — screen capture was never granted, or Android stopped it.
-  const judged = (stats.withVideo || 0) + (stats.withoutVideo || 0);
-  el('run-video').textContent = judged ? `${stats.withVideo || 0} of ${judged}` : '—';
-  el('run-video').style.color = judged && !stats.withVideo ? '#b42318' : '';
+  // Creators judged from enough of their Reels, of those judged. "0 of 12" on a
+  // live run means their Reels are not being collected — Monid's key or wallet.
+  const reels = stats.reels || {};
+  const judged = (reels.full || 0) + (reels.thin || 0);
+  el('run-video').textContent = judged ? `${reels.full || 0} of ${judged}` : '—';
+  el('run-video').style.color = judged && !reels.full ? '#b42318' : '';
   el('run-judges').textContent = judgesSummary(stats.judgedBy);
   el('run-phase').textContent = phaseOf(stats.discovery);
-  const rec = stats.recordings;
-  const recTotal = rec ? rec.heard + rec.silent + rec.noAudio + rec.unchecked : 0;
-  el('run-heard').textContent = recTotal
-    ? `${rec.heard} of ${recTotal}${rec.silent ? ` · ${rec.silent} silent` : ''}${rec.noAudio ? ` · ${rec.noAudio} no audio` : ''} · frames ${rec.framesRead}`
-    : '—';
-  el('run-heard').style.color = recTotal && !rec.heard ? '#b42318' : '';
+  el('run-heard').textContent = reels.labelled ? `${reels.heard || 0} of ${reels.labelled}` : '—';
+  el('run-heard').style.color = reels.labelled && !reels.heard ? '#b42318' : '';
   const switches = (stats.discovery && stats.discovery.switches) || [];
   el('run-phase').title = switches.map((w) => `${w.from} → ${w.to}: ${w.reason || ''}`).join('\n');
   renderCandidates(candidates);
