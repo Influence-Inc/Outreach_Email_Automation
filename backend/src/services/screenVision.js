@@ -793,6 +793,21 @@ function detectDialog(elements) {
 // ── screen classification ───────────────────────────────────────────────────
 // Ordered most-specific first. Returns a coarse label the navigator branches on.
 
+/**
+ * A search results page: its header (`serp_journey_header_*`), its tab bar, or a
+ * row in the top of the screen holding at least three results tabs
+ * (All / Reels / Accounts / Audio / Tags / Places / For you / Top).
+ */
+function isSerp(elements) {
+  if (findByRid(elements, ['serp_journey_header_container', 'serp_journey_header_query_text'])) return true;
+  if (findByRid(elements, ['chips_tab_bar_container', 'search_tab_bar_layout'])) return true;
+  const ys = elements.filter((e) => e.bounds && serpTabLabelOf(e) != null).map((e) => e);
+  if (ys.length < 3) return false;
+  const maxY = Math.max(...elements.filter((e) => e.bounds).map((e) => e.bounds.y + (e.bounds.h || 0)));
+  const top = ys.filter((e) => e.bounds.y <= maxY * 0.35);
+  return top.some((e) => new Set(sameRow(top, e).map(serpTabLabelOf)).size >= 3);
+}
+
 function classifyScreen(elements) {
   // Highest priority: an activity block means STOP engaging.
   if (elements.some((e) => ACTION_BLOCK_RE.test(textAndDesc(e)))) return 'action_blocked';
@@ -811,16 +826,18 @@ function classifyScreen(elements) {
   const title = findByRid(elements, ['action_bar_title', 'action_bar_large_title', 'title']);
   const hasProfileContainer = !!findByRid(elements, ['profile_header_container']);
   if (title && looksLikeHandle(title.text) && hasProfileContainer) return 'profile';
+
+  // Search results (SERP), before the looser profile check below and before
+  // reels_tab. The looser check is "a followers count and a Reels tab", and the
+  // current results strip (`All | Reels | Accounts | Audio | …`) has a Reels tab
+  // while All lists accounts with "1.2M followers" — so the results page read as
+  // a profile, and the scout tapped no reel at all. The reels grid's play counts
+  // would likewise make it read as reels_tab.
+  if (!hasProfileContainer && isSerp(elements)) return 'search_results';
+
   const hasFollowers = elements.some((e) => /followers?\b/i.test(textAndDesc(e)));
   const hasProfileTabs = !!resolveTarget(elements, SIGNALS.reelsTab);
   if (hasFollowers && hasProfileTabs) return 'profile';
-
-  // Search results (SERP): IG's dedicated results page has a `serp_journey_header_*`
-  // frame regardless of which chip (For you / Accounts / Audio / Tags) is active.
-  // Classify here BEFORE reels_tab, otherwise the "For you" reels grid would
-  // steal the classification via its preview_clip_play_count overlays.
-  const hasSerpHeader = !!findByRid(elements, ['serp_journey_header_container', 'serp_journey_header_query_text']);
-  if (hasSerpHeader) return 'search_results';
 
   const hasReelOverlays = extractReels(elements).length >= 2;
   const reelsTabSelected = elements.some(
@@ -995,6 +1012,7 @@ module.exports = {
   detectDialog,
   findForYouTab,
   findSerpTabStrip,
+  isSerp,
   activeSerpTab,
   SIGNALS,
   ACTION_BLOCK_RE,

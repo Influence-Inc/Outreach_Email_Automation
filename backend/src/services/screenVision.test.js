@@ -204,6 +204,47 @@ test('real IG SERP for "homegym" -> search_results with reel-grid cards', () => 
   assert.ok(r.targets['reelResult:0'], 'per-card tap target');
 });
 
+// The current strip is `All | Reels | Accounts | Audio | …`, and All lists
+// accounts with "1.2M followers". "A followers count and a Reels tab" is the
+// loose profile check, so the results page read as a PROFILE and the scout
+// tapped no reel at all. The real SERP, relabelled to the current strip:
+const currentSerp = (selected, extra = []) => {
+  const names = ['All', 'Reels', 'Accounts', 'Audio'];
+  let i = 0;
+  return [
+    ...FIX('screen1-results.xml').map((e) => (/igds_prism_chip_label/.test(e.rid)
+      ? { ...e, text: names[i], selected: names[i++] === selected }
+      : e)),
+    ...extra,
+  ];
+};
+const accountRow = {
+  rid: 'com.instagram.android:id/row_search_user_info', cls: 'android.widget.TextView', text: '1.2M followers',
+  desc: '', clickable: false, selected: false, bounds: { x: 100, y: 300, w: 300, h: 40 },
+};
+
+for (const selected of ['All', 'Reels']) {
+  test(`real SERP on the current strip ("${selected}" selected, an account row with followers) is search results, not a profile`, () => {
+    const r = sv.readScreen({ elements: currentSerp(selected, [accountRow]) });
+    assert.strictEqual(r.screen, 'search_results');
+    assert.strictEqual(r.activeTab, selected.toLowerCase());
+    assert.ok(r.reelResults.length >= 6, 'the reel cards are there to tap');
+    assert.ok(r.targets['reelResult:0']);
+  });
+}
+
+test('a results page is known by its tab row alone, without the SERP header', () => {
+  const noHeader = currentSerp('Reels', [accountRow])
+    .filter((e) => !/serp_journey_header|chips_tab_bar_container|search_tab_bar_layout/.test(e.rid));
+  assert.strictEqual(sv.isSerp(noHeader), true);
+  assert.strictEqual(sv.readScreen({ elements: noHeader }).screen, 'search_results');
+});
+
+test('a real profile is never taken for search results', () => {
+  assert.strictEqual(sv.readScreen({ elements: FIX('screen2-profile.xml') }).screen, 'profile');
+  assert.strictEqual(sv.isSerp(FIX('screen2-profile.xml')), false);
+});
+
 test('real IG profile (Reels sub-tab active) -> profile with full header + reels', () => {
   const r = sv.readScreen({ elements: FIX('screen2-profile.xml') });
   assert.strictEqual(r.screen, 'profile');

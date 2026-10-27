@@ -663,6 +663,15 @@ back to its start (never the other way, toward Audio) up to twice, then taps the
 tab, and taps again if the first tap didn't take. Only when no reels tab can be
 reached is the keyword skipped for this visit, with the reason in the run log.
 
+**Reading the results page.** The results page is recognised by its header, its
+tab bar, or a row of results tabs, before anything else is checked. (The current
+strip has a *Reels* tab and *All* lists accounts with follower counts, which the
+looser profile check — "a followers count and a Reels tab" — used to take for a
+creator's profile, so no reel was ever tapped.) A page whose grid hasn't loaded
+yet is read again up to twice. When a keyword still has nothing to open, the run
+log says what the page was read as (*"coach": no reels to open — the results page
+read as "search_results" on the "all" tab…*).
+
 ### Review queue
 
 A creator who passed every rule gets `decision = "review"` instead of being
