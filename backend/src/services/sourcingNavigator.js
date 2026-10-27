@@ -158,6 +158,9 @@ const CLIPS_PER_PROFILE = 3;
 // Instagram has since put fresh content.
 const MAX_KEYWORD_DEPTH = 8;
 
+// Extra reads of an empty results page while its grid loads.
+const RESULTS_WAITS = 2;
+
 // Safety bound on the scroll loop — a grid that stops yielding new reels exits
 // earlier, this only caps a creator with a very long back catalogue.
 const MAX_REEL_SCROLLS = 6;
@@ -456,6 +459,20 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     if (!onFor.onForYou) {
       await ensureInInstagram({ driver, read, pacingMs, jitterPx });
       continue;
+    }
+
+    // The grid loads after the tab does: a read straight after the search or the
+    // tab tap can find an empty page (a spinner), and acting on it ended the
+    // keyword with nothing tapped. Give it a moment and look again.
+    for (let waits = 0; waits < RESULTS_WAITS && view.screen === 'search_results' && !hasResults(view); waits += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(jitteredDelay(pacingMs));
+      // eslint-disable-next-line no-await-in-loop
+      view = await read(driver);
+    }
+    if (view.screen !== 'reels_feed' && !hasResults(view)) {
+      log(`[sourcing] "${term}": no reels to open — the results page read as "${view.screen}"`
+        + `${view.activeTab ? ` on the "${view.activeTab}" tab` : ''}, with no reel cards or accounts on it`);
     }
 
     // The chip can land on either of two surfaces, so handle both.

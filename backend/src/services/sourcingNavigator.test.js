@@ -2198,3 +2198,33 @@ test('a keyword that opens on Audio goes to Reels and opens the first reel', asy
   assert.ok(tabAt >= 0, 'tapped the Reels tab');
   assert.ok(taps.indexOf('200,900') > tabAt, 'then opened the first reel on the grid');
 });
+
+// The grid loads after the tab: an empty first read is looked at again before the
+// keyword is given up, and the first reel is then opened.
+test('an empty results page is read again while its grid loads, then the first reel is opened', async () => {
+  const driver = driverWithSearch();
+  const loaded = { screen: 'search_results', activeTab: 'reels', reelResults: [{ index: 0, author: 'Coach' }], targets: { 'reelResult:0': { x: 200, y: 900 }, back: BACK } };
+  const views = [
+    ...OPEN_SEARCH,
+    { screen: 'search_results', activeTab: 'reels', targets: { back: BACK } }, // spinner
+    loaded,
+    loaded, // read again by the card opener
+    ...Array(30).fill({ screen: 'search_results', activeTab: 'reels', targets: { back: BACK } }),
+  ];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views),
+  });
+  for await (const _c of gen) { /* drain */ }
+  assert.ok(driver.ops.some((o) => o[0] === 'tap' && o[1] === 200 && o[2] === 900), 'opened the first reel');
+});
+
+test('a results page with nothing to open says what it was read as', async () => {
+  const driver = driverWithSearch();
+  const lines = [];
+  const views = [...OPEN_SEARCH, ...Array(30).fill({ screen: 'search_results', activeTab: 'all', targets: { back: BACK } })];
+  const gen = scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['coach'], max: 1 }, read: scriptedRead(views), deps: { log: (l) => lines.push(l) },
+  });
+  for await (const _c of gen) { /* drain */ }
+  assert.ok(lines.some((l) => /"coach": no reels to open — the results page read as "search_results" on the "all" tab/.test(l)), lines.join('\n'));
+});
