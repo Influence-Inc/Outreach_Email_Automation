@@ -96,6 +96,24 @@ function judgeStatus({ jev = jevJudge } = {}) {
 }
 
 // GET /api/sourcing/status — admin-only via the top-level siteAuth gate.
+// When this process started — the deploy's go-live time, near enough.
+const STARTED_AT = new Date().toISOString();
+
+/**
+ * Which code this server is running. Railway sets the commit and branch on
+ * every deploy; showing them on the Scout page makes a stale deploy obvious —
+ * a site still serving old code looked exactly like the new code with bugs.
+ * Pure + exported for tests.
+ */
+function buildInfo(env = process.env, startedAt = STARTED_AT) {
+  const sha = String(env.RAILWAY_GIT_COMMIT_SHA || env.SOURCE_COMMIT || env.GIT_COMMIT || '').trim();
+  return {
+    commit: sha ? sha.slice(0, 7) : null,
+    branch: String(env.RAILWAY_GIT_BRANCH || '').trim() || null,
+    startedAt,
+  };
+}
+
 router.get('/status', async (_req, res, next) => {
   try {
     res.json({
@@ -108,6 +126,7 @@ router.get('/status', async (_req, res, next) => {
       creatorList: { curated: creatorList.curatedConfigured(), missing: creatorList.curatedMissing() },
       remoteControl: hostCommands.enabled(),
       liveMirror: hostChannel.enabled(),
+      build: buildInfo(),
     });
   } catch (err) {
     next(err);
@@ -816,5 +835,6 @@ router.annotateHostHealth = annotateHostHealth;
 router.mergeSourcingDefaults = mergeSourcingDefaults;
 router.judgeStatus = judgeStatus;
 router.mirrorHostId = mirrorHostId;
+router.buildInfo = buildInfo;
 
 module.exports = router;
