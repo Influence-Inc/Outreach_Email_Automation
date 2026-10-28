@@ -735,12 +735,24 @@ router.post(
 // Admins post control instructions (tap/swipe/type/home/pause/resume) which the
 // runner drains on its next poll. All in-memory (see services/hostChannel.js).
 
+// Which host a phone's live-mirror traffic belongs to: the one its token was
+// minted for. The URL's number is whatever was typed into the app's Host ID
+// field, and a mistyped one used to file every frame under another host — so
+// the dashboard watching the real one waited for frames forever, with no error
+// anywhere. A dashboard user or the global token has no host of its own, so for
+// them the URL decides. Pure + exported for tests.
+function mirrorHostId(req) {
+  return req.sourcingHostId != null ? Number(req.sourcingHostId) : Number(req.params.id);
+}
+
 // Runner → backend: publish the latest phone frame.
 router.post('/hosts/:id/frame', requireLiveMirror, requireHostOrSlack, async (req, res, next) => {
   try {
     const body = req.body || {};
-    const result = hostChannel.publishFrame(Number(req.params.id), body);
-    res.json({ ok: true, bytes: result.bytes });
+    const hostId = mirrorHostId(req);
+    const result = hostChannel.publishFrame(hostId, body, { claimedId: Number(req.params.id) });
+    // hostId says where the frame went, so the app can show it.
+    res.json({ ok: true, bytes: result.bytes, hostId });
   } catch (err) {
     // publishFrame throws on validation issues; surface them as 400s.
     if (/empty frame|too large/.test(err.message)) return res.status(400).json({ error: err.message });
@@ -764,6 +776,17 @@ router.get('/hosts/:id/frame', requireLiveMirror, async (req, res, next) => {
   }
 });
 
+// Dashboard → backend: why there is no live frame for this host (when the
+// frame read above came back empty) — none since the server started, one that
+// went stale, one refused, or a phone addressing another host number.
+router.get('/hosts/:id/frame/state', requireLiveMirror, (req, res, next) => {
+  try {
+    res.json({ ...hostChannel.frameState(Number(req.params.id)), now: Date.now() });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Dashboard → backend: push a control instruction.
 router.post('/hosts/:id/control', requireLiveMirror, async (req, res, next) => {
   try {
@@ -778,7 +801,9 @@ router.post('/hosts/:id/control', requireLiveMirror, async (req, res, next) => {
 // Runner → backend: drain queued control instructions.
 router.get('/hosts/:id/control', requireLiveMirror, requireHostOrSlack, async (req, res, next) => {
   try {
-    res.json({ ops: hostChannel.drainControls(Number(req.params.id)) });
+    // The same host the phone's frames are filed under, so a tap on the
+    // dashboard's picture reaches the phone that sent it.
+    res.json({ ops: hostChannel.drainControls(mirrorHostId(req)) });
   } catch (err) {
     next(err);
   }
@@ -790,5 +815,6 @@ router.nextRunStatus = nextRunStatus;
 router.annotateHostHealth = annotateHostHealth;
 router.mergeSourcingDefaults = mergeSourcingDefaults;
 router.judgeStatus = judgeStatus;
+router.mirrorHostId = mirrorHostId;
 
 module.exports = router;

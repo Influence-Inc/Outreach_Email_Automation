@@ -77,6 +77,14 @@ class MainActivity : AppCompatActivity() {
         binding.hostToken.setText(prefs.hostToken)
         binding.hostId.setText(if (prefs.hostId > 0) prefs.hostId.toString() else "")
         binding.liveMirror.isChecked = prefs.liveMirror
+        // Takes effect straight away, also while the agent is running.
+        binding.liveMirror.setOnCheckedChangeListener { _, checked ->
+            prefs.liveMirror = checked
+            if (AgentService.isRunning) {
+                startService(Intent(this, AgentService::class.java).setAction(AgentService.ACTION_SYNC_MIRROR))
+            }
+            render()
+        }
 
         binding.enableAccessibility.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))

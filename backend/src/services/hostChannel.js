@@ -27,18 +27,33 @@ function enabled() {
 
 function ensure(hostId) {
   let s = HOSTS.get(hostId);
-  if (!s) { s = { frame: null, controls: [] }; HOSTS.set(hostId, s); }
+  if (!s) {
+    s = { frame: null, controls: [], lastFrameAt: null, lastError: null, misdirected: null };
+    HOSTS.set(hostId, s);
+  }
   return s;
 }
 
 // Runner → backend: publish a frame. Rejects payloads that are too big so a
 // pathological host can't fill the process heap.
-function publishFrame(hostId, { dataBase64, mediaType = 'image/jpeg', width, height }) {
-  const buf = Buffer.from(String(dataBase64 || ''), 'base64');
-  if (!buf.length) throw new Error('empty frame');
-  if (buf.length > MAX_FRAME_BYTES) throw new Error(`frame too large (${buf.length} > ${MAX_FRAME_BYTES})`);
+function publishFrame(hostId, { dataBase64, mediaType = 'image/jpeg', width, height }, { claimedId } = {}) {
   const s = ensure(Number(hostId));
+  // The phone addressed its frame to a different host number than its token
+  // belongs to (a mistyped Host ID in the app). The frame is filed under the
+  // token's host; this is kept so the dashboard can say so.
+  if (claimedId != null && Number(claimedId) !== Number(hostId)) {
+    s.misdirected = { claimedId: Number(claimedId), at: Date.now() };
+  }
+  const buf = Buffer.from(String(dataBase64 || ''), 'base64');
+  const reject = (message) => {
+    s.lastError = { message, at: Date.now() };
+    throw new Error(message);
+  };
+  if (!buf.length) reject('empty frame');
+  if (buf.length > MAX_FRAME_BYTES) reject(`frame too large (${buf.length} > ${MAX_FRAME_BYTES})`);
   s.frame = { data: buf, mediaType, width: Number(width) || null, height: Number(height) || null, at: Date.now() };
+  s.lastFrameAt = s.frame.at;
+  s.lastError = null;
   return { bytes: buf.length };
 }
 
@@ -48,6 +63,18 @@ function latestFrame(hostId) {
   if (!s || !s.frame) return null;
   if (Date.now() - s.frame.at > FRAME_STALE_MS) return null;
   return s.frame;
+}
+
+// Dashboard → backend: why there is no live frame. All of it is since this
+// process started — the channel is in memory, so a redeploy forgets it.
+function frameState(hostId) {
+  const s = HOSTS.get(Number(hostId));
+  return {
+    lastFrameAt: (s && s.lastFrameAt) || null,
+    lastError: (s && s.lastError) || null,
+    misdirected: (s && s.misdirected) || null,
+    staleAfterMs: FRAME_STALE_MS,
+  };
 }
 
 // Dashboard → backend: push a control instruction.
@@ -79,6 +106,7 @@ module.exports = {
   enabled,
   publishFrame,
   latestFrame,
+  frameState,
   pushControl,
   drainControls,
   VALID_OPS,

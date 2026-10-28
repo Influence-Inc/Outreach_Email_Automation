@@ -190,10 +190,10 @@
           <button id="watch-pause" class="ghost small" disabled>Pause phone</button>
         </div>
       </div>
-      <p class="scout-hint">Click on the phone image below to tap that spot on the real phone. Requires <code>SOURCING_LIVE_MIRROR=on</code> on the backend and the runner started with <code>RUNNER_LIVE_MIRROR=on</code> + a paired <code>RUNNER_HOST_ID</code>.</p>
+      <p class="scout-hint">Click on the phone's picture to tap that spot on the real phone. Needs <code>SOURCING_LIVE_MIRROR=on</code> on the backend, and in the Sourcing Agent app &ldquo;Stream the screen to the dashboard&rdquo; ticked with the agent started. (Laptop runner: <code>RUNNER_LIVE_MIRROR=on</code>.)</p>
       <div id="watch-shell" style="position:relative;max-width:420px;margin-top:8px;border:1px solid #d9dbe0;border-radius:14px;overflow:hidden;background:#0b0e14;min-height:120px;display:flex;align-items:center;justify-content:center">
-        <img id="watch-frame" alt="phone screen (live)" style="display:block;max-width:100%;height:auto;cursor:crosshair" />
-        <span id="watch-empty" style="color:#93a1b1;font-size:12px;padding:24px">No frames yet — start the runner with live mirror.</span>
+        <img id="watch-frame" alt="phone screen (live)" hidden style="display:block;max-width:100%;height:auto;cursor:crosshair" />
+        <span id="watch-empty" style="color:#93a1b1;font-size:12px;padding:24px">No picture from the phone yet.</span>
       </div>
       <div id="watch-status" class="scout-status"></div>
     </div>

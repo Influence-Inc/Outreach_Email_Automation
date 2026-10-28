@@ -110,3 +110,11 @@ test('judgeStatus says whether Jev can label and hear reels, or not judge at all
   assert.strictEqual(sourcing.judgeStatus({ jev: jev(true, false) }).mode, 'no-speech');
   assert.deepStrictEqual(sourcing.judgeStatus({ jev: jev(false, true) }), { jev: false, speech: false, mode: 'none' });
 });
+
+// ── live mirror: frames belong to the phone whose token sent them ───────────
+
+test("mirrorHostId uses the token's host, not a mistyped Host ID in the URL", () => {
+  assert.strictEqual(sourcing.mirrorHostId({ sourcingHostId: 6, params: { id: '3' } }), 6);
+  // A dashboard user or the global token has no host: the URL decides.
+  assert.strictEqual(sourcing.mirrorHostId({ params: { id: '3' } }), 3);
+});
