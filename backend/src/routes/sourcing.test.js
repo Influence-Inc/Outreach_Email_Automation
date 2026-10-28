@@ -118,3 +118,14 @@ test("mirrorHostId uses the token's host, not a mistyped Host ID in the URL", ()
   // A dashboard user or the global token has no host: the URL decides.
   assert.strictEqual(sourcing.mirrorHostId({ params: { id: '3' } }), 3);
 });
+
+// ── which code the server is running ────────────────────────────────────────
+
+test('buildInfo names the deployed commit and branch Railway set', () => {
+  assert.deepStrictEqual(
+    sourcing.buildInfo({ RAILWAY_GIT_COMMIT_SHA: 'a635bd2abcdef0123', RAILWAY_GIT_BRANCH: 'main' }, 'T'),
+    { commit: 'a635bd2', branch: 'main', startedAt: 'T' },
+  );
+  // Outside Railway (or a deploy from a local upload): unknown, not a guess.
+  assert.deepStrictEqual(sourcing.buildInfo({}, 'T'), { commit: null, branch: null, startedAt: 'T' });
+});

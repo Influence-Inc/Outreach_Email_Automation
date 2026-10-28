@@ -835,6 +835,33 @@ function wire() {
 // Without Gemini no reel is watched; without Claude as well, nothing judges
 // quality and every creator who passes the reach rules waits in review. A run
 // looks normal either way, so say it before anyone starts one.
+/**
+ * Which code the server is running, so a deploy that never went out is visible
+ * here instead of looking like the new code with bugs. Compare the commit with
+ * the newest one on GitHub's main branch.
+ */
+function buildText(build) {
+  if (!build) return { text: '', warn: false };
+  const since = build.startedAt
+    ? ` · live since ${new Date(build.startedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+    : '';
+  if (!build.commit) return { text: `Running version: unknown (not deployed by Railway)${since}`, warn: false };
+  const offMain = build.branch && build.branch !== 'main';
+  return {
+    text: `Running version ${build.commit}${build.branch ? ` from ${build.branch}` : ''}${since}`
+      + (offMain ? ' — deployed from a branch other than main, so merged changes will not appear' : ''),
+    warn: Boolean(offMain),
+  };
+}
+
+function showBuildInfo(build) {
+  const line = el('build-info');
+  if (!line) return;
+  const { text, warn } = buildText(build);
+  line.textContent = text;
+  line.style.color = warn ? '#b25e09' : '';
+}
+
 async function loadJudgeStatus() {
   const banner = el('judge-banner');
   if (!banner) return;
@@ -844,6 +871,7 @@ async function loadJudgeStatus() {
   } catch (_) {
     return; // informational only — never block the page on it
   }
+  showBuildInfo(status && status.build);
   const mode = status && status.judge && status.judge.mode;
   if (mode === 'no-speech') {
     banner.textContent = 'Jev cannot hear the reels (GROQ_API_KEY is not set on the backend), so it labels '
