@@ -40,16 +40,39 @@ async function call(handle, { queue = false, fetchImpl = fetch, timeoutMs = 8000
     headers: { Authorization: `Bearer ${key}` },
     signal: AbortSignal.timeout(timeoutMs),
   });
-  let body = {};
+  let body = null;
   try { body = await res.json(); } catch { /* not JSON */ }
-  if (res.status === 404 && body.status === 'not_indexed') return { status: 'not_indexed' };
-  if (!res.ok) {
-    const why = res.status === 401 ? 'creator-list refused the API key (CREATOR_LIST_API_KEY)'
-      : res.status === 503 ? 'creator-list has no DEAL_STUDIO_API_KEY set'
-      : `creator-list answered ${res.status}${body.error ? `: ${body.error}` : ''}`;
-    throw new Error(why);
+  if (res.status === 404 && body && body.status === 'not_indexed') return { status: 'not_indexed' };
+  if (!res.ok) throw new Error(refusalReason('bench', res.status, body));
+  return body || {};
+}
+
+/**
+ * Why a creator-list service refused a call, in words that name the fix.
+ *
+ * Two different services answer Deal Studio, each with its own address but the
+ * same key: the WEBSITE (CREATOR_LIST_WEB_URL, the "Curated by INFLUENCE Team"
+ * collection) and the BENCH (CREATOR_LIST_API_URL, the analysis queue). Both
+ * answer this API in JSON with an `error`; anything else came from something
+ * that is not this API — most often the other service's address in the wrong
+ * variable, which used to be reported as "refused the API key".
+ */
+function refusalReason(which, status, body) {
+  const site = which === 'site';
+  const service = site ? 'the creator-list website (Find creators)' : 'the creator-list bench';
+  const urlVar = site ? 'CREATOR_LIST_WEB_URL' : 'CREATOR_LIST_API_URL';
+  const msg = body && typeof body.error === 'string' ? body.error : '';
+  if (status === 503 && /DEAL_STUDIO_API_KEY/.test(msg)) {
+    return `${service} has no DEAL_STUDIO_API_KEY — set it there to the same value as CREATOR_LIST_API_KEY on Deal Studio`;
   }
-  return body;
+  if (status === 401 && /api key/i.test(msg)) {
+    return `${service} refused the key — its DEAL_STUDIO_API_KEY is not the same as CREATOR_LIST_API_KEY on Deal Studio`;
+  }
+  if (status === 429) return `${service} is blocking after too many wrong keys — fix the key, then wait a few minutes`;
+  if (!msg && [401, 403, 404, 405, 503].includes(status)) {
+    return `${urlVar} does not point at ${service} (it answered ${status}) — check the address`;
+  }
+  return `${service} answered ${status}${msg ? `: ${msg}` : ''}`;
 }
 
 async function cached(handle) {
@@ -212,24 +235,74 @@ async function addToCurated(rawHandle, {
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    let body = {};
+    let body = null;
     try { body = await res.json(); } catch (_) { /* not JSON */ }
-    if (!res.ok) {
-      const why = res.status === 401 ? 'creator-list refused the API key (CREATOR_LIST_API_KEY)'
-        : res.status === 503 ? 'creator-list has no DEAL_STUDIO_API_KEY set'
-        : `creator-list answered ${res.status}${body.error ? `: ${body.error}` : ''}`;
-      return { status: 'error', error: why };
-    }
-    out = { status: 'added', collection: body.collection || null, already: !!body.already };
+    out = res.ok
+      ? { status: 'added', collection: (body && body.collection) || null, already: !!(body && body.already) }
+      : { status: 'error', error: refusalReason('site', res.status, body) };
   } catch (e) {
-    return { status: 'error', error: e && e.name === 'TimeoutError' ? 'creator-list did not answer in time' : (e && e.message) || String(e) };
+    out = {
+      status: 'error',
+      error: e && e.name === 'TimeoutError'
+        ? 'the creator-list website did not answer in time (CREATOR_LIST_WEB_URL)'
+        : `the creator-list website could not be reached at CREATOR_LIST_WEB_URL: ${(e && e.message) || e}`,
+    };
   }
-  // Their Reels, labels and prices come from the bench's analysis. Best-effort:
-  // the collection entry stands even if the bench is down.
+  // Queue them on the bench — their Reels, labels and prices come from its
+  // analysis — whether or not the collection step worked. This used to happen
+  // only after a successful collection step, so one wrong website setting kept
+  // every shortlisted creator out of creator-list's queue as well.
   if (configured()) {
-    try { out.analysis = (await sync(handle, { queue: true })).status; } catch (_) { /* best-effort */ }
+    try {
+      const q = await sync(handle, { queue: true });
+      out.analysis = q.status;
+      if (q.error) out.analysisError = q.error;
+    } catch (e) {
+      out.analysisError = (e && e.message) || String(e);
+    }
   }
   return out;
+}
+
+/**
+ * Test both creator-list services without changing anything: the website's
+ * collection endpoint is sent an empty handle, the bench is asked about an
+ * invalid one. A service that accepts the key answers "bad handle" (400), so a
+ * 400 means the address and the key both work; anything else is explained.
+ * Returns { site: { ok, error? }, bench: { ok, error? } }.
+ */
+async function checkConnection({ fetchImpl = fetch, timeoutMs = 8000 } = {}) {
+  const { url: benchUrl, key } = config();
+  const siteUrl = webUrl();
+  const probe = async (which, base, urlVar, path, init) => {
+    if (!base) return { ok: false, error: `${urlVar} is not set on Deal Studio` };
+    if (!key) return { ok: false, error: 'CREATOR_LIST_API_KEY is not set on Deal Studio' };
+    if (which === 'site' && base === benchUrl) {
+      return { ok: false, error: 'CREATOR_LIST_WEB_URL is the bench\'s address — set it to the Find creators website\'s address' };
+    }
+    try {
+      const res = await fetchImpl(`${base}${path}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status === 400) return { ok: true };
+      let body = null;
+      try { body = await res.json(); } catch (_) { /* not JSON */ }
+      if (res.ok) return { ok: false, error: `${urlVar} answered ${res.status} where the creator-list API answers 400 — check the address` };
+      return { ok: false, error: refusalReason(which, res.status, body) };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e && e.name === 'TimeoutError' ? `${urlVar} did not answer in time` : `${urlVar} could not be reached: ${(e && e.message) || e}`,
+      };
+    }
+  };
+  const [site, bench] = await Promise.all([
+    probe('site', siteUrl, 'CREATOR_LIST_WEB_URL', '/api/partner/curated', { method: 'POST', body: JSON.stringify({ handle: '' }) }),
+    probe('bench', benchUrl, 'CREATOR_LIST_API_URL', '/api/partner/creators/~', { method: 'GET' }),
+  ]);
+  return { site, bench };
 }
 
 /** Whether shortlisted creators can reach the "Curated by INFLUENCE Team" collection. */
@@ -249,6 +322,8 @@ async function status(rawHandle) {
 }
 
 module.exports = {
+  checkConnection,
+  refusalReason,
   sync, status, call, pricingCopy, applyToCreators, configured, addToCurated, curatedNote, curatedConfigured, curatedMissing,
   FRESH_MS, POLL_MS,
 };

@@ -312,7 +312,11 @@ function creatorListOf(c) {
   if (!cl) return c.decision === 'added' ? '—' : '';
   if (cl.status === 'added') return cl.already ? 'in collection' : 'added';
   const label = cl.status === 'not_configured' ? 'not sent — settings missing' : 'not sent';
-  return `<span title="${escapeHtml(cl.error || cl.status)}" style="color:#b42318">${label}</span>`
+  // The reason on the row, not only on hover: it names the setting to fix.
+  const why = cl.error ? `<span class="cell-sub">${escapeHtml(cl.error)}</span>` : '';
+  const queued = ['queued', 'running', 'indexed'].includes(cl.analysis)
+    ? '<span class="cell-sub" style="color:#067647">queued for analysis on creator-list</span>' : '';
+  return `<span title="${escapeHtml(cl.error || cl.status)}" style="color:#b42318">${label}</span>${why}${queued}`
     + ' <button data-resend class="ghost small" title="Send every shortlisted creator who never reached creator-list">send again</button>';
 }
 
@@ -826,6 +830,7 @@ function wire() {
   el('feed-mock-btn').addEventListener('click', feedMock);
   el('mint-host-btn').addEventListener('click', mintHost);
   el('watch-toggle').addEventListener('click', () => (watchTimer ? stopWatching() : startWatching()));
+  el('cl-check-btn').addEventListener('click', checkCreatorList);
   el('watch-pause').addEventListener('click', () => postControl({ op: 'pause' }));
   el('watch-frame').addEventListener('click', onFrameClick);
 }
@@ -860,6 +865,23 @@ function showBuildInfo(build) {
   const { text, warn } = buildText(build);
   line.textContent = text;
   line.style.color = warn ? '#b25e09' : '';
+}
+
+// Test both creator-list services with Deal Studio's settings and say, in
+// plain words, what (if anything) to fix on which side.
+async function checkCreatorList() {
+  const out = el('cl-check');
+  out.textContent = 'Checking…';
+  out.style.color = '';
+  try {
+    const r = await api('/api/sourcing/creator-list/check');
+    const part = (name, x) => `${name}: ${x.ok ? 'connected ✓' : x.error}`;
+    out.textContent = `${part('Website (Curated collection)', r.site)} · ${part('Bench (analysis queue)', r.bench)}`;
+    out.style.color = r.site.ok && r.bench.ok ? '#067647' : '#b42318';
+  } catch (err) {
+    out.textContent = err.message;
+    out.style.color = '#b42318';
+  }
 }
 
 async function loadJudgeStatus() {

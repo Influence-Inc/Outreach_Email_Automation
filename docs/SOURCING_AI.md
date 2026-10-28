@@ -267,17 +267,29 @@ table says *not judged — too few viral reels* for the others.
 
 ### Shortlisted creators → creator-list
 
-Every shortlisted creator is sent to creator-list's **Curated by INFLUENCE Team**
-collection. That needs, on Deal Studio's backend, `CREATOR_LIST_WEB_URL` (the
-creator-list site's address) and `CREATOR_LIST_API_KEY`, and on the creator-list
-site `DEAL_STUDIO_API_KEY` set to the same key. Without them the run table's
-*Creator list* column says *not sent — settings missing* (the reason on hover)
-and the Scout page shows a red banner naming what is missing.
+Every shortlisted creator goes to **two** creator-list services, which share one key but have
+different addresses:
 
-Nothing is lost meanwhile: at the start of every run, every shortlisted creator
-who never reached the collection is sent again (`POST
-/api/sourcing/creator-list/resend`, also behind the column's *send again*
-button).
+| creator-list service | What Deal Studio does there | Deal Studio's setting | Set on that service |
+| --- | --- | --- | --- |
+| **Website** (Find creators, `apps/web`) | adds them to *Curated by INFLUENCE Team* (`POST /api/partner/curated`), which also queues them for analysis | `CREATOR_LIST_WEB_URL` = the website's address | `DEAL_STUDIO_API_KEY` |
+| **Bench** (`apps/bench`, the analysis queue) | queues them by handle (`POST /api/partner/creators/<handle>`), as *Influence team (Deal Studio)* | `CREATOR_LIST_API_URL` = the bench's address | `DEAL_STUDIO_API_KEY` |
+
+`CREATOR_LIST_API_KEY` on Deal Studio and `DEAL_STUDIO_API_KEY` on **both** creator-list
+services are the same value. creator-list never calls Deal Studio, so it needs no Deal Studio
+address.
+
+The bench queue is asked whether or not the website step worked — a wrong website setting no
+longer keeps creators out of the queue too. **Check creator-list connection** on the Scout page
+tests both services with these settings (changing nothing: each is sent an invalid handle, which
+a service that accepts the key refuses with *bad handle*) and says what to fix: a missing or
+different key on which service, an address that is not that service (e.g. the bench's address in
+`CREATOR_LIST_WEB_URL`), or one that cannot be reached. A row's *Creator list* cell shows the same
+reason under *not sent*.
+
+Nothing is lost meanwhile: at the start of every run, every shortlisted creator who never
+reached the collection is sent again (`POST /api/sourcing/creator-list/resend`, also behind the
+column's *send again* button).
 
 ### Long runs: the search terms grow as the run goes
 
