@@ -8,8 +8,13 @@
 // (no HTTP round-trip). Yields captured candidates the orchestrator scores.
 //
 //   openApp -> for each keyword: search tab -> type -> read results ->
-//   for each result: open profile -> read header -> open Reels -> read reels ->
-//   yield candidate -> back
+//   for each reel result: open the reel -> (a) views from its likes and comments
+//   -> (b) niche from the creator's own latest Reels -> (c) open the profile ->
+//   read header -> open Reels -> read reels -> yield candidate -> back
+//
+// (a) and (b) come before the profile, the same order the feed phase uses
+// (sourcingReelsNavigator.js): a creator whose reel is nowhere near viral, or
+// whose Reels are off target, is never opened. See checkBeforeProfile.
 //
 // Every screen decision goes through `read(driver)` (default readView), so the
 // navigator never hard-codes coordinates — taps come from the reader's targets.
@@ -19,6 +24,7 @@ const { readScreen } = require('./screenVision');
 const { jitteredDelay, jitterTap } = require('./humanize');
 const { normalizeTerms } = require('./searchTerms');
 const { prefilter, reelViews } = require('./sourcingFilters');
+const feedVirality = require('./feedVirality');
 const { makePrescreen } = require('./nichePrescreen');
 const { tryDeviceHint } = require('./deviceNicheHint');
 const {
@@ -293,6 +299,10 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   // the sweeper's definition of a dead run. Without this a healthy run gets
   // reaped for doing its job well.
   const heartbeat = deps.heartbeat || (() => {});
+  // The niche judge run on a creator's latest Reels BEFORE their profile is
+  // opened (checkBeforeProfile). Without one, only the views check runs there
+  // and the orchestrator judges after the visit, as before.
+  const judge = deps.judge || null;
   // The caller hands the previous creator's result back through `yield`: a
   // shortlisted creator is warmed right there, on the reel that surfaced them,
   // where the phone is still standing (services/creatorWarmup.js), and a result
@@ -508,6 +518,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       for await (const profile of scoutReelFeed({
         driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
         remaining: max - emitted, seen: seenCreators, stall, cap, log, config, prescreen, deviceHint,
+        judge, term,
       })) {
         const outcome = yield tag(profile);
         if (await settle(outcome, profile && profile.username)) return;
@@ -561,7 +572,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       if (key) openedCards.add(key);
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
-        reelsWindow, clipsWanted, log, config, prescreen, deviceHint, seen: seenCreators, cap, term,
+        reelsWindow, clipsWanted, log, config, prescreen, deviceHint, seen: seenCreators, cap, term, judge,
       });
       // A grid card gives no handle until the reel is open — but once it IS open
       // the handle is known, and captureViaReel drops a creator we have already
@@ -779,6 +790,7 @@ async function* scoutReelFeed({
   clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
   reelsWindow = REELS_PER_PROFILE, clipsWanted = CLIPS_PER_PROFILE,
   stall = null, cap = null, log = () => {}, config = {}, prescreen = null, deviceHint = null,
+  judge = null, term = null,
 }) {
   const size = screen || { width: 1080, height: 2400 };
   let produced = 0;
@@ -810,8 +822,19 @@ async function* scoutReelFeed({
     const skip = feed.sponsored || (cap && cap.spent());
     if (feed.sponsored) log(`[sourcing] skipping a sponsored reel${author ? ` by @${author}` : ''}`);
 
-    if (!skip && link && !(author && seen.has(author))) {
-      if (author) seen.add(author);
+    // (a) views from likes and comments, then (b) niche — before the profile.
+    // eslint-disable-next-line no-await-in-loop
+    const pre = !skip && link && feed.author && !(author && seen.has(author))
+      ? await checkBeforeProfile({
+        feed, judge, config, log, term, source: 'backend-navigator:feed-scroll',
+      })
+      : null;
+    if (pre && pre.rejected) {
+      seen.add(author);
+      yield pre.rejected;
+      produced += 1;
+    } else if (pre && pre.go) {
+      seen.add(author);
       if (!cap || cap.take()) {
         // Recording waits until the profile has been read — see captureViaReel
         // for why the cheapest place to reach a reel is the worst place to decide
@@ -829,7 +852,7 @@ async function* scoutReelFeed({
 
         if (arrived.ok) {
           // eslint-disable-next-line no-await-in-loop
-          const profile = await analyseThenRecordSource({
+          const profile = withPreChecks(await analyseThenRecordSource({
             driver, pacingMs, jitterPx, read, screen: size, clipSeconds, getClip, reelsWindow, clipsWanted,
             fallbackUsername: feed.author || null,
             source: 'backend-navigator:feed-scroll',
@@ -837,7 +860,7 @@ async function* scoutReelFeed({
             view: arrived.view,
             config, prescreen, deviceHint, log,
             caption: feed.caption || null,
-          });
+          }), pre);
           if (profile) {
             yield profile;
             produced += 1;
@@ -865,6 +888,90 @@ async function* scoutReelFeed({
   }
 }
 
+/**
+ * The two checks made on a creator's reel BEFORE their profile is opened — the
+ * same order, and the same checks, as the feed phase
+ * (sourcingReelsNavigator.js):
+ *
+ *   (a) VIRALITY  the reel's views, estimated from the likes and comments the
+ *                 player shows (services/feedVirality.js). A reel nowhere near
+ *                 the viral bar is passed over; the creator is not marked as
+ *                 scouted, so another of their reels gets its own chance.
+ *   (b) NICHE     the creator's own latest Reels, labelled the way creator-list
+ *                 labels creators (services/jevJudge.js). A creator Jev rejects
+ *                 is never opened.
+ *
+ * Warm-up used to open every creator's profile first and only then have their
+ * Reels judged, so a profile visit was spent on each creator who turned out to
+ * be off target. The judge was waited for on every creator either way; it now
+ * happens before the visit instead of after it.
+ *
+ * Returns { go: true, verdict, feedViews } to open the profile;
+ * { go: false } to pass over this reel; or { go: false, rejected } with a
+ * candidate to hand on, so the rejection is recorded like any other.
+ */
+async function checkBeforeProfile({
+  feed, judge = null, config = {}, log = () => {}, term = null, source,
+}) {
+  const fv = feedVirality.check(
+    { likes: feed.likes, comments: feed.comments, views: feed.views },
+    { viralViews: config.viralViews },
+  );
+  if (!fv.pass) {
+    log(`[sourcing] skipping @${feed.author}: their reel has ${fv.reason}`);
+    return { go: false };
+  }
+  const feedViews = fv.estimate ? { ...fv.estimate, reason: fv.reason } : null;
+  if (!judge) return { go: true, verdict: null, feedViews };
+
+  let verdict = null;
+  try {
+    verdict = await judge({
+      username: feed.author,
+      caption: feed.caption || null,
+      discovery: 'search',
+      ...(term ? { sourceTerm: term } : {}),
+    }, config);
+  } catch (err) {
+    // A niche check that could not run is not a rejection: open the profile,
+    // and the orchestrator judges them as it always has.
+    log(`[sourcing] @${feed.author}: niche check failed (${err.message}) — opening the profile anyway`);
+  }
+  const jev = verdict && verdict.source === 'jev' ? verdict : null;
+  if (jev && jev.evidence && jev.evidence.jev && jev.evidence.jev.decision === 'reject') {
+    log(`[sourcing] @${feed.author}: their Reels are off target — profile not opened`);
+    return {
+      go: false,
+      rejected: {
+        username: feed.author,
+        reels: feed.caption ? [{ caption: feed.caption }] : [],
+        engagement: (feed.likes != null || feed.comments != null || feed.views != null)
+          ? { likes: feed.likes ?? null, comments: feed.comments ?? null, views: feed.views ?? null }
+          : undefined,
+        evidence: {
+          capturedAt: new Date().toISOString(),
+          source,
+          profileVisit: 'skipped',
+          ...(feedViews ? { feedViews } : {}),
+        },
+        // "Already judged — do not judge again" (jevJudge.makeClassifier).
+        _nicheVerdict: jev,
+      },
+    };
+  }
+  return { go: true, verdict: jev, feedViews };
+}
+
+/** Carry what was learnt before the profile visit onto its result. */
+function withPreChecks(profile, pre) {
+  if (!profile) return profile;
+  // Jev labelled the creator's own Reels, which the profile visit adds nothing
+  // to — judging again would only pay for the same answer twice.
+  if (pre.verdict) profile._nicheVerdict = pre.verdict;
+  if (pre.feedViews) profile.evidence = { ...profile.evidence, feedViews: pre.feedViews };
+  return profile;
+}
+
 // Reels-first capture: tap a reel card on the SERP -> read @handle from the
 // reels_feed -> tap the author to open their profile -> read header + reels.
 // Returns null if any hop lost its tap target (search UI drift); the outer loop
@@ -873,7 +980,7 @@ async function captureViaReel({
   driver, reelIndex, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
   clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null, deviceHint = null,
-  seen = null, cap = null, term = null,
+  seen = null, cap = null, term = null, judge = null,
 }) {
   const serp = await read(driver);
   const card = serp.targets && serp.targets[`reelResult:${reelIndex}`];
@@ -900,6 +1007,13 @@ async function captureViaReel({
     return null;
   }
 
+  // (a) views from likes and comments, then (b) niche — before the profile.
+  const pre = await checkBeforeProfile({
+    feed, judge, config, log, term, source: 'backend-navigator:reels-first',
+  });
+  if (pre.rejected) return { ...pre.rejected, sourceTerm: term };
+  if (!pre.go) return null;
+
   // Opening a profile is what the run's profile budget actually counts, so it is
   // spent here rather than on every card we merely glance at.
   if (cap && !cap.take()) return null;
@@ -919,7 +1033,7 @@ async function captureViaReel({
   });
   if (!arrived.ok) return null;
 
-  return analyseThenRecordSource({
+  return withPreChecks(await analyseThenRecordSource({
     driver, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
     fallbackUsername: feed.author,
     source: 'backend-navigator:reels-first',
@@ -928,7 +1042,7 @@ async function captureViaReel({
     config, prescreen, deviceHint, log,
     sourceTerm: term,
     caption: feed.caption || null,
-  });
+  }), pre);
 }
 
 /**
@@ -1819,6 +1933,7 @@ module.exports = {
   // creator the same way (Reels tab -> scroll the grid -> record the reels
   // worth watching).
   analyseProfile,
+  checkBeforeProfile,
   backTo,
   pickClipTargets,
   scrollResults,

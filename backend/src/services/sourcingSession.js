@@ -353,6 +353,10 @@ async function runSession({ hostId, run, deps }) {
       opts,
       deps: {
         getClip: deps.getClip || clipStore.take, heartbeat, saveDepth, warmCreator,
+        // The same judge as the feed: a creator's latest Reels are labelled
+        // BEFORE their profile is opened, so warm-up follows the feed's order —
+        // views from likes and comments, then niche, then the profile.
+        judge: deps.judge || require('./jevJudge').makeClassifier(),
       },
     });
   };
