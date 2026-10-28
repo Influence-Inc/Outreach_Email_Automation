@@ -20,8 +20,11 @@
 //    nothing, and finished with zero captures. The niche is now used as a
 //    fallback source of terms.
 //
-// [expandTerms] adds the optional AI layer: given the campaign's niche/genres,
-// ask Gemini for additional terms real creators actually tag themselves with.
+// [expandTerms] adds the optional AI layer: given the run's keywords and what
+// the brand sells (and a niche/genres when a config has them), ask Gemini for
+// additional terms real creators actually tag themselves with. It is the ONLY
+// source of search terms beyond the typed ones, and the only thing scouting
+// uses Gemini for.
 // It is key-optional — with no GEMINI_API_KEY it returns [] and the caller just
 // scouts the configured terms, same as before.
 
@@ -144,22 +147,28 @@ function normalizeTerms(opts = {}) {
  * contributes one usable term rather than a single unsearchable mega-query.
  */
 async function expandTerms(
-  { niche, genres = [], targetAudience = '', existing = [], limit = 8 } = {},
+  {
+    niche, genres = [], targetAudience = '', brand = '', existing = [], limit = 8,
+  } = {},
   { gemini = geminiClient } = {},
 ) {
   if (!gemini.available || !gemini.available()) return [];
-  if (!niche && !genres.length) return [];
+  // The Scout page asks only for keywords and what the brand sells — there is
+  // no niche field any more — so those are enough to suggest from. This used to
+  // require a niche or genres, which meant it never ran for a run started there.
+  if (!niche && !genres.length && !existing.length && !brand) return [];
 
   const promptText = [
-    'You pick Instagram search keywords for finding creators in a niche.',
+    'You pick Instagram search keywords for finding creators.',
     '',
-    `Niche: ${niche || '(unspecified)'}`,
+    niche ? `Niche: ${niche}` : '',
     genres.length ? `On-brand genres: ${genres.join(', ')}` : '',
+    brand ? `The brand and what it sells: ${brand}` : '',
     targetAudience ? `Target audience: ${targetAudience}` : '',
     existing.length ? `Already searching: ${existing.join(', ')}` : '',
     '',
-    `Return up to ${limit} ADDITIONAL search terms that creators in this niche`,
-    'actually use in their handles, bios and hashtags.',
+    `Return up to ${limit} ADDITIONAL search terms that creators who post this`,
+    'kind of content actually use in their handles, bios and hashtags.',
     'Rules: each term is one to three words (a phrase is fine, a comma is not);',
     'lowercase; no "#" or "@"; no generic words like "content", "creator",',
     '"reels"; do not repeat any term already being searched.',

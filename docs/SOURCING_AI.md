@@ -72,10 +72,11 @@ model docs for current rates.
 A scout fills in only what they know: **keywords**, **viral at (views)**, **creators to
 source**, **brand name** and **what you're selling** (the product and any details, one
 field). The device is picked from a list; there is no discovery mode — each phone decides
-how to scout (phone farming, below). The four switches every run needs
-— warm the feed, skip off-niche reels, screenshot pre-check, borderline → review — are not on
+how to scout (phone farming, below). The switches every run needs
+— warm the feed, skip off-niche reels, borderline → review — are not on
 the page: they are always on (`buildConfig` turns each on unless a config set through the API
-turns it off).
+turns it off). The Gemini screenshot pre-check that used to sit alongside them is gone:
+**scouting uses Gemini for one thing only, search-term suggestions** (below); Jev judges.
 
 There is **no campaign picker**. Scouting is not done for a campaign: every creator the scout
 shortlists goes to creator-list's *Curated by INFLUENCE Team* collection. A run started from the
@@ -291,23 +292,12 @@ Nothing is lost meanwhile: at the start of every run, every shortlisted creator 
 reached the collection is sent again (`POST /api/sourcing/creator-list/resend`, also behind the
 column's *send again* button).
 
-### Long runs: the search terms grow as the run goes
+### Search terms beyond the typed keywords: Gemini only
 
-A run keeps scouting until it has shortlisted its target. It used to end once its
-typed keywords' results were scrolled out — a run of 8 could finish after judging
-13 creators and shortlisting none. Now every creator who is on target (shortlisted
-or held, not rejected) also teaches the run **new search terms**: the hashtags
-they keep using on their on-target Reels (`creatorLabels.relatedTerms`, from the
-Reels collected through Monid).
-
-- A tag counts when it is on at least 2 of their on-target Reels; generic tags
-  (#fyp, #viral, #reels, #explore…) and terms already searched are left out; at
-  most 5 per creator, and 40 terms per run.
-- New terms are searched later in the same pass, and kept for the whole run —
-  a stretch on the feed and back to warm-up keeps them (`opts.learnedTerms`).
-- The run log says `new search terms from @coach's reels: calisthenics, homegym`,
-  the run card's *Scouting* tile lists them on hover, and the run's stats keep
-  them (`newTerms`).
+A run searches the keywords you typed first, then the terms **Gemini** suggests at the
+start of the run from those keywords and what the brand sells (`searchTerms.expandTerms`,
+below). Nothing else adds search terms — the hashtags on creators' Reels used to be
+learned as new terms during a run, and no longer are.
 
 When a run still ends short of its target, the run card says why on its status
 (e.g. *done — the keywords' search results are used up and the reel feed is not
@@ -430,12 +420,15 @@ configured) → AI suggestions`, de‑duplicated and capped at 24 searches per r
 A keyword you typed is taken exactly as typed; stopword/length filtering applies
 only to single words *derived* for you (from the niche, or suggested by Gemini).
 
-With `GEMINI_API_KEY` set, the run additionally asks Gemini for extra
-single‑word terms from the campaign's `niche` / `genres` / `targetAudience`.
-These are **purely additive and always last**, so your own keywords are searched
-first. Disable with `SOURCING_AI_SEARCH_TERMS=off`. With no key, or on any
-model/network failure, expansion returns nothing and scouting proceeds on the
-configured terms.
+With `GEMINI_API_KEY` set, the run additionally asks Gemini for up to 8 extra
+terms (one to three words each) from the keywords being searched and what the
+brand sells — plus `niche` / `genres` / `targetAudience` when a config has them.
+It used to need a niche or genres, which the Scout page no longer asks for, so it
+never ran for a run started there. These are **purely additive and always last**,
+so your own keywords are searched first; the run log says
+`AI added search terms […]`. Disable with `SOURCING_AI_SEARCH_TERMS=off`. With no
+key, or on any model/network failure, expansion returns nothing and scouting
+proceeds on the typed keywords. This is the only thing scouting uses Gemini for.
 
 ### Per-campaign scoring
 

@@ -172,7 +172,19 @@ test('a thrown Gemini error never propagates into the run', async () => {
   assert.deepStrictEqual(await expandTerms({ niche: 'x' }, { gemini }), []);
 });
 
-test('with no niche or genres there is nothing to expand from', async () => {
+test('with nothing at all to go on there is nothing to expand from', async () => {
   const out = await expandTerms({}, { gemini: stubGemini('{"terms":["nope"]}') });
   assert.deepStrictEqual(out, []);
+});
+
+// The Scout page has no niche field: a run started there carries only keywords
+// and what the brand sells. Suggestions must still come from those.
+test('keywords and the brand are enough to suggest from', async () => {
+  let prompt = null;
+  const gemini = { available: () => true, generate: async ({ promptText }) => { prompt = promptText; return '{"terms":["ai agents","llm apps","ai agents"]}'; } };
+  const out = await expandTerms({ existing: ['ai tools'], brand: 'Velo — an AI note-taking app' }, { gemini });
+  assert.deepStrictEqual(out, ['ai agents', 'llm apps']);
+  assert.match(prompt, /Already searching: ai tools/);
+  assert.match(prompt, /The brand and what it sells: Velo — an AI note-taking app/);
+  assert.ok(!/Niche:/.test(prompt), 'no empty niche line');
 });

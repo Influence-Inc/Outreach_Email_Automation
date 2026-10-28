@@ -305,8 +305,8 @@ const OFF_NICHE_MIN_CAPTION_CHARS = 40;
  * campaign, and each one costs a 12-second recording and a multimodal call to
  * discover that.
  *
- * Deliberately timid, in the same spirit as nichePrescreen: it answers "clearly
- * not" or "no opinion", never "probably not".
+ * Deliberately timid: it answers "clearly not" or "no opinion", never
+ * "probably not".
  *   - no keywords configured  -> no opinion (nothing to compare against)
  *   - short or absent caption -> no opinion (silence is not evidence)
  *   - a substantial caption that mentions not one of our terms -> off-niche

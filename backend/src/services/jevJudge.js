@@ -665,10 +665,6 @@ async function judge(candidate, config = {}, deps = {}) {
   if (creator && creator.source) {
     const d = creatorLabels.decideFromCreator(creator, targets, config.reviewLessons || null);
     const labels = creatorLabels.labelsOf(creator);
-    // What they tag their on-target Reels with: new search terms for the run, so it
-    // finds more creators like the ones that fit instead of running out of keywords.
-    const related = d.decision === 'reject' ? []
-      : creatorLabels.relatedTerms(creator, targets, { existing: config.keywords || [] });
     return verdict(d.decision, d.reasons, {
       labels,
       summary: summary(labels),
@@ -677,7 +673,6 @@ async function judge(candidate, config = {}, deps = {}) {
       provisional: d.provisional || undefined,
       // Decided by what the admin's review notes taught.
       lesson: d.lesson || undefined,
-      relatedTerms: related.length ? related : undefined,
       thin: d.thin || undefined,
       audienceSummary: audienceEstimate.summarise(creator.audience) || undefined,
       creator: {
