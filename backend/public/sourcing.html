@@ -15,7 +15,10 @@
        standalone page (no such region), so without this override everything
        past the first screenful is trapped and unreachable. */
     body { height: auto; min-height: 100vh; overflow: visible; }
-    .scout-wrap { max-width: 1040px; margin: 0 auto; padding: 24px 20px 64px; }
+    /* An explicit width: body is a flex column (styles.css), and a flex item with
+       auto margins sizes to its content — so one wide table used to stretch the
+       whole page past the screen on a phone. */
+    .scout-wrap { width: 100%; max-width: 1040px; margin: 0 auto; padding: 24px 20px 64px; }
     .scout-grid { display: grid; grid-template-columns: 140px 1fr; gap: 12px 16px; align-items: center; }
     .scout-grid label { font-weight: 600; font-size: 13px; }
     .scout-grid input, .scout-grid select, .scout-grid textarea, .scout-select {
@@ -42,11 +45,29 @@
     table.scout-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
     table.scout-table th, table.scout-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #eee; }
     table.scout-table th { color: #6b7280; font-weight: 600; }
-    /* The run and review tables have more columns than the card is wide: they
-       scroll sideways inside the card instead of spilling out of it. */
-    .scout-table-wrap { overflow-x: auto; max-width: 100%; margin-top: 10px; -webkit-overflow-scrolling: touch; }
-    .scout-table-wrap > table.scout-table { margin-top: 0; min-width: 1180px; }
-    .scout-table-wrap th { white-space: nowrap; }
+    /* The run and review tables fit a full-width card: fixed column widths (each
+       table's <colgroup>) and text that wraps — anywhere, if it must, so a long
+       handle or URL breaks inside its cell instead of widening the table. They
+       used to sit at a 1180px minimum inside a 1000px card, which hid the
+       right-hand columns (Shortlist and Reject among them) off the card's edge.
+       Below each table's minimum width — a narrow window or a phone — the table
+       scrolls sideways inside the card rather than squashing or spilling. */
+    .scout-table-wrap { overflow-x: auto; max-width: 100%; margin-top: 10px; padding-bottom: 4px; }
+    .scout-table-wrap::-webkit-scrollbar { height: 8px; }
+    .scout-table-wrap::-webkit-scrollbar-thumb { background: #c9ccd3; border-radius: 4px; }
+    .scout-table-wrap > table.scout-table { margin-top: 0; table-layout: fixed; min-width: 900px; }
+    .scout-table-wrap > table.scout-table.scout-table-wide { min-width: 930px; }
+    .scout-table-wrap > table.scout-table th,
+    .scout-table-wrap > table.scout-table td { padding: 8px 6px; vertical-align: top; overflow-wrap: anywhere; }
+    .scout-table button { white-space: normal; }
+    .cell-sub { display: block; margin-top: 2px; color: #6b7280; font-size: 12px; }
+    .review-note {
+      display: block; width: 100%; min-height: 56px; padding: 6px 8px; resize: vertical;
+      border: 1px solid var(--border, #d9dbe0); border-radius: 8px; font: inherit; font-size: 13px;
+    }
+    .review-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    /* The paired-phones table keeps natural columns; it just scrolls when narrow. */
+    .scout-scroll { overflow-x: auto; max-width: 100%; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
     .pill.added { background: #e7f6ee; color: #067647; }
     .pill.rejected { background: #fdecea; color: #b42318; }
@@ -152,10 +173,12 @@
         <button id="mint-host-btn" class="btn-primary small">Mint token</button>
       </div>
       <div id="new-host-token" class="scout-status" style="font-family:ui-monospace,monospace;word-break:break-all"></div>
+      <div class="scout-scroll">
       <table class="scout-table" id="hosts-table">
         <thead><tr><th>Label</th><th>Platforms</th><th>Status</th><th title="Phone farming: warming the account up, or scouting its own reel feed">Account</th><th>Session</th><th>Last seen</th><th></th></tr></thead>
         <tbody id="hosts-rows"></tbody>
       </table>
+      </div>
     </div>
 
     <div class="card" id="watch-card" hidden style="margin-top:18px">
@@ -195,9 +218,13 @@
         <div title="How the phone is scouting this run: warming up (search + liking shortlisted creators) or scouting its own reel feed">Scouting<b id="run-phase" style="font-size:13px;font-weight:600">—</b></div>
       </div>
       <div class="scout-table-wrap">
-      <table class="scout-table">
+      <table class="scout-table scout-table-wide">
+        <colgroup>
+          <col style="width:15%"><col style="width:14%"><col style="width:11%"><col style="width:11%"><col style="width:5%">
+          <col style="width:5.5%"><col style="width:9%"><col style="width:8.5%"><col style="width:11%"><col style="width:10%">
+        </colgroup>
         <thead>
-          <tr><th>Handle</th><th>Views (min–max)</th><th>Topic</th><th>Genre</th><th>Format</th><th title="Share of their Reels on your targets. ~ marks a provisional fit, from too few Reels to decide on">Fit</th><th title="Reels that reached the viral bar, of the reels read">Viral</th><th title="The Reels they were judged from: labelled, of collected, and how many had speech (Groq) — hover for why any are missing">Reels</th><th>Decision</th><th>Reason</th><th>Creator list</th></tr>
+          <tr><th title="Handle, and the lowest and highest views across the Reels read off their profile">Creator</th><th>Topic</th><th>Genre</th><th>Format</th><th title="Share of their Reels on your targets. ~ marks a provisional fit, from too few Reels to decide on">Fit</th><th title="Reels that reached the viral bar, of the reels read">Viral</th><th title="The Reels they were judged from: labelled, of collected, and how many had speech (Groq) — hover for why any are missing">Reels</th><th>Decision</th><th>Reason</th><th>Creator list</th></tr>
         </thead>
         <tbody id="cand-rows"></tbody>
       </table>
@@ -214,8 +241,11 @@
       <p class="scout-hint" id="review-lessons"></p>
       <div class="scout-table-wrap">
       <table class="scout-table">
+        <colgroup>
+          <col style="width:16%"><col style="width:25%"><col style="width:6%"><col style="width:10%"><col style="width:20%"><col style="width:23%">
+        </colgroup>
         <thead>
-          <tr><th>Handle</th><th title="Lowest and highest views across the Reels read off their profile">Views (min–max)</th><th>Jev labels</th><th>Fit</th><th title="The Reels they were judged from — hover for why any are missing">Reels</th><th>Held because</th><th title="Why you shortlist or reject them, in your own words. Jev learns what to pass on from these.">Your reason</th><th></th></tr>
+          <tr><th title="Handle, and the lowest and highest views across the Reels read off their profile">Creator</th><th>Jev labels</th><th>Fit</th><th title="The Reels they were judged from — hover for why any are missing">Reels</th><th>Held because</th><th title="Why you shortlist or reject them, in your own words. Jev learns what to pass on from these.">Your reason</th></tr>
         </thead>
         <tbody id="review-rows"></tbody>
       </table>
