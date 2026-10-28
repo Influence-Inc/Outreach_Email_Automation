@@ -194,11 +194,6 @@ function buildConfig(defaults = {}, override = {}) {
     // nicheCalibration.statedTaste.
     idealExamples: toLineList(merged.idealExamples),
     avoidExamples: toLineList(merged.avoidExamples),
-    // Look at the profile screenshots before recording any video, and skip a
-    // creator the pictures say is plainly in another line of work. Costs one
-    // small image call; saves a recording, an upload and a video call every time
-    // it fires. See services/nichePrescreen.js.
-    prescreenNiche: onUnlessOff(merged.prescreenNiche),
     // Feed mode: skip a reel whose caption plainly has nothing to do with the
     // campaign, before a clip is recorded for it. On unless explicitly turned
     // off — the test is deliberately timid (a short caption is never evidence)
@@ -211,9 +206,6 @@ function buildConfig(defaults = {}, override = {}) {
     // probability, per-session caps, stopping on "action blocked") is
     // env-tuned, not set from here.
     warmFeed: onUnlessOff(merged.warmFeed),
-    // How sure the prescreen must be before it drops a creator. A skipped
-    // creator is never looked at again, so this is deliberately high.
-    prescreenMinConfidence: num(merged.prescreenMinConfidence),
     // What THIS brand is buying. A skincare campaign is buying production
     // quality, a meme brand is buying the hook, a B2B brand is buying audience
     // fit — one set of weights cannot serve all three, and every campaign shared

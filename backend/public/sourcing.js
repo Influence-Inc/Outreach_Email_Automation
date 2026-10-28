@@ -84,8 +84,10 @@ function numOrNull(id) {
 // older version of the page stored (defaults merge, and null is how a key is
 // removed): the niche and brand details now live in the keywords and "what
 // you're selling" fields, and the rest is decided by the backend — including
-// the four switches every run needs (warm the feed, skip off-niche reels,
-// screenshot pre-check, borderline → review), which are on whenever unset.
+// the switches every run needs (warm the feed, skip off-niche reels,
+// borderline → review), which are on whenever unset. The screenshot pre-check
+// is gone (Gemini only suggests search terms now); a value saved for it is
+// cleared here like the rest.
 const RETIRED = {
   discovery: null,
   warmFeed: null,
@@ -427,11 +429,7 @@ async function refreshRun() {
   el('run-seen').textContent = reels.labelled ? `${reels.seen || 0} of ${reels.labelled}` : '—';
   el('run-seen').style.color = reels.labelled && !reels.seen ? '#b42318' : '';
   const switches = (stats.discovery && stats.discovery.switches) || [];
-  const learnedTerms = stats.newTerms || [];
-  el('run-phase').title = [
-    ...switches.map((w) => `${w.from} → ${w.to}: ${w.reason || ''}`),
-    ...(learnedTerms.length ? [`search terms learned from on-target creators: ${learnedTerms.join(', ')}`] : []),
-  ].join('\n');
+  el('run-phase').title = switches.map((w) => `${w.from} → ${w.to}: ${w.reason || ''}`).join('\n');
   // Why a run ended short of its target, when it did.
   const endReason = stats.discovery && stats.discovery.endReason;
   el('run-status').title = endReason ? `ended: ${endReason}` : '';

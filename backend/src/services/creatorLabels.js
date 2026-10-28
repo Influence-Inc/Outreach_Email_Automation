@@ -207,9 +207,6 @@ async function labelReel(row, { handle, deps = {} } = {}) {
   if (!row.state && row.originalAudio != null) state.uses_original_audio = row.originalAudio;
   out.usedSpeech = !!state.has_speech;
   out.words = String(state.speech || '').split(/\s+/).filter(Boolean).length;
-  // The creator's own hashtags on this Reel: on-target Reels' tags become new search
-  // terms for the run (relatedTerms below).
-  out.hashtags = (state.hashtags || []).map((t) => String(t).replace(/^#/, '').toLowerCase()).filter(Boolean).slice(0, 15);
   out.signals = audience.textSignals({
     caption: state.caption, transcript: state.speech, onScreenText: state.on_screen_text, language: transcript.language,
   });
@@ -378,7 +375,6 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
       // Whether Qwen3-VL described the video (and why not, when it tried and failed).
       seen: r.seen || undefined,
       visionError: r.visionError || undefined,
-      hashtags: r.hashtags && r.hashtags.length ? r.hashtags : undefined,
     })),
     costUsd: Math.round(costUsd * 10000) / 10000,
     errors,
@@ -387,48 +383,6 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
 }
 
 // ── new search terms from what an on-target creator tags ────────────────────
-
-// Hashtags that say nothing about a subject: searching them finds everyone.
-const GENERIC_TAGS = new Set([
-  'fyp', 'foryou', 'foryoupage', 'fypシ', 'viral', 'viralreels', 'viralvideo', 'viralpost', 'trending',
-  'trendingreels', 'trend', 'reels', 'reel', 'reelsinstagram', 'instareels', 'reelitfeelit', 'reelkarofeelkaro',
-  'explore', 'explorepage', 'explorepage✨', 'instagood', 'instagram', 'insta', 'instadaily', 'love', 'like',
-  'likeforlikes', 'likes', 'follow', 'followme', 'followforfollowback', 'follow4follow', 'tiktok', 'video',
-  'videos', 'photooftheday', 'picoftheday', 'daily', 'new', 'shorts', 'youtube', 'content', 'contentcreator',
-  'creator', 'influencer', 'growth', 'india', 'usa',
-]);
-// A tag must recur in this many on-target Reels to be a search term.
-const TAG_MIN_REELS = 2;
-// New terms one creator may add.
-const TAGS_PER_CREATOR = 5;
-
-/**
- * Hashtags this creator keeps using on their on-target Reels — the words they file
- * that content under, so searching them finds more creators like them. A Reel is
- * on target when its topic or niche is one the run is after (or, when the keywords
- * name no subject, its genre or format is). Generic tags (#fyp, #viral…) and terms
- * already searched are left out. Most-used first.
- */
-function relatedTerms(p, targets, { existing = [] } = {}) {
-  const rows = (p && p.perReel) || [];
-  const subject = targets.topics.length || targets.niches.length;
-  const onTarget = rows.filter((r) => (subject
-    ? targets.topics.includes(r.topic) || targets.niches.includes(r.niche)
-    : targets.genres.includes(r.genre) || targets.formats.includes(r.format)));
-  const seen = new Set(existing.map((t) => String(t).toLowerCase().replace(/^#/, '').replace(/\s+/g, '')));
-  const counts = new Map();
-  for (const r of onTarget) {
-    for (const t of new Set(r.hashtags || [])) {
-      if (t.length < 3 || t.length > 30 || GENERIC_TAGS.has(t) || seen.has(t) || !/\p{L}/u.test(t)) continue;
-      counts.set(t, (counts.get(t) || 0) + 1);
-    }
-  }
-  return [...counts.entries()]
-    .filter(([, n]) => n >= TAG_MIN_REELS)
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, TAGS_PER_CREATOR)
-    .map(([t]) => t);
-}
 
 // ── deciding against the run's targets ──────────────────────────────────────
 
@@ -555,7 +509,6 @@ module.exports = {
   aggregate,
   fromCreatorList,
   decideFromCreator,
-  relatedTerms,
   labelsOf,
   nicheOf,
   qualifies,

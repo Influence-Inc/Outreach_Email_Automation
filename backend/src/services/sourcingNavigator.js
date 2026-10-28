@@ -25,8 +25,6 @@ const { jitteredDelay, jitterTap } = require('./humanize');
 const { normalizeTerms } = require('./searchTerms');
 const { prefilter, reelViews } = require('./sourcingFilters');
 const feedVirality = require('./feedVirality');
-const { makePrescreen } = require('./nichePrescreen');
-const { tryDeviceHint } = require('./deviceNicheHint');
 const {
   clearDialogs, arriveAt, createStallGuard, recoverFromStall, createProfileCap,
 } = require('./sourcingResilience');
@@ -153,8 +151,8 @@ const REELS_PER_PROFILE = 12;
 // each costs a recording plus a Gemini call, so it does not grow past that.
 const CLIPS_PER_PROFILE = 3;
 
-// Most search terms one run may hold, typed keywords and ones learned from
-// on-target creators' hashtags together.
+// Most search terms one run may hold: the typed keywords and Gemini's
+// suggestions together (services/searchTerms.js).
 const MAX_RUN_TERMS = 40;
 
 // How far a keyword's stored depth may grow.
@@ -312,7 +310,6 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     if (outcome && outcome.added && handle && deps.warmCreator) {
       await deps.warmCreator({ driver, read, handle, pacingMs, jitterPx, log });
     }
-    if (outcome && Array.isArray(outcome.relatedTerms)) addTerms(outcome.relatedTerms, handle);
     return !!(outcome && outcome.stop);
   };
 
@@ -322,28 +319,11 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   const stall = createStallGuard({ timeoutMs: config.stallMs, now: deps.now });
   const cap = createProfileCap({ max: config.maxProfiles, log });
 
-  // A cheap look at the profile pictures before any video is recorded — see
-  // services/nichePrescreen.js. Opt-in, and null when it cannot run at all, so
-  // "off" and "said yes" stay distinguishable further down.
-  const prescreen = config.prescreenNiche
-    ? (deps.prescreen !== undefined ? deps.prescreen : makePrescreen({ logger: { log } }))
-    : null;
-
-  // The free look tried before the prescreen's paid one — see
-  // services/deviceNicheHint.js. Same opt-in flag as prescreen: this is the
-  // cheaper first pass of the same feature, not a separate one to configure.
-  const deviceHint = config.prescreenNiche
-    ? (deps.deviceHint !== undefined ? deps.deviceHint : tryDeviceHint)
-    : null;
-
   await driver.openApp(IG_ANDROID_PACKAGE);
   await sleep(jitteredDelay(pacingMs));
 
   const screen = await deviceSize(driver);
   const terms = pickSearchTerms(opts);
-  // Terms an earlier search in this run learned (opts.learnedTerms is the run's).
-  const learned = Array.isArray(opts.learnedTerms) ? opts.learnedTerms : null;
-  for (const t of learned || []) if (!terms.includes(t) && terms.length < MAX_RUN_TERMS) terms.push(t);
   let emitted = 0;
   // Creators already analysed, across every keyword AND every pass — a results
   // page re-surfaces the same popular accounts, and re-opening one burns a slot
@@ -383,22 +363,6 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
   // page opens on the same popular accounts every time and dedupe now skips all
   // of them, so starting at 0 spent the opening minutes of every re-run
   // re-walking ground already covered before reaching anyone new.
-  // The run's keywords grow as it goes: an on-target creator's recurring hashtags
-  // come back with their result (sourcingOrchestrator, relatedTerms) and join the
-  // list, searched from the top later in this pass. That is what keeps a long run
-  // finding new creators instead of ending once the typed keywords are scrolled out.
-  const addTerms = (list, from) => {
-    const fresh = [];
-    for (const raw of list) {
-      const t = String(raw || '').trim().toLowerCase().replace(/^#/, '');
-      if (!t || terms.length >= MAX_RUN_TERMS || terms.some((x) => x.toLowerCase() === t)) continue;
-      terms.push(t);
-      depthOf.set(t, 0);
-      if (learned && !learned.includes(t)) learned.push(t);
-      fresh.push(t);
-    }
-    if (fresh.length) log(`[sourcing] new search terms from @${from || 'an on-target creator'}'s reels: ${fresh.join(', ')} — ${terms.length} terms now`);
-  };
   const startDepth = opts.keywordDepth || {};
   const depthOf = new Map(terms.map((t) => {
     // Clamp on the way IN as well: a campaign that ran before the ceiling
@@ -517,7 +481,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
     if (view.screen === 'reels_feed') {
       for await (const profile of scoutReelFeed({
         driver, read, pacingMs, jitterPx, screen, clipSeconds, getClip, reelsWindow, clipsWanted,
-        remaining: max - emitted, seen: seenCreators, stall, cap, log, config, prescreen, deviceHint,
+        remaining: max - emitted, seen: seenCreators, stall, cap, log, config,
         judge, term,
       })) {
         const outcome = yield tag(profile);
@@ -572,7 +536,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
       if (key) openedCards.add(key);
       const profile = await captureViaReel({
         driver, reelIndex: rr.index, pacingMs, jitterPx, read, screen, clipSeconds, getClip,
-        reelsWindow, clipsWanted, log, config, prescreen, deviceHint, seen: seenCreators, cap, term, judge,
+        reelsWindow, clipsWanted, log, config, seen: seenCreators, cap, term, judge,
       });
       // A grid card gives no handle until the reel is open — but once it IS open
       // the handle is known, and captureViaReel drops a creator we have already
@@ -604,7 +568,7 @@ async function* scout({ driver, config = {}, opts = {}, read = readView, deps = 
         seenCreators.add(String(handle).toLowerCase());
         const profile = await openAndCaptureProfile({
           driver, handle, pacingMs, jitterPx, read, screen, clipSeconds, getClip, reelsWindow,
-          clipsWanted, log, config, prescreen, deviceHint,
+          clipsWanted, log, config,
         });
         if (profile) {
           const outcome = yield tag(profile);
@@ -789,7 +753,7 @@ async function* scoutReelFeed({
   driver, read = readView, pacingMs, jitterPx = 0, screen,
   clipSeconds = 12, getClip, remaining = Infinity, seen = new Set(),
   reelsWindow = REELS_PER_PROFILE, clipsWanted = CLIPS_PER_PROFILE,
-  stall = null, cap = null, log = () => {}, config = {}, prescreen = null, deviceHint = null,
+  stall = null, cap = null, log = () => {}, config = {},
   judge = null, term = null,
 }) {
   const size = screen || { width: 1080, height: 2400 };
@@ -858,7 +822,7 @@ async function* scoutReelFeed({
             source: 'backend-navigator:feed-scroll',
             screens: ['reels_feed', 'profile', 'reels_tab'],
             view: arrived.view,
-            config, prescreen, deviceHint, log,
+            config, log,
             caption: feed.caption || null,
           }), pre);
           if (profile) {
@@ -979,7 +943,7 @@ function withPreChecks(profile, pre) {
 async function captureViaReel({
   driver, reelIndex, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
-  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null, deviceHint = null,
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {},
   seen = null, cap = null, term = null, judge = null,
 }) {
   const serp = await read(driver);
@@ -1039,7 +1003,7 @@ async function captureViaReel({
     source: 'backend-navigator:reels-first',
     screens: ['reels_feed', 'profile', 'reels_tab'],
     view: arrived.view,
-    config, prescreen, deviceHint, log,
+    config, log,
     sourceTerm: term,
     caption: feed.caption || null,
   }), pre);
@@ -1061,7 +1025,7 @@ async function analyseThenRecordSource({ caption = null, ...opts }) {
   if (!profile) return profile;
   profile.sourceReel = { caption: caption || null };
   if (caption && !profile.caption) profile.caption = caption;
-  // Below the views benchmark (or off-niche on the prescreen): nothing to record.
+  // Below the views benchmark: nothing to record.
   if (profile.evidence && profile.evidence.notRecorded) return profile;
 
   const handle = String(profile.username || opts.fallbackUsername || '').toLowerCase();
@@ -1153,7 +1117,7 @@ async function analyseProfile({
   // defaulted, so analyseProfile's logging — "not recording", and the recording
   // failures that explain a run judging everyone on bio text — went to a no-op
   // and profiles mode looked silent no matter what went wrong on the phone.
-  config = {}, prescreen = null, deviceHint = null, log = () => {},
+  config = {}, log = () => {},
 }) {
   // The caller that verified we reached this profile already read the screen;
   // reading it again is a round-trip to the phone for a picture we have.
@@ -1195,7 +1159,7 @@ async function analyseProfile({
   // The floor is normally absolute (floorTolerance 0), which means ONE reel
   // below it disqualifies the creator — and if a reel on the very first screen
   // is already under, no amount of scrolling can rescue them. Checking here
-  // skips the rest of the grid scroll, the bio screenshot, the prescreen call,
+  // skips the rest of the grid scroll, the bio screenshot,
   // the recording and the judgement, for a creator who was never eligible.
   //
   // Deliberately only when the floor really is absolute: a campaign that set a
@@ -1238,29 +1202,6 @@ async function analyseProfile({
   if (!skipReason) {
     const pre = prefilter({ reels: window, followers: header.followers }, config);
     skipReason = pre.pass ? null : pre.rejectReason;
-  }
-
-  // A free look, on the phone itself, tried before the paid one below — see
-  // services/deviceNicheHint.js. Non-null only when it corroborates a pass
-  // confidently enough to skip the cloud call entirely; anything else (no
-  // AICore support on this phone, an agent build too old for the op, an
-  // inconclusive caption) leaves `hint` null and changes nothing below.
-  let hint = null;
-  if (!skipReason && deviceHint && shotsSoFar(bioShot, gridShot).length) {
-    hint = await deviceHint({ driver, kind: 'reels_grid', config, log });
-  }
-
-  // A second, cheaper-than-video gate: the pictures we already took. Answers
-  // "is this creator even in the right line of work" from the bio and the grid
-  // — a question a thumbnail grid settles far better than bio text, and for a
-  // fraction of what watching a reel costs. Opt-in, and never fatal.
-  if (!skipReason && !hint && prescreen && shotsSoFar(bioShot, gridShot).length) {
-    const verdict = await prescreen({
-      candidate: { username: header.username || fallbackUsername, bio: header.bio, reels: window },
-      shots: shotsSoFar(bioShot, gridShot),
-      config,
-    });
-    if (verdict && verdict.pass === false) skipReason = verdict.reason || 'off-niche on the profile screenshots';
   }
 
   if (skipReason) {
@@ -1503,7 +1444,7 @@ function totalEngagement(readings) {
  * reel below the floor disqualifies the creator outright. When that is the
  * rule, a below-floor reel on the very first screen of the grid is already the
  * whole answer, and scrolling the rest of the window, screenshotting the bio,
- * calling the prescreen and recording a clip are all spent proving something
+ * and recording a clip are all spent proving something
  * settled several round-trips ago.
  *
  * Returns a reject reason, or null to carry on reading the full window.
@@ -1825,7 +1766,7 @@ async function captureReelClips({
 async function openAndCaptureProfile({
   driver, handle, pacingMs, jitterPx = 0, read = readView,
   screen, clipSeconds = 12, getClip, reelsWindow = REELS_PER_PROFILE,
-  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {}, prescreen = null, deviceHint = null,
+  clipsWanted = CLIPS_PER_PROFILE, log = () => {}, config = {},
 }) {
   // Open the profile from the results list.
   const results = await read(driver);
@@ -1851,7 +1792,7 @@ async function openAndCaptureProfile({
     source: 'backend-navigator',
     screens: ['profile', 'reels_tab'],
     view: arrived.view,
-    config, prescreen, deviceHint, log,
+    config, log,
   });
   return { ...profile, username: handle };
 }

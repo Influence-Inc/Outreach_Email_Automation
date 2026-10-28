@@ -138,13 +138,11 @@ test('buildConfig carries the brand product and its fit floor', () => {
   assert.strictEqual(buildConfig({}, { minBrandFit: 0 }).minBrandFit, 0, '0 is a real choice');
 });
 
-test('buildConfig carries the screenshot prescreen knobs', () => {
-  const on = buildConfig({}, { prescreenNiche: 'true', prescreenMinConfidence: '0.8' });
-  assert.strictEqual(on.prescreenNiche, true);
-  assert.strictEqual(on.prescreenMinConfidence, 0.8);
-  // On unless a campaign turns it off.
-  assert.strictEqual(buildConfig({}, {}).prescreenNiche, true);
-  assert.strictEqual(buildConfig({ prescreenNiche: false }, {}).prescreenNiche, false);
+test('the screenshot prescreen is gone: its saved settings are dropped', () => {
+  // Gemini only suggests search terms now (services/searchTerms.js).
+  const cfg = buildConfig({ prescreenNiche: true }, { prescreenMinConfidence: '0.8' });
+  assert.strictEqual(cfg.prescreenNiche, undefined);
+  assert.strictEqual(cfg.prescreenMinConfidence, undefined);
 });
 
 // buildConfig is a whitelist, so a knob it does not name is silently dropped no

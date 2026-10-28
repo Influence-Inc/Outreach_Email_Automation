@@ -1550,102 +1550,6 @@ test('profile screenshots are requested downscaled', async () => {
   assert.ok(shotArgs[0].maxWidth <= 720, 'downscaled');
 });
 
-// ── the screenshot prescreen (Tier 1) ───────────────────────────────────────
-
-function profileRun({ prescreen, deviceHint, config = {}, driver }) {
-  return scout({
-    driver,
-    config: { pacingMs: 0, prescreenNiche: true, ...config },
-    opts: { keywords: ['coach'], max: 1 },
-    read: scriptedRead([
-      ...OPEN_SEARCH,
-      { screen: 'search_results', results: ['coach'], targets: { back: BACK } },
-      { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
-      { screen: 'profile', followers: 9000, bio: 'chef', targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
-      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
-      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
-      { screen: 'reels_feed', targets: { back: BACK } },
-      { screen: 'reels_tab', reels: gridOf({ x: 1, y: 1 }), targets: { back: BACK } },
-      ...Array(8).fill({ screen: 'search_results', targets: { back: BACK } }),
-    ]),
-    deps: { getClip: async () => ({ dataBase64: 'AAAA', mimeType: 'video/mp4' }), prescreen, deviceHint },
-  });
-}
-
-test('a creator the pictures say is off-niche is never recorded', async () => {
-  const driver = driverWithSearch();
-  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
-  const out = [];
-  for await (const c of profileRun({
-    driver,
-    prescreen: async () => ({ pass: false, reason: 'off-niche on the profile screenshots (looks like cooking)' }),
-  })) out.push(c);
-
-  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0, 'no video was recorded');
-  assert.match(out[0].evidence.notRecorded, /off-niche/);
-});
-
-test('a creator the pictures clear is recorded as usual', async () => {
-  const driver = driverWithSearch();
-  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
-  const out = [];
-  for await (const c of profileRun({ driver, prescreen: async () => ({ pass: true }) })) out.push(c);
-
-  assert.ok(driver.ops.filter((o) => o[0] === 'recordClip').length >= 1, 'recorded');
-  assert.strictEqual(out[0].evidence.notRecorded, undefined);
-});
-
-// Off by default: it costs a call per creator, and a run that has not asked for
-// it should behave exactly as it did before.
-test('the prescreen does not run unless the campaign asks for it', async () => {
-  const driver = driverWithSearch();
-  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
-  let called = 0;
-  const out = [];
-  for await (const c of profileRun({
-    driver,
-    config: { prescreenNiche: false },
-    prescreen: async () => { called += 1; return { pass: false, reason: 'nope' }; },
-  })) out.push(c);
-
-  assert.strictEqual(called, 0, 'never consulted');
-  assert.ok(driver.ops.filter((o) => o[0] === 'recordClip').length >= 1, 'recorded as normal');
-});
-
-// ── the on-device hint (Tier 0, ahead of the prescreen) ─────────────────────
-
-test('a corroborating on-device hint skips the cloud prescreen call', async () => {
-  const driver = driverWithSearch();
-  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
-  let prescreenCalled = 0;
-  const out = [];
-  for await (const c of profileRun({
-    driver,
-    deviceHint: async () => ({ pass: true, source: 'on-device' }),
-    prescreen: async () => { prescreenCalled += 1; return { pass: false, reason: 'should never run' }; },
-  })) out.push(c);
-
-  assert.strictEqual(prescreenCalled, 0, 'the free look already corroborated a pass');
-  assert.ok(driver.ops.filter((o) => o[0] === 'recordClip').length >= 1, 'recorded as usual');
-});
-
-// The device hint may only ever SAVE a cloud call, never decide on its own — an
-// inconclusive on-device look must fall through to the existing cloud prescreen
-// exactly as if the device tier were absent.
-test('an inconclusive on-device hint still lets the cloud prescreen decide', async () => {
-  const driver = driverWithSearch();
-  driver.screenshot = async () => ({ mediaType: 'image/jpeg', dataBase64: 'SHOT' });
-  const out = [];
-  for await (const c of profileRun({
-    driver,
-    deviceHint: async () => null,
-    prescreen: async () => ({ pass: false, reason: 'off-niche on the profile screenshots' }),
-  })) out.push(c);
-
-  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 0, 'the cloud verdict still applied');
-  assert.match(out[0].evidence.notRecorded, /off-niche/);
-});
-
 // ── a re-run resumes instead of re-walking ─────────────────────────────────
 
 test('a keyword resumes at the depth the last run reached', async () => {
@@ -2245,36 +2149,6 @@ test('a results page with nothing to open says what it was read as', async () =>
   });
   for await (const _c of gen) { /* drain */ }
   assert.ok(lines.some((l) => /"coach": no reels to open — the results page read as "search_results" on the "all" tab/.test(l)), lines.join('\n'));
-});
-
-// The run's keywords grow: an on-target creator's recurring hashtags come back
-// with their result and are searched later in the same run — what keeps a long
-// run finding creators instead of ending once the typed keywords are used up.
-test('search terms learned from an on-target creator are searched later in the run', async () => {
-  const driver = driverWithSearch();
-  const lines = [];
-  const views = [
-    ...OPEN_SEARCH,
-    { screen: 'search_results', activeTab: 'for you', results: ['coach'], targets: { back: BACK } },
-    { screen: 'search_results', targets: { 'result:coach': { x: 5, y: 5 } } },
-    { screen: 'profile', followers: 9000, targets: { reelsTab: { x: 4, y: 5 }, back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
-    { screen: 'reels_tab', reels: [{ views: 7 }], targets: { back: BACK } },
-    { screen: 'search_results', targets: { back: BACK } },
-    ...Array(40).fill({ screen: 'search', targets: { searchTab: { x: 1, y: 1 }, searchBox: { x: 1, y: 1 }, back: BACK } }),
-  ];
-  const opts = { keywords: ['coach'], max: 2, learnedTerms: [] };
-  const gen = scout({
-    driver, config: { pacingMs: 0 }, opts, read: scriptedRead(views), deps: { log: (l) => lines.push(l) },
-  });
-  const first = await gen.next();
-  assert.strictEqual(first.value.username, 'coach');
-  for (let r = await gen.next({ decision: 'review', relatedTerms: ['#Calisthenics', 'coach'] }); !r.done; r = await gen.next()) { /* drain */ }
-
-  const typed = driver.ops.filter((o) => o[0] === 'type').map((o) => o[1]);
-  assert.deepStrictEqual(typed.slice(0, 2), ['coach', 'calisthenics'], 'the learned term was searched next');
-  assert.deepStrictEqual(opts.learnedTerms, ['calisthenics'], 'kept for the rest of the run');
-  assert.ok(lines.some((l) => /new search terms from @coach's reels: calisthenics/.test(l)));
 });
 
 // ── warm-up follows the feed's order: views, niche, THEN the profile ────────

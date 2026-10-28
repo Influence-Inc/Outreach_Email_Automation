@@ -161,9 +161,6 @@ async function runSession({ hostId, run, deps }) {
     seedAccounts: config.seedAccounts || [],
     niche: config.niche || '',
     max: captureCap,
-    // Search terms learned from on-target creators' hashtags during this run. Shared
-    // across the run's searches, so a warm-up after a stretch on the feed keeps them.
-    learnedTerms: [],
   };
 
   // Everyone this campaign has already looked at. Without this the scout's memory
@@ -185,10 +182,11 @@ async function runSession({ hostId, run, deps }) {
     log(`[sourcing-session] could not load scouted history: ${(err && err.message) || err}`);
   }
 
-  // Optional AI layer: turn the campaign's niche/genres into extra single-word
-  // search terms. Purely additive — the operator's own keywords are still
-  // searched first, and with no GEMINI_API_KEY this is a no-op (see
-  // services/searchTerms.js). Never allowed to fail a run.
+  // Gemini's search-term suggestions, from the run's keywords and what the
+  // brand sells — the only new terms a run gets beyond the typed ones, and the
+  // only thing scouting uses Gemini for. Purely additive: the operator's own
+  // keywords are still searched first, and with no GEMINI_API_KEY this is a
+  // no-op (see services/searchTerms.js). Never allowed to fail a run.
   if (searchTerms.expansionEnabled()) {
     try {
       const existing = searchTerms.normalizeTerms(opts);
@@ -196,6 +194,7 @@ async function runSession({ hostId, run, deps }) {
         niche: config.niche,
         genres: config.genres || [],
         targetAudience: config.targetAudience || '',
+        brand: [config.brandName, config.brandProduct].filter(Boolean).join(' — '),
         existing,
       });
       if (extra.length) {

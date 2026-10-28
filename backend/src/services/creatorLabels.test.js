@@ -261,26 +261,3 @@ test('a lesson only applies to what MOST of their Reels are', () => {
   const d = cl.decideFromCreator(profile({ topic: { fitness: 0.9 }, genre: { educational: 0.6, comedy: 0.4 } }), targets({ topics: ['fitness'] }), LESSONS);
   assert.strictEqual(d.decision, 'shortlist');
 });
-
-// ── new search terms from what an on-target creator tags ────────────────────
-
-test('hashtags an on-target creator keeps using become search terms; generic and searched ones do not', () => {
-  const p = {
-    perReel: [
-      { topic: 'fitness', hashtags: ['homeworkout', 'fyp', 'calisthenics', 'gym'] },
-      { topic: 'fitness', hashtags: ['homeworkout', 'calisthenics', 'viral', 'gym'] },
-      { topic: 'fitness', hashtags: ['homeworkout', 'mealprep'] },
-      { topic: 'food_drink', hashtags: ['mealprep', 'recipe', 'recipe'] },
-      { topic: 'food_drink', hashtags: ['recipe'] },
-    ],
-  };
-  const terms = cl.relatedTerms(p, targets({ topics: ['fitness'] }), { existing: ['gym', 'Home Workout'] });
-  assert.deepStrictEqual(terms, ['calisthenics'], 'homeworkout is already searched, mealprep is on one on-target reel, recipe is off target');
-  assert.deepStrictEqual(cl.relatedTerms({ perReel: [] }, targets({ topics: ['fitness'] })), []);
-});
-
-test('each labelled Reel keeps its hashtags for that', async () => {
-  const { deps } = fakes();
-  const p = await cl.labelCreator({ handle: 'coach', deps });
-  assert.deepStrictEqual(p.perReel.find((r) => r.code === 'a').hashtags, ['fitness']);
-});
