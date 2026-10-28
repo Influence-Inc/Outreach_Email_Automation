@@ -161,6 +161,17 @@ router.get('/jev-calibration', async (_req, res, next) => {
   }
 });
 
+// GET /api/sourcing/creator-list/check — test both creator-list services (the
+// website's collection and the bench's queue) with Deal Studio's settings,
+// changing nothing, and say what to fix. Admin-only via the top-level gate.
+router.get('/creator-list/check', async (_req, res, next) => {
+  try {
+    res.json(await creatorList.checkConnection());
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/sourcing/creator-list/resend — send again every shortlisted creator
 // who never reached creator-list's collection (not configured then, or an error).
 router.post('/creator-list/resend', async (_req, res, next) => {

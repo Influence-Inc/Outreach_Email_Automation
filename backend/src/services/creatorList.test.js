@@ -180,7 +180,7 @@ test('creator-list unreachable: an indexed creator keeps their numbers; others s
     profiles.set('mia.skin', { handle: 'mia.skin', status: 'indexed', data: INDEXED, checked_at: new Date(0) });
     let st = await creatorList.sync('mia.skin', { queue: true, fetchImpl });
     assert.strictEqual(st.status, 'indexed');
-    assert.match(st.error, /refused the API key/);
+    assert.match(st.error, /bench refused the key/);
     st = await creatorList.sync('someone', { queue: true, fetchImpl });
     assert.strictEqual(st.status, 'error');
     assert.match(st.error, /CREATOR_LIST_API_KEY/);
@@ -238,10 +238,17 @@ test('addToCurated posts the shortlisted creator with Jev labels to the site', (
 test('addToCurated never throws: not configured, refused, or down', () => withWebEnv(null, 'k', async () => {
   assert.strictEqual((await creatorList.addToCurated('coach')).status, 'not_configured');
   process.env.CREATOR_LIST_WEB_URL = 'https://site.test';
-  const refused = await creatorList.addToCurated('coach', { fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
-  assert.deepStrictEqual(refused, { status: 'error', error: 'creator-list refused the API key (CREATOR_LIST_API_KEY)' });
+  const refused = await creatorList.addToCurated('coach', {
+    fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({ error: 'wrong or missing API key' }) }),
+  });
+  assert.deepStrictEqual(refused, {
+    status: 'error',
+    error: 'the creator-list website (Find creators) refused the key — its DEAL_STUDIO_API_KEY is not the same as CREATOR_LIST_API_KEY on Deal Studio',
+  });
   const down = await creatorList.addToCurated('coach', { fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
-  assert.deepStrictEqual(down, { status: 'error', error: 'ECONNREFUSED' });
+  assert.deepStrictEqual(down, {
+    status: 'error', error: 'the creator-list website could not be reached at CREATOR_LIST_WEB_URL: ECONNREFUSED',
+  });
   assert.strictEqual((await creatorList.addToCurated('not a handle!')).status, 'invalid');
 }));
 
@@ -251,4 +258,77 @@ test('the curated note says who the creator\'s viewers are', () => {
     'Scouted by Deal Studio · Technology · AI · for: 27 y/o AI developer in New York · found searching "ai agents"',
   );
   assert.strictEqual(creatorList.curatedNote({}), 'Scouted by Deal Studio');
+});
+
+// ── why a send failed, in words that name the fix ───────────────────────────
+
+test('each refusal names the setting to fix', () => {
+  const r = creatorList.refusalReason;
+  assert.match(r('site', 503, { error: 'no DEAL_STUDIO_API_KEY on this site' }), /website \(Find creators\) has no DEAL_STUDIO_API_KEY/);
+  assert.match(r('bench', 503, { error: 'no DEAL_STUDIO_API_KEY on this bench' }), /bench has no DEAL_STUDIO_API_KEY/);
+  assert.match(r('site', 401, { error: 'wrong or missing API key' }), /not the same as CREATOR_LIST_API_KEY/);
+  // Not this API's JSON at all: the address is wrong — e.g. the bench's address
+  // in CREATOR_LIST_WEB_URL, whose password wall answers 401 in plain text.
+  assert.match(r('site', 401, null), /CREATOR_LIST_WEB_URL does not point at the creator-list website/);
+  assert.match(r('bench', 404, null), /CREATOR_LIST_API_URL does not point at the creator-list bench/);
+  assert.match(r('site', 429, null), /too many wrong keys/);
+});
+
+test('a website refusal no longer keeps the creator out of the bench queue', async () => {
+  const { profiles } = install();
+  configure();
+  process.env.CREATOR_LIST_WEB_URL = 'https://site.test';
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push(`${init.method || 'GET'} ${url}`);
+    if (url.includes('/api/partner/curated')) {
+      return { ok: false, status: 503, json: async () => ({ error: 'no DEAL_STUDIO_API_KEY on this site' }) };
+    }
+    return { ok: true, status: 202, json: async () => ({ status: 'queued', request: { id: 'r1', status: 'queued' } }) };
+  };
+  // sync() uses the module's fetch: route it through the same fake.
+  const realFetch = global.fetch;
+  global.fetch = fetchImpl;
+  try {
+    const out = await creatorList.addToCurated('coach.mia', { fetchImpl });
+    assert.strictEqual(out.status, 'error', 'not in the collection');
+    assert.match(out.error, /website \(Find creators\) has no DEAL_STUDIO_API_KEY/);
+    assert.strictEqual(out.analysis, 'queued', 'but queued for analysis on the bench');
+    assert.ok(calls.some((c) => c.startsWith('POST ') && c.includes('/api/partner/creators/coach.mia')));
+    assert.ok(profiles.get('coach.mia'));
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.CREATOR_LIST_WEB_URL;
+    restore();
+  }
+});
+
+test('checkConnection tests both services and says what to fix', async () => {
+  configure();
+  process.env.CREATOR_LIST_WEB_URL = 'https://site.test';
+  const answers = {};
+  const fetchImpl = async (url, init) => {
+    assert.ok(!(init.body || '').includes('"handle":"x'), 'never a real handle');
+    const a = url.startsWith('https://site.test') ? answers.site : answers.bench;
+    return { ok: a.status < 400, status: a.status, json: async () => { if (!a.body) throw new Error('not json'); return a.body; } };
+  };
+  try {
+    answers.site = { status: 400, body: { error: 'bad handle' } };
+    answers.bench = { status: 400, body: { error: 'bad handle' } };
+    assert.deepStrictEqual(await creatorList.checkConnection({ fetchImpl }), { site: { ok: true }, bench: { ok: true } });
+
+    answers.site = { status: 503, body: { error: 'no DEAL_STUDIO_API_KEY on this site' } };
+    answers.bench = { status: 401, body: { error: 'wrong or missing API key' } };
+    const bad = await creatorList.checkConnection({ fetchImpl });
+    assert.match(bad.site.error, /website \(Find creators\) has no DEAL_STUDIO_API_KEY/);
+    assert.match(bad.bench.error, /bench refused the key/);
+
+    // The bench's address in the website's variable.
+    process.env.CREATOR_LIST_WEB_URL = process.env.CREATOR_LIST_API_URL;
+    const swapped = await creatorList.checkConnection({ fetchImpl });
+    assert.match(swapped.site.error, /CREATOR_LIST_WEB_URL is the bench's address/);
+  } finally {
+    delete process.env.CREATOR_LIST_WEB_URL;
+    restore();
+  }
 });
