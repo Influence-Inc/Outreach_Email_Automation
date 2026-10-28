@@ -9,7 +9,7 @@
 //                comments (services/feedVirality.js). A reel that is nowhere near
 //                the viral bar is scrolled past — nothing is spent on its creator.
 //   b. NICHE     from their own newest Reels, the way creator-list labels creators:
-//                Monid fetches them, each is split (Groq hears it, Qwen3-VL
+//                Monid fetches them, each is split (Groq hears it, GPT-6 Luna
 //                describes its frames) and Jev labels it (services/jevJudge.js).
 //                Submitted while the phone keeps scrolling; a creator Jev rejects
 //                is never opened.

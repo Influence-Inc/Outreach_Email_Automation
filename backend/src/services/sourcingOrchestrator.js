@@ -553,7 +553,7 @@ async function runWithSource(run, config, source, deps) {
     // What the creators were judged from (services/creatorLabels.js): `full` judged
     // from enough of their Reels (creator-list's labels or Monid's), `thin` from too
     // few to decide on; `labelled` Reels labelled in all, `heard` those with speech and
-    // `seen` those whose video Qwen3-VL described (services/reelVision.js).
+    // `seen` those whose video the vision model (GPT-6 Luna) described (services/reelVision.js).
     // A run of thin judgements with `failed` climbing is Monid not answering.
     reels: {
       full: 0, thin: 0, labelled: 0, heard: 0, seen: 0, failed: 0,

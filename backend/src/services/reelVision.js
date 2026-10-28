@@ -1,7 +1,7 @@
 'use strict';
 
-// What a Reel's video SHOWS, described by Qwen3-VL from frames of it — creator-list's
-// enrichment/classify/visual.py, ported for scouting.
+// What a Reel's video SHOWS, described by a vision model (GPT-6 Luna) from frames of
+// it — creator-list's enrichment/classify/visual.py, ported for scouting.
 //
 // Jev reads text only, and Tesseract turns frames into their words, so a product held up
 // to the camera, a logo on a cup, the setting and the way a Reel is filmed never reached
@@ -12,7 +12,7 @@
 //   (a Reel longer than 35 s gets its 8 frames spread evenly over the rest, so its end
 //    — where calls to action sit — is seen too)
 //
-// All frames go to Qwen3-VL-32B through OpenRouter in ONE call, with Whisper's timed
+// All frames go to GPT-6 Luna through OpenRouter in ONE call, with Whisper's timed
 // transcript and the caption as context. Its answer (summary, hook, on-screen text,
 // products, legible brands, on-screen disclosure, people, setting, how it is made) goes
 // to Jev as one more field of the state it judges (jevJudge.buildState), so topic, niche,
@@ -20,10 +20,15 @@
 // only the scrubbed description is kept.
 //
 //   JEV_API_KEY (or OPENROUTER_API_KEY / TYPESAFE_API_KEY)   the OpenRouter key, as for Jev
-//   QWEN_VL_MODEL     default qwen/qwen3-vl-32b-instruct
-//   REEL_VISION=off   skip it (Jev then judges from text, as before)
+//   REEL_VISION_MODEL  default openai/gpt-6-luna (any OpenRouter vision model)
+//   REEL_VISION=off    skip it (Jev then judges from text, as before)
 //
-// About $0.001 a Reel (11 frames of ~500 image tokens, the transcript and a short answer).
+// It was Qwen3-VL-32B (qwen/qwen3-vl-32b-instruct) until OpenRouter stopped listing it,
+// after which every Reel came back unseen. QWEN_VL_MODEL, its old setting, is no longer
+// read, so a value left over from then cannot pin the scout to a model that is gone.
+//
+// About $0.002 a Reel (11 frames, the transcript, a short reasoning pass and the answer,
+// at $0.10/M input and $0.50/M output tokens).
 
 const fs = require('fs/promises');
 const os = require('os');
@@ -31,7 +36,7 @@ const path = require('path');
 const reelMedia = require('./reelMedia');
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'qwen/qwen3-vl-32b-instruct';
+const DEFAULT_MODEL = 'openai/gpt-6-luna';
 
 const HOOK_S = 3;
 const HOOK_FRAMES = 3;
@@ -187,15 +192,40 @@ function parse(text) {
   return out;
 }
 
+const visionModel = () => String(process.env.REEL_VISION_MODEL || '').trim() || DEFAULT_MODEL;
+
 /**
- * One call to Qwen3-VL through OpenRouter's chat completions. Retries on 429/5xx.
- * Returns { text, model, costUsd }. No `response_format`: OpenRouter's Qwen3-VL hosts
- * reject it (creator-list, 2026-10-27); the prompt asks for JSON and parse() finds it.
+ * The request for one model. Model families differ in what they accept:
+ *
+ *   openai/*  GPT-6 models reason before they answer and take no `temperature`. Their
+ *             reasoning is kept short (`effort: low` — describing frames is looking, not
+ *             puzzling), `max_tokens` leaves room for it on top of the answer, and the
+ *             answer is asked for as a JSON object.
+ *   others    as for Qwen3-VL: `temperature: 0` and no `response_format`, which
+ *             OpenRouter's Qwen3-VL hosts rejected (creator-list, 2026-10-27); the prompt
+ *             asks for JSON and parse() finds it.
  */
-async function callQwen(msgs, { fetchImpl = fetch, key = openRouterKey(), retries = 3 } = {}) {
+function requestBody(model, msgs) {
+  const body = { model, messages: msgs, usage: { include: true } };
+  if (/^openai\//.test(model)) {
+    return {
+      ...body,
+      reasoning: { effort: 'low' },
+      max_tokens: 4000,
+      response_format: { type: 'json_object' },
+    };
+  }
+  return { ...body, temperature: 0, max_tokens: 1200 };
+}
+
+/**
+ * One call to the vision model through OpenRouter's chat completions. Retries on
+ * 429/5xx. Returns { text, model, costUsd }.
+ */
+async function callVision(msgs, { fetchImpl = fetch, key = openRouterKey(), retries = 3 } = {}) {
   if (!key) throw new Error('the OpenRouter key (JEV_API_KEY) is not set');
-  const model = process.env.QWEN_VL_MODEL || DEFAULT_MODEL;
-  const body = JSON.stringify({ model, messages: msgs, temperature: 0, max_tokens: 1200, usage: { include: true } });
+  const model = visionModel();
+  const body = JSON.stringify(requestBody(model, msgs));
   for (let attempt = 0; ; attempt += 1) {
     let res;
     try {
@@ -208,7 +238,7 @@ async function callQwen(msgs, { fetchImpl = fetch, key = openRouterKey(), retrie
       });
     } catch (_) {
       if (attempt < retries) { await sleep(1000 * 2 ** (attempt + 1)); continue; } // eslint-disable-line no-await-in-loop
-      throw new Error('Qwen3-VL via OpenRouter: connection failed');
+      throw new Error(`${model} via OpenRouter: connection failed`);
     }
     if ([429, 500, 502, 503, 504].includes(res.status) && attempt < retries) {
       await sleep(1000 * 2 ** (attempt + 1)); // eslint-disable-line no-await-in-loop
@@ -218,7 +248,7 @@ async function callQwen(msgs, { fetchImpl = fetch, key = openRouterKey(), retrie
     try { raw = await res.json(); } catch (_) { /* not JSON */ }
     if (!res.ok) {
       const msg = raw && raw.error && raw.error.message ? `: ${raw.error.message}` : '';
-      throw new Error(`Qwen3-VL via OpenRouter: HTTP ${res.status}${msg}`);
+      throw new Error(`${model} via OpenRouter: HTTP ${res.status}${msg}`);
     }
     const choice = (raw.choices || [])[0] || {};
     const usage = raw.usage || {};
@@ -252,7 +282,7 @@ async function describe(buf, reel = {}, deps = {}) {
     const times = frameTimes(seconds);
     const frames = await cutFrames(video, times, dir, { exec });
     if (!frames.length) return { cues: null, frameTimes: times, error: 'ffmpeg cut no frames' };
-    const res = await (deps.callQwen || callQwen)(messages({ ...reel, seconds }, frames), {
+    const res = await (deps.callVision || callVision)(messages({ ...reel, seconds }, frames), {
       fetchImpl: deps.fetchImpl, key: deps.key,
     });
     return {
@@ -289,7 +319,8 @@ module.exports = {
   cutFrames,
   messages,
   parse,
-  callQwen,
+  callVision,
+  requestBody,
   jevText,
   configured,
   speechOf,

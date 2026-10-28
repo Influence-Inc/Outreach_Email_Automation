@@ -19,7 +19,7 @@
 // Jev is text-only. "Screenshots" reach it as the words on them: frames are cut
 // from the recording and read with Tesseract, the same way creator-list reads a
 // Reel's cover. A creator's own Reels (services/creatorLabels.js) also reach it as
-// what they show: Qwen3-VL describes frames of each video (services/reelVision.js). Instagram's own player chrome (top bar, the handle and caption
+// what they show: GPT-6 Luna describes frames of each video (services/reelVision.js). Instagram's own player chrome (top bar, the handle and caption
 // strip) is cropped off first; the caption arrives separately from the phone's
 // accessibility tree, which reads it exactly.
 //
@@ -323,7 +323,7 @@ async function transcribe(buf, mimeType = 'video/mp4', { fetchImpl = fetch, key 
       text: String(body.text || '').trim(),
       language: body.language || null,
       duration: Number.isFinite(Number(body.duration)) ? Number(body.duration) : null,
-      // Timed segments: the vision step (services/reelVision.js) shows Qwen what is said when.
+      // Timed segments: the vision step (services/reelVision.js) shows the vision model what is said when.
       segments: (Array.isArray(body.segments) ? body.segments : [])
         .filter((x) => x && Number.isFinite(Number(x.start)) && Number.isFinite(Number(x.end)) && String(x.text || '').trim())
         .map((x) => ({ start: Number(x.start), end: Number(x.end), text: String(x.text).trim() })),
@@ -337,7 +337,7 @@ const HASHTAG = /#([\p{L}\p{N}_]+)/gu;
 
 /**
  * What Jev reads about one reel — creator-list's `state()`, from what the phone saw.
- * `visual` is Qwen3-VL's description of the video's frames (services/reelVision.js);
+ * `visual` is the vision model's (GPT-6 Luna's) description of the video's frames (services/reelVision.js);
  * a reel without one is asked exactly as before.
  */
 function buildState({ username, caption, transcript, onScreenText, durationSeconds, visual }) {
