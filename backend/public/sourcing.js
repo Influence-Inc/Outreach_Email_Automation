@@ -228,6 +228,14 @@ async function feedMock() {
   }
 }
 
+// The handle, with the views range under it: one cell, so the tables have a
+// column to spare for the text that needs it.
+function creatorCell(c) {
+  const views = viewRange(c.reels);
+  return handleLink(c.username)
+    + (views === '—' ? '' : `<span class="cell-sub">${views} views</span>`);
+}
+
 function viewRange(reels) {
   const vs = (reels || [])
     .map((r) => Number(r && r.views))
@@ -356,8 +364,7 @@ function renderCandidates(rows) {
   for (const c of rows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${handleLink(c.username)}</td>
-      <td>${viewRange(c.reels)}</td>
+      <td>${creatorCell(c)}</td>
       <td>${topicCell(c)}${basisOf(c)}</td>
       <td>${labelCell(c, 'genre')}</td>
       <td>${labelCell(c, 'format')}</td>
@@ -447,7 +454,7 @@ function renderReview(rows) {
   if (!tb) return;
   tb.innerHTML = '';
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="scout-hint">Nothing waiting for review.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="6" class="scout-hint">Nothing waiting for review.</td></tr>';
     return;
   }
   for (const c of rows) {
@@ -455,17 +462,20 @@ function renderReview(rows) {
     const labels = [topicCell(c), labelCell(c, 'genre'), labelCell(c, 'format')].join(' · ') + basisOf(c);
     const held = (c.evidence && c.evidence.reviewHold) || '';
     const tr = document.createElement('tr');
+    // The decision buttons sit under the reason they go with, in the same cell,
+    // so they are never pushed off the side of the card.
     tr.innerHTML = `
-      <td>${handleLink(c.username)}</td>
-      <td>${viewRange(c.reels)}</td>
+      <td>${creatorCell(c)}</td>
       <td>${labels}</td>
       <td>${fitOf(c)}</td>
       <td>${reelOf(c)}</td>
       <td>${escapeHtml(held) || '—'}</td>
-      <td><textarea data-note="${c.id}" rows="2" maxlength="500" placeholder="e.g. only memes, no real tutorials" style="width:100%;min-width:180px;font:inherit;font-size:13px"></textarea></td>
-      <td style="white-space:nowrap">
-        <button data-approve="${c.id}" class="btn-primary small">Shortlist</button>
-        <button data-reject="${c.id}" class="ghost small">Reject</button>
+      <td>
+        <textarea class="review-note" data-note="${c.id}" rows="2" maxlength="500" placeholder="e.g. only memes, no real tutorials"></textarea>
+        <div class="review-actions">
+          <button data-approve="${c.id}" class="btn-primary small">Shortlist</button>
+          <button data-reject="${c.id}" class="ghost small">Reject</button>
+        </div>
       </td>`;
     tb.appendChild(tr);
   }
