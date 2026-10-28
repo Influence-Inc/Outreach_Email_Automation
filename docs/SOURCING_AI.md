@@ -44,7 +44,7 @@ model docs for current rates.
 | `GEMINI_API_KEY` | *(unset)* | Enables the multimodal judge. Unset ⇒ falls back to Claude/keywords. **Paste the raw value — no surrounding quotes, no leading space.** |
 | `GEMINI_MODEL` | `gemini-flash-lite-latest` | Judge model. Quotes/whitespace are stripped. The default is Google's rolling alias for the current flash-lite model — a pinned generation (e.g. `gemini-2.5-flash-lite`) can 404 later with `"this model is no longer available to new users"` even though nothing in this repo changed; pin a dated snapshot only if you need reproducibility across a model upgrade. |
 | `GEMINI_MEDIA_RESOLUTION` | `low` | `low` (cheapest) / `medium` / `high` / `off`. Not every model accepts this field — one that doesn't answers with a bare `400 INVALID_ARGUMENT` naming no field. The client probes once, retries without it, and then stops sending it; `off` skips the probe. |
-| `QWEN_VL_MODEL` | `qwen/qwen3-vl-32b-instruct` | The vision model that describes frames of each of a creator's Reels for Jev (see *Judging a creator from their Reels*), called through OpenRouter with the same key as Jev. |
+| `REEL_VISION_MODEL` | `openai/gpt-6-luna` | The vision model that describes frames of each of a creator's Reels for Jev (see *Judging a creator from their Reels*), called through OpenRouter with the same key as Jev. Any OpenRouter vision model ID works. Replaces `QWEN_VL_MODEL`, which is no longer read: Qwen3-VL-32B left OpenRouter, and every Reel came back unseen. |
 | `REEL_VISION` | on when Jev's OpenRouter key is set | `off` skips the vision step: Jev then judges each Reel from its words alone. |
 | `SOURCING_REMOTE_CONTROL` | off | `on` enables backend‑driven scouting + the reel pipeline (agent mode). |
 | `SOURCING_AI_SEARCH_TERMS` | on when `GEMINI_API_KEY` is set | `off` disables AI search‑term expansion (see *Search terms* below). |
@@ -185,14 +185,14 @@ phone read off their profile:
      seconds** (the hook, the part of a Reel that says most) and then **one frame
      in the middle of each 4-second window, at most 8 more** (a Reel longer than
      35 s gets its 8 spread evenly, so its end is seen too). All of them go to
-     **Qwen3-VL-32B** through OpenRouter in one call, with Whisper's timed
+     **GPT-6 Luna** through OpenRouter in one call, with Whisper's timed
      transcript and the caption as context. It answers in JSON: a summary, what
      the first 3 seconds show, on-screen text, products, brands legible on
      screen, any on-screen ad disclosure, the people, the setting and how the
-     Reel is made (talking head, screen recording, montage…). About $0.001 a
+     Reel is made (talking head, screen recording, montage…). About $0.002 a
      Reel. A Reel it cannot describe is still labelled from its words.
    - One Jev call per Reel with the caption, hashtags, transcript, on-screen text
-     and Qwen3-VL's description (`video_frames_description` in its state), and
+     and the vision model's description (`video_frames_description` in its state), and
      creator-list's questions: the four content ones (taxonomy 2.3) and the three
      audience ones. Jev reads text only, so the frames reach it as their words and
      as that description, as in creator-list.
@@ -227,11 +227,11 @@ Reels not collected* in red), with Monid's error, and why any Reel was not seen,
 on hover; the label line reads *from 9 of 10 reels* and the audience estimate.
 The run card's **Judged from Reels** counts creators judged from enough Reels (red
 at *0 of N* — check Monid), **Reels heard** the Reels whose speech Groq
-transcribed, and **Reels seen** the Reels whose video Qwen3-VL described (red at
-*0 of N* — check the OpenRouter key, `QWEN_VL_MODEL`, or ffmpeg). The run log ends
+transcribed, and **Reels seen** the Reels whose video the vision model described (red at
+*0 of N* — check the OpenRouter key, `REEL_VISION_MODEL`, or ffmpeg). The run log ends
 with `reels={full, thin, labelled, heard, seen, failed}`.
 
-A creator costs about 2 cents (2 TikHub calls, up to 10 Groq + Qwen3-VL + Jev
+A creator costs about 2 cents (2 TikHub calls, up to 10 Groq + GPT-6 Luna + Jev
 calls), and only creators who passed the viral rule get there. The server needs
 ffmpeg, ffprobe and tesseract (`nixpacks.toml`); the Scout page warns when one is
 missing.
@@ -251,7 +251,7 @@ cheapest first, and stops at the first one they fail:
    gets its own chance. Hidden likes go on to the next check.
    `SOURCING_FEED_ENGAGEMENT_RATE` overrides the median.
 2. **Niche, from their own Reels** — the same labelling as everywhere else
-   (Monid's 10 Reels; Groq, Qwen3-VL and Tesseract on each; Jev), submitted while
+   (Monid's 10 Reels; Groq, GPT-6 Luna and Tesseract on each; Jev), submitted while
    the phone keeps scrolling. A creator Jev rejects is **never opened**; their
    row says *profile not opened*.
 3. **Profile**: opened only for the rest — pictures of the profile and bio, and

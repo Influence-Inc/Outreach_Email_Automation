@@ -13,11 +13,11 @@
 //        each Reel         → video downloaded from Instagram's CDN, split: audio to Groq
 //                            (Whisper), frames to Tesseract           (services/reelMedia.js)
 //                          → 3 frames of the first 3 s and up to 8 more (one per 4 s) to
-//                            Qwen3-VL, which describes what the video shows
+//                            GPT-6 Luna, which describes what the video shows
 //                                                                     (services/reelVision.js)
 //                          → one Jev call: creator-list's four content questions (taxonomy 2.3)
 //                            and its three audience questions        (classify/content.py)
-//      Jev reads text only, so the frames reach it as the words on them and as Qwen3-VL's
+//      Jev reads text only, so the frames reach it as the words on them and as GPT-6 Luna's
 //      description of them, as in creator-list (enrichment/classify/visual.py).
 //      When no Reels can be collected, the caption of the reel that surfaced them is labelled
 //      instead — one reel, said as much, with a provisional fit.
@@ -28,7 +28,7 @@
 //        (beauty, fashion…) in a fifth (creator_topics.py, reference/creator_topics.json);
 //        and the estimated target audience (services/audienceEstimate.js, audience.py).
 //
-// Path 2 costs about $0.004 of TikHub calls plus Groq, Qwen3-VL (~$0.001 a Reel) and Jev for
+// Path 2 costs about $0.004 of TikHub calls plus Groq, GPT-6 Luna (~$0.001 a Reel) and Jev for
 // up to 10 Reels — about 2 cents a creator — and only runs for creators who already passed the
 // viral rule.
 //
@@ -144,7 +144,7 @@ function reelQuestions() {
 /**
  * Label one Reel the way creator-list does. Never throws: a failed step leaves that Reel
  * with what it has (a Reel that cannot be downloaded is still judged on its caption, and one
- * Qwen3-VL could not describe on its words alone).
+ * GPT-6 Luna could not describe on its words alone).
  * Returns { code, labels, usedSpeech, signals, words, seen, visionError?, error? }.
  */
 async function labelReel(row, { handle, deps = {} } = {}) {
@@ -154,7 +154,7 @@ async function labelReel(row, { handle, deps = {} } = {}) {
   let screen = { text: '' };
   let visual = null;
   const errors = [];
-  // What the video shows (Qwen3-VL): on with the OpenRouter key Jev uses, unless REEL_VISION=off.
+  // What the video shows (GPT-6 Luna): on with the OpenRouter key Jev uses, unless REEL_VISION=off.
   const see = deps.describe || (reelVision.configured() ? reelVision.describe : null);
 
   if (row.state) {
@@ -359,10 +359,10 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
   const agg = aggregate(perReel, { country, countrySource: country ? 'instagram' : 'unknown' });
   const failed = perReel.filter((r) => r.error && !r.labels).length;
   if (failed) errors.push(`${failed} of ${perReel.length} Reels could not be labelled (${perReel.find((r) => r.error && !r.labels).error})`);
-  // Kept apart from `errors`: a Reel Qwen3-VL could not describe is still labelled from its
+  // Kept apart from `errors`: a Reel GPT-6 Luna could not describe is still labelled from its
   // words, so the creator is not thin for it — but the page says why nothing was "seen".
   const unseen = perReel.filter((r) => r.visionError);
-  const visionError = unseen.length ? `${unseen.length} of ${perReel.length} Reels not seen by Qwen3-VL (${unseen[0].visionError})` : undefined;
+  const visionError = unseen.length ? `${unseen.length} of ${perReel.length} Reels not seen by the vision model (${unseen[0].visionError})` : undefined;
   return {
     source: 'reels',
     // Labelled from the caption of the reel that surfaced them, their Reels not collected.
@@ -372,7 +372,7 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
       code: r.code,
       ...Object.fromEntries(DIMENSIONS.map((d) => [d, r.labels && r.labels[d] ? r.labels[d].value : null])),
       words: r.words,
-      // Whether Qwen3-VL described the video (and why not, when it tried and failed).
+      // Whether GPT-6 Luna described the video (and why not, when it tried and failed).
       seen: r.seen || undefined,
       visionError: r.visionError || undefined,
     })),

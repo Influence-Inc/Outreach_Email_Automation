@@ -291,7 +291,7 @@ function topicCell(c) {
   // row of dashes that reads as a judgement that failed.
   const v = c && c.evidence && c.evidence.viral;
   if (!j && v && !v.pass) {
-    return '<span class="scout-hint" title="The viral rule runs first and costs nothing; only creators who pass it are labelled from their Reels (Monid, Groq, Qwen3-VL, Jev).">'
+    return '<span class="scout-hint" title="The viral rule runs first and costs nothing; only creators who pass it are labelled from their Reels (Monid, Groq, GPT-6 Luna, Jev).">'
       + 'not judged — too few viral reels</span>';
   }
   const n = j && j.labels && j.labels.niche;
@@ -347,7 +347,7 @@ function reelOf(c) {
   if (cr.source === 'creator-list') return `<span title="Labels from creator-list's index">creator-list · ${cr.reels}</span>`;
   if (cr.fallback) return `<span style="color:#b42318"${title}>1 caption — Reels not collected</span>`;
   const heard = (cr.perReel || []).filter((r) => r.words > 0).length;
-  // Reels whose video Qwen3-VL described; why it could not, on hover with the rest.
+  // Reels whose video the vision model described; why it could not, on hover with the rest.
   const seen = (cr.perReel || []).filter((r) => r.seen).length;
   const thin = j.thin || errors;
   return `<span${title}${thin ? ' style="color:#b25e09"' : ''}>${cr.labelled} of ${cr.reels} · ${heard} heard · ${seen} seen</span>`;
@@ -425,7 +425,7 @@ async function refreshRun() {
   el('run-phase').textContent = phaseOf(stats.discovery);
   el('run-heard').textContent = reels.labelled ? `${reels.heard || 0} of ${reels.labelled}` : '—';
   el('run-heard').style.color = reels.labelled && !reels.heard ? '#b42318' : '';
-  // "0 of N" on a live run: Qwen3-VL is not describing the videos (key, model, or ffmpeg).
+  // "0 of N" on a live run: the vision model is not describing the videos (OpenRouter key, REEL_VISION_MODEL, or ffmpeg).
   el('run-seen').textContent = reels.labelled ? `${reels.seen || 0} of ${reels.labelled}` : '—';
   el('run-seen').style.color = reels.labelled && !reels.seen ? '#b42318' : '';
   const switches = (stats.discovery && stats.discovery.switches) || [];

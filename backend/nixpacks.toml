@@ -1,5 +1,5 @@
 # Scouting reads a recorded reel's frames for on-screen text (services/jevJudge.js):
-# ffmpeg cuts the frames, Tesseract reads them; ffmpeg also cuts the frames Qwen3-VL
+# ffmpeg cuts the frames, Tesseract reads them; ffmpeg also cuts the frames GPT-6 Luna
 # describes (services/reelVision.js). Without them the judge still runs,
 # on the transcript and caption alone.
 [phases.setup]
