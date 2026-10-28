@@ -113,6 +113,16 @@ new account ──► PHASE 1  WARM-UP   search the keywords, scout the creators
                                                    still liking every shortlist's reel
 ```
 
+- **Both phases check a creator in the same order**, cheapest first, on the reel that
+  surfaced them: (a) its views, estimated from its likes and comments
+  (`services/feedVirality.js`) — a reel nowhere near the viral bar is passed over; (b) the
+  creator's niche, from their own latest Reels labelled the way creator-list labels creators
+  (`services/creatorLabels.js`, Jev) — a creator off target is rejected with the profile never
+  opened; and only then (c) their profile, for the real view counts the viral rule needs and
+  the bio. In warm-up this is `checkBeforeProfile` in `services/sourcingNavigator.js`; the Jev
+  verdict rides along on the candidate, so it is not paid for again after the visit. (A creator
+  found through the *Accounts* list has no reel to check, so they still go straight to the
+  profile.)
 - **Warming a creator** (`services/creatorWarmup.js`) happens right after they are
   shortlisted, on the reel that surfaced them (the phone is still on it). The navigators get
   each creator's result back through `yield` (`runWithSource` passes it to `source.next`), so

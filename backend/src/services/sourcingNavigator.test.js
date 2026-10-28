@@ -2276,3 +2276,84 @@ test('search terms learned from an on-target creator are searched later in the r
   assert.deepStrictEqual(opts.learnedTerms, ['calisthenics'], 'kept for the rest of the run');
   assert.ok(lines.some((l) => /new search terms from @coach's reels: calisthenics/.test(l)));
 });
+
+// ── warm-up follows the feed's order: views, niche, THEN the profile ────────
+//
+// Warm-up used to open every creator's profile first and only then have their
+// Reels judged. It now checks (a) the reel's views from its likes and comments
+// and (b) the creator's niche from their latest Reels, before the profile.
+
+function warmupViews(player) {
+  return [
+    { screen: 'search', targets: { searchTab: { x: 10, y: 10 } } },
+    { screen: 'search', targets: { searchBox: { x: 20, y: 20 } } },
+    { screen: 'search_results', reelResults: [{ index: 0 }], targets: { 'reelResult:0': { x: 181, y: 320 }, back: { x: 56, y: 136 } } },
+    { screen: 'search_results', targets: { 'reelResult:0': { x: 181, y: 320 } } },
+    {
+      screen: 'reels_feed', author: 'coach', caption: 'leg day',
+      targets: { authorProfile: { x: 205, y: 1275 }, back: { x: 48, y: 136 } }, ...player,
+    },
+    { screen: 'profile', username: 'coach', followers: 19500, reels: [{ views: 150000 }, { views: 170000 }], targets: { back: { x: 48, y: 136 } } },
+    { screen: 'reels_feed', author: 'coach', targets: { back: { x: 48, y: 136 } } },
+    { screen: 'search_results', targets: { back: { x: 56, y: 136 } } },
+  ];
+}
+
+const tappedProfile = (driver) => driver.ops.some((o) => o[0] === 'tap' && o[1] === 205 && o[2] === 1275);
+
+function judgeThat(decision, driver) {
+  return async (candidate) => {
+    driver.ops.push(['judge', candidate.username]);
+    return { score: decision === 'reject' ? 0 : 0.9, source: 'jev', evidence: { jev: { decision } } };
+  };
+}
+
+test('warm-up: a reel whose likes and comments put it nowhere near viral is passed over before anything else', async () => {
+  const driver = fakeDriver();
+  const judge = judgeThat('shortlist', driver);
+  const out = [];
+  for await (const c of scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['homegym'], max: 1 },
+    read: scriptedRead(warmupViews({ likes: 300, comments: 10 })), deps: { judge },
+  })) out.push(c);
+
+  assert.strictEqual(out.length, 0);
+  assert.ok(!driver.ops.some((o) => o[0] === 'judge'), 'no niche check paid for');
+  assert.ok(!tappedProfile(driver), 'profile never opened');
+});
+
+test('warm-up: a creator whose Reels are off target is rejected without opening the profile', async () => {
+  const driver = fakeDriver();
+  const out = [];
+  for await (const c of scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['homegym'], max: 1 },
+    read: scriptedRead(warmupViews({ likes: 9000, comments: 300 })), deps: { judge: judgeThat('reject', driver) },
+  })) out.push(c);
+
+  assert.ok(!tappedProfile(driver), 'profile never opened');
+  assert.strictEqual(out.length, 1, 'handed on, so the rejection is recorded');
+  assert.strictEqual(out[0].username, 'coach');
+  assert.strictEqual(out[0].evidence.profileVisit, 'skipped');
+  assert.strictEqual(out[0]._nicheVerdict.evidence.jev.decision, 'reject');
+  assert.strictEqual(out[0].sourceTerm, 'homegym');
+  assert.ok(out[0].evidence.feedViews.views > 100000, 'views estimated from likes and comments');
+});
+
+test('warm-up: views, then niche, then the profile — and the verdict is not paid for twice', async () => {
+  const driver = fakeDriver();
+  const out = [];
+  for await (const c of scout({
+    driver, config: { pacingMs: 0 }, opts: { keywords: ['homegym'], max: 1 },
+    read: scriptedRead(warmupViews({ likes: 9000, comments: 300 })), deps: { judge: judgeThat('shortlist', driver) },
+  })) out.push(c);
+
+  const judged = driver.ops.findIndex((o) => o[0] === 'judge');
+  const opened = driver.ops.findIndex((o) => o[0] === 'tap' && o[1] === 205 && o[2] === 1275);
+  assert.ok(judged >= 0 && opened > judged, 'niche checked before the profile was opened');
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].username, 'coach');
+  assert.strictEqual(out[0].followers, 19500, 'the profile was read');
+  // Carried along, so the orchestrator does not judge again.
+  assert.strictEqual(out[0]._nicheVerdict.evidence.jev.decision, 'shortlist');
+  assert.strictEqual(out[0].evidence.feedViews.from, 'likes');
+});

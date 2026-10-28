@@ -8,7 +8,10 @@
 // loop, and the Scout page no longer asks which "discovery mode" to use:
 //
 //   PHASE 1  WARM-UP  Search the run's keywords and scout the creators whose
-//                     reels come up (sourcingNavigator.scout). Every creator
+//                     reels come up (sourcingNavigator.scout), checked in the
+//                     feed's order: views from the reel's likes and comments,
+//                     then niche from their latest Reels, then — only for those
+//                     who pass — the profile. Every creator
 //                     shortlisted is warmed — their reel liked
 //                     (services/creatorWarmup.js) — which teaches Instagram what
 //                     this account watches. After `goal` creators are warmed the
