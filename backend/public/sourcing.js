@@ -682,6 +682,57 @@ function populateWatchHosts(rows) {
   el('watch-card').hidden = rows.length === 0;
 }
 
+// No picture: an empty frame, not a broken-image icon with its alt text.
+function clearFrame() {
+  const img = el('watch-frame');
+  img.removeAttribute('src');
+  img.hidden = true;
+  el('watch-empty').style.display = '';
+}
+
+function agoText(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 90) return `${s}s`;
+  const m = Math.round(s / 60);
+  return m < 90 ? `${m} min` : `${Math.round(m / 60)} h`;
+}
+
+/**
+ * Why phone #id has no live picture, in words that say what to do. Without
+ * this every cause read "Waiting for the runner to publish a frame…" forever:
+ * a phone that is offline, one online with streaming never switched on, one
+ * whose pictures stopped, and one whose pictures were refused all looked alike.
+ * `state` is GET /hosts/:id/frame/state; `seenMs` how long ago the phone last
+ * checked in at all. Pure, for the page and its checks.
+ */
+function noFrameReason(state, seenMs, id) {
+  const st = state || {};
+  const now = st.now || Date.now();
+  if (st.lastError && (!st.lastFrameAt || st.lastError.at >= st.lastFrameAt)) {
+    return `Phone #${id} is sending pictures, but the server refused the last one: ${st.lastError.message}.`;
+  }
+  if (st.lastFrameAt) {
+    return `Phone #${id} sent pictures until ${agoText(now - st.lastFrameAt)} ago, then stopped. `
+      + 'Open the Sourcing Agent app: its "phone view" line says why, or the agent was stopped.';
+  }
+  if (seenMs == null || seenMs > 2 * 60 * 1000) {
+    return `Phone #${id} is not connected${seenMs != null ? ` (last seen ${agoText(seenMs)} ago)` : ''}. `
+      + 'Open the Sourcing Agent app on it and tap "Start agent".';
+  }
+  return `Phone #${id} is connected but has not sent a picture. In the Sourcing Agent app, tick `
+    + '"Stream the screen to the dashboard" (it takes effect straight away), and check its "phone view" line if it still does not appear.';
+}
+
+async function explainNoFrame(id) {
+  let state = null;
+  try {
+    state = await api(`/api/sourcing/hosts/${id}/frame/state`);
+  } catch (_) { /* an older backend: explain from what the phone list says */ }
+  const host = (latestHosts || []).find((h) => Number(h.id) === Number(id));
+  const seenMs = host && host.last_seen_at ? Date.now() - new Date(host.last_seen_at).getTime() : null;
+  return noFrameReason(state, seenMs, id);
+}
+
 async function fetchFrame() {
   if (!watchHostId) return;
   try {
@@ -689,9 +740,8 @@ async function fetchFrame() {
       headers: { Accept: 'image/*' },
     });
     if (resp.status === 204) {
-      el('watch-frame').removeAttribute('src');
-      el('watch-empty').style.display = '';
-      setWatchStatus('Waiting for the runner to publish a frame…');
+      clearFrame();
+      setWatchStatus(await explainNoFrame(watchHostId), 'warn');
       return;
     }
     if (resp.status === 404) {
@@ -710,6 +760,7 @@ async function fetchFrame() {
     const prev = img.src;
     img.onload = () => { if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev); };
     img.src = url;
+    img.hidden = false;
     el('watch-empty').style.display = 'none';
     setWatchStatus('');
   } catch (err) {
@@ -734,8 +785,7 @@ function stopWatching() {
   watchHostId = null;
   el('watch-toggle').textContent = 'Start watching';
   el('watch-pause').disabled = true;
-  el('watch-frame').removeAttribute('src');
-  el('watch-empty').style.display = '';
+  clearFrame();
   setWatchStatus('');
 }
 

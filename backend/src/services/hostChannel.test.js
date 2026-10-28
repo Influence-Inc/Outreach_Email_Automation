@@ -67,3 +67,37 @@ test('pushControl caps queue depth to prevent runaway', () => {
   const drained = ch.drainControls(9);
   assert.strictEqual(drained.length, ch.MAX_CONTROL_QUEUE);
 });
+
+// ── why there is no live frame ──────────────────────────────────────────────
+
+test('frameState says when the last frame arrived, and nothing for a silent host', () => {
+  ch._reset();
+  assert.deepStrictEqual(
+    { ...ch.frameState(6), staleAfterMs: undefined },
+    { lastFrameAt: null, lastError: null, misdirected: null, staleAfterMs: undefined },
+  );
+  ch.publishFrame(6, { dataBase64: Buffer.from('x').toString('base64') });
+  assert.ok(ch.frameState(6).lastFrameAt > 0);
+  assert.strictEqual(ch.frameState(6).staleAfterMs, ch.FRAME_STALE_MS);
+});
+
+test('a refused frame is remembered until the next good one', () => {
+  ch._reset();
+  const big = Buffer.alloc(ch.MAX_FRAME_BYTES + 1).toString('base64');
+  assert.throws(() => ch.publishFrame(6, { dataBase64: big }), /too large/);
+  assert.match(ch.frameState(6).lastError.message, /too large/);
+  ch.publishFrame(6, { dataBase64: Buffer.from('ok').toString('base64') });
+  assert.strictEqual(ch.frameState(6).lastError, null);
+});
+
+test('a frame addressed to another host number is noted on the real host', () => {
+  ch._reset();
+  ch.publishFrame(6, { dataBase64: Buffer.from('x').toString('base64') }, { claimedId: 3 });
+  assert.ok(ch.latestFrame(6), 'filed under the host it belongs to');
+  assert.strictEqual(ch.latestFrame(3), null);
+  assert.strictEqual(ch.frameState(6).misdirected.claimedId, 3);
+  // Addressed correctly: nothing to note.
+  ch._reset();
+  ch.publishFrame(6, { dataBase64: Buffer.from('x').toString('base64') }, { claimedId: 6 });
+  assert.strictEqual(ch.frameState(6).misdirected, null);
+});

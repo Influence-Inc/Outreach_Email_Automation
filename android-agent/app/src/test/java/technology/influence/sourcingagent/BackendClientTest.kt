@@ -184,6 +184,18 @@ class BackendClientTest {
     }
 
     @Test
+    fun `publishFrame returns the host the backend filed the frame under`() {
+        // The backend files a frame under the host its token belongs to, which
+        // differs from the URL's number when the Host ID field was mistyped.
+        respond(200, """{"ok":true,"bytes":4,"hostId":6}""")
+        assertEquals(6, client.publishFrame(3, dataBase64 = "AAAA", mediaType = "image/jpeg", width = 1, height = 1))
+
+        // An older backend does not say.
+        respond(200, """{"ok":true,"bytes":4}""")
+        assertEquals(null, client.publishFrame(3, dataBase64 = "AAAA", mediaType = "image/jpeg", width = 1, height = 1))
+    }
+
+    @Test
     fun `uploadClip posts raw bytes under the clip content type`() {
         respond(200, """{"clipId":"clip_abc"}""")
 

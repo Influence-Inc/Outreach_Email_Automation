@@ -40,6 +40,9 @@ class AgentService : Service() {
         const val EXTRA_PROJECTION_DATA = "projection_data"
         const val ACTION_STOP = "technology.influence.sourcingagent.STOP"
 
+        /** Re-read the "Stream the screen" tick while the agent is running. */
+        const val ACTION_SYNC_MIRROR = "technology.influence.sourcingagent.SYNC_MIRROR"
+
         /** How long to wait between retries once the backend says the mirror is off. */
         private const val MIRROR_DISABLED_RETRY_MS = 30_000L
 
@@ -94,7 +97,20 @@ class AgentService : Service() {
             stopEverything()
             return START_NOT_STICKY
         }
-        if (running.get()) return START_STICKY
+        if (running.get()) {
+            // Already running: the only thing a second start can change is the
+            // "Stream the screen" tick. It used to be read once, at start, so
+            // ticking it afterwards streamed nothing until the agent was stopped
+            // and started again — and the dashboard just waited for frames.
+            syncMirror()
+            return START_STICKY
+        }
+        if (intent?.action == ACTION_SYNC_MIRROR) {
+            // The agent is not running, so there is nothing to stream from yet;
+            // the tick is saved and applies when it starts.
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
 
         val hasProjection = intent != null &&
             intent.hasExtra(EXTRA_PROJECTION_RESULT_CODE) &&
@@ -106,11 +122,7 @@ class AgentService : Service() {
         running.set(true)
         isRunning = true
         worker = Thread(::loop, "sourcing-agent").apply { start() }
-        if (prefs.liveMirror) {
-            mirror = Thread(::mirrorLoop, "sourcing-mirror").apply { start() }
-        } else {
-            mirrorStatus = "off — tick \"Stream the screen\" before starting"
-        }
+        syncMirror()
         return START_STICKY
     }
 
@@ -226,12 +238,27 @@ class AgentService : Service() {
      * meantime. Now it backs off and keeps retrying, and says so in [mirrorStatus]
      * so the reason is visible on the setup screen instead of being a blank panel.
      */
+    /** Start or stop the mirror thread to match the "Stream the screen" tick. */
+    @Synchronized
+    private fun syncMirror() {
+        if (prefs.liveMirror) {
+            if (mirror?.isAlive != true) {
+                mirrorStatus = "starting"
+                mirror = Thread(::mirrorLoop, "sourcing-mirror").apply { start() }
+            }
+        } else {
+            mirror?.interrupt()
+            mirror = null
+            mirrorStatus = "off — tick \"Stream the screen\" to show this phone on the dashboard"
+        }
+    }
+
     private fun mirrorLoop() {
         val backend = BackendClient(prefs.backendUrl, prefs.hostToken)
         val hostId = prefs.hostId
         var backoffMs = prefs.frameMs
 
-        while (running.get()) {
+        while (running.get() && prefs.liveMirror && !Thread.currentThread().isInterrupted) {
             val service = SourcingAccessibilityService.instance
             if (service == null) {
                 mirrorStatus = "waiting for the accessibility service"
@@ -242,14 +269,23 @@ class AgentService : Service() {
             try {
                 val jpeg = service.screenshotJpeg()
                 val (w, h) = service.windowSize()
-                backend.publishFrame(
+                val filedUnder = backend.publishFrame(
                     hostId = hostId,
                     dataBase64 = Base64.encodeToString(jpeg, Base64.NO_WRAP),
                     mediaType = "image/jpeg",
                     width = w,
                     height = h,
                 )
-                mirrorStatus = "streaming (${jpeg.size / 1024} KB/frame)"
+                // The backend files the frame under the phone this app's token
+                // belongs to, which is the number to watch on the dashboard. A
+                // different Host ID typed in here is named, so it can be fixed.
+                val asPhone = filedUnder ?: hostId
+                val mistyped = if (filedUnder != null && filedUnder != hostId) {
+                    " — Host ID here says $hostId, set it to $filedUnder"
+                } else {
+                    ""
+                }
+                mirrorStatus = "streaming as phone #$asPhone (${jpeg.size / 1024} KB/frame)$mistyped"
                 backoffMs = prefs.frameMs
             } catch (e: BackendException) {
                 if (e.status == 404) {
@@ -267,6 +303,9 @@ class AgentService : Service() {
 
             runCatching { drainControls(backend, hostId) }
             sleep(backoffMs)
+        }
+        if (!prefs.liveMirror) {
+            mirrorStatus = "off — tick \"Stream the screen\" to show this phone on the dashboard"
         }
     }
 

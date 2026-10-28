@@ -96,6 +96,8 @@ class BackendClient(baseUrl: String, private val token: String) {
      * The backend caps a frame at [MAX_FRAME_BYTES] (`hostChannel.js`), so the
      * caller must send a downscaled JPEG — a full-resolution PNG screencap
      * routinely blows past the cap and comes back as "frame too large".
+     *
+     * Returns the host number the backend filed the frame under.
      */
     fun publishFrame(
         hostId: Int,
@@ -103,7 +105,7 @@ class BackendClient(baseUrl: String, private val token: String) {
         mediaType: String,
         width: Int?,
         height: Int?,
-    ) {
+    ): Int? {
         val payload = JSONObject().apply {
             put("dataBase64", dataBase64)
             put("mediaType", mediaType)
@@ -111,7 +113,11 @@ class BackendClient(baseUrl: String, private val token: String) {
             put("height", height ?: JSONObject.NULL)
         }
         val (status, body) = request("POST", "/api/sourcing/hosts/$hostId/frame", payload.toString())
-        expectJson("POST", "/frame", status, body)
+        val json = expectJson("POST", "/frame", status, body)
+        // The host the backend filed the frame under — its token's, which can
+        // differ from [hostId] when the Host ID field was mistyped. Null from a
+        // backend too old to say.
+        return if (json.has("hostId")) json.optInt("hostId") else null
     }
 
     /**
