@@ -434,6 +434,9 @@ async function refreshRun() {
   el('run-video').textContent = judged ? `${reels.full || 0} of ${judged}` : '—';
   el('run-video').style.color = judged && !reels.full ? '#b42318' : '';
   el('run-judges').textContent = judgesSummary(stats.judgedBy);
+  // What collecting creators' Reels cost on Monid this run.
+  const mo = stats.monid || {};
+  el('run-monid').textContent = mo.calls ? `$${Number(mo.usd || 0).toFixed(3)} · ${mo.calls} calls · ${mo.creators || 0} creators` : '—';
   el('run-phase').textContent = phaseOf(stats.discovery);
   el('run-heard').textContent = reels.labelled ? `${reels.heard || 0} of ${reels.labelled}` : '—';
   el('run-heard').style.color = reels.labelled && !reels.heard ? '#b42318' : '';
@@ -921,6 +924,14 @@ async function loadJudgeStatus() {
   // Without Monid no creator's own Reels are collected: each is judged from the
   // reel that surfaced them alone, and held for review.
   const mo = status && status.monid;
+  const capped = mo && mo.today && mo.today.capped;
+  if (mo && banner.hidden && capped && !mo.empty && mo.configured) {
+    banner.textContent = `Deal Studio's Monid budget for today is spent ($${Number(mo.today.usd).toFixed(2)} of `
+      + `$${Number(mo.today.cap).toFixed(2)}, MONID_USD_PER_DAY): creators' own Reels are not collected until tomorrow (UTC) — `
+      + 'each is judged from the reel that surfaced them and held in Pending review. Raise MONID_USD_PER_DAY to spend more.';
+    banner.className = 'judge-banner warn';
+    banner.hidden = false;
+  }
   if (mo && banner.hidden && (mo.empty || !mo.configured)) {
     banner.textContent = mo.empty
       ? 'Monid\'s wallet is empty, so creators\' own Reels cannot be collected: each one is judged from '

@@ -754,6 +754,7 @@ async function judge(candidate, config = {}, deps = {}) {
       perReel: creator.perReel,
       bio: creator.bio || undefined,
       costUsd: creator.costUsd,
+      monid: creator.monid || undefined,
       errors: creator.errors && creator.errors.length ? creator.errors : undefined,
       visionError: creator.visionError || undefined,
     },

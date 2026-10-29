@@ -921,8 +921,8 @@ test('the run counts creators judged from their Reels, and from too few', async 
     source: 'reels', reels: 10, labelled, perReel: words.map((w) => ({ words: w })), errors,
   });
   const verdicts = {
-    full: { decision: 'shortlist', reasons: [], fit: 0.8, creator: creator(9, [12, 0, 30], undefined) },
-    thin: { decision: 'review', reasons: ['only 1 reel to judge'], fit: 1, thin: true, provisional: true, creator: creator(1, [0], ['Reels: Monid wallet is empty']) },
+    full: { decision: 'shortlist', reasons: [], fit: 0.8, creator: { ...creator(9, [12, 0, 30], undefined), monid: { calls: 2, usd: 0.004 } } },
+    thin: { decision: 'review', reasons: ['only 1 reel to judge'], fit: 1, thin: true, provisional: true, creator: { ...creator(1, [0], ['Reels: Monid wallet is empty']), monid: { calls: 0, usd: 0 } } },
   };
   deps.nicheClassify = async (c) => ({
     score: 0.8, reason: 'x', source: 'jev', evidence: { jev: { ...verdicts[c.kind], labels: {} } },
@@ -934,6 +934,8 @@ test('the run counts creators judged from their Reels, and from too few', async 
   ]);
   const { stats } = await runWithSource(run, { ...goodCfg, keywords: ['gym'] }, source, deps);
   assert.deepStrictEqual(stats.reels, { full: 1, thin: 1, labelled: 10, heard: 2, seen: 0, failed: 1 });
+  // What the run spent on Monid: only the creator whose Reels were collected.
+  assert.deepStrictEqual(stats.monid, { calls: 2, usd: 0.004, creators: 1 });
 });
 
 test('Jev off target: rejected with its reason', async () => {

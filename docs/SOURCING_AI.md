@@ -224,6 +224,16 @@ rule), the way creator-list labels every creator it indexes
    (`creator_topics.json`) — plus the **estimated audience** (`audience.py`, ported
    to `services/audienceEstimate.js` and checked against it).
 
+**What Monid costs.** A creator collected through Monid is two calls — their card and
+one page of 12 Reels — **$0.004**; nothing is fetched twice for the same creator. Each run
+adds it up: the run card's **Monid spend** tile (*$0.048 · 24 calls · 12 creators*) and the run
+log's `monid={calls, usd, creators}`. Deal Studio's own spend is capped per UTC day by
+`MONID_USD_PER_DAY` (default **$1.00**, 250 creators; `none` lifts it). Once it is spent,
+creators are judged from the reel that surfaced them and held for review, and the Scout page
+says so. The cap counts in the running process, so a restart starts the day's count again.
+(Until 2026-10-29 a feed creator whose analysis took over 2 minutes was judged a second
+time after the profile, fetching them from Monid twice; that path is gone.)
+
 **An empty Monid wallet.** Monid answers 402 and no Reels are collected. After the
 first 402 Deal Studio stops calling Monid for 3 minutes (then tries again, so a
 top-up is picked up on its own), and the Scout page shows a red banner: *Monid's

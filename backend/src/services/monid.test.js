@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const monid = require('./monid');
 
 // A 402 pauses calls for a few minutes (walletState); no test may inherit that.
-test.afterEach(() => monid._resetWallet());
+test.afterEach(() => { monid._resetWallet(); monid._resetLedger(); delete process.env.MONID_USD_PER_DAY; });
 
 const json = (status, body) => ({ status, json: async () => body });
 const noWait = async () => {};
@@ -84,4 +84,31 @@ test('after an empty-wallet refusal, calls pause instead of being refused one by
   // A while later it tries again, so a top-up is picked up on its own.
   assert.strictEqual(monid.walletState(Date.now() + monid.EMPTY_PAUSE_MS + 1).empty, false);
   monid._resetWallet();
+});
+
+// ── Deal Studio's own daily budget ──────────────────────────────────────────
+
+const completed = (cost) => async () => json(200, { status: 'COMPLETED', output: { data: { username: 'a' } }, cost: { value: cost } });
+
+test('each call is counted against today, and the daily cap refuses the next one before it is made', async () => {
+  process.env.MONID_USD_PER_DAY = '0.004';
+  let calls = 0;
+  const fetchImpl = async (...a) => { calls += 1; return completed(0.002)(...a); };
+  await monid.run(monid.CARD, { username: 'a' }, { apiKey: 'k', wait: noWait, fetchImpl });
+  await monid.run(monid.REELS, { username: 'a' }, { apiKey: 'k', wait: noWait, fetchImpl });
+  assert.deepStrictEqual({ ...monid.spentToday(), date: undefined }, { date: undefined, usd: 0.004, calls: 2, cap: 0.004, capped: true });
+  await assert.rejects(monid.run(monid.CARD, { username: 'b' }, { apiKey: 'k', wait: noWait, fetchImpl }), /daily Monid budget is spent \(\$0\.00 of MONID_USD_PER_DAY \$0\.00\)|daily Monid budget is spent/);
+  assert.strictEqual(calls, 2, 'the third call never reached Monid');
+});
+
+test('the cap defaults to $1 a day, and "none" lifts it', () => {
+  assert.strictEqual(monid.dailyCap({}), 1);
+  assert.strictEqual(monid.dailyCap({ MONID_USD_PER_DAY: '2.5' }), 2.5);
+  assert.strictEqual(monid.dailyCap({ MONID_USD_PER_DAY: 'none' }), Infinity);
+  assert.strictEqual(monid.dailyCap({ MONID_USD_PER_DAY: 'abc' }), 1);
+});
+
+test('a refused or failed call costs nothing and is not counted', async () => {
+  await assert.rejects(monid.run(monid.REELS, {}, { apiKey: 'k', wait: noWait, fetchImpl: async () => json(200, { status: 'COMPLETED', providerResponse: { httpStatus: 400 } }) }));
+  assert.strictEqual(monid.spentToday().calls, 0);
 });

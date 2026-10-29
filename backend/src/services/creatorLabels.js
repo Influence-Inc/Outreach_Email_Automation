@@ -387,6 +387,8 @@ async function labelCreator({
   let costUsd = 0;
   let card = null;
   let rows = [];
+  // What collecting this creator cost on Monid — summed per run for the run card.
+  let monidSpend = { calls: 0, usd: 0 };
   if (!configured) {
     errors.push('MONID_API_KEY is not set, so their Reels could not be collected');
   } else {
@@ -399,6 +401,10 @@ async function labelCreator({
     ]);
     if (card) costUsd += card.costUsd || 0;
     if (page) costUsd += page.costUsd || 0;
+    monidSpend = {
+      calls: (card ? 1 : 0) + (page ? 1 : 0),
+      usd: Math.round(((card ? card.costUsd || 0 : 0) + (page ? page.costUsd || 0 : 0)) * 10000) / 10000,
+    };
     rows = page ? page.reels : [];
     if (page && !rows.length) errors.push('Monid found no Reels on their account');
   }
@@ -450,6 +456,7 @@ async function labelCreator({
       niche: bioRow.labels.niche ? bioRow.labels.niche.value : null,
     } : undefined,
     costUsd: Math.round(costUsd * 10000) / 10000,
+    monid: monidSpend,
     errors,
     visionError,
   };
