@@ -391,3 +391,31 @@ test('the navigator gets a phone that records, and the source-reel judge', async
   assert.strictEqual(given.driver.recordClip, recordClip);
   assert.strictEqual(given.deps.judge, require('./jevJudge').judgeReel);
 });
+
+// Gemini's search-term suggestions reach the phone's keyword search, from a run
+// started on the Scout page — keywords and a brand, no niche.
+test('Gemini\'s suggested terms reach the phone\'s search, after the typed keywords', async () => {
+  const gemini = require('./geminiClient');
+  const { pickSearchTerms } = require('./sourcingNavigator');
+  const saved = { generate: gemini.generate, key: process.env.GEMINI_API_KEY, off: process.env.SOURCING_AI_SEARCH_TERMS };
+  process.env.GEMINI_API_KEY = 'k';
+  delete process.env.SOURCING_AI_SEARCH_TERMS;
+  let prompt = null;
+  gemini.generate = async ({ promptText }) => { prompt = promptText; return '{"terms":["ai agents","llm apps"]}'; };
+  let given = null;
+  try {
+    const deps = { ...baseDeps(), scout: (args) => { given = args; return (async function* () {})(); } };
+    await session.start({
+      hostId: 1,
+      run: { id: 5, config: { discovery: 'search', keywords: ['ai tools'], brandName: 'Velo', brandProduct: 'an AI note-taking app' } },
+      deps,
+    }).promise;
+  } finally {
+    gemini.generate = saved.generate;
+    if (saved.key == null) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = saved.key;
+    if (saved.off != null) process.env.SOURCING_AI_SEARCH_TERMS = saved.off;
+  }
+  assert.match(prompt, /Already searching: ai tools/);
+  assert.match(prompt, /The brand and what it sells: Velo — an AI note-taking app/);
+  assert.deepStrictEqual(pickSearchTerms(given.opts), ['ai tools', 'ai agents', 'llm apps']);
+});
