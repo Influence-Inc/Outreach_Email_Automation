@@ -611,6 +611,18 @@ async function runWithSource(run, config, source, deps) {
         stats.monid.usd = Math.round((stats.monid.usd + (creator.monid.usd || 0)) * 10000) / 10000;
         stats.monid.creators += 1;
       }
+      if (creator.visionError) r.visionError = creator.visionError;
+    } else if (res.judged && jevEv && jevEv.stage === 'reel' && jevEv.sourceReel) {
+      // Decided on the reel that surfaced them, before the profile (most creators are):
+      // that reel was recorded, heard and seen too. Counted only from creators' own Reels,
+      // a run that rejected everyone before the profile read "0 seen" however well the
+      // vision model was working.
+      const r = stats.reels;
+      const src = jevEv.sourceReel;
+      if (src.labels) r.labelled += 1;
+      if (src.words > 0) r.heard += 1;
+      if (src.seen) r.seen += 1;
+      if (src.visionError) r.visionError = src.visionError;
     }
     if (res.judged) {
       if (res.hadClip) stats.withVideo += 1; else stats.withoutVideo += 1;

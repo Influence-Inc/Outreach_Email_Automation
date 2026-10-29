@@ -443,6 +443,8 @@ async function refreshRun() {
   // "0 of N" on a live run: the vision model is not describing the videos (OpenRouter key, REEL_VISION_MODEL, or ffmpeg).
   el('run-seen').textContent = reels.labelled ? `${reels.seen || 0} of ${reels.labelled}` : '—';
   el('run-seen').style.color = reels.labelled && !reels.seen ? '#b42318' : '';
+  // Why the vision model could not see a Reel, the latest of the run.
+  el('run-seen').title = reels.visionError ? `last error: ${reels.visionError}` : '';
   const switches = (stats.discovery && stats.discovery.switches) || [];
   el('run-phase').title = switches.map((w) => `${w.from} → ${w.to}: ${w.reason || ''}`).join('\n');
   // Why a run ended short of its target, when it did.
