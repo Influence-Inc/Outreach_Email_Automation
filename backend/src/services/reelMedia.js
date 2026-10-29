@@ -136,7 +136,13 @@ async function split(buf, { exec = run, frames = FRAMES, mimeType = 'video/mp4' 
       streams = await probe(video, { exec });
       out.seconds = streams.seconds;
     } catch (err) {
-      out.errors.push(`could not read the recording: ${why(err)}`);
+      // An MP4 with no index (`moov`) — what the phone app sent before it learned to
+      // stop its muxer before uploading — reads as "Invalid data". Say what fixes it.
+      const unfinished = buf.length > 12 && buf.subarray(4, 8).toString('latin1') === 'ftyp'
+        && !buf.includes('moov', 0, 'latin1');
+      out.errors.push(unfinished
+        ? 'the phone\'s recording is not a finished MP4 (an old Sourcing Agent build) — install the latest app'
+        : `could not read the recording: ${why(err)}`);
     }
 
     // ── audio ────────────────────────────────────────────────────────────

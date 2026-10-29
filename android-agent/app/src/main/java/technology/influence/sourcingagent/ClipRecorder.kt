@@ -149,6 +149,25 @@ class ClipRecorder(
             if (!state.started) {
                 throw IllegalStateException("recorder produced no output — the encoder never started")
             }
+
+            // Finish the file BEFORE reading it. MediaMuxer writes an MP4's index (the
+            // `moov` box: where every audio and video sample is) only in stop(). These bytes
+            // used to be read first and the muxer stopped afterwards, in `finally` — so every
+            // upload was an MP4 with no index, which ffmpeg ("Invalid data found when
+            // processing input") and Groq ("could not process file") both refuse. No frame
+            // was ever read and no word ever heard from a recording.
+            runCatching { virtualDisplay?.release() }
+            virtualDisplay = null
+            runCatching { audioRecord?.stop() }
+            runCatching { audioEncoder?.stop() }
+            runCatching { vEncoder.stop() }
+            synchronized(state) {
+                mux.stop()
+                state.stopped = true
+            }
+            runCatching { mux.release() }
+            muxer = null
+
             return outFile.readBytes().also {
                 if (it.isEmpty()) throw IllegalStateException("recording produced an empty file")
             }
@@ -161,7 +180,8 @@ class ClipRecorder(
             runCatching { audioEncoder?.release() }
             runCatching { videoEncoder?.stop() }
             runCatching { videoEncoder?.release() }
-            runCatching { if (state.started) muxer?.stop() }
+            // Only on a failure path: a finished recording stopped and released it above.
+            runCatching { if (state.started && !state.stopped) muxer?.stop() }
             runCatching { muxer?.release() }
             runCatching { outFile.delete() }
         }
@@ -314,7 +334,8 @@ class ClipRecorder(
 
                 if (info.size > 0) {
                     synchronized(state) {
-                        if (state.started) {
+                        // Never after stop(): the file is finished and about to be read.
+                        if (state.started && !state.stopped) {
                             val track = if (isVideo) state.videoTrack else state.audioTrack
                             if (track >= 0) {
                                 encoded.position(info.offset)
@@ -334,6 +355,7 @@ class ClipRecorder(
         var videoTrack = -1
         var audioTrack = -1
         var started = false
+        var stopped = false
         var expectedTracks = 2
 
         fun trackCount(): Int =

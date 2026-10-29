@@ -112,3 +112,20 @@ test('OCR keeps each real line once, in order', async () => {
   const broken = await media.readFrames(['a.jpg'], { exec: async () => { const e = new Error('x'); e.code = 'ENOENT'; e.path = 'tesseract'; throw e; } });
   assert.match(broken.error, /tesseract is not installed/);
 });
+
+// The phone app used to upload its recording before finishing it: an MP4 with no
+// index, which ffprobe calls "Invalid data". The reason names the fix.
+test('an unfinished MP4 from an old phone app says to install the latest build', async () => {
+  const exec = async (cmd) => {
+    if (cmd === 'ffprobe') throw Object.assign(new Error('x'), { stderr: '/tmp/reel-x/reel.mp4: Invalid data found when processing input' });
+    throw new Error('not reached');
+  };
+  // An MP4's opening `ftyp` box and its samples (`mdat`), but no `moov` index.
+  const unfinished = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom\0\0\x02\0isomiso2'), Buffer.from([0, 0, 0, 8]), Buffer.from('mdat')]);
+  const out = await media.split(unfinished, { exec });
+  try {
+    assert.match(out.errors[0], /not a finished MP4.*install the latest app/);
+  } finally {
+    await out.cleanup();
+  }
+});
