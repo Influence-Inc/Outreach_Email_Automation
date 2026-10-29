@@ -1,14 +1,17 @@
 'use strict';
 
 // Labelling a scouted creator the way creator-list labels every creator it indexes —
-// from many of their Reels, not from the one reel the phone happened to record.
+// from many of their Reels, not only the one that surfaced them.
 //
+//   0. the reel that surfaced them  → recorded on the phone and labelled BEFORE their profile
+//      is opened (jevJudge.judgeReel, via labelReel below): Whisper hears it, GPT-6 Luna sees
+//      it, Jev labels it. Here it is one more labelled Reel of theirs.
 //   1. creator-list already has them  → its labels (topic / niche / genre / format shares
 //      over the Reels it analysed, and its estimated audience), through the partner API.
 //      Free and instant.
-//   2. otherwise, creator-list's own pipeline, run here for this creator. The username is the
-//      one the phone read off their profile; the phone records nothing.
-//        TikHub via Monid  → their newest 10 Reels (pinned and trial Reels left out): caption,
+//   2. otherwise, creator-list's own pipeline, run here for this creator, once their profile
+//      has passed the viral rule. The username is the one the phone read off their profile.
+//        TikHub via Monid  → their newest 12 Reels (pinned and trial Reels left out): caption,
 //                            hashtags, video link                      (services/monid.js)
 //        each Reel         → video downloaded from Instagram's CDN, split: audio to Groq
 //                            (Whisper), frames to Tesseract           (services/reelMedia.js)
@@ -19,8 +22,10 @@
 //                            and its three audience questions        (classify/content.py)
 //      Jev reads text only, so the frames reach it as the words on them and as GPT-6 Luna's
 //      description of them, as in creator-list (enrichment/classify/visual.py).
-//      When no Reels can be collected, the caption of the reel that surfaced them is labelled
-//      instead — one reel, said as much, with a provisional fit.
+//      Their BIO is labelled too, for topic and niche only — the profile's own word on what
+//      they make, strengthening (or weakening) what their Reels say.
+//      When no Reels can be collected (no Monid key, an empty wallet), the reel that surfaced
+//      them is all there is — one reel, said as much, always a person's call.
 //   3. creator level, as creator-list builds its creator documents:
 //        shares of Reels per topic / niche / genre / format ('unclear' and 'other' left out;
 //        a niche only where it belongs to the Reel's topic), and which are the creator's OWN —
@@ -28,12 +33,12 @@
 //        (beauty, fashion…) in a fifth (creator_topics.py, reference/creator_topics.json);
 //        and the estimated target audience (services/audienceEstimate.js, audience.py).
 //
-// Path 2 costs about $0.004 of TikHub calls plus Groq, GPT-6 Luna (~$0.001 a Reel) and Jev for
-// up to 10 Reels — about 2 cents a creator — and only runs for creators who already passed the
-// viral rule.
+// Path 2 costs about $0.004 of TikHub calls plus Groq, GPT-6 Luna (~$0.002 a Reel) and Jev for
+// up to 12 Reels — about 3 cents a creator — and only runs for creators whose source reel was on
+// target and whose profile passed the viral rule.
 //
 //   MONID_API_KEY   path 2 (the same key creator-list's worker uses); without it, a creator
-//                   creator-list does not have is labelled from one caption.
+//                   creator-list does not have is judged from the reel that surfaced them.
 
 const monid = require('./monid');
 const reelMedia = require('./reelMedia');
@@ -48,8 +53,8 @@ const DIMENSIONS = ['topic', 'niche', 'genre', 'format'];
 const NICHE_PARENTS = (TAXONOMY.questions.niche && TAXONOMY.questions.niche.parents) || {};
 const EPS = 1e-9;
 
-// Reels labelled per creator, from one TikHub page.
-const REELS = 10;
+// Reels labelled per creator: one TikHub page holds 12.
+const REELS = 12;
 // Reels worked on at once.
 const CONCURRENCY = 4;
 // Frames read per Reel for on-screen text: one every 2s from 1s in (reelMedia.split).
@@ -158,27 +163,52 @@ async function labelReel(row, { handle, deps = {} } = {}) {
   const see = deps.describe || (reelVision.configured() ? reelVision.describe : null);
 
   if (row.state) {
-    // The phone's recording, already heard and read.
+    // Already heard and read.
     transcript = { text: row.state.speech || '', language: row.language || null, duration: row.state.duration_seconds };
     screen = { text: row.state.on_screen_text || '' };
-  } else if (row.videoUrl) {
+  } else if (row.videoUrl || row.buf) {
     let split = null;
     try {
-      const buf = await (deps.download || download)(row.videoUrl, { fetchImpl: deps.fetchImpl });
-      split = await (deps.split || reelMedia.split)(buf, { frames: FRAMES_PER_REEL });
+      // `buf`: the phone's screen recording of the reel that surfaced them. `videoUrl`: a Reel
+      // of theirs on Instagram's CDN, collected through Monid.
+      const buf = row.buf || await (deps.download || download)(row.videoUrl, { fetchImpl: deps.fetchImpl });
+      split = await (deps.split || reelMedia.split)(buf, { frames: FRAMES_PER_REEL, mimeType: row.mimeType || 'video/mp4' });
+      out.audio = (split.audio && split.audio.state) || null;
+      for (const e of split.errors || []) errors.push(e);
       const a = split.audio || {};
       const [t, s] = await Promise.all([
         ['ok', 'unchecked'].includes(a.state) && a.buf && row.hasAudio !== false
           ? (deps.transcribe || jev.transcribe)(a.buf, a.mimeType || 'video/mp4', { fetchImpl: deps.fetchImpl })
-            .catch((err) => { errors.push(`Groq: ${err.message}`); return { text: '', language: null, duration: null }; })
+            .catch((err) => {
+              errors.push(`Groq: ${err.message}`);
+              out.transcriptError = err.message;
+              return { text: '', language: null, duration: null };
+            })
           : Promise.resolve({ text: '', language: null, duration: null }),
         (deps.readFrames || reelMedia.readFrames)(split.frames || []),
       ]);
       transcript = { ...t, duration: t.duration || row.durationS || null };
       screen = s;
+      if (s && s.error) errors.push(s.error);
+      // What the recording gave the judge, for the run card and for saying why a reel had
+      // nothing to read (kept for the reel that surfaced them).
+      if (row.keepText) {
+        out.media = {
+          audio: (a && a.state) || 'unchecked',
+          maxVolumeDb: a && Number.isFinite(a.maxVolumeDb) ? a.maxVolumeDb : null,
+          seconds: split.seconds || null,
+          framesCut: (split.frames || []).length,
+          framesRead: Number(s && s.frames) || 0,
+          words: String(t.text || '').split(/\s+/).filter(Boolean).length,
+          errors: [...errors],
+        };
+      }
       if (see) {
+        // A screen recording carries Instagram's own buttons and caption strip: cropped off
+        // before GPT-6 Luna looks, as before the frames are read for text.
         const v = await see(buf, {
           handle, caption: row.caption, transcript: t.text, segments: t.segments, seconds: transcript.duration,
+          screenRecording: !!row.buf,
         }, { fetchImpl: deps.fetchImpl });
         visual = v.cues || null;
         out.costUsd = (out.costUsd || 0) + (v.costUsd || 0);
@@ -207,16 +237,30 @@ async function labelReel(row, { handle, deps = {} } = {}) {
   if (!row.state && row.originalAudio != null) state.uses_original_audio = row.originalAudio;
   out.usedSpeech = !!state.has_speech;
   out.words = String(state.speech || '').split(/\s+/).filter(Boolean).length;
+  // The reel that surfaced them: what it said and showed, for the page and for recognising
+  // it among the Reels Monid collects.
+  if (row.keepText) {
+    out.caption = String(caption || '').slice(0, 300);
+    out.transcript = String(state.speech || '').slice(0, 600);
+    out.onScreenText = String(state.on_screen_text || '').slice(0, 300);
+    out.language = transcript.language || null;
+    out.framesRead = Number(screen.frames) || 0;
+    if (visual) out.seenSummary = String(visual.summary || '').slice(0, 300);
+  }
   out.signals = audience.textSignals({
     caption: state.caption, transcript: state.speech, onScreenText: state.on_screen_text, language: transcript.language,
   });
 
   if (!state.has_speech && !state.caption && !state.on_screen_text && !state.hashtags.length && !state.video_frames_description) {
     out.error = errors[0] || 'nothing to read';
+    out.nothingToRead = true;
     return out;
   }
   try {
-    const res = await (deps.callJev || jev.callJev)(state, reelQuestions(), { fetchImpl: deps.fetchImpl, key: deps.jevKey });
+    // `contentOnly`: the four content questions alone — the source reel decides whether the
+    // creator is worth a profile visit; their audience is read from their own Reels later.
+    const questions = row.contentOnly ? jev.buildQuestions() : reelQuestions();
+    const res = await (deps.callJev || jev.callJev)(state, questions, { fetchImpl: deps.fetchImpl, key: deps.jevKey });
     out.labels = jev.toLabels(res.answers);
     out.costUsd = (out.costUsd || 0) + (res.costUsd || 0);
   } catch (err) {
@@ -243,12 +287,16 @@ async function pool(items, size, fn) {
 // ── the creator ─────────────────────────────────────────────────────────────
 
 /** Shares, own labels and the audience estimate from labelled Reels. */
-function aggregate(reels, { country = null, countrySource = 'unknown' } = {}) {
+function aggregate(rows, { country = null, countrySource = 'unknown' } = {}) {
+  // The bio is not a Reel: it has a say in WHAT they make (topic, niche), none in how a
+  // Reel is made (genre, format) or how many Reels there were.
+  const reels = rows.filter((r) => !r.bio);
   const labelled = reels.filter((r) => r.labels);
+  const subjects = rows.filter((r) => r.labels);
   const value = (r, dim) => r.labels[dim] && r.labels[dim].value;
   const shares = {
-    topic: sharesOf(labelled.map((r) => value(r, 'topic'))),
-    niche: sharesOf(labelled.map((r) => nicheOf(value(r, 'topic'), value(r, 'niche')))),
+    topic: sharesOf(subjects.map((r) => value(r, 'topic'))),
+    niche: sharesOf(subjects.map((r) => nicheOf(value(r, 'topic'), value(r, 'niche')))),
     genre: sharesOf(labelled.map((r) => value(r, 'genre'))),
     format: sharesOf(labelled.map((r) => value(r, 'format'))),
   };
@@ -309,18 +357,25 @@ async function fromCreatorList(handle, { call = creatorList.call, configured = c
   };
 }
 
+const sameCaption = (a, b) => {
+  const norm = (x) => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 120);
+  return norm(a).length >= 12 && norm(a) === norm(b);
+};
+
 /**
- * Label a creator from their Reels. Returns a profile
+ * Label a creator from their Reels and bio. Returns a profile
  * { source: 'creator-list' | 'reels', reels, labelled, shares, own, audience, perReel?, costUsd, errors }
- * or { source: null, reason } when neither way is available. Never throws.
+ * or { source: null, reason } when there is nothing to label. Never throws.
  *
  * @param {object} o
  * @param {string} o.handle
- * @param {object} [o.recorded]  the reel that led to them, as { state (jevJudge.buildState),
- *                               language } — labelled only when none of their Reels can be
- *                               collected
+ * @param {object} [o.source]  the reel that surfaced them, already labelled (labelReel with
+ *                             keepText) before their profile was opened
+ * @param {string} [o.bio]     their profile bio, labelled for topic and niche
  */
-async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
+async function labelCreator({
+  handle, source = null, bio = '', deps = {},
+} = {}) {
   const who = String(handle || '').replace(/^@/, '').trim().toLowerCase();
   if (!who) return { source: null, reason: 'no handle' };
 
@@ -348,15 +403,29 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
     if (page && !rows.length) errors.push('Monid found no Reels on their account');
   }
 
-  // No Reels of theirs: the reel that surfaced them is all there is.
-  const fallback = !rows.length && !!(recorded && recorded.state);
-  if (fallback) rows = [{ code: 'source', state: recorded.state, language: recorded.language || null }];
-  if (!rows.length) return { source: null, reason: errors[0] || 'no Reels to label' };
+  // The reel that surfaced them counts once: when Monid collected it too, its own full
+  // video stands in for the phone's recording of it.
+  const labelledSource = source && source.labels ? { ...source, code: 'source', costUsd: 0 } : null;
+  const sourceAmongRows = labelledSource && rows.some((r) => sameCaption(r.caption, labelledSource.caption));
+  const fallback = !rows.length && !!labelledSource;
+  if (!rows.length && !labelledSource) return { source: null, reason: errors[0] || 'no Reels to label' };
 
-  const perReel = await pool(rows, CONCURRENCY, (row) => labelReel(row, { handle: who, deps }));
+  const bioText = String(bio || card?.bio || '').trim();
+  const [perReel, bioRow] = await Promise.all([
+    pool(rows, CONCURRENCY, (row) => labelReel(row, { handle: who, deps })),
+    bioText ? labelReel({ code: 'bio', caption: bioText }, { handle: who, deps }) : Promise.resolve(null),
+  ]);
   for (const r of perReel) costUsd += r.costUsd || 0;
+  if (labelledSource && !sourceAmongRows) perReel.unshift(labelledSource);
+  if (bioRow) {
+    costUsd += bioRow.costUsd || 0;
+    // Topic and niche only: a bio has no genre or format.
+    if (bioRow.labels) bioRow.labels = { topic: bioRow.labels.topic, niche: bioRow.labels.niche };
+    bioRow.bio = true;
+  }
+  const all = bioRow && bioRow.labels ? [...perReel, bioRow] : perReel;
   const country = card && card.country ? audience.countryCode(card.country) : null;
-  const agg = aggregate(perReel, { country, countrySource: country ? 'instagram' : 'unknown' });
+  const agg = aggregate(all, { country, countrySource: country ? 'instagram' : 'unknown' });
   const failed = perReel.filter((r) => r.error && !r.labels).length;
   if (failed) errors.push(`${failed} of ${perReel.length} Reels could not be labelled (${perReel.find((r) => r.error && !r.labels).error})`);
   // Kept apart from `errors`: a Reel GPT-6 Luna could not describe is still labelled from its
@@ -365,7 +434,7 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
   const visionError = unseen.length ? `${unseen.length} of ${perReel.length} Reels not seen by the vision model (${unseen[0].visionError})` : undefined;
   return {
     source: 'reels',
-    // Labelled from the caption of the reel that surfaced them, their Reels not collected.
+    // Their Reels could not be collected: judged from the one that surfaced them.
     fallback: fallback || undefined,
     ...agg,
     perReel: perReel.map((r) => ({
@@ -376,6 +445,10 @@ async function labelCreator({ handle, recorded = null, deps = {} } = {}) {
       seen: r.seen || undefined,
       visionError: r.visionError || undefined,
     })),
+    bio: bioRow && bioRow.labels ? {
+      topic: bioRow.labels.topic ? bioRow.labels.topic.value : null,
+      niche: bioRow.labels.niche ? bioRow.labels.niche.value : null,
+    } : undefined,
     costUsd: Math.round(costUsd * 10000) / 10000,
     errors,
     visionError,

@@ -864,6 +864,9 @@ test('(b) a creator Jev rejects from their Reels is never opened; (c) the rest a
   assert.strictEqual(chef.discovery, 'reels');
   assert.match(chef.evidence.feedViews.reason, /about 294K views/);
   const coach = out.find((c) => c.username === 'coach');
-  assert.strictEqual(coach._nicheVerdict.evidence.jev.decision, 'shortlist');
+  // The reel's verdict is step 2, not the last word: the creator-level judgement
+  // after the profile builds on it (jevJudge.judge), so it is not pinned as final.
+  assert.strictEqual(coach.sourceReelVerdict.evidence.jev.decision, 'shortlist');
+  assert.strictEqual(coach._nicheVerdict, undefined);
   assert.ok(coach.reels.some((r) => r.views != null), 'the profile visit read their views');
 });

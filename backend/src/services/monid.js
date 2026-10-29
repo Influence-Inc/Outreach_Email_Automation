@@ -28,6 +28,23 @@ function configured() {
   return Boolean(key());
 }
 
+// After a 402 the wallet stays empty until someone tops it up, and every later call would be
+// refused the same way — one per creator, each a round trip. So calls pause for a few
+// minutes (then try again, so a top-up is picked up on its own), and the Scout page says why.
+const EMPTY_PAUSE_MS = 3 * 60 * 1000;
+let walletEmptyAt = 0;
+const EMPTY = 'Monid wallet is empty (HTTP 402): top it up';
+
+/** { empty: true, since } while the wallet is known to be empty, else { empty: false }. */
+function walletState(now = Date.now()) {
+  return walletEmptyAt && now - walletEmptyAt < EMPTY_PAUSE_MS
+    ? { empty: true, since: new Date(walletEmptyAt).toISOString() }
+    : { empty: false };
+}
+
+/** Test-only: forget an empty wallet. */
+function _resetWallet() { walletEmptyAt = 0; }
+
 class MonidError extends Error {
   constructor(message, status = null) {
     super(message);
@@ -41,6 +58,7 @@ async function run(endpoint, query, {
   fetchImpl = fetch, apiKey = key(), pollMs = 2000, maxWaitMs = 120_000, retries = 3, wait = sleep,
 } = {}) {
   if (!apiKey) throw new MonidError('MONID_API_KEY is not set');
+  if (walletState().empty) throw new MonidError(EMPTY, 402);
   const call = async (method, path, body) => {
     for (let attempt = 0; ; attempt += 1) {
       let res;
@@ -56,7 +74,10 @@ async function run(endpoint, query, {
         if (attempt < retries) { await wait(2000 * 2 ** attempt); continue; } // eslint-disable-line no-await-in-loop
         throw new MonidError(`Monid: ${(err && err.message) || 'connection failed'}`);
       }
-      if (res.status === 402) throw new MonidError('Monid wallet is empty (HTTP 402): top it up', 402);
+      if (res.status === 402) {
+        walletEmptyAt = Date.now();
+        throw new MonidError(EMPTY, 402);
+      }
       if ([429, 500, 503, 504].includes(res.status) && attempt < retries) {
         await wait(2000 * 2 ** attempt); // eslint-disable-line no-await-in-loop
         continue;
@@ -177,5 +198,6 @@ async function fetchReels(handle, { limit = 12, userId = null, ...opts } = {}) {
 }
 
 module.exports = {
-  run, fetchCard, fetchReels, parseReels, pinnedBy, isTrial, thumbUrl, configured, MonidError, CARD, REELS,
+  run, fetchCard, fetchReels, parseReels, pinnedBy, isTrial, thumbUrl, configured, walletState, _resetWallet,
+  MonidError, CARD, REELS, EMPTY_PAUSE_MS,
 };

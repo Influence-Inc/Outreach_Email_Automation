@@ -34,6 +34,7 @@ const sourcingMetrics = require('../services/sourcingMetrics');
 const jevCalibration = require('../services/jevCalibration');
 const reviewLessons = require('../services/reviewLessons');
 const creatorList = require('../services/creatorList');
+const monid = require('../services/monid');
 const jevJudge = require('../services/jevJudge');
 const phoneFarm = require('../services/phoneFarm');
 const reelMedia = require('../services/reelMedia');
@@ -124,6 +125,8 @@ router.get('/status', async (_req, res, next) => {
       media: await reelMedia.tools(),
       // Whether shortlisted creators can reach creator-list's collection.
       creatorList: { curated: creatorList.curatedConfigured(), missing: creatorList.curatedMissing() },
+      // Whether creators' Reels can be collected: the key, and a wallet Monid refused.
+      monid: { configured: monid.configured(), ...monid.walletState() },
       remoteControl: hostCommands.enabled(),
       liveMirror: hostChannel.enabled(),
       build: buildInfo(),

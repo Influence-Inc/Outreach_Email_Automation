@@ -790,7 +790,7 @@ async function* scoutReelFeed({
     // eslint-disable-next-line no-await-in-loop
     const pre = !skip && link && feed.author && !(author && seen.has(author))
       ? await checkBeforeProfile({
-        feed, judge, config, log, term, source: 'backend-navigator:feed-scroll',
+        feed, judge, config, log, term, source: 'backend-navigator:feed-scroll', driver, getClip, clipSeconds,
       })
       : null;
     if (pre && pre.rejected) {
@@ -824,6 +824,7 @@ async function* scoutReelFeed({
             view: arrived.view,
             config, log,
             caption: feed.caption || null,
+            recorded: pre.clip || null,
           }), pre);
           if (profile) {
             yield profile;
@@ -853,29 +854,25 @@ async function* scoutReelFeed({
 }
 
 /**
- * The two checks made on a creator's reel BEFORE their profile is opened — the
- * same order, and the same checks, as the feed phase
- * (sourcingReelsNavigator.js):
+ * What is decided on a creator's reel BEFORE their profile is opened — the same order,
+ * and the same checks, as the feed phase (sourcingReelsNavigator.js):
  *
- *   (a) VIRALITY  the reel's views, estimated from the likes and comments the
- *                 player shows (services/feedVirality.js). A reel nowhere near
- *                 the viral bar is passed over; the creator is not marked as
- *                 scouted, so another of their reels gets its own chance.
- *   (b) NICHE     the creator's own latest Reels, labelled the way creator-list
- *                 labels creators (services/jevJudge.js). A creator Jev rejects
- *                 is never opened.
+ *   (a) VIRALITY  the reel's views, estimated from the likes and comments the player
+ *                 shows (services/feedVirality.js). A reel nowhere near the viral bar is
+ *                 passed over; the creator is not marked as scouted, so another of their
+ *                 reels gets its own chance.
+ *   (b) THE REEL  recorded right here in the player (12 s, with sound), then heard
+ *                 (Whisper), seen (GPT-6 Luna) and labelled (Jev) for topic, niche, genre
+ *                 and format (jevJudge.judgeReel). A reel Jev places off target ends the
+ *                 creator here: the profile is never opened.
  *
- * Warm-up used to open every creator's profile first and only then have their
- * Reels judged, so a profile visit was spent on each creator who turned out to
- * be off target. The judge was waited for on every creator either way; it now
- * happens before the visit instead of after it.
- *
- * Returns { go: true, verdict, feedViews } to open the profile;
- * { go: false } to pass over this reel; or { go: false, rejected } with a
- * candidate to hand on, so the rejection is recorded like any other.
+ * Returns { go: true, verdict, feedViews, clip } to open the profile; { go: false } to
+ * pass over this reel; or { go: false, rejected } with a candidate to hand on, so the
+ * rejection is recorded like any other.
  */
 async function checkBeforeProfile({
   feed, judge = null, config = {}, log = () => {}, term = null, source,
+  driver = null, getClip = async () => null, clipSeconds = 12,
 }) {
   const fv = feedVirality.check(
     { likes: feed.likes, comments: feed.comments, views: feed.views },
@@ -886,7 +883,20 @@ async function checkBeforeProfile({
     return { go: false };
   }
   const feedViews = fv.estimate ? { ...fv.estimate, reason: fv.reason } : null;
-  if (!judge) return { go: true, verdict: null, feedViews };
+
+  // Record the reel the phone is standing on: the video that led to this creator.
+  let clip = null;
+  if (driver && driver.recordClip) {
+    try {
+      const rec = await driver.recordClip(clipSeconds);
+      const resolved = await resolveClip(rec, getClip);
+      clip = resolved.clip ? { ...resolved.clip, origin: 'keyword-match' } : null;
+      if (!clip) log(`[sourcing] @${feed.author}: recording failed — judging the reel from its caption: ${resolved.reason}`);
+    } catch (err) {
+      log(`[sourcing] @${feed.author}: recording failed — judging the reel from its caption: ${err.message}`);
+    }
+  }
+  if (!judge) return { go: true, verdict: null, feedViews, clip };
 
   let verdict = null;
   try {
@@ -894,16 +904,17 @@ async function checkBeforeProfile({
       username: feed.author,
       caption: feed.caption || null,
       discovery: 'search',
+      ...(clip ? { clip } : {}),
       ...(term ? { sourceTerm: term } : {}),
     }, config);
   } catch (err) {
-    // A niche check that could not run is not a rejection: open the profile,
-    // and the orchestrator judges them as it always has.
-    log(`[sourcing] @${feed.author}: niche check failed (${err.message}) — opening the profile anyway`);
+    // A check that could not run is not a rejection: open the profile, and the
+    // orchestrator judges them as it always has.
+    log(`[sourcing] @${feed.author}: the reel could not be judged (${err.message}) — opening the profile anyway`);
   }
   const jev = verdict && verdict.source === 'jev' ? verdict : null;
   if (jev && jev.evidence && jev.evidence.jev && jev.evidence.jev.decision === 'reject') {
-    log(`[sourcing] @${feed.author}: their Reels are off target — profile not opened`);
+    log(`[sourcing] @${feed.author}: the reel that surfaced them is off target — profile not opened`);
     return {
       go: false,
       rejected: {
@@ -912,10 +923,12 @@ async function checkBeforeProfile({
         engagement: (feed.likes != null || feed.comments != null || feed.views != null)
           ? { likes: feed.likes ?? null, comments: feed.comments ?? null, views: feed.views ?? null }
           : undefined,
+        ...(clip ? { clip } : {}),
         evidence: {
           capturedAt: new Date().toISOString(),
           source,
           profileVisit: 'skipped',
+          clipCaptured: !!clip,
           ...(feedViews ? { feedViews } : {}),
         },
         // "Already judged — do not judge again" (jevJudge.makeClassifier).
@@ -923,15 +936,23 @@ async function checkBeforeProfile({
       },
     };
   }
-  return { go: true, verdict: jev, feedViews };
+  return { go: true, verdict: jev, feedViews, clip };
 }
 
 /** Carry what was learnt before the profile visit onto its result. */
 function withPreChecks(profile, pre) {
   if (!profile) return profile;
-  // Jev labelled the creator's own Reels, which the profile visit adds nothing
-  // to — judging again would only pay for the same answer twice.
-  if (pre.verdict) profile._nicheVerdict = pre.verdict;
+  // The verdict on the reel that surfaced them: the creator-level judgement after the
+  // profile (jevJudge.judge) builds on it rather than labelling that reel again.
+  if (pre.verdict) profile.sourceReelVerdict = pre.verdict;
+  if (pre.clip) {
+    profile.clip = profile.clip || pre.clip;
+    profile.clips = profile.clips && profile.clips.length ? profile.clips : [pre.clip];
+    // Recorded before the profile, whatever the profile visit then found.
+    profile.evidence = {
+      ...profile.evidence, clipCaptured: true, clipsCaptured: 1, clipSource: 'keyword-match',
+    };
+  }
   if (pre.feedViews) profile.evidence = { ...profile.evidence, feedViews: pre.feedViews };
   return profile;
 }
@@ -973,7 +994,7 @@ async function captureViaReel({
 
   // (a) views from likes and comments, then (b) niche — before the profile.
   const pre = await checkBeforeProfile({
-    feed, judge, config, log, term, source: 'backend-navigator:reels-first',
+    feed, judge, config, log, term, source: 'backend-navigator:reels-first', driver, getClip, clipSeconds,
   });
   if (pre.rejected) return { ...pre.rejected, sourceTerm: term };
   if (!pre.go) return null;
@@ -1006,6 +1027,7 @@ async function captureViaReel({
     config, log,
     sourceTerm: term,
     caption: feed.caption || null,
+    recorded: pre.clip || null,
   }), pre);
 }
 
@@ -1020,7 +1042,7 @@ async function captureViaReel({
  * Nothing from the creator's own grid is recorded any more: one reel, the one
  * the search matched, is what gets judged.
  */
-async function analyseThenRecordSource({ caption = null, ...opts }) {
+async function analyseThenRecordSource({ caption = null, recorded = null, ...opts }) {
   const profile = await analyseProfile({ ...opts, recordClip: false });
   if (!profile) return profile;
   profile.sourceReel = { caption: caption || null };
@@ -1029,8 +1051,12 @@ async function analyseThenRecordSource({ caption = null, ...opts }) {
   if (profile.evidence && profile.evidence.notRecorded) return profile;
 
   const handle = String(profile.username || opts.fallbackUsername || '').toLowerCase();
+  // Recorded already, before the profile (checkBeforeProfile): go back to the reel for its
+  // likes and comments — and so a shortlisted creator's like lands on it — but do not
+  // record it again.
+  const { recordClip: _again, ...noRecorder } = opts.driver || {};
   const rec = await recordSourceReel({
-    driver: opts.driver,
+    driver: recorded ? noRecorder : opts.driver,
     read: opts.read || readView,
     pacingMs: opts.pacingMs,
     jitterPx: opts.jitterPx || 0,
@@ -1039,8 +1065,9 @@ async function analyseThenRecordSource({ caption = null, ...opts }) {
     log: opts.log || (() => {}),
     author: handle,
   });
-  if (rec.clip) {
-    const clip = { ...rec.clip, views: rec.engagement ? rec.engagement.views : null, origin: 'keyword-match' };
+  const got = rec.clip || recorded;
+  if (got) {
+    const clip = { ...got, views: rec.engagement ? rec.engagement.views : (got.views ?? null), origin: 'keyword-match' };
     profile.clip = clip;
     profile.clips = [clip];
   }
@@ -1049,24 +1076,23 @@ async function analyseThenRecordSource({ caption = null, ...opts }) {
   }
   profile.evidence = {
     ...profile.evidence,
-    clipCaptured: !!rec.clip,
-    clipsCaptured: rec.clip ? 1 : 0,
-    clipSource: rec.clip ? 'keyword-match' : null,
-    notRecorded: rec.clip ? undefined : rec.reason,
+    clipCaptured: !!got,
+    clipsCaptured: got ? 1 : 0,
+    clipSource: got ? 'keyword-match' : null,
+    notRecorded: got ? undefined : rec.reason,
   };
   return profile;
 }
 
 /**
  * Back from the profile to the reel player we came from, check it is still this
- * creator's reel, read its likes and comments, and — on a phone that records —
+ * creator's reel, read its likes and comments, and — when `driver` can record —
  * record it. Returns { clip, engagement, reason }.
  *
- * Scouting no longer records (services/sourcingSession.js hands the navigator a
- * phone without `recordClip`): the creator is judged from their Reels collected
- * through Monid. The phone still goes back to the reel, for its likes and
- * comments and so that a shortlisted creator's like lands on the reel that
- * surfaced them.
+ * The warm-up records the reel BEFORE the profile (checkBeforeProfile) and calls
+ * this with a driver that cannot record: the phone still goes back to the reel,
+ * for its likes and comments and so that a shortlisted creator's like lands on
+ * the reel that surfaced them.
  */
 async function recordSourceReel({
   driver, read = readView, pacingMs, jitterPx = 0, clipSeconds = 12, getClip, log = () => {}, author,

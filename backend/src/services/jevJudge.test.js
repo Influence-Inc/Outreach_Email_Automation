@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  judge, targetsOf, decideFromLabels, toLabels, buildQuestions, buildState, callJev, transcribe,
+  judge, judgeReel, targetsOf, decideFromLabels, toLabels, buildQuestions, buildState, callJev, transcribe,
 } = require('./jevJudge');
 
 const L = (value, confidence, runnerUp = null) => ({ value, confidence, runnerUp });
@@ -53,11 +53,11 @@ test("the creator's own keyword decides; a format in another keyword is not aske
   assert.deepStrictEqual(viaHomegym.formats, []);
 });
 
-// The judge's own single-reel path: what runs when the creator could not be
-// labelled at all (creatorLabels.labelCreator failing). These tests drive it.
+// The reel that surfaced the creator, judged before their profile is opened
+// (judgeReel). `labelCreator` is not called at this stage.
 const noCreator = async () => ({ source: null, reason: 'not labelled in this test' });
 
-test('judge checks the format named by the keyword that found the creator', async () => {
+test('judgeReel checks the format named by the keyword that found the creator', async () => {
   const answers = {
     topic: { choice: 'fitness', confidence: 0.9 }, niche: { choice: 'gym_strength', confidence: 0.8 },
     genre: { choice: 'educational', confidence: 0.8 }, format: { choice: 'vlog_day_in_life', confidence: 0.85 },
@@ -70,9 +70,9 @@ test('judge checks the format named by the keyword that found the creator', asyn
   };
   const cfg = { keywords: ['gym', 'workout tutorial'] };
   const base = { username: 'c', caption: 'gym day', clip: { dataBase64: 'AA==', mimeType: 'video/mp4' } };
-  const viaTutorial = await judge({ ...base, sourceTerm: 'workout tutorial' }, cfg, deps);
+  const viaTutorial = await judgeReel({ ...base, sourceTerm: 'workout tutorial' }, cfg, deps);
   assert.strictEqual(viaTutorial.evidence.jev.decision, 'reject', 'a vlog is not the tutorial searched for');
-  const viaGym = await judge({ ...base, sourceTerm: 'gym' }, cfg, deps);
+  const viaGym = await judgeReel({ ...base, sourceTerm: 'gym' }, cfg, deps);
   assert.strictEqual(viaGym.evidence.jev.decision, 'shortlist');
   assert.strictEqual(viaGym.evidence.jev.targets.from, 'gym');
 });
@@ -207,9 +207,9 @@ const clipCandidate = {
   clip: { dataBase64: Buffer.from('mp4').toString('base64'), mimeType: 'video/mp4' },
 };
 
-test('judge: transcript + on-screen text + caption go to Jev, and its labels decide', async () => {
+test('judgeReel: transcript + on-screen text + caption go to Jev, and its labels decide', async () => {
   let state = null;
-  const v = await judge(clipCandidate, { keywords: ['gym workout'] }, {
+  const v = await judgeReel(clipCandidate, { keywords: ['gym workout'] }, {
     jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => ({ text: 'here are the five mistakes I see in the gym every day', language: 'english', duration: 12 }),
     split: fakeSplit(), readFrames: async () => ({ text: '5 GYM MISTAKES', frames: 4 }),
@@ -237,11 +237,12 @@ test('judge: transcript + on-screen text + caption go to Jev, and its labels dec
 });
 
 test('judge: no Jev key, or Jev failing, puts the creator in front of the admin', async () => {
-  const none = await judge(clipCandidate, {}, { jevKey: '' });
+  const none = await judgeReel(clipCandidate, {}, { jevKey: '' });
   assert.strictEqual(none.evidence.jev.decision, 'review');
   assert.match(none.reason, /not configured/);
+  assert.match((await judge(clipCandidate, {}, { jevKey: '' })).reason, /not configured/, 'and after the profile');
 
-  const down = await judge(clipCandidate, { keywords: ['gym'] }, {
+  const down = await judgeReel(clipCandidate, { keywords: ['gym'] }, {
     jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => ({ text: '', language: null, duration: null }),
     split: fakeSplit(), readFrames: async () => ({ text: '', frames: 0 }),
@@ -251,9 +252,9 @@ test('judge: no Jev key, or Jev failing, puts the creator in front of the admin'
   assert.match(down.reason, /Jev failed/);
 });
 
-test('judge: a silent reel with no caption or text has nothing to read', async () => {
+test('judgeReel: a silent reel with no caption or text has nothing to read', async () => {
   let called = false;
-  const v = await judge({ username: 'x', clip: clipCandidate.clip }, { keywords: ['gym'] }, {
+  const v = await judgeReel({ username: 'x', clip: clipCandidate.clip }, { keywords: ['gym'] }, {
     jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => ({ text: '', language: null, duration: null }),
     split: fakeSplit(), readFrames: async () => ({ text: '', frames: 0 }),
@@ -263,8 +264,8 @@ test('judge: a silent reel with no caption or text has nothing to read', async (
   assert.strictEqual(v.evidence.jev.decision, 'review');
 });
 
-test('judge: a Groq failure is not fatal — the caption still gets judged', async () => {
-  const v = await judge(clipCandidate, { keywords: ['gym'] }, {
+test('judgeReel: a Groq failure is not fatal — the caption still gets judged', async () => {
+  const v = await judgeReel(clipCandidate, { keywords: ['gym'] }, {
     jevKey: 'k', labelCreator: noCreator,
     transcribe: async () => { throw new Error('Groq answered 429'); },
     split: fakeSplit(), readFrames: async () => ({ text: '', frames: 0 }),
@@ -303,10 +304,10 @@ test('a blank bar on the config means the default, not zero', () => {
 
 // ── the recording, split ────────────────────────────────────────────────────
 
-test('judge sends Groq the audio taken out of the recording, and records what it got', async () => {
+test('judgeReel sends Groq the audio taken out of the recording, and records what it got', async () => {
   let sent = null;
   let cleaned = false;
-  const v = await judge(clipCandidate, { keywords: ['gym workout'] }, {
+  const v = await judgeReel(clipCandidate, { keywords: ['gym workout'] }, {
     jevKey: 'k', labelCreator: noCreator,
     split: fakeSplit({ cleanup: async () => { cleaned = true; } }),
     transcribe: async (buf, mime) => { sent = [buf.toString(), mime]; return { text: 'five gym mistakes every beginner makes', language: 'english', duration: 12 }; },
@@ -324,7 +325,7 @@ test('a silent or audio-less recording is not sent to Groq, and says so', async 
   for (const [state, phrase] of [['silent', /recording is silent/], ['none', /no audio track/]]) {
     let called = false;
     // eslint-disable-next-line no-await-in-loop
-    const v = await judge({ ...clipCandidate, caption: '' }, { keywords: ['gym'] }, {
+    const v = await judgeReel({ ...clipCandidate, caption: '' }, { keywords: ['gym'] }, {
       jevKey: 'k', labelCreator: noCreator,
       split: fakeSplit({ audio: { state }, frames: [] }),
       transcribe: async () => { called = true; return { text: '' }; },
@@ -339,7 +340,7 @@ test('a silent or audio-less recording is not sent to Groq, and says so', async 
 
 test('when ffmpeg cannot read the recording, Groq still gets the mp4 and the failure is kept', async () => {
   let sentMime = null;
-  const v = await judge(clipCandidate, { keywords: ['gym'] }, {
+  const v = await judgeReel(clipCandidate, { keywords: ['gym'] }, {
     jevKey: 'k', labelCreator: noCreator,
     split: fakeSplit({ audio: { state: 'unchecked', buf: Buffer.from('mp4'), mimeType: 'video/mp4' }, frames: [], errors: ['could not read the recording: ffprobe is not installed'] }),
     transcribe: async (buf, mime) => { sentMime = mime; return { text: 'five gym mistakes every beginner makes', language: 'english', duration: 12 }; },
@@ -354,11 +355,15 @@ test('when ffmpeg cannot read the recording, Groq still gets the mp4 and the fai
 
 test('judge decides from the creator\'s Reels when they can be labelled, and records how', async () => {
   let given = null;
-  const v = await judge({ ...clipCandidate, caption: 'leg day' }, { keywords: ['gym workout'] }, {
+  const v = await judge({ ...clipCandidate, caption: 'leg day', bio: 'Strength coach · plans below' }, { keywords: ['gym workout'] }, {
     jevKey: 'k',
     split: fakeSplit(),
     transcribe: async () => ({ text: 'five moves for strong legs every day', language: 'english', duration: 12 }),
     readFrames: async () => ({ text: '', frames: 1 }),
+    fetchImpl: async () => jsonResponse(200, { answers: {
+      topic: { choice: 'fitness', confidence: 0.9 }, niche: { choice: 'gym_strength', confidence: 0.8 },
+      genre: { choice: 'educational', confidence: 0.8 }, format: { choice: 'tutorial_how_to', confidence: 0.8 },
+    } }),
     labelCreator: async (args) => {
       given = args;
       return {
@@ -371,7 +376,11 @@ test('judge decides from the creator\'s Reels when they can be labelled, and rec
     },
   });
   assert.strictEqual(given.handle, 'coach');
-  assert.strictEqual(given.recorded.state.speech, 'five moves for strong legs every day', 'the reel that surfaced them is passed on, for when no Reels can be collected');
+  assert.strictEqual(given.source.transcript, 'five moves for strong legs every day', 'the reel that surfaced them is passed on, labelled');
+  assert.strictEqual(given.source.labels.topic.value, 'fitness');
+  assert.strictEqual(given.bio, 'Strength coach · plans below', 'their bio strengthens the call');
+  assert.strictEqual(v.evidence.jev.stage, 'creator');
+  assert.strictEqual(v.evidence.jev.sourceReel.decision, 'shortlist');
   assert.strictEqual(v.evidence.jev.decision, 'shortlist');
   assert.deepStrictEqual(v.evidence.jev.labels.topic, { value: 'fitness', confidence: 0.82, runnerUp: 'food_drink', share: true });
   assert.strictEqual(v.evidence.jev.audienceSummary, 'male-leaning · 18-24, 25-34 · mostly United States');
@@ -427,7 +436,11 @@ test('judge applies what the review notes taught, and suggests no search terms',
     perReel: Array.from({ length: 3 }, () => ({ topic: 'fitness', hashtags: ['calisthenics'] })),
     audience: null, costUsd: 0, errors: [],
   };
-  const deps = { jevKey: 'k', labelCreator: async () => creator };
+  const deps = {
+    jevKey: 'k',
+    labelCreator: async () => creator,
+    labelReel: async () => ({ code: 'source', labels: null, nothingToRead: true }),
+  };
   const plain = await judge({ username: 'coach', caption: 'gym' }, { keywords: ['gym workout'] }, deps);
   assert.strictEqual(plain.evidence.jev.decision, 'shortlist');
   assert.strictEqual(plain.evidence.jev.relatedTerms, undefined);
@@ -438,4 +451,52 @@ test('judge applies what the review notes taught, and suggests no search terms',
   assert.strictEqual(taught.evidence.jev.decision, 'reject');
   assert.strictEqual(taught.evidence.jev.lesson, true);
   assert.match(taught.evidence.jev.reasons[0], /you passed on creators like this — "only memes"/);
+});
+
+// ── the order: the source reel first, the creator after the profile ─────────
+
+test('judgeReel: the phone\'s recording is seen by the vision model, cropped, and heard', async () => {
+  let seen = null;
+  const v = await judgeReel(clipCandidate, { keywords: ['gym workout'] }, {
+    jevKey: 'k',
+    split: fakeSplit(),
+    transcribe: async () => ({ text: 'five gym mistakes every beginner makes', language: 'english', duration: 12 }),
+    readFrames: async () => ({ text: '', frames: 1 }),
+    describe: async (buf, reel) => { seen = reel; return { cues: { summary: 'a coach points at a squat rack' }, costUsd: 0.002 }; },
+    fetchImpl: async (url, init) => {
+      const { state } = JSON.parse(init.body);
+      assert.match(state.video_frames_description, /squat rack/, 'Jev reads what the video shows');
+      return jsonResponse(200, { answers: {
+        topic: { choice: 'fitness', confidence: 0.9 }, niche: { choice: 'gym_strength', confidence: 0.8 },
+        genre: { choice: 'educational', confidence: 0.8 }, format: { choice: 'talking_head', confidence: 0.8 },
+      } });
+    },
+  });
+  assert.strictEqual(seen.screenRecording, true);
+  assert.strictEqual(v.evidence.jev.stage, 'reel');
+  assert.strictEqual(v.evidence.jev.seen, true);
+  assert.strictEqual(v.evidence.jev.decision, 'shortlist');
+  assert.strictEqual(v.evidence.jev.sourceReel.seenSummary, 'a coach points at a squat rack');
+});
+
+test('judge reuses the verdict on the source reel made before the profile — never labels it twice', async () => {
+  const early = await judgeReel(clipCandidate, { keywords: ['gym workout'] }, {
+    jevKey: 'k',
+    split: fakeSplit(),
+    transcribe: async () => ({ text: 'five gym mistakes every beginner makes', language: 'english', duration: 12 }),
+    readFrames: async () => ({ text: '', frames: 1 }),
+    fetchImpl: async () => jsonResponse(200, { answers: {
+      topic: { choice: 'fitness', confidence: 0.9 }, niche: { choice: 'gym_strength', confidence: 0.8 },
+      genre: { choice: 'educational', confidence: 0.8 }, format: { choice: 'talking_head', confidence: 0.8 },
+    } }),
+  });
+  let labelled = 0;
+  let given = null;
+  await judge({ ...clipCandidate, sourceReelVerdict: early }, { keywords: ['gym workout'] }, {
+    jevKey: 'k',
+    labelReel: async () => { labelled += 1; return { labels: null }; },
+    labelCreator: async (args) => { given = args; return { source: null, reason: 'test' }; },
+  });
+  assert.strictEqual(labelled, 0);
+  assert.strictEqual(given.source.labels.topic.value, 'fitness');
 });

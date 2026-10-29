@@ -4,6 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert');
 const monid = require('./monid');
 
+// A 402 pauses calls for a few minutes (walletState); no test may inherit that.
+test.afterEach(() => monid._resetWallet());
+
 const json = (status, body) => ({ status, json: async () => body });
 const noWait = async () => {};
 
@@ -31,6 +34,7 @@ test('a queued run is polled until it completes', async () => {
 
 test('an empty wallet and a provider error are reported', async () => {
   await assert.rejects(monid.run(monid.REELS, {}, { apiKey: 'k', wait: noWait, fetchImpl: async () => json(402, {}) }), /wallet is empty/);
+  monid._resetWallet(); // the 402 paused calls; the next case is a separate wallet
   await assert.rejects(
     monid.run(monid.REELS, {}, { apiKey: 'k', wait: noWait, fetchImpl: async () => json(200, { status: 'COMPLETED', providerResponse: { httpStatus: 404 } }) }),
     /provider HTTP 404/,
@@ -65,4 +69,19 @@ test('the card gives the country, and a hidden one is unknown', async () => {
   assert.deepStrictEqual({ ...shown, costUsd: undefined }, { userId: '7', bio: 'hi', followers: 5000, country: 'United States', costUsd: undefined });
   const hidden = await monid.fetchCard('mia', { apiKey: 'k', wait: noWait, fetchImpl: async () => card('Not shared') });
   assert.strictEqual(hidden.country, null);
+});
+
+// ── an empty wallet ─────────────────────────────────────────────────────────
+
+test('after an empty-wallet refusal, calls pause instead of being refused one by one', async () => {
+  monid._resetWallet();
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { status: 402, json: async () => ({}) }; };
+  await assert.rejects(monid.run(monid.REELS, { username: 'a' }, { fetchImpl, apiKey: 'k', retries: 0 }), /wallet is empty/);
+  assert.strictEqual(monid.walletState().empty, true);
+  await assert.rejects(monid.run(monid.REELS, { username: 'b' }, { fetchImpl, apiKey: 'k', retries: 0 }), /wallet is empty/);
+  assert.strictEqual(calls, 1, 'the second creator did not call Monid');
+  // A while later it tries again, so a top-up is picked up on its own.
+  assert.strictEqual(monid.walletState(Date.now() + monid.EMPTY_PAUSE_MS + 1).empty, false);
+  monid._resetWallet();
 });
