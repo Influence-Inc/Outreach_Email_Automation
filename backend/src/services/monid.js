@@ -95,6 +95,7 @@ class MonidError extends Error {
 /** Run one TikHub endpoint through Monid. Returns { output, costUsd } or throws MonidError. */
 async function run(endpoint, query, {
   fetchImpl = fetch, apiKey = key(), pollMs = 2000, maxWaitMs = 120_000, retries = 3, wait = sleep,
+  providerRetries = 2,
 } = {}) {
   if (!apiKey) throw new MonidError('MONID_API_KEY is not set');
   if (walletState().empty) throw new MonidError(EMPTY, 402);
@@ -134,24 +135,52 @@ async function run(endpoint, query, {
     }
   };
 
-  let { status, body } = await call('POST', '/v1/run', { provider: 'tikhub', endpoint, input: { queryParams: query } });
-  let waited = 0;
-  while (status === 202 || (status === 200 && !TERMINAL.has(body.status))) {
-    if (!body.runId || waited > maxWaitMs) throw new MonidError(`${endpoint}: run did not finish`, status);
-    await wait(pollMs); // eslint-disable-line no-await-in-loop
-    waited += pollMs;
-    ({ status, body } = await call('GET', `/v1/runs/${encodeURIComponent(body.runId)}`)); // eslint-disable-line no-await-in-loop
-  }
-  const reason = body.reason || body.error || body.status || `HTTP ${status}`;
-  if (body.status === 'BLOCKED') throw new MonidError(`${endpoint}: blocked by Monid: ${reason}`, status);
-  const provider = body.providerResponse && body.providerResponse.httpStatus;
-  if (body.status === 'COMPLETED' && provider != null && !(provider >= 200 && provider < 300)) {
-    throw new MonidError(`${endpoint}: provider HTTP ${provider}`, Number(provider));
+  // TikHub often fails a fetch from Instagram on one try and serves it on the next: it
+  // answers 400 "Request failed. Please retry … You won't be charged for this request."
+  // Those (and its 429/5xx) are retried, free, before the creator is given up on.
+  let status;
+  let body;
+  let reason;
+  for (let attempt = 0; ; attempt += 1) {
+    ({ status, body } = await call('POST', '/v1/run', { provider: 'tikhub', endpoint, input: { queryParams: query } })); // eslint-disable-line no-await-in-loop
+    let waited = 0;
+    while (status === 202 || (status === 200 && !TERMINAL.has(body.status))) {
+      if (!body.runId || waited > maxWaitMs) throw new MonidError(`${endpoint}: run did not finish`, status);
+      await wait(pollMs); // eslint-disable-line no-await-in-loop
+      waited += pollMs;
+      ({ status, body } = await call('GET', `/v1/runs/${encodeURIComponent(body.runId)}`)); // eslint-disable-line no-await-in-loop
+    }
+    reason = body.reason || body.error || body.status || `HTTP ${status}`;
+    if (body.status === 'BLOCKED') throw new MonidError(`${endpoint}: blocked by Monid: ${reason}`, status);
+    const provider = body.providerResponse && body.providerResponse.httpStatus;
+    if (body.status === 'COMPLETED' && provider != null && !(provider >= 200 && provider < 300)) {
+      if (PROVIDER_RETRY.has(Number(provider)) && attempt < providerRetries) {
+        await wait(3000 * 2 ** attempt); // eslint-disable-line no-await-in-loop
+        continue;
+      }
+      const said = providerMessage(body);
+      throw new MonidError(
+        `${endpoint}: TikHub could not fetch it from Instagram (HTTP ${provider}${said ? `: "${said}"` : ''})`
+        + `${attempt ? ` after ${attempt + 1} tries` : ''} — TikHub's side; failed calls are not charged`,
+        Number(provider),
+      );
+    }
+    break;
   }
   if (body.status !== 'COMPLETED' || status >= 400) throw new MonidError(`${endpoint}: ${reason}`, status);
   const costUsd = costOf(body, endpoint);
   charge(costUsd);
   return { output: body.output || {}, costUsd };
+}
+
+// TikHub answers worth another try: its "Request failed. Please retry" 400, rate limits, outages.
+const PROVIDER_RETRY = new Set([400, 429, 500, 502, 503, 504]);
+
+/** TikHub's own words for a failed fetch, short. */
+function providerMessage(res) {
+  const e = res && res.providerResponse && res.providerResponse.error;
+  const msg = e && ((e.detail && e.detail.message) || e.message);
+  return msg ? String(msg).split('.')[0].slice(0, 80) : '';
 }
 
 function costOf(res, endpoint) {

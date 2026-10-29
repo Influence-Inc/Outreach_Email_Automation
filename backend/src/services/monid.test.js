@@ -37,7 +37,7 @@ test('an empty wallet and a provider error are reported', async () => {
   monid._resetWallet(); // the 402 paused calls; the next case is a separate wallet
   await assert.rejects(
     monid.run(monid.REELS, {}, { apiKey: 'k', wait: noWait, fetchImpl: async () => json(200, { status: 'COMPLETED', providerResponse: { httpStatus: 404 } }) }),
-    /provider HTTP 404/,
+    /TikHub could not fetch it from Instagram \(HTTP 404\)/,
   );
   await assert.rejects(monid.run(monid.REELS, {}, { apiKey: '' }), /MONID_API_KEY is not set/);
 });
@@ -111,4 +111,34 @@ test('the cap defaults to $1 a day, and "none" lifts it', () => {
 test('a refused or failed call costs nothing and is not counted', async () => {
   await assert.rejects(monid.run(monid.REELS, {}, { apiKey: 'k', wait: noWait, fetchImpl: async () => json(200, { status: 'COMPLETED', providerResponse: { httpStatus: 400 } }) }));
   assert.strictEqual(monid.spentToday().calls, 0);
+});
+
+// ── TikHub's "Request failed. Please retry" ─────────────────────────────────
+
+const tikhub400 = () => json(200, {
+  status: 'COMPLETED',
+  providerResponse: { httpStatus: 400, error: { detail: { message: 'Request failed. Please retry. Check the docs below' } } },
+  cost: { value: 0 },
+});
+
+test('a TikHub "please retry" 400 is retried, free, and the next try is used', async () => {
+  const answers = [tikhub400(), json(200, { status: 'COMPLETED', output: { data: { username: 'klairs.us' } }, cost: { value: 0.002 } })];
+  let calls = 0;
+  const waits = [];
+  const out = await monid.run(monid.CARD, { username: 'klairs.us' }, {
+    apiKey: 'k', wait: async (ms) => { waits.push(ms); }, fetchImpl: async () => { calls += 1; return answers.shift(); },
+  });
+  assert.strictEqual(out.output.data.username, 'klairs.us');
+  assert.strictEqual(calls, 2);
+  assert.deepStrictEqual(waits, [3000]);
+  assert.strictEqual(monid.spentToday().usd, 0.002, 'only the call that worked is counted');
+});
+
+test('three failed tries say it was TikHub, and that failures are not charged', async () => {
+  let calls = 0;
+  await assert.rejects(
+    monid.run(monid.REELS, { username: 'x' }, { apiKey: 'k', wait: noWait, fetchImpl: async () => { calls += 1; return tikhub400(); } }),
+    /TikHub could not fetch it from Instagram \(HTTP 400: "Request failed"\) after 3 tries — TikHub's side; failed calls are not charged/,
+  );
+  assert.strictEqual(calls, 3);
 });
