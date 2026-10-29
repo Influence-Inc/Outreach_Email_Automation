@@ -94,13 +94,13 @@ another app will not pass review — so sideload it.
    - *Host ID* — the integer next to that host (e.g. `3`)
 3. **Tap "1. Enable accessibility service"** → find **Sourcing Agent** under
    *Installed apps* and switch it on. Without it the phone cannot be driven at all.
-4. **Tap "2. Grant screen capture"** and accept. This is what lets the AI judge
-   *watch* reels, and **both** discovery modes need it: profiles mode (the
-   default) records each creator's best and typical reels from their Reels
-   grid, and reels mode records the reel the feed served. Without it the run
-   still works, but every creator is judged on screenshots and text alone — the
-   run log shows `withVideo=0` and the Scout page's run card shows
-   *Judged with video 0 of N*.
+4. **Tap "2. Grant screen capture"** and accept. The phone records the reel that
+   surfaced each creator (12 s, with sound) so it can be heard (Whisper), seen
+   (GPT-6 Luna) and labelled (Jev) **before** their profile is opened — in warm-up
+   (keyword search) and on the feed alike. Without it the run still works, but
+   that reel is judged from its caption alone: the run table's Reels column says
+   *not recorded — caption only*. (Screen capture also powers the dashboard's
+   *Watch phone* view.)
 5. **Tap "3. Start agent".** The status panel should read
    `idle — waiting for a queued run`, then `running — session started (run #N)`
    once someone queues a run from the dashboard.

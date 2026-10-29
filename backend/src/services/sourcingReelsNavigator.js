@@ -8,13 +8,15 @@
 //   a. VIRALITY  on the feed reel itself: its views estimated from its likes and
 //                comments (services/feedVirality.js). A reel that is nowhere near
 //                the viral bar is scrolled past — nothing is spent on its creator.
-//   b. NICHE     from their own newest Reels, the way creator-list labels creators:
-//                Monid fetches them, each is split (Groq hears it, GPT-6 Luna
-//                describes its frames) and Jev labels it (services/jevJudge.js).
-//                Submitted while the phone keeps scrolling; a creator Jev rejects
-//                is never opened.
-//   c. PROFILE   opened only for the rest: pictures of the profile and bio, and
-//                the views on their Reels tab for the viral rule.
+//   b. THE REEL  that surfaced them: recorded on the phone (12 s, with sound), heard
+//                (Whisper), seen (GPT-6 Luna) and labelled by Jev for topic, niche,
+//                genre and format (jevJudge.judgeReel). Submitted while the phone
+//                keeps scrolling; a creator whose reel Jev places off target is
+//                never opened.
+//   c. PROFILE   opened only for the rest: the views on their Reels tab for the
+//                viral rule, the bio. Then, for those who pass, the creator: their
+//                newest 12 Reels through Monid, each heard, seen and labelled, with
+//                this reel and their bio (jevJudge.judge, in the orchestrator).
 //
 // Three phases per batch, and the order is the point:
 //
@@ -238,8 +240,9 @@ async function collectBatch({
     // Recording is a device action, so it is awaited. Judging the recording is
     // not, so it is not.
     let clip = null;
-    // A phone without recordClip (scouting no longer records: the creator is
-    // judged from their Reels collected through Monid) skips straight on.
+    // The video that led to this creator, recorded to be heard, seen and labelled
+    // (jevJudge.judgeReel). A phone without recordClip (a laptop runner, an old
+    // agent) skips straight on, and the reel is judged from its caption.
     if (driver.recordClip) {
       try {
         // eslint-disable-next-line no-await-in-loop
@@ -454,25 +457,20 @@ async function handleCreator({
   // stalling the run.
   if (!verdict) verdict = await queue.take(key);
 
-  // `_nicheVerdict` tells the orchestrator "already judged, do not judge again".
-  // The queued verdict was written from the FEED reel alone — one clip, one
-  // caption, no bio, no reach window and no profile pictures — so pinning it
-  // here threw away everything the profile visit just gathered and made opening
-  // the profile pointless for scoring. Keep it only when the profile gave us
-  // nothing better; otherwise let the orchestrator judge the whole bundle
-  // (video + bio + grid screenshots + captions + reach) against the campaign's
-  // actual rules. The clip is carried across so that richer call still watches
-  // and hears the reel.
+  // The verdict on the feed reel is step 2, not the last word. A Jev verdict on the reel
+  // that surfaced them (jevJudge.judgeReel) goes on as `sourceReelVerdict`: the
+  // creator-level judgement after the profile builds on it — their newest Reels through
+  // Monid, their bio — without labelling this reel again.
+  //
+  // Any other judge's verdict is final unless the profile gave something better: then the
+  // orchestrator judges the whole bundle, and the feed reel's verdict is kept alongside.
   const richer = !!(candidate.shots || (Array.isArray(candidate.reels) && candidate.reels.some((r) => r && r.views != null)));
-  // Jev judges the one reel and nothing else, so a profile visit gives it
-  // nothing more to read — judging again would only pay Groq and Jev twice for
-  // the same answer.
   const jev = verdict && verdict.source === 'jev';
-  if (verdict && (!richer || jev)) {
+  if (jev) {
+    candidate.sourceReelVerdict = verdict;
+  } else if (verdict && !richer) {
     candidate._nicheVerdict = verdict;
   } else if (verdict) {
-    // Not the verdict, but worth keeping as evidence of what the feed reel alone
-    // looked like next to the fuller judgement.
     candidate.evidence = { ...candidate.evidence, feedReelVerdict: verdict.evidence || null };
   } else {
     candidate.evidence = { ...candidate.evidence, analysis: 'incomplete' };

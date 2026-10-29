@@ -274,10 +274,11 @@ function basisOf(c) {
   const j = jevOf(c);
   if (!j) return '';
   const cr = j.creator;
-  const from = !cr ? 'from 1 reel'
+  // Step 2 (the reel that surfaced them, before the profile) or step 4 (the creator).
+  const from = !cr ? (j.stage === 'reel' || j.sourceReel ? 'from the reel that surfaced them' : 'from 1 reel')
     : cr.source === 'creator-list' ? `from creator-list (${cr.reels} reels)`
-      : cr.fallback ? 'from 1 caption (their Reels not collected)'
-        : `from ${cr.labelled} of ${cr.reels} reels`;
+      : cr.fallback ? 'from the reel that surfaced them (their Reels not collected)'
+        : `from ${cr.labelled} of ${cr.reels} reels${cr.bio ? ' + bio' : ''}`;
   const why = !cr && j.creatorNotLabelled ? j.creatorNotLabelled : ((cr && cr.errors) || []).join('\n');
   const skipped = c.evidence && c.evidence.profileVisit === 'skipped' ? ' · profile not opened' : '';
   const aud = j.audienceSummary ? ` · audience: ${escapeHtml(j.audienceSummary)}` : '';
@@ -340,12 +341,23 @@ function reelOf(c) {
   const j = jevOf(c);
   if (!j) return '—';
   const cr = j.creator;
-  if (!cr) return '—';
+  if (!cr) {
+    // Decided on the reel that surfaced them, before the profile: was it recorded, heard, seen?
+    if (j.stage !== 'reel') return '—';
+    if (!j.hadVideo) return '<span style="color:#b42318" title="Screen capture is not on in the phone app, so the reel was judged from its caption">not recorded — caption only</span>';
+    const why = [j.visionError, j.transcriptError].filter(Boolean).join('\n');
+    return `<span${why ? ` title="${escapeHtml(why)}"` : ''}>source reel · ${j.usedSpeech ? 'heard' : 'not heard'} · ${j.seen ? 'seen' : 'not seen'}</span>`;
+  }
   const errors = (cr.errors || []).join('\n');
   const hover = [errors, cr.visionError].filter(Boolean).join('\n');
   const title = hover ? ` title="${escapeHtml(hover)}"` : '';
   if (cr.source === 'creator-list') return `<span title="Labels from creator-list's index">creator-list · ${cr.reels}</span>`;
-  if (cr.fallback) return `<span style="color:#b42318"${title}>1 caption — Reels not collected</span>`;
+  if (cr.fallback) {
+    // Only the reel that surfaced them: whether it was heard and seen, and why the rest are missing.
+    const src = (cr.perReel || [])[0] || {};
+    const got = [src.words > 0 ? 'heard' : 'not heard', src.seen ? 'seen' : 'not seen'].join(' · ');
+    return `<span style="color:#b42318"${title}>source reel only (${got}) — their Reels not collected</span>`;
+  }
   const heard = (cr.perReel || []).filter((r) => r.words > 0).length;
   // Reels whose video the vision model described; why it could not, on hover with the rest.
   const seen = (cr.perReel || []).filter((r) => r.seen).length;
@@ -905,6 +917,19 @@ async function loadJudgeStatus() {
     banner.hidden = false;
   } else {
     banner.hidden = true;
+  }
+  // Without Monid no creator's own Reels are collected: each is judged from the
+  // reel that surfaced them alone, and held for review.
+  const mo = status && status.monid;
+  if (mo && banner.hidden && (mo.empty || !mo.configured)) {
+    banner.textContent = mo.empty
+      ? 'Monid\'s wallet is empty, so creators\' own Reels cannot be collected: each one is judged from '
+        + 'the reel that surfaced them alone and held in Pending review. Top it up at app.monid.ai/wallet — '
+        + 'scouting picks it up within a few minutes.'
+      : 'MONID_API_KEY is not set on the backend, so creators\' own Reels cannot be collected: each one is '
+        + 'judged from the reel that surfaced them alone and held in Pending review.';
+    banner.className = 'judge-banner err';
+    banner.hidden = false;
   }
   // Shortlisted creators go to creator-list's "Curated by INFLUENCE Team" — only
   // when Deal Studio knows the site and its key.

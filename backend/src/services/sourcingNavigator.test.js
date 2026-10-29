@@ -2227,7 +2227,33 @@ test('warm-up: views, then niche, then the profile — and the verdict is not pa
   assert.strictEqual(out.length, 1);
   assert.strictEqual(out[0].username, 'coach');
   assert.strictEqual(out[0].followers, 19500, 'the profile was read');
-  // Carried along, so the orchestrator does not judge again.
-  assert.strictEqual(out[0]._nicheVerdict.evidence.jev.decision, 'shortlist');
+  // Carried along: the creator-level judgement after the profile builds on it.
+  assert.strictEqual(out[0].sourceReelVerdict.evidence.jev.decision, 'shortlist');
+  assert.strictEqual(out[0]._nicheVerdict, undefined, 'not final: their Reels and bio are still to come');
   assert.strictEqual(out[0].evidence.feedViews.from, 'likes');
+});
+
+test('warm-up: the reel is recorded where it was found, judged from the recording, then the profile — recorded once', async () => {
+  const driver = fakeDriver();
+  driver.recordClip = async (seconds) => { driver.ops.push(['recordClip', seconds]); return { clipId: 'c1' }; };
+  let judgedClip = null;
+  const judge = async (candidate) => {
+    driver.ops.push(['judge', candidate.username]);
+    judgedClip = candidate.clip || null;
+    return { score: 0.9, source: 'jev', evidence: { jev: { decision: 'shortlist' } } };
+  };
+  const out = [];
+  for await (const c of scout({
+    driver, config: { pacingMs: 0, clipSeconds: 12 }, opts: { keywords: ['homegym'], max: 1 },
+    read: scriptedRead(warmupViews({ likes: 9000, comments: 300 })),
+    deps: { judge, getClip: async (id) => ({ dataBase64: Buffer.from(`video ${id}`).toString('base64'), mimeType: 'video/mp4' }) },
+  })) out.push(c);
+
+  const at = (name) => driver.ops.findIndex((o) => o[0] === name);
+  const opened = driver.ops.findIndex((o) => o[0] === 'tap' && o[1] === 205 && o[2] === 1275);
+  assert.ok(at('recordClip') >= 0 && at('recordClip') < at('judge') && at('judge') < opened, 'record, judge, then the profile');
+  assert.strictEqual(driver.ops.filter((o) => o[0] === 'recordClip').length, 1, 'not recorded again after the profile');
+  assert.strictEqual(Buffer.from(judgedClip.dataBase64, 'base64').toString(), 'video c1', 'the judge got the recording');
+  assert.strictEqual(out[0].clip.origin, 'keyword-match');
+  assert.strictEqual(out[0].evidence.clipCaptured, true);
 });

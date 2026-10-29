@@ -1,9 +1,16 @@
 # AI creator sourcing — multimodal reel judging, explore/scroll & engagement
 
-> **Current flow:** the phone finds creators and reads their profiles; it records
-> nothing. Each creator is judged from their newest 10 Reels collected through
-> Monid — see *Judging a creator from their Reels* below. Sections about recorded
-> clips and Gemini describe earlier versions.
+> **Current flow**, for every creator, cheapest first:
+> 1. **Views** of the reel that surfaced them, estimated from its likes and comments.
+> 2. **That reel** — recorded on the phone (12 s, with sound), heard by Whisper, seen by
+>    GPT-6 Luna, labelled by Jev (topic, niche, genre, format). Off target: the profile
+>    is never opened.
+> 3. **Their profile** — the views on their Reels tab (the viral rule) and the bio.
+> 4. **The creator** — their newest 12 Reels collected through Monid, each heard, seen
+>    and labelled, together with that reel and their bio.
+>
+> See *Judging a creator from their Reels* below. Sections about Gemini judging clips
+> describe earlier versions.
 
 This is the Phase‑3 layer on top of the paired‑phone sourcing stack. The backend
 drives a real Instagram app (no IG API), and now:
@@ -117,13 +124,13 @@ new account ──► PHASE 1  WARM-UP   search the keywords, scout the creators
 - **Both phases check a creator in the same order**, cheapest first, on the reel that
   surfaced them: (a) its views, estimated from its likes and comments
   (`services/feedVirality.js`) — a reel nowhere near the viral bar is passed over; (b) the
-  creator's niche, from their own latest Reels labelled the way creator-list labels creators
-  (`services/creatorLabels.js`, Jev) — a creator off target is rejected with the profile never
-  opened; and only then (c) their profile, for the real view counts the viral rule needs and
-  the bio. In warm-up this is `checkBeforeProfile` in `services/sourcingNavigator.js`; the Jev
-  verdict rides along on the candidate, so it is not paid for again after the visit. (A creator
-  found through the *Accounts* list has no reel to check, so they still go straight to the
-  profile.)
+  reel itself, recorded on the phone and heard, seen and labelled (`jevJudge.judgeReel`) — a
+  creator whose reel is off target is rejected with the profile never opened; (c) their
+  profile, for the real view counts the viral rule needs and the bio; and (d) the creator,
+  from their newest 12 Reels and bio (`jevJudge.judge`). In warm-up (a) and (b) are
+  `checkBeforeProfile` in `services/sourcingNavigator.js`; the reel's verdict rides along on
+  the candidate (`sourceReelVerdict`), so it is not labelled again. (A creator found through
+  the *Accounts* list has no reel to check, so they still go straight to the profile.)
 - **Warming a creator** (`services/creatorWarmup.js`) happens right after they are
   shortlisted, on the reel that surfaced them (the phone is still on it). The navigators get
   each creator's result back through `yield` (`runWithSource` passes it to `source.next`), so
@@ -159,24 +166,34 @@ new account ──► PHASE 1  WARM-UP   search the keywords, scout the creators
 applies); anything else is `auto`. A one-time migration (`scout-discovery-auto`) removed the mode
 the old page saved.
 
-### Judging a creator from their Reels (the phone records nothing)
+### Judging a creator from their Reels
 
-The phone's job is to **find** creators: search a keyword, open a reel, open the
-creator's profile, read their followers and the views on their Reels tab (the
-viral rule), go back to the reel that surfaced them, and like it if they are
-shortlisted. It no longer screen-records anything — `services/sourcingSession.js`
-hands the navigators a phone without `recordClip`.
+The phone **finds** creators and records the reel that surfaced each one: search a
+keyword or scroll the feed, check the reel's views from its likes and comments,
+**record it** (12 s, with sound — *screen capture* must be granted in the phone app),
+open the creator's profile, read their followers, bio and the views on their Reels
+tab (the viral rule), go back to the reel that surfaced them, and like it if they
+are shortlisted.
 
-The **judging** is done from the creator's own Reels, the way creator-list labels
-every creator it indexes (`services/creatorLabels.js`), using the username the
-phone read off their profile:
+**Step 2 — the reel that surfaced them** (`jevJudge.judgeReel`, before the profile):
+the recording is split (`services/reelMedia.js`) — the audio → Groq (Whisper) →
+transcript; frames → Tesseract → the words on screen — and **GPT-6 Luna** sees it
+(below; Instagram's own buttons and caption strip are cropped off first). Jev labels
+its topic, niche, genre and format (the four content questions). Decided against
+the run's targets: **off target → rejected, the profile never opened**, nothing
+spent on Monid. Without a recording (screen capture off), the reel is labelled from
+its caption, and the Reels column says *not recorded — caption only*.
+
+**Step 4 — the creator** (`jevJudge.judge`, after the profile passes the viral
+rule), the way creator-list labels every creator it indexes
+(`services/creatorLabels.js`), using the username the phone read off their profile:
 
 1. **creator-list already has them** → its labels through the partner API: topic,
    niche, genre and format shares over the Reels it analysed, and its estimated
    audience. Free and instant.
-2. **otherwise** (needs `MONID_API_KEY`):
-   - TikHub via Monid (`services/monid.js`): their card (country) and their newest
-     **10 Reels**, pinned and trial Reels left out — $0.002 a call.
+2. **otherwise** (needs `MONID_API_KEY` and a funded Monid wallet):
+   - TikHub via Monid (`services/monid.js`): their card (country, bio) and their
+     newest **12 Reels** (one page), pinned and trial Reels left out — $0.002 a call.
    - Each Reel's video is downloaded from Instagram's CDN and split
      (`services/reelMedia.js`): the audio → Groq (Whisper) → transcript; 4 frames
      → Tesseract → the words on screen.
@@ -196,11 +213,22 @@ phone read off their profile:
      creator-list's questions: the four content ones (taxonomy 2.3) and the three
      audience ones. Jev reads text only, so the frames reach it as their words and
      as that description, as in creator-list.
+   - **The reel that surfaced them** joins these as one more labelled Reel (not
+     labelled again; when Monid collected it too, its full video counts instead).
+   - **Their bio** is labelled too, for **topic and niche only** — the profile's own
+     word on what they make, strengthening (or weakening) what their Reels say. It
+     is not counted as a Reel and has no say in genre or format.
 3. **creator level**, as creator-list builds its creator documents: the share of
    Reels per topic / niche / genre / format, and which are the creator's **own** —
    a dedicated topic in at least half their Reels, a broad one in a fifth
    (`creator_topics.json`) — plus the **estimated audience** (`audience.py`, ported
    to `services/audienceEstimate.js` and checked against it).
+
+**An empty Monid wallet.** Monid answers 402 and no Reels are collected. After the
+first 402 Deal Studio stops calling Monid for 3 minutes (then tries again, so a
+top-up is picked up on its own), and the Scout page shows a red banner: *Monid's
+wallet is empty … top it up at app.monid.ai/wallet*. Meanwhile each creator is judged
+from the reel that surfaced them alone and held for review (below).
 
 The decision compares the targets with the creator's own labels: **shortlist**
 when the target topic/niche (and genre) is their own and a target format is in at
@@ -217,28 +245,32 @@ show and a **provisional fit** (`~1.00` on the page):
 > collected: Reels: Monid wallet is empty (HTTP 402): top it up; that reel is on
 > target
 
-With no Reels at all, the caption of the reel that surfaced them is what is
-labelled. Such a hold is never called "doubtful": the creator may be fine, there
+With no Reels of theirs at all, the reel that surfaced them — recorded, heard and
+seen — is what they are judged from. Such a hold is never called "doubtful": the creator may be fine, there
 was just too little to go on.
 
 **On the page.** The run table's **Reels** column shows what each creator was
-judged from (*9 of 10 · 6 heard · 9 seen*, *creator-list · 30*, or *1 caption —
-Reels not collected* in red), with Monid's error, and why any Reel was not seen,
-on hover; the label line reads *from 9 of 10 reels* and the audience estimate.
+judged from (*12 of 13 · 10 heard · 12 seen*, *creator-list · 30*, *source reel ·
+heard · seen* for a creator decided on that reel before the profile, or *source
+reel only (heard · seen) — their Reels not collected* in red), with Monid's error,
+and why any Reel was not seen, on hover; the label line reads *from 12 of 13 reels
++ bio* and the audience estimate.
 The run card's **Judged from Reels** counts creators judged from enough Reels (red
 at *0 of N* — check Monid), **Reels heard** the Reels whose speech Groq
 transcribed, and **Reels seen** the Reels whose video the vision model described (red at
 *0 of N* — check the OpenRouter key, `REEL_VISION_MODEL`, or ffmpeg). The run log ends
 with `reels={full, thin, labelled, heard, seen, failed}`.
 
-A creator costs about 2 cents (2 TikHub calls, up to 10 Groq + GPT-6 Luna + Jev
-calls), and only creators who passed the viral rule get there. The server needs
+A creator costs about 3 cents (2 TikHub calls, up to 12 Groq + GPT-6 Luna + Jev
+calls, and the bio), and only creators whose source reel was on target and whose
+profile passed the viral rule get there; the source reel itself costs well under a
+cent. The server needs
 ffmpeg, ffprobe and tesseract (`nixpacks.toml`); the Scout page warns when one is
 missing.
 
-### Scouting the reel feed: virality, niche, profile — in that order
+### Scouting the reel feed: virality, the reel, profile — in that order
 
-On the feed (phase 2 of phone farming) each creator goes through three checks,
+On the feed (phase 2 of phone farming) each creator goes through these checks,
 cheapest first, and stops at the first one they fail:
 
 1. **Virality, off the feed reel itself** (`services/feedVirality.js`). The player
@@ -250,12 +282,13 @@ cheapest first, and stops at the first one they fail:
    with nothing spent; the creator is not marked handled, so their next reel
    gets its own chance. Hidden likes go on to the next check.
    `SOURCING_FEED_ENGAGEMENT_RATE` overrides the median.
-2. **Niche, from their own Reels** — the same labelling as everywhere else
-   (Monid's 10 Reels; Groq, GPT-6 Luna and Tesseract on each; Jev), submitted while
-   the phone keeps scrolling. A creator Jev rejects is **never opened**; their
-   row says *profile not opened*.
-3. **Profile**: opened only for the rest — pictures of the profile and bio, and
-   the views on their Reels tab for the viral rule.
+2. **The reel itself** — recorded (12 s, with sound), then heard (Whisper), seen
+   (GPT-6 Luna) and labelled (Jev), submitted while the phone keeps scrolling. A
+   creator whose reel Jev places off target is **never opened**; their row says
+   *profile not opened*.
+3. **Profile**: opened only for the rest — the bio, and the views on their Reels
+   tab for the viral rule. Those who pass are judged as creators: their newest 12
+   Reels through Monid, this reel and their bio (above).
 
 The run log says `skipping @x: their reel has about 48K views (28K–66K) from 1.5K
 likes and 50 comments — below the 100K viral bar`, and the run's stats count

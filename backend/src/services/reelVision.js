@@ -113,8 +113,13 @@ function frameTimes(seconds) {
   return out;
 }
 
-/** [{t, jpeg}] for each time ffmpeg could cut a frame at. */
-async function cutFrames(video, times, dir, { exec = reelMedia.run } = {}) {
+/**
+ * [{t, jpeg}] for each time ffmpeg could cut a frame at. `crop`: a phone's screen recording,
+ * whose top bar and bottom caption/buttons strip are Instagram's, not the creator's — cut
+ * off the same way the frames read for text are (reelMedia.CROP).
+ */
+async function cutFrames(video, times, dir, { exec = reelMedia.run, crop = false } = {}) {
+  const vf = `${crop ? `${reelMedia.CROP},` : ''}scale=-2:min(${FRAME_HEIGHT}\\,ih)`;
   const out = [];
   for (let i = 0; i < times.length; i += 1) {
     const t = times[i];
@@ -123,7 +128,7 @@ async function cutFrames(video, times, dir, { exec = reelMedia.run } = {}) {
       // eslint-disable-next-line no-await-in-loop
       await exec('ffmpeg', [
         '-hide_banner', '-loglevel', 'error', '-y', '-ss', t.toFixed(2), '-i', video,
-        '-frames:v', '1', '-vf', `scale=-2:min(${FRAME_HEIGHT}\\,ih)`, '-q:v', '4', f,
+        '-frames:v', '1', '-vf', vf, '-q:v', '4', f,
       ], { env: { ...process.env, OMP_THREAD_LIMIT: '1' } });
       const jpeg = await fs.readFile(f); // eslint-disable-line no-await-in-loop
       if (jpeg.length) out.push({ t, jpeg });
@@ -265,7 +270,8 @@ async function callVision(msgs, { fetchImpl = fetch, key = openRouterKey(), retr
  * or { cues: null, error }.
  *
  * @param {Buffer} buf             the Reel's video
- * @param {object} reel            { handle, caption, transcript, segments, seconds }
+ * @param {object} reel            { handle, caption, transcript, segments, seconds,
+ *                                   screenRecording (the phone's recording: crop the app) }
  */
 async function describe(buf, reel = {}, deps = {}) {
   const exec = deps.exec || reelMedia.run;
@@ -280,7 +286,7 @@ async function describe(buf, reel = {}, deps = {}) {
     } catch (_) { /* the Reel's own duration below */ }
     seconds = seconds || Number(reel.seconds) || 0;
     const times = frameTimes(seconds);
-    const frames = await cutFrames(video, times, dir, { exec });
+    const frames = await cutFrames(video, times, dir, { exec, crop: !!reel.screenRecording });
     if (!frames.length) return { cues: null, frameTimes: times, error: 'ffmpeg cut no frames' };
     const res = await (deps.callVision || callVision)(messages({ ...reel, seconds }, frames), {
       fetchImpl: deps.fetchImpl, key: deps.key,

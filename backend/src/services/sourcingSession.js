@@ -95,12 +95,12 @@ async function runSession({ hostId, run, deps }) {
   );
 
   chan.beginSession(hostId);
-  // The phone never records a reel: a creator is judged from their newest Reels,
-  // collected through Monid by their username and split here (services/
-  // creatorLabels.js). Without `recordClip` the navigators read the profile, go
-  // back to the reel that surfaced the creator (so a shortlisted creator's like
-  // lands on it), and move on.
-  const { recordClip: _noRecording, ...driver } = makeDriver({ hostId, channel: chan });
+  // The phone records the reel that surfaced each creator (12 s, with sound — screen
+  // capture must be granted in the phone app): it is heard, seen by GPT-6 Luna and
+  // labelled by Jev BEFORE their profile is opened (jevJudge.judgeReel). Their newest
+  // 12 Reels are collected through Monid only after the profile passes the viral rule
+  // (jevJudge.judge, services/creatorLabels.js).
+  const driver = makeDriver({ hostId, channel: chan });
   // Ready the phone (agent maps these to adb). Best-effort — but surface a
   // failure instead of swallowing it: a keepAwake/wake timeout here is the
   // earliest sign the command channel isn't round-tripping (the agent executes
@@ -305,7 +305,8 @@ async function runSession({ hostId, run, deps }) {
       },
       opts,
       deps: {
-        judge: deps.judge || jevJudge.makeClassifier(),
+        // Step 2, on the reel that surfaced them, while the phone keeps scrolling.
+        judge: deps.judge || jevJudge.judgeReel,
         getClip: deps.getClip || clipStore.take,
         engagement: deps.engagement || { policy: engagementPolicy.loadPolicy(), decide: engagementPolicy.decide },
         rng: deps.rng,
@@ -352,10 +353,10 @@ async function runSession({ hostId, run, deps }) {
       opts,
       deps: {
         getClip: deps.getClip || clipStore.take, heartbeat, saveDepth, warmCreator,
-        // The same judge as the feed: a creator's latest Reels are labelled
-        // BEFORE their profile is opened, so warm-up follows the feed's order —
-        // views from likes and comments, then niche, then the profile.
-        judge: deps.judge || require('./jevJudge').makeClassifier(),
+        // The same judge as the feed: the reel that surfaced a creator is recorded,
+        // heard, seen and labelled BEFORE their profile is opened, so warm-up follows
+        // the feed's order — views from likes and comments, the reel, the profile.
+        judge: deps.judge || require('./jevJudge').judgeReel,
       },
     });
   };

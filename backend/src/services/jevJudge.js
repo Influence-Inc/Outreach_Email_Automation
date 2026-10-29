@@ -1,14 +1,20 @@
 'use strict';
 
-// Judging a scouted creator from the ONE reel that surfaced them, the way the
-// creator-list project judges every Reel it indexes.
+// Judging a scouted creator the way the creator-list project judges every Reel and creator
+// it indexes — in the order the scout meets them:
 //
-//   the phone records the reel ──► split (services/reelMedia.js):
-//                                    audio track ─► Groq (Whisper) transcribes it
-//                                    frames      ─► Tesseract reads the on-screen text
-//   transcript + on-screen text + caption ──► Jev (TypeSafe, via OpenRouter)
-//                                          answers topic / niche / genre / format
-//   those answers, against the run's targets ──► shortlist | review | reject
+//   1. (the navigators) the reel's views, estimated from its likes and comments.
+//   2. judgeReel — THE REEL THAT SURFACED THEM, before their profile is opened. The phone
+//      records it (12 s, with sound); it is split (services/reelMedia.js): Whisper (Groq)
+//      hears it, Tesseract reads its frames, GPT-6 Luna describes what it shows
+//      (services/reelVision.js); Jev (TypeSafe, via OpenRouter) labels its topic, niche,
+//      genre and format. Off target: the creator ends here, profile never opened.
+//   3. (the navigators) their profile: the views on their Reels tab for the viral rule, the
+//      bio.
+//   4. judge — THE CREATOR, after the profile: creator-list's labels when it has them, else
+//      their newest 12 Reels collected through Monid, each heard, seen and labelled the same
+//      way; with the source reel and their bio (services/creatorLabels.js). Shortlist,
+//      review or reject against the run's targets.
 //
 // The questions, their worked examples and the option lists are creator-list's
 // own content taxonomy (cpmReference/content_taxonomy.json, kept identical to
@@ -16,17 +22,15 @@
 // its enrichment/classify/content.py asks them — so a creator Deal Studio
 // shortlists carries the same labels creator-list would give them.
 //
-// Jev is text-only. "Screenshots" reach it as the words on them: frames are cut
-// from the recording and read with Tesseract, the same way creator-list reads a
-// Reel's cover. A creator's own Reels (services/creatorLabels.js) also reach it as
-// what they show: GPT-6 Luna describes frames of each video (services/reelVision.js). Instagram's own player chrome (top bar, the handle and caption
-// strip) is cropped off first; the caption arrives separately from the phone's
-// accessibility tree, which reads it exactly.
+// Jev is text-only. What a video shows reaches it as the words on its frames
+// (Tesseract) and as GPT-6 Luna's description of them. On the phone's recording,
+// Instagram's own player chrome (top bar, the handle and caption strip) is cropped off
+// first; the caption arrives separately from the phone's accessibility tree, which reads
+// it exactly.
 //
 // What the judge actually got from the recording — audio present, silent or
-// missing, how many frames were read, any step that failed — is kept on the
-// verdict (evidence.jev.media), so a judgement made without speech or text says
-// why.
+// missing, how many frames were read, whether it was seen — is kept on the
+// verdict (evidence.jev.media, .seen), so a judgement made without them says why.
 //
 //   GROQ_API_KEY                     Groq, for Whisper
 //   JEV_API_KEY (or OPENROUTER_API_KEY / TYPESAFE_API_KEY)
@@ -37,7 +41,6 @@
 //
 // Nothing here is persisted: the recording is read, labelled and dropped.
 
-const reelMedia = require('./reelMedia');
 const reelVision = require('./reelVision');
 const creatorLabels = require('./creatorLabels');
 const audienceEstimate = require('./audienceEstimate');
@@ -573,24 +576,12 @@ function nothingToReadReason(clip, media) {
   return 'nothing to read on this reel: no speech, caption or on-screen text';
 }
 
-/**
- * Judge one creator from their recorded reel. Never throws: a failure is a
- * `review` verdict naming what went wrong, so a missing key or a provider outage
- * puts creators in front of the admin instead of silently passing or dropping
- * them.
- *
- * Returns the shape sourcingFilters.nicheMatch expects —
- * { score, reason, source: 'jev', evidence: { jev: {...} } } — with the decision
- * in evidence.jev.decision for the orchestrator.
- */
-async function judge(candidate, config = {}, deps = {}) {
+/** The pieces of a Jev verdict both stages share. */
+function verdictFor(candidate, config) {
   const sourceTerm = (candidate && (candidate.sourceTerm || (candidate.evidence && candidate.evidence.sourceTerm))) || null;
   const targets = targetsOf(config, sourceTerm);
-  const clip = clipOf(candidate);
-  const caption = captionOf(candidate);
   const jev = {
     targets: { topics: targets.topics, niches: targets.niches, genres: targets.genres, formats: targets.formats, from: targets.from || null },
-    hadVideo: !!clip,
   };
   const verdict = (decision, reasons, extra = {}) => {
     const out = { ...jev, ...extra, decision, reasons };
@@ -601,126 +592,179 @@ async function judge(candidate, config = {}, deps = {}) {
       evidence: { jev: out },
     };
   };
+  return { targets, jev, verdict };
+}
+
+/**
+ * STEP 2 — the reel that surfaced a creator, judged BEFORE their profile is opened.
+ *
+ * The phone records it (12 s, with sound) right where it found it; Whisper hears it,
+ * Tesseract reads its frames, GPT-6 Luna describes what it shows, and Jev labels its topic,
+ * niche, genre and format (creatorLabels.labelReel, creator-list's way). Decided against the
+ * run's targets: a reel Jev places off target ends the creator here — the profile is never
+ * opened and nothing is spent collecting their Reels. Without a recording (screen capture not
+ * granted) it is labelled from its caption, and says so.
+ *
+ * Never throws: a failure is a `review` verdict naming what went wrong. The labelled reel
+ * rides along as evidence.jev.sourceReel, for the creator-level judgement after the profile.
+ */
+async function judgeReel(candidate, config = {}, deps = {}) {
+  const { targets, jev, verdict } = verdictFor(candidate, config);
+  const clip = clipOf(candidate);
+  const caption = captionOf(candidate);
+  jev.stage = 'reel';
+  jev.hadVideo = !!clip;
 
   const key = deps.jevKey !== undefined ? deps.jevKey : jevKey();
   if (!key) return verdict('review', ['Jev is not configured (set JEV_API_KEY) — judge this creator by hand']);
 
-  let transcript = { text: '', language: null, duration: null };
-  let screen = { text: '', frames: 0 };
-  let media = null;
-  if (clip) {
-    const split = await (deps.split || reelMedia.split)(Buffer.from(clip.dataBase64, 'base64'), {
-      mimeType: clip.mimeType || 'video/mp4',
-    });
-    try {
-      const audio = split.audio || { state: 'unchecked' };
-      const hear = ['ok', 'unchecked'].includes(audio.state) && audio.buf
-        ? (deps.transcribe || transcribe)(audio.buf, audio.mimeType || 'video/mp4', { fetchImpl: deps.fetchImpl })
-          .catch((err) => ({ text: '', language: null, duration: null, error: err.message }))
-        : Promise.resolve({ text: '', language: null, duration: null });
-      const [t, s] = await Promise.all([hear, (deps.readFrames || reelMedia.readFrames)(split.frames || [])]);
-      transcript = t;
-      screen = s;
-      media = {
-        audio: audio.state,
-        maxVolumeDb: Number.isFinite(audio.maxVolumeDb) ? audio.maxVolumeDb : null,
-        seconds: split.seconds || null,
-        framesCut: (split.frames || []).length,
-        framesRead: s.frames || 0,
-        words: String(t.text || '').split(/\s+/).filter(Boolean).length,
-        errors: [...(split.errors || []), ...(s.error ? [s.error] : []), ...(t.error ? [`Groq: ${t.error}`] : [])],
-      };
-    } finally {
-      if (split.cleanup) await split.cleanup();
-    }
-  }
-  const state = buildState({
-    username: candidate.username,
-    caption,
-    transcript: transcript.text,
-    onScreenText: screen.text,
-    durationSeconds: transcript.duration,
-  });
-  Object.assign(jev, {
-    language: transcript.language || null,
-    transcriptError: transcript.error || undefined,
-    usedSpeech: state.has_speech,
-    transcript: state.speech ? state.speech.slice(0, 600) : '',
-    onScreenText: state.on_screen_text ? state.on_screen_text.slice(0, 300) : '',
-    framesRead: screen.frames,
-    media: media || undefined,
-  });
-
-  // THE CREATOR, NOT ONE REEL. creator-list labels a creator from many of their Reels
-  // (services/creatorLabels.js): its own labels when it has the creator, else their newest
-  // 10 Reels collected through Monid by username and labelled the same way. The phone no
-  // longer records, so the reel that surfaced them is only its caption, labelled when none
-  // of their Reels can be collected.
-  const recordedReel = clip || caption ? { state, language: transcript.language } : null;
-  const creator = await (deps.labelCreator || creatorLabels.labelCreator)({
-    handle: candidate.username,
-    recorded: recordedReel,
-    deps: { fetchImpl: deps.fetchImpl, jevKey: key, ...(deps.creatorDeps || {}) },
-  }).catch((err) => ({ source: null, reason: err.message }));
-  if (creator && creator.source) {
-    const d = creatorLabels.decideFromCreator(creator, targets, config.reviewLessons || null);
-    const labels = creatorLabels.labelsOf(creator);
-    return verdict(d.decision, d.reasons, {
-      labels,
-      summary: summary(labels),
-      fit: d.fit,
-      // Too few Reels to decide on: the fit is what the few there are show.
-      provisional: d.provisional || undefined,
-      // Decided by what the admin's review notes taught.
-      lesson: d.lesson || undefined,
-      thin: d.thin || undefined,
-      audienceSummary: audienceEstimate.summarise(creator.audience) || undefined,
-      creator: {
-        source: creator.source,
-        fallback: creator.fallback || undefined,
-        as_of: creator.as_of || undefined,
-        reels: creator.reels,
-        labelled: creator.labelled,
-        shares: creator.shares,
-        own: creator.own,
-        audience: creator.audience,
-        perReel: creator.perReel,
-        costUsd: creator.costUsd,
-        errors: creator.errors && creator.errors.length ? creator.errors : undefined,
-        visionError: creator.visionError || undefined,
+  const pass = (k) => (deps[k] ? { [k]: deps[k] } : {});
+  const row = await (deps.labelReel || creatorLabels.labelReel)(
+    clip
+      ? {
+        code: 'source', buf: Buffer.from(clip.dataBase64, 'base64'), mimeType: clip.mimeType || 'video/mp4', caption, keepText: true, contentOnly: true,
+      }
+      : {
+        code: 'source', caption, keepText: true, contentOnly: true,
       },
-    });
-  }
-  // Judged on the one recorded reel: say why the creator could not be.
-  if (creator && creator.reason) jev.creatorNotLabelled = creator.reason;
+    {
+      handle: candidate.username,
+      deps: {
+        fetchImpl: deps.fetchImpl,
+        jevKey: key,
+        ...pass('split'),
+        ...pass('transcribe'),
+        ...pass('readFrames'),
+        ...pass('describe'),
+        ...(deps.creatorDeps || {}),
+      },
+    },
+  ).catch((err) => ({ code: 'source', labels: null, error: err.message }));
 
-  const nothingToRead = !state.has_speech && !state.caption && !state.on_screen_text && !state.hashtags.length;
-  if (nothingToRead) {
-    return verdict('review', [nothingToReadReason(clip, media)]);
-  }
+  Object.assign(jev, {
+    sourceReel: row,
+    language: row.language || null,
+    usedSpeech: !!row.usedSpeech,
+    transcript: row.transcript || '',
+    onScreenText: row.onScreenText || '',
+    seen: !!row.seen,
+    visionError: row.visionError || undefined,
+    transcriptError: row.transcriptError || undefined,
+    framesRead: row.framesRead || 0,
+    media: clip ? row.media : undefined,
+  });
 
-  let res;
-  try {
-    res = await callJev(state, buildQuestions(), { fetchImpl: deps.fetchImpl, key });
-  } catch (err) {
-    return verdict('review', [`Jev failed (${err.message}) — judge this creator by hand`]);
+  if (!row.labels) {
+    if (row.nothingToRead) return verdict('review', [nothingToReadReason(clip, row.media)]);
+    return verdict('review', [`Jev failed (${row.error || 'no answer'}) — judge this creator by hand`]);
   }
-  const labels = toLabels(res.answers);
-  const d = decideFromLabels(labels, targets, config);
+  const d = decideFromLabels(row.labels, targets, config);
   return verdict(d.decision, d.reasons, {
-    labels,
-    summary: summary(labels),
+    labels: row.labels,
+    summary: summary(row.labels),
     fit: d.fit,
     unsureAt: d.unsureAt ?? null,
     probablyOffAt: d.probablyOffAt ?? null,
     // The bars this verdict was decided against — learned, see jevCalibration.
     bars: { shortlistAt: shortlistBar(config), rejectAt: rejectBar(config) },
-    model: res.model,
-    costUsd: res.costUsd,
+    costUsd: row.costUsd || null,
   });
 }
 
-/** The classifier the orchestrator and the reels navigator inject as `nicheClassify` / `judge`. */
+/**
+ * STEPS 3–4 — the creator, once their profile has been read and passed the viral rule.
+ *
+ * creator-list labels a creator from many of their Reels (services/creatorLabels.js): its own
+ * labels when it has the creator, else their newest 12 Reels collected through Monid by
+ * username — each heard (Whisper), seen (GPT-6 Luna) and labelled (Jev) — together with the
+ * reel that surfaced them (labelled before, not again) and their bio (topic and niche only).
+ * When none of their Reels can be collected, the source reel is all there is: one reel,
+ * always a person's call, with the reason.
+ *
+ * Never throws. Returns the shape sourcingFilters.nicheMatch expects —
+ * { score, reason, source: 'jev', evidence: { jev: {...} } } — with the decision in
+ * evidence.jev.decision for the orchestrator.
+ */
+async function judge(candidate, config = {}, deps = {}) {
+  const { targets, jev, verdict } = verdictFor(candidate, config);
+
+  const key = deps.jevKey !== undefined ? deps.jevKey : jevKey();
+  if (!key) return verdict('review', ['Jev is not configured (set JEV_API_KEY) — judge this creator by hand']);
+
+  // The source reel: judged before the profile was opened — or now, for a creator who
+  // reached here without that (an Accounts-list find, a navigator that did not record).
+  let reel = candidate && candidate.sourceReelVerdict;
+  if (!reel || !reel.evidence || !reel.evidence.jev) reel = await judgeReel(candidate, config, deps);
+  const rj = reel.evidence.jev;
+  const row = rj.sourceReel && rj.sourceReel.labels ? rj.sourceReel : null;
+  const sourceReel = {
+    decision: rj.decision,
+    summary: rj.summary || null,
+    labels: rj.labels || null,
+    hadVideo: !!rj.hadVideo,
+    seen: !!rj.seen,
+    usedSpeech: !!rj.usedSpeech,
+    seenSummary: (rj.sourceReel && rj.sourceReel.seenSummary) || undefined,
+  };
+  Object.assign(jev, {
+    stage: 'creator',
+    hadVideo: !!rj.hadVideo,
+    sourceReel,
+    language: rj.language || null,
+    usedSpeech: !!rj.usedSpeech,
+    transcript: rj.transcript || '',
+    onScreenText: rj.onScreenText || '',
+    media: rj.media,
+  });
+
+  const creator = await (deps.labelCreator || creatorLabels.labelCreator)({
+    handle: candidate.username,
+    source: row,
+    bio: candidate.bio || '',
+    deps: { fetchImpl: deps.fetchImpl, jevKey: key, ...(deps.creatorDeps || {}) },
+  }).catch((err) => ({ source: null, reason: err.message }));
+  if (!creator || !creator.source) {
+    // Nothing of theirs to label at all — not even the source reel. Its own verdict, held.
+    jev.creatorNotLabelled = (creator && creator.reason) || 'their Reels could not be labelled';
+    return verdict(rj.decision === 'reject' ? 'reject' : 'review', [...(rj.reasons || []), `their Reels: ${jev.creatorNotLabelled}`], {
+      labels: rj.labels, summary: rj.summary, fit: rj.fit, provisional: true,
+    });
+  }
+  const d = creatorLabels.decideFromCreator(creator, targets, config.reviewLessons || null);
+  const labels = creatorLabels.labelsOf(creator);
+  return verdict(d.decision, d.reasons, {
+    labels,
+    summary: summary(labels),
+    fit: d.fit,
+    // Too few Reels to decide on: the fit is what the few there are show.
+    provisional: d.provisional || undefined,
+    // Decided by what the admin's review notes taught.
+    lesson: d.lesson || undefined,
+    thin: d.thin || undefined,
+    audienceSummary: audienceEstimate.summarise(creator.audience) || undefined,
+    creator: {
+      source: creator.source,
+      fallback: creator.fallback || undefined,
+      as_of: creator.as_of || undefined,
+      reels: creator.reels,
+      labelled: creator.labelled,
+      shares: creator.shares,
+      own: creator.own,
+      audience: creator.audience,
+      perReel: creator.perReel,
+      bio: creator.bio || undefined,
+      costUsd: creator.costUsd,
+      errors: creator.errors && creator.errors.length ? creator.errors : undefined,
+      visionError: creator.visionError || undefined,
+    },
+  });
+}
+
+/**
+ * The classifier the orchestrator injects as `nicheClassify`: the creator-level judge,
+ * after the profile. A creator already rejected on the reel that surfaced them carries that
+ * verdict as `_nicheVerdict` and is not judged again. (The navigators use judgeReel.)
+ */
 function makeClassifier(deps = {}) {
   return async function classify(candidate, config) {
     if (candidate && candidate._nicheVerdict) return candidate._nicheVerdict;
@@ -730,6 +774,7 @@ function makeClassifier(deps = {}) {
 
 module.exports = {
   judge,
+  judgeReel,
   makeClassifier,
   transcribe,
   nothingToReadReason,

@@ -375,15 +375,19 @@ test('warming can be turned off for a run through the API', async () => {
 
 // Scouting records nothing: the navigator is handed a phone without recordClip,
 // so it reads the profile, goes back to the reel, and never asks for a recording.
-test('the navigator gets a phone that cannot record', async () => {
+// The reel that surfaced a creator is recorded on the phone and judged before
+// their profile is opened (jevJudge.judgeReel) — so the navigator gets a phone
+// that records, and the source-reel judge.
+test('the navigator gets a phone that records, and the source-reel judge', async () => {
   let given = null;
+  const recordClip = async () => ({ clipId: 'c1' });
   const deps = {
     ...baseDeps(),
-    makeDriver: () => ({ ...fakeDriver(), recordClip: async () => { throw new Error('must not record'); }, tap: async () => {} }),
-    scout: (args) => { given = args.driver; return (async function* () {})(); },
+    makeDriver: () => ({ ...fakeDriver(), recordClip, tap: async () => {} }),
+    scout: (args) => { given = args; return (async function* () {})(); },
   };
   await session.start({ hostId: 1, run: { id: 5, config: { discovery: 'search', keywords: ['gym'] } }, deps }).promise;
   assert.ok(given, 'the navigator ran');
-  assert.strictEqual(given.recordClip, undefined);
-  assert.strictEqual(typeof given.tap, 'function', 'everything else is still there');
+  assert.strictEqual(given.driver.recordClip, recordClip);
+  assert.strictEqual(given.deps.judge, require('./jevJudge').judgeReel);
 });

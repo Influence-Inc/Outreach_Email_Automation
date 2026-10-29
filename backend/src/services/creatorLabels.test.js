@@ -154,37 +154,100 @@ test('a creator creator-list does not have is labelled from their newest Reels, 
   assert.ok(p.costUsd > 0);
 });
 
-// The phone records nothing now: the reel that surfaced them is only its caption,
-// labelled when none of their Reels can be collected.
-const sourceReel = { state: { creator: 'coach', caption: 'five moves for strong legs', hashtags: [], on_screen_text: '', speech: '', has_speech: false, duration_seconds: null, uses_original_audio: null } };
+// The reel that surfaced them: recorded on the phone and labelled before their profile
+// was opened (jevJudge.judgeReel). Here it is one more labelled Reel of theirs.
+const recordedSource = (deps, caption = 'five moves for strong legs') => cl.labelReel(
+  { code: 'source', buf: Buffer.from('screen recording'), caption, keepText: true },
+  { handle: 'coach', deps },
+);
 
-test('the reel that surfaced them is not labelled when their Reels were collected', async () => {
+test('the phone\'s recording is heard, read and seen — with Instagram\'s own buttons cropped off', async () => {
+  const { deps } = fakes();
+  let seenWith = null;
+  deps.describe = async (buf, reel) => { seenWith = { buf: buf.toString(), ...reel }; return { cues: { summary: 'a coach demonstrates squats' }, costUsd: 0.002 }; };
+  const r = await recordedSource(deps);
+  assert.strictEqual(seenWith.buf, 'screen recording');
+  assert.strictEqual(seenWith.screenRecording, true, 'the app\'s chrome is cropped before the vision model looks');
+  assert.strictEqual(r.seen, true);
+  assert.strictEqual(r.labels.topic.value, 'fitness');
+  assert.strictEqual(r.transcript, 'today we train legs with five simple moves');
+  assert.strictEqual(r.seenSummary, 'a coach demonstrates squats');
+  assert.strictEqual(r.caption, 'five moves for strong legs');
+});
+
+test('the reel that surfaced them joins the Reels Monid collected, labelled once', async () => {
   const { deps, jevCalls } = fakes();
-  const p = await cl.labelCreator({ handle: 'coach', recorded: sourceReel, deps });
-  assert.strictEqual(p.reels, 3);
-  assert.strictEqual(jevCalls.length, 3);
-  assert.ok(!jevCalls.some((c) => c.state.caption === 'five moves for strong legs'));
+  const source = await recordedSource(deps);
+  const p = await cl.labelCreator({ handle: 'coach', source, deps });
+  assert.strictEqual(p.reels, 4, '3 collected + the one that surfaced them');
+  assert.strictEqual(p.perReel[0].code, 'source');
+  assert.strictEqual(jevCalls.filter((c) => c.state.caption === 'five moves for strong legs').length, 1, 'not labelled again');
   assert.strictEqual(p.fallback, undefined);
 });
 
-test('their Reels could not be collected: the caption of the reel that surfaced them is labelled, and why is kept', async () => {
+test('a source reel Monid also collected counts once, from its full video', async () => {
+  const { deps } = fakes();
+  const source = await recordedSource(deps, 'home workout for beginners');
+  const p = await cl.labelCreator({ handle: 'coach', source, deps });
+  assert.strictEqual(p.reels, 3);
+  assert.ok(!p.perReel.some((r) => r.code === 'source'));
+});
+
+test('their Reels could not be collected: judged from the reel that surfaced them, and why is kept', async () => {
   const { deps, jevCalls } = fakes();
   deps.monid.fetchReels = async () => { throw new Error('Monid wallet is empty (HTTP 402): top it up'); };
-  const p = await cl.labelCreator({ handle: 'coach', recorded: sourceReel, deps });
+  const source = await recordedSource(deps);
+  const p = await cl.labelCreator({ handle: 'coach', source, deps });
   assert.strictEqual(p.source, 'reels');
   assert.strictEqual(p.fallback, true);
   assert.strictEqual(p.reels, 1);
-  assert.strictEqual(jevCalls.length, 1);
-  assert.strictEqual(jevCalls[0].state.caption, 'five moves for strong legs');
+  assert.strictEqual(jevCalls.length, 1, 'only the source reel, labelled before');
   assert.deepStrictEqual(p.errors, ['Reels: Monid wallet is empty (HTTP 402): top it up']);
+  // One reel is always a person's call, with the reason.
+  const d = cl.decideFromCreator(p, { topics: ['fitness'], niches: [], genres: [], formats: [] });
+  assert.strictEqual(d.decision, 'review');
+  assert.match(d.reasons[0], /only 1 reel to judge \(the one that surfaced them\) — their Reels could not be collected: Reels: Monid wallet is empty/);
 });
 
 test('Monid answering with no Reels says so', async () => {
   const { deps } = fakes();
   deps.monid.fetchReels = async () => ({ reels: [], costUsd: 0.002 });
-  const p = await cl.labelCreator({ handle: 'coach', recorded: sourceReel, deps });
+  const p = await cl.labelCreator({ handle: 'coach', source: await recordedSource(deps), deps });
   assert.strictEqual(p.fallback, true);
   assert.deepStrictEqual(p.errors, ['Monid found no Reels on their account']);
+});
+
+test('neither creator-list nor MONID_API_KEY: judged from the source reel, and why is kept', async () => {
+  const none = await cl.labelCreator({ handle: 'coach', deps: { fromCreatorList: async () => null } });
+  assert.strictEqual(none.source, null, 'nothing at all to label');
+  assert.match(none.reason, /MONID_API_KEY/);
+  const { deps } = fakes();
+  const source = await recordedSource(deps);
+  delete deps.monid;
+  const prev = process.env.MONID_API_KEY;
+  delete process.env.MONID_API_KEY;
+  try {
+    const p = await cl.labelCreator({ handle: 'coach', source, deps });
+    assert.strictEqual(p.fallback, true);
+    assert.match(p.errors[0], /MONID_API_KEY is not set/);
+  } finally {
+    if (prev !== undefined) process.env.MONID_API_KEY = prev;
+  }
+});
+
+test('the bio has a say in their topic and niche, none in genre, format or the Reel count', async () => {
+  const { deps, jevCalls } = fakes();
+  const p = await cl.labelCreator({ handle: 'coach', bio: 'Home fitness coach · free plans below', deps });
+  assert.ok(jevCalls.some((c) => c.state.caption === 'Home fitness coach · free plans below'), 'the bio was labelled');
+  assert.strictEqual(p.reels, 3, 'the bio is not a Reel');
+  assert.strictEqual(p.labelled, 3);
+  assert.deepStrictEqual(p.shares.topic, { fitness: 0.75, food_drink: 0.25 }, '2 of 3 Reels + the bio');
+  assert.deepStrictEqual(p.shares.genre, { educational: 1 }, 'genre from the Reels alone');
+  assert.deepStrictEqual(p.bio, { topic: 'fitness', niche: 'gym_strength' });
+});
+
+test('Monid collects a full page of 12 Reels', () => {
+  assert.strictEqual(cl.REELS, 12);
 });
 
 test('creator-list\'s own labels are used first, at no cost', async () => {
@@ -209,24 +272,6 @@ test('creator-list\'s own labels are used first, at no cost', async () => {
   // Not indexed, or too few Reels analysed: null, and the Reels are collected instead.
   assert.strictEqual(await cl.fromCreatorList('x', { configured: () => true, call: async () => ({ status: 'not_indexed' }) }), null);
   assert.strictEqual(await cl.fromCreatorList('x', { configured: () => false, call: async () => { throw new Error('not called'); } }), null);
-});
-
-test('neither creator-list nor MONID_API_KEY: the caption is labelled, and why is kept', async () => {
-  const none = await cl.labelCreator({ handle: 'coach', deps: { fromCreatorList: async () => null } });
-  assert.strictEqual(none.source, null, 'nothing at all to label');
-  assert.match(none.reason, /MONID_API_KEY/);
-  const { deps, jevCalls } = fakes();
-  delete deps.monid;
-  const prev = process.env.MONID_API_KEY;
-  delete process.env.MONID_API_KEY;
-  try {
-    const p = await cl.labelCreator({ handle: 'coach', recorded: sourceReel, deps });
-    assert.strictEqual(p.fallback, true);
-    assert.strictEqual(jevCalls.length, 1);
-    assert.match(p.errors[0], /MONID_API_KEY is not set/);
-  } finally {
-    if (prev !== undefined) process.env.MONID_API_KEY = prev;
-  }
 });
 
 test('only Instagram CDN video links are downloaded', () => {
