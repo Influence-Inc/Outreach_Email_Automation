@@ -152,6 +152,7 @@ test('a creator creator-list does not have is labelled from their newest Reels, 
   assert.strictEqual(call('my morning smoothie').state.speech, '', 'a Reel with no video is judged on its caption');
   assert.strictEqual(p.audience.geography.primary_country, 'US');
   assert.ok(p.costUsd > 0);
+  assert.deepStrictEqual(p.monid, { calls: 2, usd: 0.004 }, 'one card and one page of Reels: $0.004 a creator');
 });
 
 // The reel that surfaced them: recorded on the phone and labelled before their profile

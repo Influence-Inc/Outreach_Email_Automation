@@ -558,6 +558,9 @@ async function runWithSource(run, config, source, deps) {
     reels: {
       full: 0, thin: 0, labelled: 0, heard: 0, seen: 0, failed: 0,
     },
+    // What collecting creators' Reels cost this run on Monid (services/monid.js):
+    // a card and a page of 12 Reels, $0.002 each, per creator collected.
+    monid: { calls: 0, usd: 0, creators: 0 },
   };
   let stopped = false;
   let last;
@@ -603,6 +606,11 @@ async function runWithSource(run, config, source, deps) {
       r.heard += (creator.perReel || []).filter((x) => x.words > 0).length;
       r.seen += (creator.perReel || []).filter((x) => x.seen).length;
       if (creator.errors && creator.errors.length) r.failed += 1;
+      if (creator.monid && creator.monid.calls) {
+        stats.monid.calls += creator.monid.calls;
+        stats.monid.usd = Math.round((stats.monid.usd + (creator.monid.usd || 0)) * 10000) / 10000;
+        stats.monid.creators += 1;
+      }
     }
     if (res.judged) {
       if (res.hadClip) stats.withVideo += 1; else stats.withoutVideo += 1;

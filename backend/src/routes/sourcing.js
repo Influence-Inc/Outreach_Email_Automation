@@ -126,7 +126,7 @@ router.get('/status', async (_req, res, next) => {
       // Whether shortlisted creators can reach creator-list's collection.
       creatorList: { curated: creatorList.curatedConfigured(), missing: creatorList.curatedMissing() },
       // Whether creators' Reels can be collected: the key, and a wallet Monid refused.
-      monid: { configured: monid.configured(), ...monid.walletState() },
+      monid: { configured: monid.configured(), ...monid.walletState(), today: monid.spentToday() },
       remoteControl: hostCommands.enabled(),
       liveMirror: hostChannel.enabled(),
       build: buildInfo(),

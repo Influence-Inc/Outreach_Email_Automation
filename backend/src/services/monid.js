@@ -45,6 +45,45 @@ function walletState(now = Date.now()) {
 /** Test-only: forget an empty wallet. */
 function _resetWallet() { walletEmptyAt = 0; }
 
+// Deal Studio's own daily Monid budget, so a busy day — or a bug that fetches the same
+// creator twice — cannot drain the wallet other services share.
+//   MONID_USD_PER_DAY   USD per UTC day (default 1.00, 250 creators); "none" = no cap
+// Counted in this process: a restart starts the day's count again.
+const DEFAULT_USD_PER_DAY = 1;
+let ledger = { date: '', usd: 0, calls: 0 };
+
+const today = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
+
+function dailyCap(env = process.env) {
+  const raw = String(env.MONID_USD_PER_DAY ?? '').trim().toLowerCase();
+  if (!raw) return DEFAULT_USD_PER_DAY;
+  if (raw === 'none') return Infinity;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_USD_PER_DAY;
+}
+
+/** What Deal Studio has spent on Monid today (UTC), and its cap. */
+function spentToday(now = Date.now()) {
+  if (ledger.date !== today(now)) ledger = { date: today(now), usd: 0, calls: 0 };
+  const cap = dailyCap();
+  return {
+    date: ledger.date,
+    usd: Math.round(ledger.usd * 10000) / 10000,
+    calls: ledger.calls,
+    cap: Number.isFinite(cap) ? cap : null,
+    capped: ledger.usd + 0.002 > cap + 1e-9,
+  };
+}
+
+function charge(usd) {
+  spentToday();
+  ledger.usd += usd;
+  ledger.calls += 1;
+}
+
+/** Test-only: start the day's count again. */
+function _resetLedger() { ledger = { date: '', usd: 0, calls: 0 }; }
+
 class MonidError extends Error {
   constructor(message, status = null) {
     super(message);
@@ -59,6 +98,13 @@ async function run(endpoint, query, {
 } = {}) {
   if (!apiKey) throw new MonidError('MONID_API_KEY is not set');
   if (walletState().empty) throw new MonidError(EMPTY, 402);
+  const day = spentToday();
+  if (day.usd + (PRICE[endpoint] || 0.002) > dailyCap() + 1e-9) {
+    throw new MonidError(
+      `Deal Studio's daily Monid budget is spent ($${day.usd.toFixed(2)} of MONID_USD_PER_DAY $${dailyCap().toFixed(2)}) — more tomorrow (UTC), or raise it`,
+      'cap',
+    );
+  }
   const call = async (method, path, body) => {
     for (let attempt = 0; ; attempt += 1) {
       let res;
@@ -103,7 +149,9 @@ async function run(endpoint, query, {
     throw new MonidError(`${endpoint}: provider HTTP ${provider}`, Number(provider));
   }
   if (body.status !== 'COMPLETED' || status >= 400) throw new MonidError(`${endpoint}: ${reason}`, status);
-  return { output: body.output || {}, costUsd: costOf(body, endpoint) };
+  const costUsd = costOf(body, endpoint);
+  charge(costUsd);
+  return { output: body.output || {}, costUsd };
 }
 
 function costOf(res, endpoint) {
@@ -199,5 +247,6 @@ async function fetchReels(handle, { limit = 12, userId = null, ...opts } = {}) {
 
 module.exports = {
   run, fetchCard, fetchReels, parseReels, pinnedBy, isTrial, thumbUrl, configured, walletState, _resetWallet,
+  spentToday, dailyCap, _resetLedger,
   MonidError, CARD, REELS, EMPTY_PAUSE_MS,
 };

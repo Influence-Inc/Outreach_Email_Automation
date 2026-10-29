@@ -396,7 +396,9 @@ async function runSession({ hostId, run, deps }) {
       + ` judgedBy=${JSON.stringify(stats.judgedBy || {})}`
       // And what the recordings held: audio heard / silent / missing, and how
       // many had frames read for on-screen text.
-      + ` recordings=${JSON.stringify(stats.recordings || {})}`,
+      + ` recordings=${JSON.stringify(stats.recordings || {})}`
+      // What this run spent on Monid, collecting creators' Reels.
+      + ` monid=${JSON.stringify(stats.monid || {})}`,
     );
   } finally {
     try { if (source.close) await source.close(); } catch (_) { /* generator already done */ }
