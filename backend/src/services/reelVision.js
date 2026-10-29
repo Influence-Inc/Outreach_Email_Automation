@@ -259,6 +259,7 @@ async function callVision(msgs, { fetchImpl = fetch, key = openRouterKey(), retr
     const usage = raw.usage || {};
     return {
       text: String((choice.message && choice.message.content) || ''),
+      finishReason: choice.finish_reason || null,
       model: raw.model || model,
       costUsd: usage.cost != null ? Number(usage.cost) : null,
     };
@@ -291,6 +292,12 @@ async function describe(buf, reel = {}, deps = {}) {
     const res = await (deps.callVision || callVision)(messages({ ...reel, seconds }, frames), {
       fetchImpl: deps.fetchImpl, key: deps.key,
     });
+    // A reasoning model can spend its whole allowance thinking and answer nothing: say so,
+    // rather than "no JSON object in the answer".
+    if (!String(res.text || '').trim()) {
+      const why = res.finishReason === 'length' ? ' — it ran out of tokens before answering' : '';
+      return { cues: null, error: `${res.model || visionModel()} gave an empty answer${why}`, costUsd: res.costUsd };
+    }
     return {
       cues: parse(res.text), frameTimes: frames.map((f) => f.t), model: res.model, costUsd: res.costUsd,
     };

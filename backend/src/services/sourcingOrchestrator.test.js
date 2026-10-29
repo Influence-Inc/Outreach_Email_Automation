@@ -1096,3 +1096,27 @@ test('a feed creator rejected before their profile was opened is rejected for Je
   assert.strictEqual(res.decision, 'rejected');
   assert.match(res.rejectReason, /^Jev: their reels are about cooking/);
 });
+
+// Most creators are decided on the reel that surfaced them, before the profile. That
+// reel was recorded, heard and seen — and the run used to count none of it, so a run
+// that rejected everyone early read "0 seen" however well the vision model worked.
+test('the run counts the source reel of creators decided before the profile', async () => {
+  const { deps } = memStore();
+  const reelVerdict = (seen, visionError) => ({
+    score: 0, reason: 'off target', source: 'jev',
+    evidence: { jev: {
+      stage: 'reel', decision: 'reject', reasons: ['off target'], labels: {},
+      sourceReel: { labels: { topic: { value: 'food_drink' } }, words: 14, seen, visionError },
+    } },
+  });
+  const source = arraySource([
+    { username: 'chefA', reels: fitReels(), _nicheVerdict: reelVerdict(true) },
+    { username: 'chefB', reels: fitReels(), _nicheVerdict: reelVerdict(false, 'openai/gpt-6-luna via OpenRouter: HTTP 402') },
+  ]);
+  deps.nicheClassify = async (c) => c._nicheVerdict;
+  const { stats } = await runWithSource(run, { ...goodCfg, keywords: ['gym'] }, source, deps);
+  assert.strictEqual(stats.reels.labelled, 2);
+  assert.strictEqual(stats.reels.heard, 2);
+  assert.strictEqual(stats.reels.seen, 1);
+  assert.strictEqual(stats.reels.visionError, 'openai/gpt-6-luna via OpenRouter: HTTP 402', 'why the other was not seen');
+});

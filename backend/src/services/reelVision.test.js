@@ -266,3 +266,18 @@ test('frames are cut from a real video at the right times and sent as JPEGs', as
   }
   return undefined;
 });
+
+// GPT-6 Luna reasons before answering; an answer that never came says so.
+test('an empty answer from the vision model says why, instead of "no JSON"', async () => {
+  const exec = async (cmd, args) => {
+    if (cmd === 'ffprobe') return { stdout: JSON.stringify({ format: { duration: '6' }, streams: [] }) };
+    await require('fs/promises').writeFile(args[args.length - 1], Buffer.from('jpeg'));
+    return { stdout: '' };
+  };
+  const r = await vision.describe(Buffer.from('mp4'), { handle: 'x' }, {
+    exec,
+    callVision: async () => ({ text: '', finishReason: 'length', model: 'openai/gpt-6-luna', costUsd: 0.001 }),
+  });
+  assert.strictEqual(r.cues, null);
+  assert.match(r.error, /openai\/gpt-6-luna gave an empty answer — it ran out of tokens before answering/);
+});
