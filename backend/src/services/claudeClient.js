@@ -21,7 +21,7 @@ function getClient() {
   }
   try {
     const Anthropic = require('@anthropic-ai/sdk');
-    _client = new Anthropic({ apiKey });
+    _client = require('./claudeAlerts').watch(new Anthropic({ apiKey }));
   } catch (err) {
     console.warn('[claude] @anthropic-ai/sdk unavailable, using templates only:', err.message);
     _client = null;

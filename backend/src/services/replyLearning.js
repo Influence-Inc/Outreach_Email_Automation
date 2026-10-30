@@ -52,7 +52,7 @@ function getClient() {
   }
   try {
     const Anthropic = require('@anthropic-ai/sdk');
-    _client = new Anthropic({ apiKey });
+    _client = require('./claudeAlerts').watch(new Anthropic({ apiKey }));
   } catch (err) {
     console.warn('[replyLearning] @anthropic-ai/sdk unavailable, learning disabled:', err.message);
     _client = null;
