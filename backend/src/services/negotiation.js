@@ -333,7 +333,8 @@ function sharesVideoDraftForReview(text) {
 // ── Context ───────────────────────────────────────────────────────────────
 async function loadCreator(creatorId) {
   return db.one(
-    `SELECT c.*, ca.brand_name, ca.name AS campaign_name, ca.max_cpm, ca.usage_rights_policy
+    `SELECT c.*, ca.brand_name, ca.name AS campaign_name, ca.max_cpm, ca.usage_rights_policy,
+            ca.reply1_template
      FROM creators c JOIN campaigns ca ON ca.id = c.campaign_id
      WHERE c.id = $1`,
     [creatorId],
@@ -375,6 +376,11 @@ function ctxFor(creator, extra = {}) {
     // reply1()) and paid-ad-rights inclusion in the generated contract (see
     // contracts.js). Defaults to 'no_rights' — the pre-existing behavior.
     usageRightsPolicy: creator.usage_rights_policy || 'no_rights',
+    // The campaign's E-2 letter template (Deal Studio), or null for the
+    // built-in REPLY 1. Fed to Claude as the sample letter to adapt.
+    reply1Template: creator.reply1_template && String(creator.reply1_template).trim()
+      ? creator.reply1_template
+      : null,
     ...extra,
   };
 }
@@ -617,7 +623,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
     '',
     'Adapt the following canonical templates — keep their content and tone, do not free-write new structures:',
     '--- REPLY 1 (share details + ask for their rate) ---',
-    templates.REPLY1_BODY,
+    templates.reply1TemplateOrDefault(ctx.reply1Template),
     '--- REPLY 2 (performance / view-based offer style) ---',
     templates.REPLY2_BODY,
     '',
@@ -900,7 +906,7 @@ function heuristicReply(text, ctx) {
     understanding: '(heuristic) creator interested, no rate yet',
     action: 'asking_details',
     quoted_rate: null,
-    email: templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx) }),
+    email: templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx), template: ctx.reply1Template }),
     send_now: true,
   };
 }
@@ -1062,7 +1068,7 @@ async function draftOfferEmail(
                 // (References and Deliverables & Rates are still shown and
                 // dropped by instruction — those are situational, whereas rights
                 // and cadence are never right in an offer email.)
-                templates.stripCadence(templates.stripUsageRights(templates.REPLY1_BODY)),
+                templates.stripCadence(templates.stripUsageRights(templates.reply1TemplateOrDefault(ctx.reply1Template))),
                 `Use brand "${v.brandName}". In Timelines give ONLY an approximate posted-by date — no posting pace. REPLY 1's "Usage Rights" section has been removed above on purpose: an offer email never discusses ad or usage rights (they are settled later, in the contract), so do not write one back in. Do NOT include the "Past content references" section — an offer email should not introduce references unprompted. Do NOT include the "Deliverables & Rates" section from REPLY 1 either — its vague, rate-dependent pitch ("a 2 or more video package deal") conflicts with the concrete approved offer you present below, which is the single source of deliverables and rates in this combined email.`,
               ].join('\n')
             : '',
@@ -1188,7 +1194,7 @@ async function draftReplyEmail(creator, ctx, { instructions = '' } = {}) {
     '',
     'Grounding facts you may draw on (our standard collaboration terms) — use ONLY what the instructions actually call for, never dump the whole thing:',
     '--- REPLY 1 (collaboration details) ---',
-    templates.REPLY1_BODY,
+    templates.reply1TemplateOrDefault(ctx.reply1Template),
     '--- REPLY 2 (offer / payment style) ---',
     templates.REPLY2_BODY,
     guidelinesBlock(ctx),
@@ -2480,7 +2486,7 @@ async function applyReply(creator, ctx, result) {
       // "what rate would work for you?" reply, move to AWAITING_RATE so the
       // dashboard shows we're waiting on their counter, and log the request
       // on the rate timeline so the admin sees the negotiation re-opened.
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx) });
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx), template: ctx.reply1Template });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, 'request_counter_rate');
       }
@@ -2499,7 +2505,7 @@ async function applyReply(creator, ctx, result) {
       // Claude wrote, and PRESERVE the existing negotiation stage — asking a
       // clarifying question shouldn't regress AWAITING_DECISION back to
       // AWAITING_RATE. Only set AWAITING_RATE if there's no stage yet.
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx) });
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx), template: ctx.reply1Template });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, 'reply_qa');
       }
@@ -2518,7 +2524,7 @@ async function applyReply(creator, ctx, result) {
     }
     default: {
       // asking_details / other
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx) });
+      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx), template: ctx.reply1Template });
       if (result.send_now !== false) {
         await sendNegotiationEmail(creator, email, result.action === 'other' ? 'reply' : 'reply1');
       }

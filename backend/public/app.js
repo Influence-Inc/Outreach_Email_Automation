@@ -495,6 +495,7 @@ async function selectCampaign(id) {
   syncIgDmTemplateUI(c);
   syncMessagingBriefUI(c);
   syncContentBriefUI(c);
+  syncReply1TemplateUI(c);
   syncCampaignIntakeUI(c);
   syncStageFilterUI();
   await refreshCreators();
@@ -578,6 +579,38 @@ function syncContentBriefUI(c) {
   el('content-brief-status').textContent = '';
   el('content-brief-hint').textContent = (cb.campaign_narrative || cb.website) ? 'configured' : 'not set';
   card.open = false;
+}
+
+// --- E-2 letter template (per campaign) ------------------------------------
+// The sample second email Claude adapts for interested creators. A campaign
+// that hasn't customised it shows the built-in default (fetched once) so the
+// admin edits from a real starting point; saving the unchanged default stores
+// nothing, so the campaign keeps following future changes to the built-in.
+let _defaultReply1Template = null;
+async function loadDefaultReply1Template() {
+  if (_defaultReply1Template != null) return _defaultReply1Template;
+  try {
+    const r = await api('/api/campaigns/defaults/reply1-template');
+    _defaultReply1Template = (r && r.template) || '';
+  } catch (_err) {
+    _defaultReply1Template = '';
+  }
+  return _defaultReply1Template;
+}
+
+async function syncReply1TemplateUI(c) {
+  const card = el('reply1-template-card');
+  if (!card) return;
+  card.hidden = false;
+  card.open = false;
+  const custom = c && typeof c.reply1_template === 'string' && c.reply1_template.trim() ? c.reply1_template : '';
+  el('reply1-template-status').textContent = '';
+  el('reply1-template-hint').textContent = custom ? 'custom' : 'default';
+  const campaignId = c && c.id;
+  const text = custom || (await loadDefaultReply1Template());
+  // The admin may have switched campaigns while the default was loading.
+  if (campaignId !== state.selectedCampaignId) return;
+  el('reply1-template-text').value = text;
 }
 
 // Render the per-campaign "Campaign setup details" card. The intake ships on
@@ -3890,6 +3923,38 @@ el('save-content-brief-btn').addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
   }
+});
+
+el('save-reply1-template-btn').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const btn = el('save-reply1-template-btn');
+  const status = el('reply1-template-status');
+  const text = el('reply1-template-text').value.trim();
+  const def = (await loadDefaultReply1Template()).trim();
+  // Empty, or identical to the built-in default -> store null (use the default).
+  const reply1_template = !text || text === def ? null : text;
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await api(`/api/campaigns/${encodeURIComponent(state.selectedCampaignId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reply1_template }),
+    });
+    await refreshCampaigns();
+    const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
+    if (c) await syncReply1TemplateUI(c);
+    el('reply1-template-card').open = true;
+    status.textContent = reply1_template ? 'Saved.' : 'Saved — using the default letter.';
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el('reset-reply1-template-btn').addEventListener('click', async () => {
+  el('reply1-template-text').value = await loadDefaultReply1Template();
+  el('reply1-template-status').textContent = 'Default loaded — press Save to apply.';
 });
 
 el('send-ig-dms-btn').addEventListener('click', async () => {
