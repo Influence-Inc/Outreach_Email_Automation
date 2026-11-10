@@ -116,6 +116,13 @@ If everything sounds good, please let me know your rates :)
 
 - {managerName}`;
 
+// The REPLY 1 text to use for a campaign: its own E-2 letter template when the
+// admin has written one, else the built-in default.
+function reply1TemplateOrDefault(template) {
+  const t = template == null ? '' : String(template).trim();
+  return t || REPLY1_BODY;
+}
+
 // Remove the "Past content references" block from a filled REPLY 1 body.
 // References are a portfolio credential — only shared when the creator asks.
 function stripReferences(body) {
@@ -161,11 +168,13 @@ function stripDeliverables(body) {
 // matching the "no_rights" campaign default — see contracts.js/negotiation.js
 // usageRightsPolicy). Callers on a "free_only" or "required" campaign must
 // pass false so Reply 1 never promises rights the campaign actually wants.
-function reply1(vars, { includeRefs = false, includeUsageRights = true } = {}) {
+// template: the campaign's own E-2 letter template (campaigns.reply1_template);
+// blank/null falls back to the built-in REPLY1_BODY.
+function reply1(vars, { includeRefs = false, includeUsageRights = true, template = null } = {}) {
   const v = withDefaults(vars);
   // Reply 1 pitches a "2 or more video package"; estimate from 2 videos.
   v.deadline = approxDeadline(2, v.cadence);
-  let body = fill(REPLY1_BODY, v);
+  let body = fill(reply1TemplateOrDefault(template), v);
   if (!includeRefs) body = stripReferences(body);
   if (!includeUsageRights) body = stripUsageRights(body);
   return { subject: fill(REPLY1_SUBJECT, v), body };
@@ -533,6 +542,7 @@ Take a look whenever you're ready. Excited to see what you create :)
 }
 
 module.exports = {
+  reply1TemplateOrDefault,
   defaults,
   fill,
   approxDeadline,

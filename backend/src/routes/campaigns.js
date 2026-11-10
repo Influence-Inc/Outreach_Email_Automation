@@ -15,7 +15,7 @@ router.get('/', async (_req, res, next) => {
     const rows = await db.many(
       `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
-              c.ig_dm_body, c.messaging_brief, c.content_brief, c.sourcing_defaults,
+              c.ig_dm_body, c.messaging_brief, c.content_brief, c.reply1_template, c.sourcing_defaults,
               c.deadline_date,
               COUNT(cr.id)::int AS creator_count,
               -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
@@ -113,6 +113,12 @@ router.post('/sync', async (_req, res) => {
   }
 });
 
+// The built-in E-2 letter template, so the Deal Studio editor can show it as
+// the starting point for a campaign that hasn't customised its own yet.
+router.get('/defaults/reply1-template', (_req, res) => {
+  res.json({ template: require('../services/negotiationTemplates').REPLY1_BODY });
+});
+
 router.get('/:id', async (req, res, next) => {
   try {
     const row = await db.one(`SELECT * FROM campaigns WHERE id = $1`, [req.params.id]);
@@ -133,15 +139,16 @@ router.patch('/:id', async (req, res, next) => {
     const hasIgDm = Object.prototype.hasOwnProperty.call(body, 'ig_dm_body');
     const hasMessagingBrief = Object.prototype.hasOwnProperty.call(body, 'messaging_brief');
     const hasContentBrief = Object.prototype.hasOwnProperty.call(body, 'content_brief');
+    const hasReply1Template = Object.prototype.hasOwnProperty.call(body, 'reply1_template');
     const hasSourcingDefaults = Object.prototype.hasOwnProperty.call(body, 'sourcing_defaults');
     const hasDeadline = Object.prototype.hasOwnProperty.call(body, 'deadline_date');
     if (
       !hasTemplate && !hasMaxCpm && !hasInstantly && !hasUsageRights && !hasIgDm &&
-      !hasMessagingBrief && !hasContentBrief && !hasSourcingDefaults && !hasDeadline
+      !hasMessagingBrief && !hasContentBrief && !hasReply1Template && !hasSourcingDefaults && !hasDeadline
     ) {
       return res.status(400).json({
         error:
-          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body, messaging_brief, content_brief, sourcing_defaults or deadline_date is required',
+          'template_id, max_cpm, instantly_campaign_id, usage_rights_policy, ig_dm_body, messaging_brief, content_brief, reply1_template, sourcing_defaults or deadline_date is required',
       });
     }
 
@@ -216,6 +223,20 @@ router.patch('/:id', async (req, res, next) => {
       }
       params.push(raw == null ? null : JSON.stringify(raw));
       sets.push(`content_brief = $${params.length}::jsonb`);
+    }
+
+    if (hasReply1Template) {
+      const raw = body.reply1_template;
+      if (raw != null && typeof raw !== 'string') {
+        return res.status(400).json({ error: 'reply1_template must be a string or null' });
+      }
+      // Blank clears it, falling back to the built-in REPLY 1 template.
+      const value = raw == null || !raw.trim() ? null : raw.replace(/\r\n/g, '\n').trim();
+      if (value && value.length > 20000) {
+        return res.status(400).json({ error: 'reply1_template is too long (max 20000 characters)' });
+      }
+      params.push(value);
+      sets.push(`reply1_template = $${params.length}`);
     }
 
     if (hasSourcingDefaults) {

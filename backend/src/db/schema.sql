@@ -544,6 +544,12 @@ ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS messaging_brief TEXT;
 -- upstream campaign sync (like templates / messaging_brief). NULL = not set yet.
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS content_brief JSONB;
 
+-- Per-campaign "E-2 letter template": the sample second email (details + ask
+-- for their rate) that Claude adapts when an interested creator replies to the
+-- outreach. Admin-editable in Deal Studio. NULL/blank = use the built-in
+-- REPLY 1 template (negotiationTemplates.REPLY1_BODY).
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS reply1_template TEXT;
+
 -- IG DM send tracking on creators. Distinct from the email fields so the
 -- outreach lifecycle stays uncontaminated — a creator can have BOTH an email
 -- outreach and an IG DM sent (rare, but possible if we later discover an email).

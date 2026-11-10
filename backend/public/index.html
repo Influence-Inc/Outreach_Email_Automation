@@ -226,6 +226,34 @@
             </div>
           </details>
 
+          <!-- E-2 letter template (per campaign). The sample second email Claude
+               adapts when an interested creator replies to the outreach (details
+               + ask for their rate). Blank = the built-in default letter. -->
+          <details id="reply1-template-card" class="card" hidden>
+            <summary class="ig-dm-summary">
+              <h2>E-2 letter template</h2>
+              <span id="reply1-template-hint" class="hint"></span>
+            </summary>
+            <p class="hint subhead">
+              The sample letter Claude follows when a creator replies interested to
+              the outreach email: it sends the collaboration details and asks for
+              their rate. Claude personalises it for each creator and keeps its
+              sections and tone. Placeholders filled in automatically:
+              <code>{salutation}</code> (creator&rsquo;s name), <code>{brandName}</code>,
+              <code>{cadence}</code>, <code>{deadline}</code>, <code>{refs}</code>
+              (reference creators, only shared when asked) and <code>{managerName}</code>.
+              Keep a section titled <b>Past content references</b>, <b>Usage Rights</b> or
+              <b>Deliverables &amp; Rates</b> if you want those parts dropped automatically
+              when they don&rsquo;t apply. Leave it empty to use the built-in default.
+            </p>
+            <textarea id="reply1-template-text" class="io-scroll" rows="18" spellcheck="true"></textarea>
+            <div class="form-foot end">
+              <span id="reply1-template-status" class="hint push"></span>
+              <button id="reset-reply1-template-btn" class="ghost" type="button" title="Load the built-in default letter into the editor (not saved until you press Save)">Reset to default</button>
+              <button id="save-reply1-template-btn" class="btn-primary" type="button">Save E-2 letter template</button>
+            </div>
+          </details>
+
           <div id="creator-table-wrap" class="card" hidden>
             <div class="card-header">
               <h2>Creators</h2>
