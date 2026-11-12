@@ -421,14 +421,35 @@ async function attachCategories(rows) {
     email: r.email || undefined,
     instagramUsername: r.instagram_username || undefined,
   }));
-  const results = await creatorDb.categorizeCreators(keys);
+  // Cached + time-boxed (see creatorDb.categorizeCreatorsCached): a slow
+  // Creator-DB no longer holds the whole table. Rows whose answer misses the
+  // budget render without a badge; the late answer still repairs drifted names
+  // in the background and warms the cache for the next load.
+  const results = await creatorDb.categorizeCreatorsCached(keys, {
+    onLate: (lateKeys, lateResults) => {
+      const byKey = new Map();
+      lateKeys.forEach((k, i) => byKey.set(creatorDb.categorizeKeyId(k), lateResults[i]));
+      const lateRows = [];
+      for (const r of rows) {
+        const hit = byKey.get(creatorDb.categorizeKeyId({ email: r.email, instagramUsername: r.instagram_username }));
+        if (hit && hit.creator) lateRows.push({ ...r, creator_db_ref: hit.creator });
+      }
+      if (lateRows.length) {
+        syncCreatorNames(lateRows).catch((err) =>
+          console.warn('[creators] late creator-name sync failed:', err.message),
+        );
+      }
+    },
+  });
   for (let i = 0; i < rows.length; i += 1) {
     const r = rows[i];
-    const c = results[i] || { category: 'new', creator: null };
-    r.category = c.category;
+    const c = results[i];
+    // null = Creator-DB didn't answer in time; the client shows no badge rather
+    // than a misleading "New".
+    r.category = c ? c.category : null;
     // The Creator-DB master record is exposed too, so the dashboard can show
     // "already in DB with N past contracts" tooltips without a second call.
-    r.creator_db_ref = c.creator || null;
+    r.creator_db_ref = (c && c.creator) || null;
   }
 
   // Creator-DB owns the creator's name, and its record is already in hand — so
@@ -631,17 +652,35 @@ router.get('/', async (req, res, next) => {
     // dismissal fingerprint still matches the creator's current flag. New
     // activity shifts the fingerprint and the row re-flags on its own. The
     // dashboard reads this boolean directly (see isFlagDismissed in app.js).
-    const rows = await db.many(
-      `SELECT *, ${flagDismissedSql()} AS flag_dismissed
-         FROM creators ${where} ORDER BY created_at DESC`,
-      params,
+    // Each phase is timed into a Server-Timing header, so a slow campaign switch
+    // shows exactly which step is to blame in the browser's Network panel.
+    const timings = [];
+    const timed = async (name, fn) => {
+      const t0 = process.hrtime.bigint();
+      try {
+        return await fn();
+      } finally {
+        timings.push(`${name};dur=${(Number(process.hrtime.bigint() - t0) / 1e6).toFixed(1)}`);
+      }
+    };
+    const rows = await timed('rows', () =>
+      db.many(
+        `SELECT *, ${flagDismissedSql()} AS flag_dismissed
+           FROM creators ${where} ORDER BY created_at DESC`,
+        params,
+      ),
     );
-    await attachRateLog(rows);
-    await contracts.attachContracts(rows);
-    await offerPortal.attachOffers(rows);
-    await briefs.attachBriefs(rows);
-    await attachSegment(rows);
-    await attachCategories(rows);
+    // The attachers each write their own fields and don't read one another's,
+    // so they run concurrently instead of as a serial chain of round-trips.
+    await Promise.all([
+      timed('ratelog', () => attachRateLog(rows)),
+      timed('contracts', () => contracts.attachContracts(rows)),
+      timed('offers', () => offerPortal.attachOffers(rows)),
+      timed('briefs', () => briefs.attachBriefs(rows)),
+      timed('segment', () => attachSegment(rows)),
+      timed('categories', () => attachCategories(rows)),
+    ]);
+    res.set('Server-Timing', timings.join(', '));
     res.json(rows);
 
     // Refresh new-vs-old segmentation in the background (best-effort). Any row

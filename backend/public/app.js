@@ -292,6 +292,7 @@ async function refreshCampaigns() {
     for (const c of list) {
       const item = document.createElement('div');
       item.className = 'campaign-item';
+      item.dataset.campaignId = c.id;
       if (c.id === state.selectedCampaignId) item.classList.add('active');
       // A red pending dot appears when the campaign has anything awaiting a
       // human (delegated replies or offers to approve) — mirrors action_count.
@@ -433,12 +434,44 @@ window.addEventListener('resize', () => {
   if (!isMobileLayout()) setSidebarOpen(false);
 });
 
+// Move the sidebar's active highlight without rebuilding the tree.
+function markActiveCampaign(id) {
+  document.querySelectorAll('#brand-tree .campaign-item').forEach((item) => {
+    item.classList.toggle('active', item.dataset.campaignId === id);
+  });
+}
+
+// Switching campaigns paints immediately from what's already in memory — the
+// campaign row from the sidebar list and, if this campaign was opened before,
+// its last creator rows — then revalidates both in parallel. It used to await
+// a full /api/campaigns refresh (an aggregate over every creator in every
+// campaign) before drawing anything, and only then start the creators fetch.
 async function selectCampaign(id) {
   showView('campaign');
   state.selectedCampaignId = id;
-  await refreshCampaigns();
-  const c = state.campaigns.find((x) => x.id === id);
-  if (!c) return;
+  markActiveCampaign(id);
+  const campaignsP = refreshCampaigns();
+  let c = state.campaigns.find((x) => x.id === id);
+  if (!c) {
+    await campaignsP;
+    c = state.campaigns.find((x) => x.id === id);
+    if (!c) return;
+  } else {
+    // Fresh counts land on the stats bar / send buttons once the list is back.
+    campaignsP
+      .then(() => {
+        if (state.selectedCampaignId !== id) return;
+        const fresh = state.campaigns.find((x) => x.id === id);
+        if (fresh) syncCampaignCounts(fresh);
+      })
+      .catch((err) => console.warn('campaigns refresh failed:', err.message));
+  }
+  renderCampaignPanel(c);
+  await refreshCreators();
+}
+
+function renderCampaignPanel(c) {
+  const id = c.id;
   const eyebrow = el('campaign-eyebrow');
   eyebrow.textContent = c.brand_name;
   eyebrow.hidden = false;
@@ -452,6 +485,38 @@ async function selectCampaign(id) {
   state.searchQuery = '';
   const searchInput = el('creator-search');
   if (searchInput) searchInput.value = '';
+  renderCampaignStats(c);
+  el('creator-form').hidden = false;
+  el('creator-table-wrap').hidden = false;
+  setUsageRightsToggle(c.usage_rights_policy || 'no_rights');
+  el('usage-rights-status').textContent = '';
+  el('campaign-instantly-id').value = c.instantly_campaign_id || '';
+  el('instantly-status').textContent = '';
+  // Postgres hands back a DATE as a JS Date (or ISO string) via pg — take the
+  // first 10 chars so <input type="date"> reads it in the YYYY-MM-DD shape it
+  // requires; nothing else needs to look at the deadline here.
+  el('campaign-deadline-date').value = c.deadline_date ? String(c.deadline_date).slice(0, 10) : '';
+  el('deadline-status').textContent = '';
+  syncSendEmailsBtn(c);
+  syncIgDmTemplateUI(c);
+  syncMessagingBriefUI(c);
+  syncContentBriefUI(c);
+  syncReply1TemplateUI(c);
+  syncCampaignIntakeUI(c);
+  syncStageFilterUI();
+}
+
+// Re-apply just the live counts (stats bar, send buttons) from a fresher
+// campaign row, leaving the editable cards alone so nothing being typed into
+// them gets overwritten.
+function syncCampaignCounts(c) {
+  renderCampaignStats(c);
+  syncStageFilterUI();
+  syncSendEmailsBtn(c);
+  syncIgDmCounts(c);
+}
+
+function renderCampaignStats(c) {
   const emailsSent = Number(c.email_sent_count) || 0;
   const openedPct = emailsSent > 0 ? Math.round((Number(c.opened_count) || 0) / emailsSent * 100) : null;
   const repliedPct = emailsSent > 0 ? Math.round((Number(c.replied_count) || 0) / emailsSent * 100) : null;
@@ -480,25 +545,6 @@ async function selectCampaign(id) {
   statsEl.querySelectorAll('.stat-cell').forEach((cell) => {
     cell.addEventListener('click', () => setStageFilter(cell.dataset.stage));
   });
-  el('creator-form').hidden = false;
-  el('creator-table-wrap').hidden = false;
-  setUsageRightsToggle(c.usage_rights_policy || 'no_rights');
-  el('usage-rights-status').textContent = '';
-  el('campaign-instantly-id').value = c.instantly_campaign_id || '';
-  el('instantly-status').textContent = '';
-  // Postgres hands back a DATE as a JS Date (or ISO string) via pg — take the
-  // first 10 chars so <input type="date"> reads it in the YYYY-MM-DD shape it
-  // requires; nothing else needs to look at the deadline here.
-  el('campaign-deadline-date').value = c.deadline_date ? String(c.deadline_date).slice(0, 10) : '';
-  el('deadline-status').textContent = '';
-  syncSendEmailsBtn(c);
-  syncIgDmTemplateUI(c);
-  syncMessagingBriefUI(c);
-  syncContentBriefUI(c);
-  syncReply1TemplateUI(c);
-  syncCampaignIntakeUI(c);
-  syncStageFilterUI();
-  await refreshCreators();
 }
 
 function syncSendEmailsBtn(c) {
@@ -528,15 +574,26 @@ function syncIgDmTemplateUI(c) {
     card.open = true;
     btn.hidden = true;
   } else {
-    const bits = [];
-    if (queueCount) bits.push(`${queueCount} to DM`);
-    if (sentCount) bits.push(`${sentCount} sent`);
-    hint.textContent = bits.join(' · ') || 'ready';
     card.open = false;
-    btn.hidden = queueCount === 0;
-    btn.textContent = `Send Instagram DMs (${queueCount})`;
     btn.disabled = false;
+    syncIgDmCounts(c);
   }
+}
+
+// The count-driven bits of the IG DM card (summary hint + Send button), safe to
+// re-run when fresher counts arrive without touching the template textarea.
+function syncIgDmCounts(c) {
+  if (!c.ig_dm_body) return;
+  const hint = el('ig-dm-template-hint');
+  const btn = el('send-ig-dms-btn');
+  const queueCount = c.ig_dm_queue_count || 0;
+  const sentCount = c.ig_dm_sent_count || 0;
+  const bits = [];
+  if (queueCount) bits.push(`${queueCount} to DM`);
+  if (sentCount) bits.push(`${sentCount} sent`);
+  hint.textContent = bits.join(' · ') || 'ready';
+  btn.hidden = queueCount === 0;
+  btn.textContent = `Send Instagram DMs (${queueCount})`;
 }
 
 // Render the WhatsApp/iMessage brief card for a campaign. Unlike the IG DM
@@ -709,7 +766,7 @@ function setStageFilter(stage) {
   const next = state.stageFilter === stage ? null : stage;
   state.stageFilter = next;
   syncStageFilterUI();
-  refreshCreators();
+  renderCreators();
 }
 
 // Reflect the current filter on the stat buttons — the active one is highlighted
@@ -775,7 +832,7 @@ function setSearchQuery(next) {
   state.searchQuery = value;
   const input = el('creator-search');
   if (input && input.value !== value) input.value = value;
-  refreshCreators();
+  renderCreators();
 }
 
 // `multiline` swaps the one-line input for a textarea — used by fields whose
@@ -3218,10 +3275,95 @@ function buildOfferConfigurator(r, onRefresh) {
   return root;
 }
 
-async function refreshCreators() {
-  if (!state.selectedCampaignId) return;
-  const allRows = await api(`/api/creators?campaign_id=${encodeURIComponent(state.selectedCampaignId)}`);
+// Last creator rows fetched per campaign. Lets a campaign switch paint the table
+// instantly from the previous visit while the fresh fetch runs, and lets the
+// stage filter / search box re-filter locally instead of refetching the whole
+// list on every click or keystroke.
+const creatorRowsCache = new Map();
+// The in-flight list fetch: { campaignId, promise, next }. Calls that arrive
+// while one is running (bulk-DM progress fires one per creator) coalesce into a
+// single follow-up fetch instead of stacking parallel requests.
+let creatorsFetch = null;
+
+function refreshCreators() {
+  const id = state.selectedCampaignId;
+  if (!id) return Promise.resolve();
+  if (creatorsFetch && creatorsFetch.campaignId === id) {
+    // The running fetch may have read the DB before the change this caller
+    // wants to see, so queue exactly one more after it.
+    if (!creatorsFetch.next) {
+      creatorsFetch.next = creatorsFetch.promise.catch(() => {}).then(() => refreshCreators());
+    }
+    return creatorsFetch.next;
+  }
+  // Only when the table is showing some other campaign (i.e. a switch): paint
+  // this campaign's last-known rows right away, or a loading state the first
+  // time. A refresh after an action on the current campaign leaves the table
+  // as-is until the fresh rows arrive.
+  if (el('creator-rows').dataset.campaignId !== id) {
+    if (creatorRowsCache.has(id)) renderCreators();
+    else renderCreatorsLoading();
+  }
+  const me = { campaignId: id, next: null };
+  me.promise = (async () => {
+    try {
+      const rows = await api(`/api/creators?campaign_id=${encodeURIComponent(id)}`);
+      creatorRowsCache.set(id, rows);
+      if (state.selectedCampaignId === id) renderCreatorsWhenIdle();
+    } catch (err) {
+      // Nothing cached to fall back on — replace the loading line with the error.
+      const container = el('creator-rows');
+      if (state.selectedCampaignId === id && container.dataset.campaignId !== id) {
+        container.innerHTML = `<div class="hint" style="padding:26px 6px;">Couldn't load creators: ${escapeHtml(err.message)}</div>`;
+      }
+      throw err;
+    } finally {
+      if (creatorsFetch === me) creatorsFetch = null;
+    }
+  })();
+  creatorsFetch = me;
+  return me.promise;
+}
+
+function renderCreatorsLoading() {
   const container = el('creator-rows');
+  delete container.dataset.campaignId;
+  updateAttentionBanner(0);
+  syncSearchCount(0, 0);
+  container.innerHTML = '<div class="hint" style="padding:26px 6px;">Loading creators…</div>';
+}
+
+// Don't yank the table out from under an inline edit in progress — wait until
+// the field loses focus, then draw the fresh rows.
+let _pendingCreatorsRender = false;
+function renderCreatorsWhenIdle() {
+  const container = el('creator-rows');
+  const active = document.activeElement;
+  const editing = active && container.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+  if (!editing) {
+    renderCreators();
+    return;
+  }
+  if (_pendingCreatorsRender) return;
+  _pendingCreatorsRender = true;
+  container.addEventListener(
+    'focusout',
+    () => {
+      // Let the blur/save handler run first.
+      setTimeout(() => {
+        _pendingCreatorsRender = false;
+        renderCreatorsWhenIdle();
+      }, 0);
+    },
+    { once: true },
+  );
+}
+
+function renderCreators() {
+  const allRows = creatorRowsCache.get(state.selectedCampaignId);
+  if (!allRows) return;
+  const container = el('creator-rows');
+  container.dataset.campaignId = state.selectedCampaignId;
   container.innerHTML = '';
   // Campaign-wide count of creators needing a human right now, surfaced in the
   // banner above the table (replaces the old Delegate button's badge).
@@ -3285,6 +3427,9 @@ async function refreshCreators() {
     ...filtered.filter(isDelegateActionable),
     ...filtered.filter((r) => !isDelegateActionable(r)),
   ];
+  // Build every row off-document and attach once — one layout pass instead of
+  // one per creator.
+  const frag = document.createDocumentFragment();
   rows.forEach((r, idx) => {
     const row = document.createElement('div');
     row.className = 'creator-row';
@@ -3394,8 +3539,9 @@ async function refreshCreators() {
     row.appendChild(reachCell);
     row.appendChild(rateCell);
     row.appendChild(statusCell);
-    container.appendChild(row);
+    frag.appendChild(row);
   });
+  container.appendChild(frag);
 }
 
 el('sync-btn').addEventListener('click', async () => {

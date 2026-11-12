@@ -2,6 +2,7 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 
 const campaigns = require('./routes/campaigns');
 const creators = require('./routes/creators');
@@ -48,6 +49,11 @@ app.use((req, res, next) => {
   next();
 });
 app.use(cors());
+// gzip every response. The Deal Studio creators list ships each creator's full
+// row (scrape JSON, contract data) plus the email bodies behind its timeline —
+// often several MB of highly repetitive JSON per campaign switch. Compressed it's
+// a fraction of that over the wire.
+app.use(compression());
 // A paired phone answers a `screenshot` command with the PNG inline as base64,
 // and a full-resolution phone screen easily clears 1 MB once base64-encoded.
 // Under the global 1 MB parser below that POST 413s, the agent's result never
