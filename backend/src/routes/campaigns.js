@@ -12,91 +12,117 @@ const USAGE_RIGHTS_POLICIES = ['no_rights', 'free_only', 'required'];
 
 router.get('/', async (_req, res, next) => {
   try {
+    // Creator stats are aggregated per campaign_id FIRST and only then joined to
+    // the (wide: templates, briefs) campaign rows, so the grouping never drags
+    // those columns through every creator row. The contract checks read a
+    // one-pass per-creator rollup (creator_contracts) instead of probing the
+    // contracts index once per creator via correlated EXISTS subqueries — that
+    // probe was ~97% of the query's buffer reads.
     const rows = await db.many(
-      `SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
+      `WITH creator_contracts AS (
+         -- One row per creator that has ANY contract; signed = at least one of
+         -- them is signed or completed.
+         SELECT creator_id, bool_or(status IN ('signed', 'completed')) AS signed
+           FROM contracts
+          GROUP BY creator_id
+       ),
+       stats AS (
+         SELECT cr.campaign_id,
+                COUNT(cr.id)::int AS creator_count,
+                -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
+                -- creators without an email who haven't been DM'd yet AND whose
+                -- newest reel is inside the recency window (dormant accounts are
+                -- excluded from bulk sends — the admin can still DM them by hand
+                -- from the row menu). Keep in sync with routes/creators.js:
+                -- POST /bulk/queue-ig-dm.
+                COUNT(cr.id) FILTER (
+                  WHERE (cr.email IS NULL OR cr.email = '')
+                    AND cr.ig_dm_sent_at IS NULL
+                    AND cr.status IN ('no_email','pending_extraction','invalid_email')
+                    AND ${recentReelSql('cr.')}
+                )::int AS ig_dm_queue_count,
+                COUNT(cr.id) FILTER (WHERE cr.ig_dm_sent_at IS NOT NULL)::int AS ig_dm_sent_count,
+                -- email_found_count feeds the "Send outreach" confirmation dialog
+                -- (creators with an email but no outreach yet); not shown as a
+                -- stat. Same dormant-reel exclusion as above so the number in the
+                -- confirm matches what the bulk endpoint will actually send.
+                COUNT(cr.id) FILTER (
+                  WHERE cr.status = 'email_found'
+                    AND ${recentReelSql('cr.')}
+                )::int AS email_found_count,
+                -- Outreach: creators we've actually reached, on ANY channel —
+                -- outreach_sent_at (email, stamped when Instantly confirms) OR
+                -- ig_dm_sent_at (Instagram Priority DM, stamped when the extension
+                -- confirms). Includes both so the "how many reached?" number is
+                -- honest regardless of the channel used. A queued-but-not-yet-sent
+                -- creator is deliberately not counted here — it still reads as
+                -- pending until the send truly lands.
+                COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL OR cr.ig_dm_sent_at IS NOT NULL)::int AS outreach_sent_count,
+                -- Email-only send count, used as the reply-rate denominator in the
+                -- Deal Studio stats box (replies ÷ emails sent). Excludes IG DMs on
+                -- purpose so the percentage reflects email outreach specifically.
+                COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS email_sent_count,
+                COUNT(cr.id) FILTER (WHERE cr.open_count > 0)::int AS opened_count,
+                -- Pending: creators we haven't reached yet on any channel — no
+                -- email sent AND no IG DM sent. This includes 'outreach_queued'
+                -- leads (enrolled in Instantly, email not yet confirmed) and
+                -- 'ig_dm_queued' rows (DM handed to the extension, not yet
+                -- confirmed). Excludes duplicates (auto-rejected) and stopped
+                -- creators, which never send. Without the ig_dm_sent_at guard,
+                -- DM'd creators showed up under Pending even after we'd already
+                -- reached them.
+                COUNT(cr.id) FILTER (
+                  WHERE cr.outreach_sent_at IS NULL
+                    AND cr.ig_dm_sent_at IS NULL
+                    AND cr.status NOT IN ('duplicate', 'stopped')
+                )::int AS pending_count,
+                COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
+                -- Removed: creators whose outreach was explicitly stopped (removed
+                -- from the campaign). The automated follow-up steps skip these.
+                COUNT(cr.id) FILTER (WHERE cr.status = 'stopped')::int AS stopped_count,
+                -- Contracted: creators who have SIGNED their contract. A signed
+                -- contract advances pending -> signed -> completed (contracts.status),
+                -- so both 'signed' and 'completed' count; 'pending' (sent but not yet
+                -- signed) does not.
+                COUNT(cr.id) FILTER (WHERE cc.signed)::int AS contracted_count,
+                COUNT(cr.id) FILTER (WHERE cr.needs_human)::int AS needs_human_count,
+                -- action_count also includes accepted deals parked for the brand
+                -- POC's go-ahead (no approval recorded, no contract yet) — they
+                -- render as approval cards in the Delegate window.
+                -- A creator the admin has dismissed (flag snoozed from the
+                -- dashboard) drops out of the count until new activity re-flags it
+                -- (flagDismissedSql), so the sidebar pending-dot matches the table.
+                COUNT(cr.id) FILTER (
+                  WHERE (
+                       cr.needs_human
+                     OR (cr.suggested_offers IS NOT NULL AND cr.negotiation_status = 'AWAITING_APPROVAL')
+                     OR (cr.negotiation_status = 'ACCEPTED' AND NOT cr.contract_approved
+                         AND cc.creator_id IS NULL)
+                  ) AND NOT ${flagDismissedSql('cr.')}
+                )::int AS action_count
+           FROM creators cr
+           LEFT JOIN creator_contracts cc ON cc.creator_id = cr.id
+          GROUP BY cr.campaign_id
+       )
+       SELECT c.id, c.name, c.brand_name, c.slug, c.synced_at,
               c.template_id, c.max_cpm, c.instantly_campaign_id, c.usage_rights_policy,
               c.ig_dm_body, c.messaging_brief, c.content_brief, c.reply1_template, c.sourcing_defaults,
               c.deadline_date,
-              COUNT(cr.id)::int AS creator_count,
-              -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
-              -- creators without an email who haven't been DM'd yet AND whose
-              -- newest reel is inside the recency window (dormant accounts are
-              -- excluded from bulk sends — the admin can still DM them by hand
-              -- from the row menu). Keep in sync with routes/creators.js:
-              -- POST /bulk/queue-ig-dm.
-              COUNT(cr.id) FILTER (
-                WHERE (cr.email IS NULL OR cr.email = '')
-                  AND cr.ig_dm_sent_at IS NULL
-                  AND cr.status IN ('no_email','pending_extraction','invalid_email')
-                  AND ${recentReelSql('cr.')}
-              )::int AS ig_dm_queue_count,
-              COUNT(cr.id) FILTER (WHERE cr.ig_dm_sent_at IS NOT NULL)::int AS ig_dm_sent_count,
-              -- email_found_count feeds the "Send outreach" confirmation dialog
-              -- (creators with an email but no outreach yet); not shown as a
-              -- stat. Same dormant-reel exclusion as above so the number in the
-              -- confirm matches what the bulk endpoint will actually send.
-              COUNT(cr.id) FILTER (
-                WHERE cr.status = 'email_found'
-                  AND ${recentReelSql('cr.')}
-              )::int AS email_found_count,
-              -- Outreach: creators we've actually reached, on ANY channel —
-              -- outreach_sent_at (email, stamped when Instantly confirms) OR
-              -- ig_dm_sent_at (Instagram Priority DM, stamped when the extension
-              -- confirms). Includes both so the "how many reached?" number is
-              -- honest regardless of the channel used. A queued-but-not-yet-sent
-              -- creator is deliberately not counted here — it still reads as
-              -- pending until the send truly lands.
-              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL OR cr.ig_dm_sent_at IS NOT NULL)::int AS outreach_sent_count,
-              -- Email-only send count, used as the reply-rate denominator in the
-              -- Deal Studio stats box (replies ÷ emails sent). Excludes IG DMs on
-              -- purpose so the percentage reflects email outreach specifically.
-              COUNT(cr.id) FILTER (WHERE cr.outreach_sent_at IS NOT NULL)::int AS email_sent_count,
-              COUNT(cr.id) FILTER (WHERE cr.open_count > 0)::int AS opened_count,
-              -- Pending: creators we haven't reached yet on any channel — no
-              -- email sent AND no IG DM sent. This includes 'outreach_queued'
-              -- leads (enrolled in Instantly, email not yet confirmed) and
-              -- 'ig_dm_queued' rows (DM handed to the extension, not yet
-              -- confirmed). Excludes duplicates (auto-rejected) and stopped
-              -- creators, which never send. Without the ig_dm_sent_at guard,
-              -- DM'd creators showed up under Pending even after we'd already
-              -- reached them.
-              COUNT(cr.id) FILTER (
-                WHERE cr.outreach_sent_at IS NULL
-                  AND cr.ig_dm_sent_at IS NULL
-                  AND cr.status NOT IN ('duplicate', 'stopped')
-              )::int AS pending_count,
-              COUNT(cr.id) FILTER (WHERE cr.status = 'replied')::int AS replied_count,
-              -- Removed: creators whose outreach was explicitly stopped (removed
-              -- from the campaign). The automated follow-up steps skip these.
-              COUNT(cr.id) FILTER (WHERE cr.status = 'stopped')::int AS stopped_count,
-              -- Contracted: creators who have SIGNED their contract. A signed
-              -- contract advances pending -> signed -> completed (contracts.status),
-              -- so both 'signed' and 'completed' count; 'pending' (sent but not yet
-              -- signed) does not.
-              COUNT(cr.id) FILTER (
-                WHERE EXISTS (
-                  SELECT 1 FROM contracts ct
-                  WHERE ct.creator_id = cr.id AND ct.status IN ('signed', 'completed')
-                )
-              )::int AS contracted_count,
-              COUNT(cr.id) FILTER (WHERE cr.needs_human)::int AS needs_human_count,
-              -- action_count also includes accepted deals parked for the brand
-              -- POC's go-ahead (no approval recorded, no contract yet) — they
-              -- render as approval cards in the Delegate window.
-              -- A creator the admin has dismissed (flag snoozed from the
-              -- dashboard) drops out of the count until new activity re-flags it
-              -- (flagDismissedSql), so the sidebar pending-dot matches the table.
-              COUNT(cr.id) FILTER (
-                WHERE (
-                     cr.needs_human
-                   OR (cr.suggested_offers IS NOT NULL AND cr.negotiation_status = 'AWAITING_APPROVAL')
-                   OR (cr.negotiation_status = 'ACCEPTED' AND NOT cr.contract_approved
-                       AND NOT EXISTS (SELECT 1 FROM contracts ct2 WHERE ct2.creator_id = cr.id))
-                ) AND NOT ${flagDismissedSql('cr.')}
-              )::int AS action_count
+              COALESCE(s.creator_count, 0) AS creator_count,
+              COALESCE(s.ig_dm_queue_count, 0) AS ig_dm_queue_count,
+              COALESCE(s.ig_dm_sent_count, 0) AS ig_dm_sent_count,
+              COALESCE(s.email_found_count, 0) AS email_found_count,
+              COALESCE(s.outreach_sent_count, 0) AS outreach_sent_count,
+              COALESCE(s.email_sent_count, 0) AS email_sent_count,
+              COALESCE(s.opened_count, 0) AS opened_count,
+              COALESCE(s.pending_count, 0) AS pending_count,
+              COALESCE(s.replied_count, 0) AS replied_count,
+              COALESCE(s.stopped_count, 0) AS stopped_count,
+              COALESCE(s.contracted_count, 0) AS contracted_count,
+              COALESCE(s.needs_human_count, 0) AS needs_human_count,
+              COALESCE(s.action_count, 0) AS action_count
        FROM campaigns c
-       LEFT JOIN creators cr ON cr.campaign_id = c.id
-       GROUP BY c.id
+       LEFT JOIN stats s ON s.campaign_id = c.id
        ORDER BY c.brand_name ASC, c.name ASC`,
     );
     res.json(rows);
