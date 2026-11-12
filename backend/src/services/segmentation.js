@@ -64,42 +64,68 @@ async function segmentCreators(creators, campaignName, { force = false } = {}) {
   }
 
   const results = (resp && resp.results) || [];
-  let updated = 0;
+  const ids = [];
+  const segments = [];
+  const priors = [];
+  const phones = [];
   for (let i = 0; i < targets.length; i += 1) {
-    const t = targets[i];
     const r = results[i];
     if (!r) continue;
-    const segment = r.hasPriorParticipation ? 'old' : 'new';
-    const priorCampaigns = JSON.stringify(Array.isArray(r.priorCampaigns) ? r.priorCampaigns : []);
-    const phone = r.contact && r.contact.phoneNumber ? r.contact.phoneNumber : null;
-    try {
-      // Backfill WhatsApp/iMessage contact from the Creator-DB master record when
-      // we don't already have one (both default to the same phone number). Email
-      // is intentionally left untouched so the existing outreach pipeline is not
-      // disturbed by this background job.
-      // eslint-disable-next-line no-await-in-loop
-      await db.query(
-        `UPDATE creators
-         SET creator_segment = $2,
-             prior_campaigns = $3::jsonb,
-             segment_checked_at = NOW(),
-             whatsapp = COALESCE(whatsapp, $4),
-             imessage = COALESCE(imessage, $4),
-             updated_at = NOW()
-         WHERE id = $1`,
-        [t.id, segment, priorCampaigns, phone],
-      );
-      updated += 1;
-    } catch (err) {
-      console.error(`[segmentation] update failed for creator ${t.id}:`, err.message);
-    }
+    ids.push(targets[i].id);
+    segments.push(r.hasPriorParticipation ? 'old' : 'new');
+    priors.push(JSON.stringify(Array.isArray(r.priorCampaigns) ? r.priorCampaigns : []));
+    phones.push(r.contact && r.contact.phoneNumber ? r.contact.phoneNumber : null);
+  }
+  if (!ids.length) return { checked: targets.length, updated: 0 };
+
+  // One statement for the whole batch rather than a round-trip per creator: a
+  // 1,000-creator campaign used to hold a pooled connection for 1,000 serial
+  // UPDATEs on every dashboard load that found it due, starving the requests
+  // the dashboard was actually waiting on.
+  //
+  // Backfill WhatsApp/iMessage contact from the Creator-DB master record when
+  // we don't already have one (both default to the same phone number). Email
+  // is intentionally left untouched so the existing outreach pipeline is not
+  // disturbed by this background job.
+  let updated = 0;
+  try {
+    const res = await db.query(
+      `UPDATE creators AS c
+          SET creator_segment = v.segment,
+              prior_campaigns = v.prior::jsonb,
+              segment_checked_at = NOW(),
+              whatsapp = COALESCE(c.whatsapp, v.phone),
+              imessage = COALESCE(c.imessage, v.phone),
+              updated_at = NOW()
+         FROM (SELECT unnest($1::int[]) AS id,
+                      unnest($2::text[]) AS segment,
+                      unnest($3::text[]) AS prior,
+                      unnest($4::text[]) AS phone) AS v
+        WHERE c.id = v.id`,
+      [ids, segments, priors, phones],
+    );
+    updated = res && typeof res.rowCount === 'number' ? res.rowCount : ids.length;
+  } catch (err) {
+    console.error(`[segmentation] batch update failed for ${ids.length} creator(s):`, err.message);
   }
   return { checked: targets.length, updated };
 }
 
 // Segment every creator in a campaign (loads them + the campaign name first).
-async function segmentCampaign(campaignId, { force = false } = {}) {
-  if (!creatorDb.isConfigured()) return { skipped: 'CREATOR_DB_URL not set' };
+//
+// Every creators-list load fires this in the background, so it is
+// single-flight per campaign: switching back and forth between campaigns (or a
+// burst of refreshes after bulk actions) joins the pass already running instead
+// of stacking another Creator-DB lookup behind it. After a failed lookup the
+// campaign rests for SEGMENT_RETRY_MS, so an outage costs one request per
+// campaign per few minutes rather than one per page load. `force` (the
+// dashboard's manual re-check) skips the rest period but still joins a pass
+// that is already in flight.
+const SEGMENT_RETRY_MS = Number(process.env.SEGMENT_RETRY_MS || 5 * 60 * 1000);
+const _inflight = new Map(); // campaignId -> Promise
+const _failedAt = new Map(); // campaignId -> ms of the last failed lookup
+
+async function runSegmentCampaign(campaignId, { force }) {
   const campaign = await db.one(`SELECT id, name FROM campaigns WHERE id = $1`, [campaignId]);
   if (!campaign) return { skipped: 'campaign not found' };
   const creators = await db.many(
@@ -108,6 +134,30 @@ async function segmentCampaign(campaignId, { force = false } = {}) {
     [campaignId],
   );
   return segmentCreators(creators, campaign.name, { force });
+}
+
+function segmentCampaign(campaignId, { force = false } = {}) {
+  if (!creatorDb.isConfigured()) return Promise.resolve({ skipped: 'CREATOR_DB_URL not set' });
+  const running = _inflight.get(campaignId);
+  if (running) return running;
+  const failedAt = _failedAt.get(campaignId);
+  if (!force && failedAt && Date.now() - failedAt < SEGMENT_RETRY_MS) {
+    return Promise.resolve({ skipped: 'recent Creator-DB failure; retrying later' });
+  }
+  const p = runSegmentCampaign(campaignId, { force })
+    .then((r) => {
+      if (r && r.error) _failedAt.set(campaignId, Date.now());
+      else _failedAt.delete(campaignId);
+      return r;
+    })
+    .finally(() => _inflight.delete(campaignId));
+  _inflight.set(campaignId, p);
+  return p;
+}
+
+function _resetSegmentState() {
+  _inflight.clear();
+  _failedAt.clear();
 }
 
 // Segment every campaign's creators — the scheduled sweep, so Used-creator
@@ -132,4 +182,4 @@ async function segmentAllCampaigns({ force = false } = {}) {
   return { campaigns: campaigns.length, checked, updated };
 }
 
-module.exports = { segmentCreators, segmentCampaign, segmentAllCampaigns, handleFor };
+module.exports = { segmentCreators, segmentCampaign, segmentAllCampaigns, handleFor, _resetSegmentState };

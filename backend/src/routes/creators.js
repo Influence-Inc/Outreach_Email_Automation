@@ -844,9 +844,14 @@ router.get('/panel', async (req, res, next) => {
       return res.status(400).json({ error: 'creator_id or username is required' });
     }
     if (!row) return res.status(404).json({ error: 'not found' });
-    await attachRateLog([row]);
-    await contracts.attachContracts([row]);
-    await attachCpmEstimate(row);
+    // Each writes its own fields (rate_log / contract / cpm_estimate +
+    // creator_list), so the creator-list lookup — an outside call that can take
+    // seconds — overlaps the DB work instead of queueing behind it.
+    await Promise.all([
+      attachRateLog([row]),
+      contracts.attachContracts([row]),
+      attachCpmEstimate(row),
+    ]);
     res.json(row);
   } catch (err) { next(err); }
 });
