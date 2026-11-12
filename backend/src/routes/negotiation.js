@@ -164,17 +164,52 @@ router.post('/:id/quoted-rate', async (req, res, next) => {
 
 // Admin sends a manual reply from the Delegate window. Sends a threaded email
 // and clears the needs_human flag.
+// `html` (optional) is the rich-text composer's output — sent as formatted email.
 router.post('/:id/delegate-reply', async (req, res, next) => {
   try {
-    const { subject, body } = req.body || {};
-    if (!body || !String(body).trim()) {
+    const { subject, body, html } = req.body || {};
+    if ((!body || !String(body).trim()) && !(html && String(html).trim())) {
       return res.status(400).json({ error: 'body is required' });
     }
-    const result = await negotiation.sendDelegateReply(req.params.id, { subject, body });
+    const result = await negotiation.sendDelegateReply(req.params.id, { subject, body, html: html || null });
     const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
     res.json({ ...fresh, send_result: result });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// "Record agreed terms" — for deals settled by hand in the team's own emails.
+// Marks the deal ACCEPTED on exactly these terms (dealTerms shape) without
+// sending anything; it then parks for the brand go-ahead like any acceptance,
+// and the contract is written from these terms. Refused once a contract exists.
+router.post('/:id/agreed-terms', async (req, res, next) => {
+  try {
+    const result = await negotiation.recordAgreedTerms(req.params.id, (req.body || {}).terms);
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, record_result: result });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// "Write your own email" — the fourth option beside the three offer structures.
+// Body: { html, terms? } (terms: see services/dealTerms.js; the older `fee`
+// field still works and means flat-fee terms). With a fee it is a hand-written OFFER (creator moves to
+// AWAITING_DECISION and the fee is what an acceptance books); without one it's
+// a plain reply and the stage is left alone. See negotiation.sendComposedEmail.
+router.post('/:id/composed-email', async (req, res, next) => {
+  try {
+    const { html, fee, terms } = req.body || {};
+    if (!html || !String(html).trim()) return res.status(400).json({ error: 'The email is empty — write something first.' });
+    if (String(html).length > 200000) return res.status(413).json({ error: 'That email is too long to send.' });
+    const result = await negotiation.sendComposedEmail(req.params.id, { html, fee, terms });
+    const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
+    res.json({ ...fresh, send_result: result });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
   }
 });
 

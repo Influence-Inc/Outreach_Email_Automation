@@ -1105,7 +1105,25 @@ function renderReachCell(r, cell) {
 // $X → $Y" on the timeline), which supersedes it. A creator's own re-quote is a
 // negotiation move, not an agreement, so it never moves the number. Otherwise
 // it's their quoted_rate.
+// The deal's terms when it ISN'T a flat fee — "15% commission", "$500 + 15%
+// commission", "Product only" — read off the contract once there is one, else
+// off the latest offer / acceptance on the timeline. null for a flat-fee deal,
+// whose number effectiveRate() resolves as before.
+function dealTermsLabel(r) {
+  const cd = r.contract && r.contract.data;
+  if (cd) return cd.compensationModel && cd.compensationModel !== 'flat' ? cd.offerLabel || 'Commission deal' : null;
+  const log = Array.isArray(r.rate_log) ? r.rate_log : [];
+  for (let i = log.length - 1; i >= 0; i--) {
+    const e = log[i];
+    if (!e || (e.type !== 'rate_accepted' && e.type !== 'rate_offer_sent')) continue;
+    return e.model ? e.terms_label || null : null;
+  }
+  return null;
+}
+
 function effectiveRate(r) {
+  // A commission / product deal has no single agreed number to show.
+  if (dealTermsLabel(r)) return null;
   const cd = r.contract && r.contract.data;
   if (cd) {
     const fee = cd.compensation != null ? Number(cd.compensation)
@@ -1320,6 +1338,21 @@ function renderEditableDeal(cell, r, data) {
 
   const isViewBased = data.offerType === 'view_based';
   const isVideoBonus = data.offerType === 'video_bonus';
+  // A commission / fee + commission / product deal: its pay terms are fixed by
+  // what was agreed, so show them instead of the flat-fee shape toggle.
+  if (data.compensationModel && data.compensationModel !== 'flat') {
+    const payLine = document.createElement('div');
+    payLine.className = 'deal-line';
+    payLine.innerHTML = '<span class="deal-tag">PAY</span>';
+    const payVal = document.createElement('span');
+    payVal.className = 'deal-val';
+    payVal.textContent =
+      data.compensationModel === 'product'
+        ? `Product only${data.productDescription ? ` — ${data.productDescription}` : ''}`
+        : (data.commission && data.commission.summary) || data.offerLabel || '';
+    payLine.appendChild(payVal);
+    cell.appendChild(payLine);
+  }
   // Offer-type toggle: cycles View-based → Video-based → Video + bonus when the
   // extraction shaped the wrong kind of deal (or to add a performance bonus).
   // Each click rewrites the deliverables text, the label chip, the video count,
@@ -1333,6 +1366,8 @@ function renderEditableDeal(cell, r, data) {
   const nextType = TYPE_CYCLE[(TYPE_CYCLE.indexOf(currentType) + 1) % TYPE_CYCLE.length];
   const typeLine = document.createElement('div');
   typeLine.className = 'deal-line';
+  // The shape toggle only means something for the three priced structures.
+  typeLine.hidden = !!(data.compensationModel && data.compensationModel !== 'flat');
   const typeTag = document.createElement('span');
   typeTag.className = 'deal-tag';
   typeTag.textContent = 'TYPE';
@@ -1514,6 +1549,9 @@ function renderEditableDeal(cell, r, data) {
   const upPct = Number(data.upfrontPercent);
   const remPct = Number(data.remainderPercent);
   const hasUpfront = upPct > 0 && remPct > 0;
+  // Splitting a fee into upfront + remainder only applies to a fee: commission
+  // and product deals have none to split (a hybrid's upfront fee is its own).
+  if (data.compensationModel === 'commission' || data.compensationModel === 'product') return;
   appendEditableDealLine(cell, r, {
     label: 'UPFRONT',
     value: hasUpfront ? `${upPct}%` : '',
@@ -1535,6 +1573,18 @@ function renderEditableDeal(cell, r, data) {
 // contract is still pending those deal terms are editable in place; once it's
 // signed they're shown read-only.
 function renderRateCell(r, cell) {
+  // Commission / product deals show their terms, read-only: there's no fee to
+  // type over (changing the terms goes through "Record agreed terms").
+  const termsLabel = r.negotiation_status === 'ACCEPTED' || (r.contract && r.contract.data) ? dealTermsLabel(r) : null;
+  if (termsLabel) {
+    const termsDiv = document.createElement('div');
+    termsDiv.className = 'rate-value rate-terms';
+    termsDiv.textContent = termsLabel;
+    termsDiv.title = 'Not a flat fee — the full terms are on the contract';
+    cell.appendChild(termsDiv);
+    if (r.contract && r.contract.data) renderEditableDeal(cell, r, r.contract.data);
+    return;
+  }
   const rate = effectiveRate(r);
   const valueDiv = document.createElement('div');
   valueDiv.className = 'rate-value num' + (rate != null ? '' : ' empty');
@@ -2278,7 +2328,12 @@ function openEmailModal(email) {
   m.subject.hidden = !subj;
   m.meta.textContent = email.at ? fmtDate(email.at) : '';
   m.meta.hidden = !email.at;
-  m.bodyEl.textContent = String(email.body || '').trim() || '(This email has no text body.)';
+  // A composer email keeps the formatting the creator saw (re-sanitised here
+  // before it touches the DOM); everything else is shown as plain text.
+  const html = email.html && window.EmailComposer ? window.EmailComposer.sanitize(email.html) : '';
+  m.bodyEl.classList.toggle('ec-view', !!html);
+  if (html) m.bodyEl.innerHTML = html;
+  else m.bodyEl.textContent = String(email.body || '').trim() || '(This email has no text body.)';
   m.bodyEl.scrollTop = 0;
   m.show();
 }
@@ -2408,12 +2463,18 @@ function openInterventionModal(r) {
     }
   } else if (manualSend) {
     m.bodyEl.appendChild(buildManualContractSendBlock(r));
+    m.bodyEl.appendChild(buildRecordTermsBlock(r));
   } else if (brief) {
     m.bodyEl.appendChild(buildBriefBlock(r));
   } else {
     const msg = buildHandoffMessage(r);
     if (msg) m.bodyEl.appendChild(msg);
     m.bodyEl.appendChild(buildReplyBlock(r));
+    // A hand-off mid-negotiation (no contract yet) can be closed out by
+    // recording terms agreed in the team's own emails.
+    if (!(r.contract && r.contract.status) && !['ACCEPTED', 'DECLINED'].includes(r.negotiation_status)) {
+      m.bodyEl.appendChild(buildRecordTermsBlock(r));
+    }
   }
   m.bodyEl.scrollTop = 0;
   m.show();
@@ -2696,7 +2757,21 @@ const OC_ICONS = {
   view: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
   video: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"></rect><path d="m10 9 5 3-5 3Z" fill="currentColor" stroke="none"></path></svg>',
   bonus: '<svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"></path></svg>',
+  compose: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
 };
+
+// Unsent composer drafts survive closing the pop-up (per browser, per creator).
+// Best-effort: storage can be blocked, and nothing depends on it.
+function composeDraftKey(r, scope) { return `oea:compose:${scope}:${r.id}`; }
+function loadComposeDraft(r, scope) {
+  try { return JSON.parse(localStorage.getItem(composeDraftKey(r, scope)) || 'null'); } catch { return null; }
+}
+function saveComposeDraft(r, scope, draft) {
+  try {
+    if (draft) localStorage.setItem(composeDraftKey(r, scope), JSON.stringify(draft));
+    else localStorage.removeItem(composeDraftKey(r, scope));
+  } catch { /* storage unavailable */ }
+}
 
 function buildOfferConfigurator(r, onRefresh) {
   const root = document.createElement('div');
@@ -2737,9 +2812,14 @@ function buildOfferConfigurator(r, onRefresh) {
         ? 'view'
         : custom.offer_type === 'video_bonus'
         ? 'bonus'
+        : custom.offer_type === 'composed'
+        ? 'compose'
         : 'video'
       : 'view',
   };
+  // An unsent "Write your own email" draft reopens on that option.
+  const composeDraft = loadComposeDraft(r, 'offer');
+  if (composeDraft && composeDraft.html) m.selected = 'compose';
 
   const initial = avatarInitial(r);
   const badge = sent
@@ -2872,6 +2952,32 @@ function buildOfferConfigurator(r, onRefresh) {
       </div>
     </div>
 
+    <!-- COMPOSE: answer in your own words instead of a priced structure -->
+    <div class="oc-deal oc-compose" data-deal="compose">
+      <div class="oc-compose-head">
+        <div class="oc-deal-head">
+          <div class="oc-deal-icon compose">${OC_ICONS.compose}</div>
+          <div><div class="oc-deal-kicker">04 · YOUR OWN WORDS</div><div class="oc-deal-title">Write your own email</div></div>
+        </div>
+        <div class="oc-deal-desc">Reply to their rate in your own words — a custom counter, a question, or a deal none of the cards cover. Full formatting, and pasting from Docs or Gmail keeps it.</div>
+        <button class="oc-choose" data-choose="compose" type="button">Choose this option</button>
+      </div>
+      <div class="oc-compose-body" hidden>
+        <div class="oc-compose-terms"></div>
+        <div class="oc-compose-ai">
+          <input class="oc-compose-ai-note" type="text" placeholder="Or describe it and let AI draft — e.g. “counter at $4,500 for two Reels, mention the Dec 1 deadline”">
+          <button class="oc-compose-ai-draft ghost small" type="button">✎ Draft with AI</button>
+        </div>
+        <div class="oc-compose-editor"></div>
+        <div class="oc-compose-foot">
+          <div class="oc-compose-to">Sends as a reply in the existing thread to <b>${escapeHtml(r.email || 'no email')}</b>${
+            r.instantly_reply_subject ? ` · <span class="oc-compose-subj">${escapeHtml(r.instantly_reply_subject)}</span>` : ''
+          }. The AI reads it as context for every reply after it.</div>
+          <button class="oc-compose-record ghost small" type="button" title="Already agreed by email? Book these terms as accepted without sending anything">Record as agreed — no email</button>
+        </div>
+      </div>
+    </div>
+
     <div class="oc-sendbar">
       <div class="oc-sendbar-info">
         <div class="oc-sendbar-label">Selected offer · @${escapeHtml(r.instagram_username || '')}</div>
@@ -2918,6 +3024,158 @@ function buildOfferConfigurator(r, onRefresh) {
   const dismissBtn = root.querySelector('.oc-dismiss');
   let computed = {};
 
+  // ── "Write your own email" (option 04) ──
+  const composeBody = root.querySelector('.oc-compose-body');
+  const aiToggleBtn = root.querySelector('.oc-ai-toggle');
+  const aiPanelEl = root.querySelector('.oc-ai');
+  const termsPicker = window.EmailComposer.createTermsPicker();
+  root.querySelector('.oc-compose-terms').appendChild(termsPicker.el);
+  const recordBtn = root.querySelector('.oc-compose-record');
+  const composeAiNote = root.querySelector('.oc-compose-ai-note');
+  const composeAiBtn = root.querySelector('.oc-compose-ai-draft');
+  const composer = window.EmailComposer.create({
+    placeholder: `Hi ${r.first_name || 'there'}, thanks for sharing your rate…`,
+    minHeight: 220,
+    ariaLabel: 'Your email to the creator',
+  });
+  root.querySelector('.oc-compose-editor').appendChild(composer.el);
+  if (composeDraft) {
+    if (composeDraft.html) composer.setHtml(composeDraft.html);
+    if (composeDraft.terms) termsPicker.setTerms(composeDraft.terms);
+    else if (composeDraft.fee) termsPicker.setTerms({ model: 'flat', fee: Number(composeDraft.fee) });
+  }
+  // The deal terms attached to this email (see dealTerms.js on the server):
+  // none = a plain reply; anything else = an offer whose "yes" books them.
+  let persistTimer = null;
+  function persistCompose() {
+    clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      const terms = termsPicker.read().terms || null;
+      saveComposeDraft(r, 'offer', composer.isEmpty() && !terms ? null : { html: composer.getHtml(), terms });
+    }, 300);
+  }
+  // "Your email mentions 15% — set as a commission offer?" A nudge only: the
+  // terms are what an acceptance books, so they're never filled in silently.
+  composer.onChange(() => { persistCompose(); termsPicker.suggestFrom(composer.getText()); });
+  termsPicker.onChange(() => { persistCompose(); termsPicker.suggestFrom(composer.getText()); recompute(); });
+
+  composeAiBtn.onclick = async () => {
+    if (composeAiBtn.dataset.busy === '1') return;
+    const note = composeAiNote.value.trim();
+    if (!note) { statusEl.textContent = 'Describe what the email should say first.'; composeAiNote.focus(); return; }
+    if (!composer.isEmpty() && !(await confirmDialog({
+      title: 'Replace what you’ve written?',
+      message: 'The AI draft replaces the email in the editor.',
+      confirmLabel: 'Replace',
+    }))) return;
+    composeAiBtn.dataset.busy = '1';
+    composeAiBtn.disabled = true;
+    statusEl.textContent = 'Drafting…';
+    const summary = termsPicker.summary();
+    try {
+      const draft = await api(`/api/creators/${r.id}/draft-reply`, {
+        method: 'POST',
+        body: JSON.stringify({
+          instructions: summary
+            ? `${note}\n(The deal terms this email offers — state them exactly, add no other numbers: ${summary})`
+            : note,
+        }),
+      });
+      composer.setMarkdown(draft.body || '');
+      statusEl.textContent = 'Draft ready — edit it in place, then send.';
+      composer.focus();
+    } catch (err) {
+      statusEl.textContent = `Couldn't draft: ${err.message}`;
+    } finally {
+      composeAiBtn.disabled = false;
+      composeAiBtn.dataset.busy = '';
+    }
+  };
+  composeAiNote.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); composeAiBtn.click(); }
+  });
+
+  function readTermsOrSay() {
+    const res = termsPicker.read();
+    if (res.error) {
+      statusEl.textContent = res.error;
+      if (res.el) res.el.focus();
+      return undefined;
+    }
+    return res.terms || null;
+  }
+
+  async function sendComposed() {
+    if (composer.isEmpty()) {
+      statusEl.textContent = 'Write the email first.';
+      composer.focus();
+      return;
+    }
+    const terms = readTermsOrSay();
+    if (terms === undefined) return;
+    approveBtn.dataset.busy = '1';
+    approveBtn.disabled = true;
+    dismissBtn.disabled = true;
+    recordBtn.disabled = true;
+    composer.setDisabled(true);
+    termsPicker.setDisabled(true);
+    statusEl.textContent = 'Sending…';
+    try {
+      await api(`/api/creators/${r.id}/composed-email`, {
+        method: 'POST',
+        body: JSON.stringify({ html: composer.getHtml(), terms }),
+      });
+      clearTimeout(persistTimer);
+      saveComposeDraft(r, 'offer', null);
+      statusEl.textContent = terms
+        ? `✓ Your offer email (${window.EmailComposer.describeTerms(terms)}) was sent.`
+        : '✓ Your email was sent.';
+      setTimeout(onRefresh, 1400);
+    } catch (err) {
+      // The server refuses before sending (empty, bad terms, no thread, already
+      // offered) or reports after a send attempt; the text stays put to retry.
+      statusEl.textContent = `Not sent — ${err.message}`;
+      approveBtn.disabled = false;
+      dismissBtn.disabled = false;
+      recordBtn.disabled = false;
+      approveBtn.dataset.busy = '';
+      composer.setDisabled(false);
+      termsPicker.setDisabled(false);
+    }
+  }
+
+  // "Record as agreed" — the deal was settled by hand over email: book these
+  // terms as accepted WITHOUT sending anything, so it moves to brand approval
+  // and the contract is written from exactly these terms.
+  recordBtn.onclick = async () => {
+    if (recordBtn.dataset.busy === '1') return;
+    const terms = readTermsOrSay();
+    if (terms === undefined) return;
+    if (!terms) { statusEl.textContent = 'Pick the terms that were agreed first (not “Just a reply”).'; return; }
+    const label = window.EmailComposer.describeTerms(terms);
+    if (!(await confirmDialog({
+      title: `Record ${label} as agreed?`,
+      message: 'Nothing is emailed. The deal moves to “awaiting brand approval”, and the contract is written from these terms.',
+      confirmLabel: 'Record as agreed',
+    }))) return;
+    recordBtn.dataset.busy = '1';
+    recordBtn.disabled = true;
+    approveBtn.disabled = true;
+    statusEl.textContent = 'Recording…';
+    try {
+      await api(`/api/creators/${r.id}/agreed-terms`, { method: 'POST', body: JSON.stringify({ terms }) });
+      clearTimeout(persistTimer);
+      saveComposeDraft(r, 'offer', null);
+      statusEl.textContent = `✓ Recorded ${label} as agreed — now awaiting brand approval.`;
+      setTimeout(onRefresh, 1400);
+    } catch (err) {
+      statusEl.textContent = `Couldn't record: ${err.message}`;
+      recordBtn.disabled = false;
+      approveBtn.disabled = false;
+      recordBtn.dataset.busy = '';
+    }
+  };
+
   function recompute() {
     const sf = numOr(m.safeFloor);
     const vViews = numOr(m.vViews), vCpm = numOr(m.vCpm);
@@ -2955,22 +3213,41 @@ function buildOfferConfigurator(r, onRefresh) {
       selName = 'Video-based deal';
       selFee = money(videoFee);
       selMeta = `${fVideos} videos · ${fmtViews(videoViews)} views · $${fCpm} CPM`;
-    } else {
+    } else if (m.selected === 'bonus') {
       selName = 'Video + bonus deal';
       selFee = money(aggregate);
       selMeta = `${bVideos} videos · base ${money(baseFee)} + ${money(bBonus)} bonus`;
+    } else {
+      const t = termsPicker.read().terms;
+      const none = termsPicker.getModel() === 'none';
+      selName = 'Your own email';
+      selFee = t ? window.EmailComposer.describeTerms(t) : none ? 'no terms' : '…';
+      selMeta = t
+        ? 'Sent as your offer — their “yes” books these terms'
+        : none ? 'A plain reply; their rate stays open' : 'Finish the terms above to send';
     }
     setR('selName', selName);
     setR('selFee', selFee);
     setR('selMeta', selMeta);
 
+    const composing = m.selected === 'compose';
     root.querySelectorAll('.oc-deal').forEach((d) => {
       const on = d.dataset.deal === m.selected;
       d.classList.toggle('selected', on);
       const btn = d.querySelector('.oc-choose');
-      btn.textContent = on ? '✓ Selected offer' : 'Choose this offer';
+      const isCompose = d.dataset.deal === 'compose';
+      btn.textContent = on
+        ? isCompose ? '✓ Writing your own' : '✓ Selected offer'
+        : isCompose ? 'Choose this option' : 'Choose this offer';
       btn.classList.toggle('is-selected', on);
     });
+    root.classList.toggle('is-composing', composing);
+    composeBody.hidden = !composing;
+    aiToggleBtn.hidden = composing;
+    if (composing && !aiPanelEl.hidden) aiPanelEl.hidden = true;
+    approveBtn.innerHTML = composing
+      ? termsPicker.getModel() !== 'none' ? 'Send offer email →' : 'Send email →'
+      : `${approveLabel} →`;
 
     computed = { viewFee, vViews, vCpm, videoViews, videoFee, perVideo, fVideos, fCpm, bonusViews, baseFee, aggregate, bVideos, bCpm, bUnlock, bBonus };
   }
@@ -2986,6 +3263,10 @@ function buildOfferConfigurator(r, onRefresh) {
     btn.addEventListener('click', () => {
       m.selected = btn.dataset.choose;
       recompute();
+      if (m.selected === 'compose') {
+        composer.focus();
+        composeBody.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
     });
   });
 
@@ -3037,6 +3318,7 @@ function buildOfferConfigurator(r, onRefresh) {
     // this makes a duplicate approve-send-offer literally impossible from one
     // click.
     if (approveBtn.dataset.busy === '1') return;
+    if (m.selected === 'compose') return sendComposed();
     approveBtn.dataset.busy = '1';
     approveBtn.disabled = true;
     dismissBtn.disabled = true;
@@ -4948,7 +5230,8 @@ function isDelegateActionable(r) {
 // emails its signing link — nothing is sent to the creator until this click.
 function buildContractApprovalBlock(r) {
   const rate = effectiveRate(r);
-  const rateStr = rate != null ? ` at $${fmtNum(rate)}` : '';
+  const terms = dealTermsLabel(r);
+  const rateStr = terms ? ` — ${terms}` : rate != null ? ` at $${fmtNum(rate)}` : '';
   const block = document.createElement('div');
   block.className = 'delegate-approval-block';
   block.innerHTML = `
@@ -4987,12 +5270,17 @@ function buildContractApprovalBlock(r) {
 function buildManualContractSendBlock(r) {
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
   let offerAmount = null;
+  let offerTerms = null;
   for (let i = log.length - 1; i >= 0; i--) {
     const e = log[i];
-    if (e && e.type === 'rate_offer_sent' && e.amount != null) { offerAmount = Number(e.amount); break; }
+    if (!e || e.type !== 'rate_offer_sent') continue;
+    // A commission / product offer has no amount — name its terms instead, and
+    // never fall back to the creator's asking rate.
+    if (e.model) { offerTerms = e.terms_label || 'the terms in your email'; break; }
+    if (e.amount != null) { offerAmount = Number(e.amount); break; }
   }
-  if (offerAmount == null && r.quoted_rate != null) offerAmount = Number(r.quoted_rate);
-  const rateStr = offerAmount != null ? ` at $${fmtNum(offerAmount)}` : '';
+  if (!offerTerms && offerAmount == null && r.quoted_rate != null) offerAmount = Number(r.quoted_rate);
+  const rateStr = offerTerms ? ` — ${offerTerms}` : offerAmount != null ? ` at $${fmtNum(offerAmount)}` : '';
   const block = document.createElement('div');
   block.className = 'delegate-approval-block';
   block.innerHTML = `
@@ -5056,19 +5344,35 @@ function buildReplyBlock(r) {
       <input class="delegate-ai-note" type="text" placeholder="Or describe the reply and let AI draft it — e.g. “reassure them on the timeline, then ask for their rate”">
       <button class="ghost small delegate-ai-draft" type="button">✎ Draft with AI</button>
     </div>
-    <textarea class="delegate-reply io-scroll" rows="5" placeholder="Write your reply…  ([text](url) and {{grey}}…{{/grey}} formatting supported)"></textarea>
+    <div class="delegate-reply-editor"></div>
     <div class="delegate-reply-foot">
       <span class="delegate-status hint"></span>
       <button class="ghost small delegate-dismiss" type="button">Dismiss</button>
       <button class="btn-primary delegate-send" type="button">Send reply</button>
     </div>`;
 
-  const replyEl = block.querySelector('.delegate-reply');
   const statusEl = block.querySelector('.delegate-status');
   const sendBtn = block.querySelector('.delegate-send');
   const dismissBtn = block.querySelector('.delegate-dismiss');
   const aiNote = block.querySelector('.delegate-ai-note');
   const aiDraftBtn = block.querySelector('.delegate-ai-draft');
+  // Rich-text reply (see composer.js): formatting toolbar + clean paste. The
+  // unsent text survives closing the pop-up.
+  const composer = window.EmailComposer.create({
+    placeholder: 'Write your reply…',
+    minHeight: 140,
+    ariaLabel: 'Your reply to the creator',
+  });
+  block.querySelector('.delegate-reply-editor').appendChild(composer.el);
+  const saved = loadComposeDraft(r, 'reply');
+  if (saved && saved.html) composer.setHtml(saved.html);
+  let persistTimer = null;
+  composer.onChange(() => {
+    clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      saveComposeDraft(r, 'reply', composer.isEmpty() ? null : { html: composer.getHtml() });
+    }, 300);
+  });
 
   // "Draft with AI" — describe the reply in a line or two, AI drafts it into the
   // reply box, which stays the review/edit surface. Sending is unchanged (the
@@ -5077,6 +5381,11 @@ function buildReplyBlock(r) {
     if (aiDraftBtn.dataset.busy === '1') return;
     const instructions = aiNote.value.trim();
     if (!instructions) { statusEl.textContent = 'Describe what the reply should say first.'; return; }
+    if (!composer.isEmpty() && !(await confirmDialog({
+      title: 'Replace what you’ve written?',
+      message: 'The AI draft replaces the reply in the editor.',
+      confirmLabel: 'Replace',
+    }))) return;
     aiDraftBtn.dataset.busy = '1';
     aiDraftBtn.disabled = true;
     statusEl.textContent = 'Drafting…';
@@ -5085,9 +5394,9 @@ function buildReplyBlock(r) {
         method: 'POST',
         body: JSON.stringify({ instructions }),
       });
-      replyEl.value = draft.body || '';
+      composer.setMarkdown(draft.body || '');
       statusEl.textContent = 'Draft ready — review and edit, then Send reply.';
-      replyEl.focus();
+      composer.focus();
     } catch (err) {
       statusEl.textContent = `Couldn't draft: ${err.message}`;
     } finally {
@@ -5097,19 +5406,25 @@ function buildReplyBlock(r) {
   };
 
   sendBtn.onclick = async () => {
-    const body = replyEl.value.trim();
-    if (!body) { statusEl.textContent = 'Write a reply first.'; return; }
+    if (sendBtn.dataset.busy === '1') return;
+    if (composer.isEmpty()) { statusEl.textContent = 'Write a reply first.'; composer.focus(); return; }
+    sendBtn.dataset.busy = '1';
     sendBtn.disabled = true; dismissBtn.disabled = true;
+    composer.setDisabled(true);
     statusEl.textContent = 'Sending…';
     try {
       await api(`/api/creators/${r.id}/delegate-reply`, {
         method: 'POST',
-        body: JSON.stringify({ body }),
+        body: JSON.stringify({ html: composer.getHtml() }),
       });
+      clearTimeout(persistTimer);
+      saveComposeDraft(r, 'reply', null);
       await refreshAfterIntervention();
     } catch (err) {
       statusEl.textContent = `Failed: ${err.message}`;
       sendBtn.disabled = false; dismissBtn.disabled = false;
+      sendBtn.dataset.busy = '';
+      composer.setDisabled(false);
     }
   };
 
@@ -5127,6 +5442,56 @@ function buildReplyBlock(r) {
     } catch (err) {
       statusEl.textContent = `Failed: ${err.message}`;
       sendBtn.disabled = false; dismissBtn.disabled = false;
+    }
+  };
+  return block;
+}
+
+// "Record agreed terms" for a hand-off: the creator and the team settled a deal
+// in their own emails (an affiliate deal agreed over several messages, or one
+// of two options the creator picked). Books the final terms as accepted
+// without emailing anything, so the deal moves to brand approval and the
+// contract is written from exactly these terms. Collapsed by default.
+function buildRecordTermsBlock(r) {
+  const block = document.createElement('details');
+  block.className = 'record-terms-block';
+  block.innerHTML = `
+    <summary>Agreed a deal by email? Record the final terms</summary>
+    <div class="record-terms-body">
+      <div class="record-terms-desc">Nothing is emailed. The deal moves to “awaiting brand approval”, and the contract is written from these terms — use it when the agreement happened in your own emails.</div>
+      <div class="record-terms-picker"></div>
+      <div class="delegate-reply-foot">
+        <span class="delegate-status hint"></span>
+        <button class="btn-primary record-terms-btn" type="button">Record as agreed</button>
+      </div>
+    </div>`;
+  const picker = window.EmailComposer.createTermsPicker({ allowNone: false, label: 'Agreed terms' });
+  const offer = r.custom_offer && typeof r.custom_offer === 'object' ? r.custom_offer : null;
+  if (offer && offer.terms) picker.setTerms(offer.terms);
+  block.querySelector('.record-terms-picker').appendChild(picker.el);
+  const statusEl = block.querySelector('.delegate-status');
+  const btn = block.querySelector('.record-terms-btn');
+  btn.onclick = async () => {
+    if (btn.dataset.busy === '1') return;
+    const res = picker.read();
+    if (res.error) { statusEl.textContent = res.error; if (res.el) res.el.focus(); return; }
+    const label = window.EmailComposer.describeTerms(res.terms);
+    const ok = await confirmDialog({
+      title: `Record ${label} as agreed?`,
+      message: 'Nothing is emailed. The deal moves to “awaiting brand approval”, and the contract is written from these terms.',
+      confirmLabel: 'Record as agreed',
+    });
+    if (!ok) return;
+    btn.dataset.busy = '1';
+    btn.disabled = true;
+    statusEl.textContent = 'Recording…';
+    try {
+      await api(`/api/creators/${r.id}/agreed-terms`, { method: 'POST', body: JSON.stringify({ terms: res.terms }) });
+      await refreshAfterIntervention();
+    } catch (err) {
+      statusEl.textContent = `Couldn't record: ${err.message}`;
+      btn.disabled = false;
+      btn.dataset.busy = '';
     }
   };
   return block;

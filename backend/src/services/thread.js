@@ -25,6 +25,8 @@ const { stripQuotedReply } = require('./emailQuote');
 const GIST_WORTHY_OUTBOUND_KINDS = new Set([
   'manual_reply',
   'delegate_reply',
+  'composed_offer',
+  'composed_reply',
   'reply1',
   'reply_qa',
   'reply',
@@ -32,6 +34,12 @@ const GIST_WORTHY_OUTBOUND_KINDS = new Set([
 function isGistWorthy(dir, kind) {
   return dir === 'inbound' || GIST_WORTHY_OUTBOUND_KINDS.has(kind);
 }
+
+// Outbound kinds a person on our team wrote themselves (as opposed to Claude or
+// a template): the hand-off reply box, the "Write your own email" composer, and
+// replies sent straight from the mailbox. renderTranscript can flag these so
+// Claude treats what the account manager personally said as binding context.
+const HUMAN_WRITTEN_KINDS = new Set(['manual_reply', 'delegate_reply', 'composed_offer', 'composed_reply']);
 
 // Persist one message of the conversation. Best-effort: callers wrap this so a
 // logging failure can never abort actually sending or receiving the email.
@@ -45,14 +53,22 @@ function isGistWorthy(dir, kind) {
 // off the send hot path), so the extra LLM call adds no user-facing latency.
 // The timelineSummary require is deferred to call time to break the
 // thread → timelineSummary → negotiation → thread require cycle.
-async function recordMessage(creatorId, { direction, kind = null, subject = null, body } = {}) {
+async function recordMessage(creatorId, { direction, kind = null, subject = null, body, html = null } = {}) {
   if (!creatorId || body == null || !String(body).trim()) return null;
   const dir = direction === 'inbound' ? 'inbound' : 'outbound';
-  const row = await db.one(
-    `INSERT INTO email_messages (creator_id, direction, kind, subject, body)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [creatorId, dir, kind, subject, String(body)],
-  );
+  // `html` is only set for composer emails (already sanitised by emailHtml);
+  // the column is left out otherwise so plain sends write exactly as before.
+  const row = html
+    ? await db.one(
+        `INSERT INTO email_messages (creator_id, direction, kind, subject, body, body_html)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [creatorId, dir, kind, subject, String(body), String(html)],
+      )
+    : await db.one(
+        `INSERT INTO email_messages (creator_id, direction, kind, subject, body)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [creatorId, dir, kind, subject, String(body)],
+      );
   if (row && isGistWorthy(dir, kind)) {
     try {
       await require('./timelineSummary').summarizeAndStore(row.id, String(body));
@@ -84,10 +100,20 @@ async function loadThread(creatorId) {
 // reply carries a copy of everything before it — which, under a [CREATOR]
 // label, presents OUR proposals as the creator's own words, and burns the
 // character budget re-reading the same thread once per turn.
-function renderTranscript(messages, { maxChars = 8000 } = {}) {
+//
+// `markHumanWritten` labels the turns an account manager wrote personally
+// ("[MANAGER — written personally by our account manager]") so a reply-writing
+// prompt can give them the weight of a team decision. Off by default: the
+// contract extractor's prompt keeps the plain labels it was tuned on.
+function renderTranscript(messages, { maxChars = 8000, markHumanWritten = false } = {}) {
   const turns = (messages || [])
     .map((m) => {
-      const who = m.direction === 'inbound' ? 'CREATOR' : 'MANAGER';
+      const who =
+        m.direction === 'inbound'
+          ? 'CREATOR'
+          : markHumanWritten && HUMAN_WRITTEN_KINDS.has(m.kind)
+            ? 'MANAGER — written personally by our account manager'
+            : 'MANAGER';
       const body = stripQuotedReply(String(m.body || '').replace(/\r/g, ''));
       return body ? `[${who}]\n${body}` : '';
     })
@@ -101,4 +127,4 @@ function renderTranscript(messages, { maxChars = 8000 } = {}) {
   return out;
 }
 
-module.exports = { recordMessage, loadThread, renderTranscript };
+module.exports = { recordMessage, loadThread, renderTranscript, HUMAN_WRITTEN_KINDS };

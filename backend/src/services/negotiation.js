@@ -28,6 +28,9 @@ const thread = require('./thread');
 const offers = require('./offers');
 const { formatFirstName } = require('./nameFormat');
 const { splitQuotedReply, stripQuotedReply } = require('./emailQuote');
+const emailHtml = require('./emailHtml');
+const dealTerms = require('./dealTerms');
+const { flagFingerprintSql } = require('../db/flagFingerprint');
 
 // ── Claude client (shared) ────────────────────────────────────────────────
 // The lazy Anthropic client + JSON helpers live in ./claudeClient so the
@@ -592,6 +595,19 @@ function framedInbound(replyText) {
   ].join('\n');
 }
 
+// When the offer on the table isn't a flat fee (an affiliate / commission,
+// fee + commission, or product-only offer from the composer), spell its terms
+// out and fence the classifier in: it may recognise a yes, but any push-back
+// goes to a human — the configurator can't price commission terms, and the
+// rate extractor only understands dollars.
+function nonFlatOfferRule(ctx) {
+  const terms = ctx && ctx.approvedOffer ? dealTerms.termsFromOffer(ctx.approvedOffer) : null;
+  if (!terms || dealTerms.isFlat(terms)) return [];
+  return [
+    `- The offer on the table is NOT a flat fee. Its exact terms: ${dealTerms.termsSummary(terms)} Never describe it as a flat payment, and never invent or change its commission rate, upfront fee, attribution, term or any other number. If the creator agrees to it, use "accepted". If they push back on or ask to change ANY of its terms (a higher commission, an upfront fee, a different term), use "escalate" — never "counter" or "request_counter_rate".`,
+  ];
+}
+
 // ── (a) Understand a reply — ONE Claude call, strict JSON ─────────────────
 async function handleCreatorReply(creator, replyText, ctx) {
   const v = templateVars(ctx);
@@ -618,6 +634,8 @@ async function handleCreatorReply(creator, replyText, ctx) {
     ctx.approvedOffer
       ? `An admin has approved this offer to send: ${JSON.stringify(ctx.approvedOffer)}.`
       : 'No offer has been approved yet.',
+    // Only when a conversation is on file, so the prompt is unchanged otherwise.
+    ...(ctx.conversation ? ['', conversationBlock(ctx.conversation)] : []),
     guidelinesBlock(ctx),
     actionReplyOverridesBlock(ctx),
     '',
@@ -645,7 +663,10 @@ async function handleCreatorReply(creator, replyText, ctx) {
     `- VIDEO DRAFT / CONTENT REVIEW — always "escalate". If the creator (or their manager) is sharing a video/reel/clip draft, cut, or edit for our review, asking us for feedback or notes on the content, or asking us to check/approve the content they've made for this collab, use "escalate" (email=null, send_now=false) no matter the stage. A person must review the content and reply — never draft an approval, critique, or acknowledgement of a draft yourself.`,
     `- "other": only a trivial acknowledgement that needs no action (e.g. "got it, thanks"). email=null, send_now=false.`,
     `- ACKNOWLEDGE the creator's actual message. Whenever you write an email (asking_details, answer_question, request_counter_rate, declined, accepted), OPEN by briefly and specifically reacting to what THIS reply said — a compliment they paid, a preference or constraint they mentioned (a timeline, a platform, a video count, their availability), a piece of context they shared, or the question they asked — in one warm, natural sentence before you move into the template content. Never send the canonical template as a generic form letter that ignores what they wrote. Do NOT invent facts or answer things outside your source material just to seem responsive: if they raised something you cannot address from the templates / campaign context / past examples / approved offer, acknowledge it warmly and handle it per the action rules above (fold it in where you can, otherwise "escalate").`,
-    '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
+    ...nonFlatOfferRule(ctx),
+    ctx.conversation
+      ? '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer or from an offer our account manager personally wrote in the conversation above (repeat those exactly, never change them).'
+      : '- NEVER invent specific offer numbers in any email — offer numbers only ever come from an admin-approved offer.',
     '- Some (user → assistant) turn pairs may precede the real message below: those are REAL exchanges from our past negotiations, showing the correct output for a similar inbound. Treat the facts, decisions, and phrasing in their replies as team-approved knowledge. When the new message closely matches an example where our team answered directly, answer the same way instead of escalating — but never copy a dollar amount from an example, and never reuse another creator\'s name or deal specifics.',
     `- Salutation name — HARD RULE, no exceptions. The greeting has already been resolved for you from the sender's address and signature: it is "${v.salutation}". Every email you write opens "Hi ${v.salutation},". Do NOT scan the message for a name of your own choosing — the reply below usually carries the QUOTED EARLIER THREAD under it, and the signature down there is OUR OWN previous email, not the sender's. Never address anyone as "${v.managerName}" (that is you) or by the brand name.`,
     `- Reference accounts (${v.refs}) are a portfolio credential — DO NOT include them proactively. Only include them when the sender explicitly asked to see examples of past work, other creators we've worked with, our portfolio, or references. When adapting REPLY 1 without such an ask, drop the "Past content references" section from your email entirely.`,
@@ -939,6 +960,46 @@ async function latestCreatorMessage(creator) {
   return '';
 }
 
+// The conversation so far, as a transcript for a Claude prompt — the stored
+// thread (email_messages), de-quoted, most recent tail kept. The creator's
+// newest message(s) are dropped by default because every caller already shows
+// the message it is answering on its own, framed as "the new message".
+//
+// This is what lets Claude take in what the TEAM said — above all the emails an
+// account manager wrote personally (the "Write your own email" composer, the
+// hand-off reply box, replies from the mailbox), which are labelled as such.
+// Without it the reply classifier only ever saw the creator's latest message
+// plus whatever their mail client happened to quote. Best-effort: '' on any
+// failure, so a thread read can never block a reply.
+async function conversationContext(creator, { dropTrailingInbound = true, maxChars = 6000 } = {}) {
+  if (!creator || !creator.id) return '';
+  try {
+    const msgs = await thread.loadThread(creator.id);
+    if (!Array.isArray(msgs) || !msgs.length) return '';
+    let end = msgs.length;
+    if (dropTrailingInbound) {
+      while (end > 0 && msgs[end - 1] && msgs[end - 1].direction === 'inbound') end -= 1;
+    }
+    if (!end) return '';
+    return thread.renderTranscript(msgs.slice(0, end), { maxChars, markHumanWritten: true }) || '';
+  } catch (e) {
+    console.warn(`[negotiation] conversation context read failed for creator ${creator.id}: ${e.message}`);
+    return '';
+  }
+}
+
+// The transcript as a prompt block (or '' when there's nothing on file).
+function conversationBlock(transcript) {
+  if (!transcript || !String(transcript).trim()) return '';
+  return [
+    'CONVERSATION SO FAR with this creator (oldest first, quoted history removed) — CONTEXT ONLY; you are not replying to these earlier messages:',
+    '"""',
+    String(transcript).trim(),
+    '"""',
+    'Turns labelled "written personally by our account manager" were composed by a human on our team, not by you. Everything in them — numbers, deliverables, dates, terms, promises, answers — is team-approved and binding: stay consistent with it, never contradict or walk it back, never re-ask a question it already asked or re-pitch what it already covered. If the account manager made an offer there, THAT is the offer on the table.',
+  ].join('\n');
+}
+
 // Draft ONE short, warm, specific sentence acknowledging what the creator said
 // in their latest message — used to personalize an otherwise-fixed template
 // email (the contract email) WITHOUT touching its terms, numbers, or links.
@@ -995,6 +1056,9 @@ async function draftOfferEmail(
   // The creator's own words, so the offer opens by acknowledging what they said
   // (their rate, a preference) instead of a cold "Thanks for sharing your rates".
   const lastCreatorMsg = await latestCreatorMessage(creator);
+  // What's already been said (incl. emails the account manager wrote), so the
+  // offer email stays consistent with it.
+  const conversation = await conversationContext(creator);
 
   const isViewBased = offer.offer_type === 'view_based';
   const offerDesc = isViewBased
@@ -1037,6 +1101,9 @@ async function draftOfferEmail(
     // renegotiating or answering out-of-scope asks.
     lastCreatorMsg
       ? `The creator's most recent message to us is below. OPEN the email with ONE short, specific sentence acknowledging what they actually said (e.g. thank them for sharing their rate, note a timeline/platform/preference they raised) BEFORE you present the offer. Then continue with the template as instructed. HARD RULES for the acknowledgment: do NOT change, restate, or negotiate any offer number; do NOT answer questions or add terms the approved offer doesn't cover — if they asked something outside this offer, you may briefly say we'll follow up on it separately, and nothing more.\nCreator's message:\n"""${lastCreatorMsg}"""`
+      : '',
+    conversation
+      ? `${conversationBlock(conversation)}\nThe approved offer above still governs every number in THIS email.`
       : '',
     '',
     guidelinesBlock(ctx),
@@ -1173,6 +1240,7 @@ async function draftReplyEmail(creator, ctx, { instructions = '' } = {}) {
   const parkedQ = creator.delegate_question && String(creator.delegate_question).trim();
   const parkedReason = creator.delegate_reason && String(creator.delegate_reason).trim();
   const fallbackSubject = templates.reply1(v).subject;
+  const conversation = await conversationContext(creator);
 
   const system = [
     `You are ${v.managerName}, a friendly brand-partnerships manager at INFLUENCE.`,
@@ -1191,6 +1259,7 @@ async function draftReplyEmail(creator, ctx, { instructions = '' } = {}) {
       : inbound
         ? `The creator's most recent message:\n"""${inbound}"""`
         : '',
+    conversation ? conversationBlock(conversation) : '',
     '',
     'Grounding facts you may draw on (our standard collaboration terms) — use ONLY what the instructions actually call for, never dump the whole thing:',
     '--- REPLY 1 (collaboration details) ---',
@@ -1358,6 +1427,9 @@ async function sendNegotiationEmail(creator, email, kind) {
       subject,
       body: email.body,
       cc,
+      // Composer emails carry their own rendered HTML + plain-text parts.
+      html: email.html || null,
+      text: email.text || null,
     });
     detail = { ...detail, replyToUuid: creator.instantly_reply_uuid, eaccount };
     if (cc.length) detail.cc = cc;
@@ -1371,7 +1443,13 @@ async function sendNegotiationEmail(creator, email, kind) {
   // offer). Best-effort: the email is already sent, so a logging failure here
   // must not surface as a send error.
   try {
-    await thread.recordMessage(creator.id, { direction: 'outbound', kind, subject, body: email.body });
+    await thread.recordMessage(creator.id, {
+      direction: 'outbound',
+      kind,
+      subject,
+      body: email.body,
+      html: email.storeHtml || null,
+    });
   } catch (e) {
     console.warn(`[negotiation] thread record (outbound ${kind}) failed for creator ${creator.id}: ${e.message}`);
   }
@@ -1438,15 +1516,27 @@ function extractOfferAmount(text) {
 
 // Admin's manual reply from the Delegate window. Sends a threaded email and
 // clears the delegation flag. Reuses the same threading as auto-replies.
-async function sendDelegateReply(creatorId, { subject, body }) {
+//
+// `html` (optional) is the rich-text composer's output. It's sanitised and sent
+// as the HTML part; its markdown copy becomes the stored body, so everything
+// downstream (offer-amount detection, reply learning, Claude's view of the
+// thread) reads it exactly like a plain-text reply.
+async function sendDelegateReply(creatorId, { subject, body, html = null }) {
   const creator = await loadCreator(creatorId);
   if (!creator) throw new Error('creator not found');
   if (!creator.email) throw new Error('creator has no email');
-  const text = String(body || '').trim();
+  const composed = html ? emailHtml.prepareComposedEmail(html) : null;
+  const text = composed ? composed.markdown : String(body || '').trim();
   if (!text) throw new Error('reply body is required');
 
   const subj = (subject && String(subject).trim()) || templates.reply1(templateVars(ctxFor(creator))).subject;
-  await sendNegotiationEmail(creator, { subject: subj, body: text }, 'delegate_reply');
+  await sendNegotiationEmail(
+    creator,
+    composed
+      ? { subject: subj, body: text, html: composed.emailHtml, text: composed.text, storeHtml: composed.html }
+      : { subject: subj, body: text },
+    'delegate_reply',
+  );
 
   // Surface the delegate reply on the rate timeline so the dashboard shows we
   // responded to the creator. If the admin typed a dollar amount, treat it as
@@ -1509,6 +1599,214 @@ async function sendDelegateReply(creatorId, { subject, body }) {
     [creatorId, creator.latest_inbound_text],
   );
   return { sent: true };
+}
+
+// ── "Write your own email" (the fourth option beside the three offers) ────
+// An admin answers a creator in their own words from Deal Studio's rich-text
+// composer instead of picking a priced structure. Two shapes, chosen by the
+// deal TERMS attached to the email (see dealTerms.js):
+//
+//   • terms given → it's an OFFER written by hand — a flat fee ("we can do
+//     $4,000 for two Reels"), a commission-only affiliate pitch, an upfront fee
+//     + commission, or product only. Same lifecycle as Approve & send: an
+//     atomic claim moves the creator to AWAITING_DECISION (so a double-click
+//     can't send twice), the terms are logged on 'rate_offer_sent' (so an
+//     acceptance books THOSE terms — never the creator's asking rate — and the
+//     contract is written from them), and custom_offer records them as a
+//     'composed' offer so Claude knows which offer is on the table.
+//   • no terms    → it's a REPLY (a question, a clarification, a pitch). The
+//     stage is left alone; the creator's rate is still waiting on a decision,
+//     so the "Decide offer" flag is snoozed until they answer (the flag
+//     fingerprint includes replied_at, so their next reply re-raises it).
+//
+// Either way the email is threaded through Instantly exactly like every other
+// negotiation send, and its markdown copy lands in the stored conversation,
+// labelled as written by the account manager — which is how Claude takes it in
+// as context on every later reply, draft and contract.
+const COMPOSED_OFFER_STAGES = ['AWAITING_APPROVAL', 'AWAITING_RATE'];
+
+function composedOffer(terms) {
+  return {
+    offer_id: 'cfg_composed',
+    offer_type: 'composed',
+    compensation_model: terms.model,
+    terms,
+    label: dealTerms.describeTerms(terms),
+    summary: dealTerms.termsSummary(terms),
+    // Only a cash fee is a fee: commission / product offers carry none, so
+    // nothing downstream can mistake them for a flat payment.
+    flat_fee: terms.fee,
+    note: "Written by our account manager in their own email — the full pitch is in that email in the conversation.",
+  };
+}
+
+// The timeline detail for an offer / acceptance carrying terms. `fee` stays the
+// cash part (null on commission / product) so every fee reader keeps working.
+function termsDetail(terms, extras = {}) {
+  return { fee: terms.fee, model: terms.model, terms, label: dealTerms.describeTerms(terms), ...extras };
+}
+
+function httpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+// `terms` is the composer's terms picker (dealTerms.normalizeTerms shape); the
+// older `fee` field is still accepted and read as flat-fee terms.
+async function sendComposedEmail(creatorId, { html, fee = null, terms = null } = {}) {
+  const composed = emailHtml.prepareComposedEmail(html); // 400 on an empty email
+  let offerTerms;
+  if (terms != null) {
+    offerTerms = dealTerms.normalizeTerms(terms); // 400 with a readable reason
+  } else {
+    const feeNum = fee == null || fee === '' ? null : Number(fee);
+    if (feeNum != null && (!Number.isFinite(feeNum) || feeNum <= 0)) {
+      throw httpError(400, 'The fee must be a positive dollar amount (or leave it blank for a plain reply).');
+    }
+    offerTerms = feeNum != null ? dealTerms.normalizeTerms({ model: 'flat', fee: feeNum }) : null;
+  }
+
+  const creator = await loadCreator(creatorId);
+  if (!creator) throw httpError(404, 'creator not found');
+  if (!creator.email) throw httpError(400, 'This creator has no email address.');
+  // Checked BEFORE any claim: a send that can't even start must leave the
+  // creator exactly where they were.
+  if (!isDryRun()) {
+    if (!creator.instantly_reply_uuid) {
+      throw httpError(409, 'No reply received yet — wait for the creator to reply before emailing them here.');
+    }
+    if (!(creator.instantly_email_account || process.env.INSTANTLY_EACCOUNT)) {
+      throw httpError(409, 'No sending mailbox is on file for this creator — it is captured from their reply.');
+    }
+  }
+
+  const subject = threadSubject(creator);
+  const email = {
+    subject,
+    body: composed.markdown,
+    html: composed.emailHtml,
+    text: composed.text,
+    storeHtml: composed.html,
+  };
+  if (offerTerms) {
+    const offer = composedOffer(offerTerms);
+    const claim = await db.one(
+      `UPDATE creators
+       SET negotiation_status = 'AWAITING_DECISION', offer_approved = TRUE,
+           selected_offer_id = $2, custom_offer = $3::jsonb, updated_at = NOW()
+       WHERE id = $1
+         ${isDryRun() ? '' : 'AND instantly_reply_uuid IS NOT NULL'}
+         AND (negotiation_status IS NULL OR negotiation_status = ANY($4::text[]))
+       RETURNING id`,
+      [creatorId, offer.offer_id, JSON.stringify(offer), COMPOSED_OFFER_STAGES],
+    );
+    if (!claim) {
+      const stage = creator.negotiation_status;
+      throw httpError(
+        409,
+        `This creator is not awaiting an offer (stage: ${stage ? stage.replace(/_/g, ' ').toLowerCase() : 'no reply yet'}) — it may already have been sent. Check the thread before sending again.`,
+      );
+    }
+    // ⚠ From here on the email may be in flight: no rollback (see sendApprovedOffer).
+    await sendNegotiationEmail(creator, email, 'composed_offer');
+    try {
+      await db.query(
+        `UPDATE creators
+         SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
+             latest_inbound_text = CASE
+               WHEN latest_inbound_text IS NOT DISTINCT FROM $2 THEN NULL
+               ELSE latest_inbound_text END,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [creatorId, creator.latest_inbound_text],
+      );
+      await db.query(
+        `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_offer_sent', $2)`,
+        [creatorId, termsDetail(offerTerms, { source: 'composed' })],
+      );
+    } catch (e) {
+      console.error(`[negotiation] post-send bookkeeping failed for creator ${creatorId} (composed offer already sent):`, e.message);
+    }
+    return { sent: true, offer: true, fee: offerTerms.fee, terms: offerTerms };
+  }
+
+  await sendNegotiationEmail(creator, email, 'composed_reply');
+  try {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'sent_composed_email', $2)`,
+      [creatorId, {}],
+    );
+    // The reply answers whatever was pending: clear the hand-off flags and
+    // consume the inbound we loaded (a newer one is left for the scheduler).
+    await db.query(
+      `UPDATE creators
+       SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
+           latest_inbound_text = CASE
+             WHEN latest_inbound_text IS NOT DISTINCT FROM $2 THEN NULL
+             ELSE latest_inbound_text END,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [creatorId, creator.latest_inbound_text],
+    );
+    // The ball is in the creator's court now — snooze the "Decide offer" flag
+    // until they reply (a new reply shifts the fingerprint and re-flags them).
+    if (creator.negotiation_status === 'AWAITING_APPROVAL') {
+      await db.query(
+        `UPDATE creators SET flag_dismissed_fp = ${flagFingerprintSql()} WHERE id = $1`,
+        [creatorId],
+      );
+    }
+  } catch (e) {
+    console.error(`[negotiation] post-send bookkeeping failed for creator ${creatorId} (composed reply already sent):`, e.message);
+  }
+  // Like a hand-off reply: when this answers a parked question, learn from it.
+  if (creator.delegate_question) {
+    replyLearning
+      .learnFromHumanReply({
+        creator,
+        inbound: creator.delegate_question,
+        outbound: { subject, body: composed.markdown },
+        stage: creator.negotiation_status || null,
+      })
+      .catch((err) => console.warn('[negotiation] composed-reply learning failed:', err.message));
+  }
+  return { sent: true, offer: false };
+}
+
+// ── "Record agreed terms" (escape hatch) ─────────────────────────────────
+// Deals negotiated by hand in the team's own emails — an affiliate deal agreed
+// over several messages, or a creator who picked one of two options we pitched
+// — never pass through a single "offer → yes" the classifier can recognise.
+// This records the final terms as accepted (no email is sent), so the deal
+// parks for the brand go-ahead and the contract is written from exactly these
+// terms. Refused once a contract exists: change that from the Deals column.
+async function recordAgreedTerms(creatorId, rawTerms) {
+  const terms = dealTerms.normalizeTerms(rawTerms);
+  if (!terms) throw httpError(400, 'Choose the terms that were agreed.');
+  const creator = await loadCreator(creatorId);
+  if (!creator) throw httpError(404, 'creator not found');
+  const existing = await db.one(`SELECT id FROM contracts WHERE creator_id = $1 LIMIT 1`, [creatorId]);
+  if (existing) {
+    throw httpError(409, 'A contract already exists for this creator — change its terms from the Deals column instead.');
+  }
+  const offer = composedOffer(terms);
+  await db.query(
+    `UPDATE creators
+     SET negotiation_status = 'ACCEPTED', offer_approved = TRUE, contract_approved = FALSE,
+         selected_offer_id = $2, custom_offer = $3::jsonb,
+         quoted_rate = COALESCE($4, quoted_rate),
+         needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [creatorId, offer.offer_id, JSON.stringify(offer), terms.model === 'flat' ? terms.fee : null],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
+    [creatorId, termsDetail(terms, { by: 'team', source: 'recorded' })],
+  );
+  await requestContractApproval(creator, terms.fee, terms);
+  return { recorded: true, terms };
 }
 
 // ── Orchestration (called by the scheduler) ───────────────────────────────
@@ -1590,6 +1888,15 @@ async function processReply(creatorId) {
     getReplyPromptNotes(),
     getReplyPromptOverrides(),
   ]);
+  // An offer the account manager wrote in their own email is the offer on the
+  // table — tell the classifier so "sounds good" reads as accepting it.
+  const composedOnTable =
+    creator.negotiation_status === 'AWAITING_DECISION' &&
+    creator.custom_offer &&
+    typeof creator.custom_offer === 'object' &&
+    creator.custom_offer.offer_type === 'composed'
+      ? creator.custom_offer
+      : null;
   const ctx = ctxFor(creator, {
     guidelines,
     replyNotes,
@@ -1597,6 +1904,8 @@ async function processReply(creatorId) {
     salutation: greeting.name,
     isDelegate: greeting.isDelegate,
     includeRefs,
+    ...(composedOnTable ? { approvedOffer: composedOnTable } : {}),
+    conversation: await conversationContext(creator),
   });
   const result = await handleCreatorReply(creator, inbound.text, ctx);
   // Visibility: surface Claude's classification + a snippet of its understanding
@@ -1604,6 +1913,26 @@ async function processReply(creatorId) {
   console.log(
     `[negotiation] creator ${creator.id}: action=${result.action} understanding="${(result.understanding || '').slice(0, 140)}"`,
   );
+
+  // A non-flat offer (commission / hybrid / product) is on the table and the
+  // creator is negotiating it. The configurator can only price dollar fees and
+  // the rate extractor only reads dollars ("$500 upfront plus 20%" would book
+  // $500 and drop the 20%), so a person takes it — regardless of how the
+  // classifier (or the no-Claude heuristic) labelled it.
+  const termsOnTable = composedOnTable ? dealTerms.termsFromOffer(composedOnTable) : null;
+  if (
+    termsOnTable &&
+    !dealTerms.isFlat(termsOnTable) &&
+    ['counter', 'request_counter_rate', 'shared_rate', 'request_our_offer'].includes(result.action)
+  ) {
+    await delegate(
+      creator,
+      inbound,
+      `The creator is negotiating the ${dealTerms.describeTerms(termsOnTable)} offer from your own email. Reply yourself — and once you've agreed, record the final terms so the contract matches.`,
+    );
+    await markHandled();
+    return { action: 'delegated', reason: 'non_flat_offer_negotiation' };
+  }
 
   // Creator asked US to quote a rate first -> put it in front of the admin as an
   // offer to price & send (the configurator), not a plain reply to write.
@@ -1811,7 +2140,29 @@ async function startOfferForCreator(creatorId) {
 // The fee of the offer the creator is accepting: the most recent priced offer
 // we logged as sent, falling back to the currently approved offer. Used to set
 // the agreed rate on acceptance.
+// The terms of the offer on the table: the latest offer we sent, when it carried
+// terms (a composed offer), else the approved offer's own terms, else flat.
+async function agreedOfferTerms(creator) {
+  const ev = await db.one(
+    `SELECT detail FROM email_events
+     WHERE creator_id = $1 AND type = 'rate_offer_sent'
+     ORDER BY created_at DESC LIMIT 1`,
+    [creator.id],
+  );
+  const fromEvent = dealTerms.termsFromDetail(ev && ev.detail);
+  if (fromEvent) return fromEvent;
+  // A later priced (legacy, flat) offer supersedes an earlier composed one.
+  if (ev && ev.detail && ev.detail.fee != null) return null;
+  const offer = resolveApprovedOffer(creator);
+  const t = offer && offer.terms ? dealTerms.termsFromOffer(offer) : null;
+  return t && !dealTerms.isFlat(t) ? t : null;
+}
+
 async function agreedOfferFee(creator) {
+  // A commission / product offer has no fee to book — and must never fall
+  // through to some older number (see dealTerms.js).
+  const terms = await agreedOfferTerms(creator);
+  if (terms) return terms.fee != null ? terms.fee : null;
   const ev = await db.one(
     `SELECT detail FROM email_events
      WHERE creator_id = $1 AND type = 'rate_offer_sent'
@@ -1834,10 +2185,11 @@ async function agreedOfferFee(creator) {
 // step — the Delegate window derives its approval card from state (ACCEPTED +
 // contract_approved = FALSE + no contract yet), so no extra flag is needed and
 // the card can't be lost by an unrelated needs_human clear.
-async function requestContractApproval(creator, fee) {
+async function requestContractApproval(creator, fee, terms = null) {
+  const detail = terms && !dealTerms.isFlat(terms) ? termsDetail(terms) : { fee: fee != null ? fee : null };
   await db.query(
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_approval_requested', $2)`,
-    [creator.id, { fee: fee != null ? fee : null }],
+    [creator.id, detail],
   );
 }
 
@@ -2448,6 +2800,9 @@ async function applyReply(creator, ctx, result) {
       // The agreed rate is now the offer the creator accepted, not their earlier
       // quote — overwrite quoted_rate so the dashboard's Rate column reflects the
       // final agreed amount. COALESCE guards the rare case with no priced offer.
+      // A commission / product offer books its TERMS; its fee (if any) is just
+      // the cash part, and quoted_rate is left alone rather than overwritten.
+      const agreedTerms = await agreedOfferTerms(creator);
       const agreedFee = await agreedOfferFee(creator);
       await db.query(
         `UPDATE creators
@@ -2456,17 +2811,17 @@ async function applyReply(creator, ctx, result) {
              contract_approved = FALSE,
              updated_at = NOW()
          WHERE id = $1`,
-        [creator.id, agreedFee],
+        [creator.id, agreedTerms ? null : agreedFee],
       );
       await db.query(
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_accepted', $2)`,
-        [creator.id, { fee: agreedFee }],
+        [creator.id, agreedTerms ? termsDetail(agreedTerms) : { fee: agreedFee }],
       );
       // Acceptance does NOT fire the contract: the team needs the brand POC's
       // go-ahead before a creator is finalized, so the accepted deal parks in
       // the Delegate window as a pending approval instead. The contract is
       // generated + emailed only when approveContract records that go-ahead.
-      await requestContractApproval(creator, agreedFee);
+      await requestContractApproval(creator, agreedFee, agreedTerms);
       return;
     }
     case 'declined': {
@@ -2862,6 +3217,11 @@ module.exports = {
   sendApprovedOffer,
   startOfferForCreator,
   sendDelegateReply,
+  sendComposedEmail,
+  recordAgreedTerms,
+  agreedOfferTerms,
+  agreedOfferFee,
+  conversationContext,
   ensureContractSent,
   sendBriefEmail,
   approveContract,

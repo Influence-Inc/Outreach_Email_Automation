@@ -368,6 +368,7 @@ async function markOutreachSent(creatorId, { messageId = null } = {}) {
 // timeline shows the same send twice.
 const APP_OUTBOUND_TYPES = [
   'sent_delegate_reply',
+  'sent_composed_email',
   'sent_negotiation',
   'rate_offer_sent',
   'contract_sent',

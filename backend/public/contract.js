@@ -176,6 +176,46 @@
   }
   function rowsWrap(inner) { return inner ? '<div class="rows">' + inner + '</div>' : ''; }
 
+  // Pay rows for a deal that isn't a flat fee (commission / fee + commission /
+  // product). Mirrors nonFlatPayRows in backend/src/services/contractTerms.js
+  // (the PDF copy) — keep the two in step. Returns '' for a flat deal.
+  function trackingText(c) {
+    var code = c.promoCode ? 'promo code ' + c.promoCode : 'a personal promo code (provided by us)';
+    if (c.attribution === 'code') return "Sales are attributed to the creator's " + code;
+    if (c.attribution === 'link_and_code') return "Sales are attributed to the creator's tracked link or " + code;
+    return "Sales are attributed to the creator's tracked link (provided by us)";
+  }
+  function nonFlatPayHtml(d, termsText, hasSchedule, upPct, remPct) {
+    var model = d.compensationModel;
+    if (!model || model === 'flat') return '';
+    var c = d.commission || null;
+    var html = '';
+    if (model === 'product') {
+      return row('Compensation', 'Product only — no cash payment', { big: true }) +
+        row('Product', d.productDescription || 'As agreed in writing') +
+        row('Payment terms', d.paymentTerms || 'No cash payment');
+    }
+    html += model === 'hybrid'
+      ? row('Upfront fee', fmtMoney(d.compensation, d.currency), { big: true })
+      : row('Compensation', 'Commission only — no upfront fee', { big: true });
+    if (c) {
+      html += row('Commission', c.summary) +
+        row('Tracking', trackingText(c)) +
+        row('Reporting', "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout") +
+        row('Returns', 'Commission on orders later refunded, returned or charged back is deducted from the next payout');
+    }
+    html += row('Currency', d.currency);
+    var commissionPay = c ? 'Direct bank transfer, monthly, within ' + c.payoutNetDays + " days of each month's end" : '';
+    if (model === 'hybrid') {
+      html += row('Upfront fee payment', termsText);
+      if (hasSchedule) html += row('Payment schedule', upPct + '% upfront, ' + remPct + '% ' + (d.remainderTrigger || 'on completion'));
+      if (c) html += row('Commission payment', commissionPay);
+    } else {
+      html += row('Payment terms', d.paymentTerms || commissionPay);
+    }
+    return html;
+  }
+
   // ── Render the read-only contract sections (v1 layout, no Additional Terms) ──
   // `combined` is the server's ready-made Additional Terms list (see the
   // /api/contracts/:token payload); the local merge below is only the fallback
@@ -321,7 +361,11 @@
     var termsText = 'Direct bank transfer, initiated within ' + daysN + ' working days of ' + termsAnchor;
     var hasBonus = d.bonusAmount && d.bonusThresholdViews;
     var totalIncl = hasBonus && baseComp != null ? baseComp + Number(d.bonusAmount) : baseComp;
-    html += section('Compensation & Payment', rowsWrap(
+    // Commission / fee + commission / product deals have their own pay rows
+    // (mirrors nonFlatPayRows in backend/src/services/contractTerms.js).
+    var nonFlat = nonFlatPayHtml(d, termsText, hasSchedule, upPct, remPct);
+    if (nonFlat) html += section('Compensation & Payment', rowsWrap(nonFlat));
+    else html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(baseComp, d.currency), { big: true }) +
       (hasBonus
         ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if total views reach ' + fmtNum(d.bonusThresholdViews) + '. ' + countingWindowText)

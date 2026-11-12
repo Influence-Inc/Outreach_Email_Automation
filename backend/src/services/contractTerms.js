@@ -37,6 +37,51 @@ function rows(list) {
 // Build the read-only term sections for a contract's `data` blob. Returns
 // [{ title, rows: [{ label, value, big }] }] plus an Additional Terms section
 // carrying `bullets` instead of rows.
+// Pay rows for a deal that isn't a flat fee. Mirrored in public/contract.js
+// (the signing page) — keep the two in step. Returns null for a flat deal.
+//
+// The Reporting / Returns rows are standard affiliate terms; their wording is
+// pending the team's legal review.
+function trackingText(c) {
+  const code = c.promoCode ? `promo code ${c.promoCode}` : 'a personal promo code (provided by us)';
+  if (c.attribution === 'code') return `Sales are attributed to the creator's ${code}`;
+  if (c.attribution === 'link_and_code') return `Sales are attributed to the creator's tracked link or ${code}`;
+  return "Sales are attributed to the creator's tracked link (provided by us)";
+}
+
+function nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct }) {
+  const model = d.compensationModel;
+  if (!model || model === 'flat') return null;
+  const c = d.commission || null;
+  const out = [];
+  if (model === 'product') {
+    out.push({ label: 'Compensation', value: 'Product only — no cash payment', big: true });
+    out.push({ label: 'Product', value: d.productDescription || 'As agreed in writing' });
+    out.push({ label: 'Payment terms', value: d.paymentTerms || 'No cash payment' });
+    return out;
+  }
+  if (model === 'hybrid') {
+    out.push({ label: 'Upfront fee', value: fmtMoney(d.compensation, d.currency), big: true });
+  } else {
+    out.push({ label: 'Compensation', value: 'Commission only — no upfront fee', big: true });
+  }
+  if (c) {
+    out.push({ label: 'Commission', value: c.summary });
+    out.push({ label: 'Tracking', value: trackingText(c) });
+    out.push({ label: 'Reporting', value: "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout" });
+    out.push({ label: 'Returns', value: 'Commission on orders later refunded, returned or charged back is deducted from the next payout' });
+  }
+  out.push({ label: 'Currency', value: d.currency });
+  if (model === 'hybrid') {
+    out.push({ label: 'Upfront fee payment', value: termsText });
+    if (hasSchedule) out.push({ label: 'Payment schedule', value: `${upPct}% upfront, ${remPct}% ${d.remainderTrigger || 'on completion'}` });
+    if (c) out.push({ label: 'Commission payment', value: `Direct bank transfer, monthly, within ${c.payoutNetDays} days of each month's end` });
+  } else {
+    out.push({ label: 'Payment terms', value: d.paymentTerms || (c ? `Direct bank transfer, monthly, within ${c.payoutNetDays} days of each month's end` : '') });
+  }
+  return out;
+}
+
 function contractSections(data) {
   const d = data && typeof data === 'object' ? data : {};
   const sections = [];
@@ -147,7 +192,12 @@ function contractSections(data) {
   const hasBonus = !!(d.bonusAmount && d.bonusThresholdViews);
   const totalIncl = hasBonus && baseComp != null ? baseComp + Number(d.bonusAmount) : baseComp;
 
-  sections.push({
+  // Commission / fee + commission / product deals (see dealTerms.js) have their
+  // own pay rows; a flat-fee deal keeps the rows below unchanged.
+  const nonFlat = nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct });
+  if (nonFlat) {
+    sections.push({ title: 'Compensation & Payment', rows: rows(nonFlat) });
+  } else sections.push({
     title: 'Compensation & Payment',
     rows: rows([
       { label: 'Compensation', value: fmtMoney(baseComp, d.currency), big: true },
