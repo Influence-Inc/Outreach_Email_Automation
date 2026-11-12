@@ -246,6 +246,17 @@ a { color: inherit; }
 .oc-deal-icon.view { background: #0e7490; }
 .oc-deal-icon.video { background: #5b45e0; }
 .oc-deal-icon.bonus { background: #c2410c; }
+.oc-deal-icon.compose { background: #be185d; }
+/* Option 04 — "Write your own email" */
+.oc-compose-body { display: flex; flex-direction: column; gap: 10px; margin-bottom: 2px; }
+.oc-compose .reply-ai-row { margin-bottom: 0; }
+.oc-compose-record { width: 100%; }
+.oc-compose .tp-model { font-size: 11.5px; padding: 6px 10px; }
+.oc-compose .ec-btn { width: 27px; height: 27px; }
+.oc-compose .ec-sep { margin: 0 2px; }
+.reply-editor .ec-btn { width: 27px; height: 27px; }
+.reply-editor .ec-sep { margin: 0 2px; }
+.reply-editor .ec-editor, .oc-compose .ec-editor { font-size: 13px; padding: 11px 12px; }
 .oc-deal-kicker { font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; color: var(--faint); }
 .oc-deal-title { font-size: 13.5px; font-weight: 600; }
 .oc-deal-desc { font-size: 11.5px; color: var(--muted); margin: 8px 0 10px; line-height: 1.45; }
@@ -391,3 +402,5 @@ a { color: inherit; }
 .cpm-analyse:hover { border-color: var(--accent); }
 .spinner.sm { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--accent);
   animation: spin 0.8s linear infinite; flex: none; }
+.reply-editor .ec.is-empty .ec-editor::before,
+.oc-compose .ec.is-empty .ec-editor::before { left: 12px; top: 11px; }

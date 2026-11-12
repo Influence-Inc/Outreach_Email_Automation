@@ -365,6 +365,12 @@ CREATE INDEX IF NOT EXISTS idx_email_messages_creator ON email_messages(creator_
 -- generated; the timeline falls back to the deterministic gist meanwhile.
 ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS summary TEXT;
 
+-- The sanitised HTML of a message a human wrote in Deal Studio's rich-text
+-- composer (services/emailHtml.js). `body` still holds the markdown copy, which
+-- is what Claude reads; this keeps the formatting the creator actually saw so
+-- the dashboard can show it back. NULL for every other message.
+ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS body_html TEXT;
+
 -- ---------------------------------------------------------------------------
 -- Offer Portal (old-creator negotiation)
 -- ---------------------------------------------------------------------------

@@ -101,6 +101,17 @@ const cleanNested = (o) => {
   return Object.keys(out).length ? out : undefined;
 };
 
+// Plain-text pay terms for a non-flat deal (Creator-DB has no fields for them).
+function payTermsLines(d) {
+  const lines = [];
+  if (d.compensationModel === 'commission' && d.commission) lines.push(`Commission only: ${d.commission.summary}`);
+  if (d.compensationModel === 'hybrid' && d.commission) {
+    lines.push(`Upfront fee of $${Number(d.compensation || 0).toLocaleString('en-US')} plus ${d.commission.summary}`);
+  }
+  if (d.compensationModel === 'product') lines.push(`Product only, no cash payment: ${d.productDescription || 'product as agreed'}`);
+  return lines;
+}
+
 // Map a signed contract row + its creator into the Creator-DB CreateContractDto.
 function buildPayload(contract, creator) {
   const d = (contract && contract.data) || {};
@@ -135,7 +146,12 @@ function buildPayload(contract, creator) {
     // bonus). `totalPayment` is that total; it equals `compensation` (the
     // guaranteed base) on every non-bonus deal, and falls back to it on older
     // rows that stored only the one figure.
-    compensation: numOrUndef(d.totalPayment != null ? d.totalPayment : d.compensation),
+    // A commission / product deal syncs its cash part only (0 when there is
+    // none); the terms themselves go across as the first additional term until
+    // Creator-DB has native fields for them.
+    compensation: d.compensationModel && d.compensationModel !== 'flat'
+      ? (d.compensation != null ? numOrUndef(d.compensation) : 0)
+      : numOrUndef(d.totalPayment != null ? d.totalPayment : d.compensation),
     currency: /^[A-Z]{3}$/.test(String(d.currency || '')) ? d.currency : 'USD',
     paymentTerms: d.paymentTerms,
     // A view floor is a view-based term — never sync one for a flat video-based
@@ -146,7 +162,7 @@ function buildPayload(contract, creator) {
     // The extracted thread terms combined with the team's hand-added manual
     // points (see contracts.combinedAdditionalTerms) so manual extras sync too.
     additionalTerms: (() => {
-      const merged = contracts.combinedAdditionalTerms(d);
+      const merged = [...payTermsLines(d), ...contracts.combinedAdditionalTerms(d)];
       return merged.length ? merged : undefined;
     })(),
     // Contract

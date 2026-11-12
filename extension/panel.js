@@ -355,7 +355,20 @@
     view: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
     video: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"></rect><path d="m10 9 5 3-5 3Z" fill="currentColor" stroke="none"></path></svg>',
     bonus: '<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"></path></svg>',
+    compose: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
   };
+
+  // Unsent composer drafts survive a panel reload (per creator). Best-effort.
+  function loadComposeDraft(r, scope) {
+    try { return JSON.parse(localStorage.getItem(`oea:compose:${scope}:${r.id}`) || 'null'); } catch { return null; }
+  }
+  function saveComposeDraft(r, scope, draft) {
+    try {
+      const k = `oea:compose:${scope}:${r.id}`;
+      if (draft) localStorage.setItem(k, JSON.stringify(draft));
+      else localStorage.removeItem(k);
+    } catch { /* storage unavailable */ }
+  }
 
   // The bonus deal's base CPM sits below the headline CPM ($4 under it), but never under
   // half of it — an estimate of $6 shouldn't open the bonus deal at $2.
@@ -671,9 +684,13 @@
           ? 'view'
           : custom.offer_type === 'video_bonus'
           ? 'bonus'
+          : custom.offer_type === 'composed'
+          ? 'compose'
           : 'video'
         : 'view',
     };
+    const composeDraft = loadComposeDraft(r, 'offer');
+    if (composeDraft && composeDraft.html) m.selected = 'compose';
 
     const approveLabel = priorOfferSent ? 'Re-approve &amp; send counter offer' : 'Approve &amp; send offer';
     const medianTxt = stats.p50 ? `${fmtViews(stats.p50)} median` : '';
@@ -800,6 +817,25 @@
           </div>
           <button class="oc-choose" data-choose="bonus" type="button">Choose this offer</button>
         </div>
+
+        <div class="oc-deal oc-compose" data-deal="compose">
+          <div class="oc-deal-head">
+            <div class="oc-deal-icon compose">${OC_ICONS.compose}</div>
+            <div><div class="oc-deal-kicker">04 · YOUR OWN WORDS</div><div class="oc-deal-title">Write your own email</div></div>
+          </div>
+          <div class="oc-deal-desc">Reply to their rate in your own words — a custom counter, a question, or a deal the cards don't cover. Full formatting; pasting from Docs or Gmail keeps it.</div>
+          <div class="oc-compose-body" hidden>
+            <div class="oc-compose-terms"></div>
+            <div class="reply-ai-row oc-compose-ai">
+              <input class="reply-ai-note oc-compose-ai-note" type="text" placeholder="Or describe it and let AI draft…">
+              <button class="btn btn-ghost oc-compose-ai-draft" type="button">✎ AI</button>
+            </div>
+            <div class="oc-compose-editor"></div>
+            <div class="oc-sub">Sent as a reply in the thread; the AI reads it as context for every reply after it.</div>
+            <button class="btn btn-ghost oc-compose-record" type="button">Record as agreed — no email</button>
+          </div>
+          <button class="oc-choose" data-choose="compose" type="button">Choose this option</button>
+        </div>
       </div>
 
       <div class="oc-sendbar">
@@ -848,6 +884,151 @@
     const dismissBtn = root.querySelector('.oc-dismiss');
     let computed = {};
 
+    // ── "Write your own email" (option 04) — mirrors app.js ──
+    const composeBody = root.querySelector('.oc-compose-body');
+    const aiToggleBtn = root.querySelector('.oc-ai-toggle');
+    const aiPanelEl = root.querySelector('.oc-ai');
+    const termsPicker = window.EmailComposer.createTermsPicker();
+    root.querySelector('.oc-compose-terms').appendChild(termsPicker.el);
+    const recordBtn = root.querySelector('.oc-compose-record');
+    const composeAiNote = root.querySelector('.oc-compose-ai-note');
+    const composeAiBtn = root.querySelector('.oc-compose-ai-draft');
+    const composer = window.EmailComposer.create({
+      placeholder: `Hi ${r.first_name || 'there'}, thanks for sharing your rate…`,
+      minHeight: 180,
+      hint: false,
+      ariaLabel: 'Your email to the creator',
+    });
+    root.querySelector('.oc-compose-editor').appendChild(composer.el);
+    if (composeDraft) {
+      if (composeDraft.html) composer.setHtml(composeDraft.html);
+      if (composeDraft.terms) termsPicker.setTerms(composeDraft.terms);
+      else if (composeDraft.fee) termsPicker.setTerms({ model: 'flat', fee: Number(composeDraft.fee) });
+    }
+    // The deal terms attached to this email (see dealTerms.js on the server):
+    // none = a plain reply; anything else = an offer whose "yes" books them.
+    let persistTimer = null;
+    function persistCompose() {
+      clearTimeout(persistTimer);
+      persistTimer = setTimeout(() => {
+        const terms = termsPicker.read().terms || null;
+        saveComposeDraft(r, 'offer', composer.isEmpty() && !terms ? null : { html: composer.getHtml(), terms });
+      }, 300);
+    }
+    // "Your email mentions 15% — set as a commission offer?" A nudge only: the
+    // terms are what an acceptance books, so they're never filled in silently.
+    composer.onChange(() => { persistCompose(); termsPicker.suggestFrom(composer.getText()); });
+    termsPicker.onChange(() => { persistCompose(); termsPicker.suggestFrom(composer.getText()); recompute(); });
+
+    composeAiBtn.onclick = async () => {
+      if (composeAiBtn.dataset.busy === '1') return;
+      const note = composeAiNote.value.trim();
+      if (!note) { statusEl.textContent = 'Describe what the email should say first.'; composeAiNote.focus(); return; }
+      if (!composer.isEmpty() && !(confirm('Replace what you’ve written with the AI draft?'))) return;
+      composeAiBtn.dataset.busy = '1';
+      composeAiBtn.disabled = true;
+      statusEl.textContent = 'Drafting…';
+      const summary = termsPicker.summary();
+      try {
+        const draft = await api(`/api/creators/${r.id}/draft-reply`, {
+          method: 'POST',
+          body: JSON.stringify({
+            instructions: summary
+              ? `${note}\n(The deal terms this email offers — state them exactly, add no other numbers: ${summary})`
+              : note,
+          }),
+        });
+        composer.setMarkdown(draft.body || '');
+        statusEl.textContent = 'Draft ready — edit it in place, then send.';
+        composer.focus();
+      } catch (err) {
+        statusEl.textContent = `Couldn't draft: ${err.message}`;
+      } finally {
+        composeAiBtn.disabled = false;
+        composeAiBtn.dataset.busy = '';
+      }
+    };
+    composeAiNote.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); composeAiBtn.click(); }
+    });
+
+    function readTermsOrSay() {
+      const res = termsPicker.read();
+      if (res.error) {
+        statusEl.textContent = res.error;
+        if (res.el) res.el.focus();
+        return undefined;
+      }
+      return res.terms || null;
+    }
+
+    async function sendComposed() {
+      if (composer.isEmpty()) {
+        statusEl.textContent = 'Write the email first.';
+        composer.focus();
+        return;
+      }
+      const terms = readTermsOrSay();
+      if (terms === undefined) return;
+      approveBtn.dataset.busy = '1';
+      approveBtn.disabled = true;
+      dismissBtn.disabled = true;
+      recordBtn.disabled = true;
+      composer.setDisabled(true);
+      termsPicker.setDisabled(true);
+      statusEl.textContent = 'Sending…';
+      try {
+        await api(`/api/creators/${r.id}/composed-email`, {
+          method: 'POST',
+          body: JSON.stringify({ html: composer.getHtml(), terms }),
+        });
+        clearTimeout(persistTimer);
+        saveComposeDraft(r, 'offer', null);
+        statusEl.textContent = terms
+          ? `✓ Your offer email (${window.EmailComposer.describeTerms(terms)}) was sent.`
+          : '✓ Your email was sent.';
+        setTimeout(onRefresh, 1200);
+      } catch (err) {
+        // The server refuses before sending (empty, bad terms, no thread, already
+        // offered) or reports after a send attempt; the text stays put to retry.
+        statusEl.textContent = `Not sent — ${err.message}`;
+        approveBtn.disabled = false;
+        dismissBtn.disabled = false;
+        recordBtn.disabled = false;
+        approveBtn.dataset.busy = '';
+        composer.setDisabled(false);
+        termsPicker.setDisabled(false);
+      }
+    }
+
+    // "Record as agreed" — the deal was settled by hand over email: book these
+    // terms as accepted WITHOUT sending anything, so it moves to brand approval
+    // and the contract is written from exactly these terms.
+    recordBtn.onclick = async () => {
+      if (recordBtn.dataset.busy === '1') return;
+      const terms = readTermsOrSay();
+      if (terms === undefined) return;
+      if (!terms) { statusEl.textContent = 'Pick the terms that were agreed first (not “Just a reply”).'; return; }
+      const label = window.EmailComposer.describeTerms(terms);
+      if (!(confirm(`Record ${label} as agreed? Nothing is emailed — the deal moves to brand approval and the contract is written from these terms.`))) return;
+      recordBtn.dataset.busy = '1';
+      recordBtn.disabled = true;
+      approveBtn.disabled = true;
+      statusEl.textContent = 'Recording…';
+      try {
+        await api(`/api/creators/${r.id}/agreed-terms`, { method: 'POST', body: JSON.stringify({ terms }) });
+        clearTimeout(persistTimer);
+        saveComposeDraft(r, 'offer', null);
+        statusEl.textContent = `✓ Recorded ${label} as agreed — now awaiting brand approval.`;
+        setTimeout(onRefresh, 1200);
+      } catch (err) {
+        statusEl.textContent = `Couldn't record: ${err.message}`;
+        recordBtn.disabled = false;
+        approveBtn.disabled = false;
+        recordBtn.dataset.busy = '';
+      }
+    };
+
     function recompute() {
       const sf = numOr(m.safeFloor);
       const vViews = numOr(m.vViews), vCpm = numOr(m.vCpm);
@@ -885,22 +1066,40 @@
         selName = 'Video-based deal';
         selFee = money(videoFee);
         selMeta = `${fVideos} videos · ${fmtViews(videoViews)} views · $${fCpm} CPM`;
-      } else {
+      } else if (m.selected === 'bonus') {
         selName = 'Video + bonus deal';
         selFee = money(aggregate);
         selMeta = `${bVideos} videos · base ${money(baseFee)} + ${money(bBonus)} bonus`;
+      } else {
+        const t = termsPicker.read().terms;
+        const none = termsPicker.getModel() === 'none';
+        selName = 'Your own email';
+        selFee = t ? window.EmailComposer.describeTerms(t) : none ? 'no terms' : '…';
+        selMeta = t
+          ? 'Sent as your offer — their “yes” books these terms'
+          : none ? 'A plain reply; their rate stays open' : 'Finish the terms above to send';
       }
       setR('selName', selName);
       setR('selFee', selFee);
       setR('selMeta', selMeta);
 
+      const composing = m.selected === 'compose';
       root.querySelectorAll('.oc-deal').forEach((d) => {
         const on = d.dataset.deal === m.selected;
         d.classList.toggle('selected', on);
         const btn = d.querySelector('.oc-choose');
-        btn.textContent = on ? '✓ Selected offer' : 'Choose this offer';
+        const isCompose = d.dataset.deal === 'compose';
+        btn.textContent = on
+          ? isCompose ? '✓ Writing your own' : '✓ Selected offer'
+          : isCompose ? 'Choose this option' : 'Choose this offer';
         btn.classList.toggle('is-selected', on);
       });
+      composeBody.hidden = !composing;
+      aiToggleBtn.hidden = composing;
+      if (composing && !aiPanelEl.hidden) aiPanelEl.hidden = true;
+      approveBtn.innerHTML = composing
+        ? termsPicker.getModel() !== 'none' ? 'Send offer email →' : 'Send email →'
+        : `${approveLabel} →`;
 
       computed = { viewFee, vViews, vCpm, videoViews, videoFee, perVideo, fVideos, fCpm, bonusViews, baseFee, aggregate, bVideos, bCpm, bUnlock, bBonus };
     }
@@ -913,7 +1112,11 @@
       });
     });
     root.querySelectorAll('.oc-choose').forEach((btn) => {
-      btn.addEventListener('click', () => { m.selected = btn.dataset.choose; recompute(); });
+      btn.addEventListener('click', () => {
+        m.selected = btn.dataset.choose;
+        recompute();
+        if (m.selected === 'compose') composer.focus();
+      });
     });
 
     // Every deal follows the creator's CPM: the view and video deals at it, the bonus deal
@@ -986,6 +1189,7 @@
 
     approveBtn.onclick = async () => {
       if (approveBtn.dataset.busy === '1') return;
+      if (m.selected === 'compose') return sendComposed();
       approveBtn.dataset.busy = '1';
       approveBtn.disabled = true;
       dismissBtn.disabled = true;
@@ -1202,14 +1406,23 @@
           <input class="reply-ai-note" type="text" placeholder="Or describe it and let AI draft — e.g. “reassure on timeline, ask for rate”">
           <button class="btn btn-ghost reply-ai-draft" type="button">✎ AI</button>
         </div>
-        <textarea class="reply-text" rows="5" placeholder="Write your reply…  ([text](url) formatting supported)"></textarea>
+        <div class="reply-editor"></div>
         <div class="oc-send-status reply-status"></div>
         <div class="btn-row" style="margin-top:8px">
           <button class="btn btn-ghost reply-dismiss" type="button">Dismiss</button>
           <button class="btn btn-primary reply-send" type="button">Send reply</button>
         </div>
       </div>`;
-    const textEl = block.querySelector('.reply-text');
+    // Rich-text reply (composer.js); the unsent text survives a panel reload.
+    const composer = window.EmailComposer.create({ placeholder: 'Write your reply…', minHeight: 130, hint: false, ariaLabel: 'Your reply to the creator' });
+    block.querySelector('.reply-editor').appendChild(composer.el);
+    const saved = loadComposeDraft(r, 'reply');
+    if (saved && saved.html) composer.setHtml(saved.html);
+    let persistTimer = null;
+    composer.onChange(() => {
+      clearTimeout(persistTimer);
+      persistTimer = setTimeout(() => saveComposeDraft(r, 'reply', composer.isEmpty() ? null : { html: composer.getHtml() }), 300);
+    });
     const statusEl = block.querySelector('.reply-status');
     const sendBtn = block.querySelector('.reply-send');
     const dismissBtn = block.querySelector('.reply-dismiss');
@@ -1222,6 +1435,7 @@
       if (aiDraftBtn.dataset.busy === '1') return;
       const instructions = aiNote.value.trim();
       if (!instructions) { statusEl.textContent = 'Describe what the reply should say first.'; return; }
+      if (!composer.isEmpty() && !confirm('Replace what you’ve written with the AI draft?')) return;
       aiDraftBtn.dataset.busy = '1';
       aiDraftBtn.disabled = true;
       statusEl.textContent = 'Drafting…';
@@ -1230,9 +1444,9 @@
           method: 'POST',
           body: JSON.stringify({ instructions }),
         });
-        textEl.value = draft.body || '';
+        composer.setMarkdown(draft.body || '');
         statusEl.textContent = 'Draft ready — review and edit, then Send reply.';
-        textEl.focus();
+        composer.focus();
       } catch (err) {
         statusEl.textContent = `Couldn't draft: ${err.message}`;
       } finally {
@@ -1242,16 +1456,22 @@
     };
 
     sendBtn.onclick = async () => {
-      const body = textEl.value.trim();
-      if (!body) { statusEl.textContent = 'Write a reply first.'; return; }
+      if (sendBtn.dataset.busy === '1') return;
+      if (composer.isEmpty()) { statusEl.textContent = 'Write a reply first.'; composer.focus(); return; }
+      sendBtn.dataset.busy = '1';
       sendBtn.disabled = true; dismissBtn.disabled = true;
+      composer.setDisabled(true);
       statusEl.textContent = 'Sending…';
       try {
-        await api(`/api/creators/${r.id}/delegate-reply`, { method: 'POST', body: JSON.stringify({ body }) });
+        await api(`/api/creators/${r.id}/delegate-reply`, { method: 'POST', body: JSON.stringify({ html: composer.getHtml() }) });
+        clearTimeout(persistTimer);
+        saveComposeDraft(r, 'reply', null);
         onRefresh();
       } catch (err) {
         statusEl.textContent = `Failed: ${err.message}`;
         sendBtn.disabled = false; dismissBtn.disabled = false;
+        sendBtn.dataset.busy = '';
+        composer.setDisabled(false);
       }
     };
     dismissBtn.onclick = async () => {

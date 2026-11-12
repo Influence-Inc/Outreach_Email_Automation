@@ -87,6 +87,7 @@ const RATE_LOG_TYPES = [
   'sent_negotiation',
   'sent_delegate_reply',
   'sent_manual_reply',
+  'sent_composed_email',
   'contract_approval_requested',
   'contract_approved',
   'contract_sent',
@@ -106,6 +107,10 @@ const NEGOTIATION_KINDS_WITH_OWN_EVENT = new Set([
   'decline',
   'request_counter_rate',
   'delegate_reply',
+  // "Write your own email": an offer logs 'rate_offer_sent', a reply logs
+  // 'sent_composed_email' — each is its own step.
+  'composed_offer',
+  'composed_reply',
 ]);
 // Our templated idle nudges — rendered as a plain "Follow-up sent" step (like
 // the Instantly sequence follow-ups), not a quoted conversational reply.
@@ -214,6 +219,12 @@ function rateLogEntry(type, detail, msg, summary) {
       return { text: to ? `Rate set to ${to}` : 'Rate updated', tone: 'active' };
     }
     case 'rate_offer_sent': {
+      // Offers carrying deal terms (commission / fee + commission / product, or
+      // a flat fee from the composer) read their own label — "15% commission".
+      if (d.model && d.label) {
+        const via = d.source === 'composed' ? ' (your own email)' : '';
+        return { text: `Offer sent — ${d.label}${via}`, tone: 'active' };
+      }
       const fee = d.fee != null ? fmtMoney(d.fee) : null;
       // Views were what the CPM was priced against, so surface both on the same
       // line. Prefer a stored views value; else derive it from fee/CPM (the
@@ -248,12 +259,18 @@ function rateLogEntry(type, detail, msg, summary) {
           bonus += ` at ${fmtViews(d.bonus_threshold_views)} views`;
         }
       }
-      const via = d.source === 'delegate' ? ' (from delegate)' : '';
+      const via = d.source === 'delegate' ? ' (from delegate)' : d.source === 'composed' ? ' (your own email)' : '';
       return { text: fee ? `Offer sent — ${fee}${cpm}${bonus}${via}` : `Offer sent${via}`, tone: 'active' };
     }
     case 'rate_counter_requested':
       return { text: 'Asked creator for their counter rate', tone: 'active' };
     case 'rate_accepted': {
+      if (d.model && d.label) {
+        // Terms the team recorded by hand vs. the creator saying yes by email.
+        return d.source === 'recorded'
+          ? { text: `Terms agreed ✓ — ${d.label} (recorded)`, tone: 'success' }
+          : { text: `Creator accepted ✓ — ${d.label}`, tone: 'success' };
+      }
       const fee = d.fee != null ? fmtMoney(d.fee) : null;
       // Same offer-math suffix as rate_offer_sent — surfaces HOW the accepted
       // number was reached ("1 video x 8.1M views x $37 CPM" for video-based,
@@ -313,6 +330,10 @@ function rateLogEntry(type, detail, msg, summary) {
       const gist = summary || summarizeMessage(msg);
       return { text: gist ? `Sent: “${gist}”` : 'Manual reply sent', tone: 'done' };
     }
+    case 'sent_composed_email': {
+      const gist = summary || summarizeMessage(msg);
+      return { text: gist ? `Sent: “${gist}”` : 'Your own email sent', tone: 'done' };
+    }
     case 'outreach_stopped':
       return { text: d.removed ? 'Outreach stopped (removed from campaign)' : 'Outreach stopped', tone: 'muted' };
     case 'contract_approval_requested':
@@ -366,7 +387,7 @@ function collapseSupersededSteps(log) {
 // outbound reply we sent. Each is paired with the nearest matching message from
 // the stored thread so the label can quote what was actually said.
 const INBOUND_MSG_EVENTS = new Set(['replied', 'rate_quoted']);
-const OUTBOUND_MSG_EVENTS = new Set(['sent_delegate_reply', 'sent_manual_reply']);
+const OUTBOUND_MSG_EVENTS = new Set(['sent_delegate_reply', 'sent_manual_reply', 'sent_composed_email']);
 
 // Which outbound send kind carries the offer email backing a 'rate_offer_sent'
 // step, so the actual priced offer we mailed can be opened from the timeline
@@ -383,6 +404,7 @@ const OUTBOUND_MSG_EVENTS = new Set(['sent_delegate_reply', 'sent_manual_reply']
 function offerEmailBackingKind(detail) {
   const d = detail || {};
   if (d.via === 'offer_portal') return null;
+  if (d.source === 'composed') return 'composed_offer';
   return d.source === 'delegate' ? 'delegate_reply' : 'offer';
 }
 
@@ -393,7 +415,7 @@ function offerEmailBackingKind(detail) {
 // they're detected dynamically (by kind) via isConversationalSend rather than
 // listed here, since the same event type also covers non-gist milestone/nudge
 // kinds.
-const GIST_MSG_EVENTS = new Set(['replied', 'sent_delegate_reply', 'sent_manual_reply']);
+const GIST_MSG_EVENTS = new Set(['replied', 'sent_delegate_reply', 'sent_manual_reply', 'sent_composed_email']);
 
 // Safety net for un-summarized gist messages. Summaries are normally generated
 // on receipt (thread.recordMessage), so this only catches rows that predate
@@ -482,7 +504,7 @@ async function attachRateLog(rows) {
     // kind; the templated sends (outreach, follow-up, offer, contract) that have
     // their own descriptive labels simply go unpaired.
     db.many(
-      `SELECT id, creator_id, direction, kind, subject, body, summary, created_at
+      `SELECT id, creator_id, direction, kind, subject, body, body_html, summary, created_at
        FROM email_messages
        WHERE creator_id = ANY($1::int[])
        ORDER BY creator_id, created_at ASC`,
@@ -567,6 +589,9 @@ async function attachRateLog(rows) {
         at: m.created_at,
         direction: m.direction,
         kind: e.type === 'rate_offer_sent' ? 'offer' : null,
+        // Composer emails keep the formatting the creator saw (sanitised on
+        // write by services/emailHtml); the client shows it instead of `body`.
+        html: m.body_html || null,
       };
     }
     // Expose the numeric amount (offer fee / quoted rate) so the client can
@@ -578,6 +603,12 @@ async function attachRateLog(rows) {
     // admin "Rate updated" override (which supersedes the accepted fee) apart
     // from a creator's own re-quote (a negotiation move, not an agreement).
     if (d.by != null) entry.by = d.by;
+    // Deals that aren't a flat fee carry their terms: the client shows the
+    // label ("15% commission") wherever it would show a dollar amount.
+    if (d.model && d.model !== 'flat') {
+      entry.model = d.model;
+      entry.terms_label = d.label || null;
+    }
     if (!byCreator.has(e.creator_id)) byCreator.set(e.creator_id, []);
     byCreator.get(e.creator_id).push(entry);
   }

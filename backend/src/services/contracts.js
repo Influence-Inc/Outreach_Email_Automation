@@ -17,6 +17,7 @@ const db = require('../db');
 const claude = require('./claudeClient');
 const templates = require('./negotiationTemplates');
 const thread = require('./thread');
+const dealTerms = require('./dealTerms');
 
 // 24 random bytes -> 32-char base64url string. Unguessable; never the DB id.
 function generateToken() {
@@ -88,6 +89,26 @@ function resolveOffer(creator, opts = {}) {
 // 'rate_offer_sent' (our lower counter) would override the number we actually
 // agreed to. Failing that, prefer the most recent priced offer we sent, then
 // the creator's stored quoted_rate, then the resolved offer's flat_fee.
+// The agreed deal TERMS when the deal isn't a plain fee — a commission,
+// fee + commission, or product-only deal from the composer, or terms the team
+// recorded by hand. Read off the most recent offer / acceptance event: if that
+// event carries terms, those are the deal; if it doesn't (a priced card, an
+// accepted creator rate, a portal accept), the deal is a legacy flat fee and
+// this returns null so the fee logic below applies unchanged.
+async function agreedTermsFor(creator) {
+  const ev = await db.one(
+    `SELECT type, detail FROM email_events
+     WHERE creator_id = $1 AND type IN ('rate_accepted', 'rate_offer_sent')
+     ORDER BY created_at DESC LIMIT 1`,
+    [creator.id],
+  );
+  const fromEvent = dealTerms.termsFromDetail(ev && ev.detail);
+  if (fromEvent) return fromEvent;
+  if (ev) return null;
+  const offer = resolveOffer(creator);
+  return offer && offer.terms ? dealTerms.termsFromOffer(offer) : null;
+}
+
 async function agreedFeeFor(creator) {
   // A deliberate admin fee override made AFTER the deal was struck ("Rate
   // updated $X → $Y" on the timeline) is the latest word on the fee and wins
@@ -112,6 +133,11 @@ async function agreedFeeFor(creator) {
       return Math.round(Number(override.detail.to));
     }
   }
+  // Terms-carrying deals book their own fee — the cash part only, so a
+  // commission or product deal is null here and NEVER falls through to the
+  // creator's original asking rate (quoted_rate) below.
+  const terms = await agreedTermsFor(creator);
+  if (terms) return terms.fee != null ? terms.fee : null;
   const accepted = await db.one(
     `SELECT detail FROM email_events
      WHERE creator_id = $1 AND type = 'rate_accepted' AND detail->>'source' = 'creator_rate'
@@ -312,7 +338,47 @@ function suggestPostingWindows(n, deadline) {
 // both as the no-Claude fallback and as the base Claude's extraction merges over.
 // The shape mirrors the fields the public contract page renders — see
 // public/contract.html for the layout that consumes each key.
-function baseContractData(creator, fee, offer) {
+// Contract fields that describe HOW the creator is paid when it isn't a flat
+// fee (see dealTerms.js). Merged over the flat-fee base and re-pinned after
+// extraction, so the thread can never talk a commission deal into a fee.
+//   compensationModel  'flat' | 'commission' | 'hybrid' | 'product'
+//   compensation       the cash fee (hybrid upfront fee); null when there is none
+//   commission         { ratePct, attribution, promoCode, cookieDays, termMonths,
+//                        payoutNetDays, summary } for commission + hybrid
+//   productDescription what a product deal gives the creator
+function termsContractFields(terms) {
+  if (!terms || dealTerms.isFlat(terms)) return { compensationModel: 'flat', commission: null, productDescription: null };
+  const c = terms.commission;
+  const fields = {
+    compensationModel: terms.model,
+    offerLabel: dealTerms.describeTerms(terms),
+    compensation: terms.fee != null ? terms.fee : null,
+    totalPayment: terms.fee != null ? terms.fee : null,
+    bonusAmount: null,
+    bonusThresholdViews: null,
+    commission: c
+      ? {
+          ratePct: c.rate_pct,
+          attribution: c.attribution,
+          promoCode: c.promo_code || null,
+          cookieDays: c.cookie_days,
+          termMonths: c.term_months,
+          payoutNetDays: c.payout_net_days,
+          summary: dealTerms.commissionSentence(terms),
+        }
+      : null,
+    productDescription: terms.product || null,
+  };
+  // Payment-method clause for the cash that actually moves.
+  if (terms.model === 'commission') {
+    fields.paymentTerms = `Commission is paid by direct bank transfer, monthly, within ${c.payout_net_days} days of each month's end`;
+  } else if (terms.model === 'product') {
+    fields.paymentTerms = 'No cash payment — the product is shipped to the creator before content production';
+  }
+  return fields;
+}
+
+function baseContractData(creator, fee, offer, terms = null) {
   const n = numDeliverables(offer);
   // A view-based deal is priced by TOTAL guaranteed views, not a fixed post
   // count — the creator publishes as many videos as needed to reach the total —
@@ -467,6 +533,9 @@ function baseContractData(creator, fee, offer) {
     // never wipes them (see updateContractTermsFromThread). Combined with
     // additionalTerms only at the read/sync boundary (combinedAdditionalTerms).
     manualTerms: [],
+    // How the creator is paid — 'flat' unless the deal carries terms. Spread
+    // last so a commission / product deal overrides the flat-fee defaults.
+    ...termsContractFields(terms),
   };
 }
 
@@ -794,6 +863,7 @@ Rules:
 - "minVideos" applies ONLY to view-based deals (KNOWN VALUES.acceptedOffer.offer_type is "view_based"). A view-based deal is priced by the TOTAL guaranteed views and normally has NO minimum number of videos — the creator posts as many as needed to reach the view total — so "minVideos" is null in the overwhelming majority of cases. Set it to a number ONLY when the thread explicitly states a MINIMUM count of videos/posts the creator must publish (e.g. "at least 3 videos", "a minimum of 2 posts", "you'll need to post at least 4 times"). Do NOT infer a minimum from the guaranteed-view number, from a single-post assumption, or from anything short of an explicit minimum-count statement. Always null for video-based or bonus deals — they already name an exact video count.
 - "viewCountingDays" is the number of days AFTER a post is published during which its views are counted toward the deal's guaranteed-view total or performance-bonus threshold. It applies ONLY to a deal WITH a view requirement — a view-based deal, or a video-based deal that carries a views bonus. Default to 30: return 30 unless the thread EXPLICITLY names a different counting window (e.g. "views counted over 60 days", "measured across the first 14 days from posting"). Return null for a flat video-based deal with no views target or bonus.
 - "compensation" is the guaranteed base fee as a plain number (no currency symbol) — the agreed fee the creator is paid for the deliverables. On a video+bonus deal the performance bonus is paid ON TOP, so "totalPayment" is base + bonus; on every other deal "totalPayment" equals "compensation". If the thread is unclear, use the provided agreed fee. (Both are re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
+- When KNOWN VALUES.compensationModel is "commission", "hybrid" or "product", the creator is paid by the terms in KNOWN VALUES.agreedTerms (a commission on sales, an upfront fee plus commission, or product only) — NOT by a flat fee. Then "compensation" is the upfront cash fee only (KNOWN VALUES.agreedFee, null when there is none); never use the creator's quotedRate or any other number as compensation, and do NOT restate the commission or product terms in "additionalTerms" (they have their own section). Deliverables still come from the thread (e.g. the posts promoting their link or code).
 - "currency" is a 3-letter ISO code (default "USD").
 - "postingDeadline" is the hard "posted no later than" date as a human-readable string, e.g. "April 20, 2026".
 - "postingWindows" are suggested per-video windows, e.g. [{"label":"Video 1","range":"December 11 - 14"}]. Return null if the thread doesn't specify windows.
@@ -820,7 +890,8 @@ async function extractContractData(creator, opts = {}) {
     preferOfferType: opts.preferOfferType || null,
     preferNumVideos: opts.preferNumVideos,
   });
-  const base = baseContractData(creator, fee, offer);
+  const terms = await agreedTermsFor(creator);
+  const base = baseContractData(creator, fee, offer, terms);
 
   const events = await db.many(
     `SELECT type, detail, created_at FROM email_events
@@ -839,6 +910,12 @@ async function extractContractData(creator, opts = {}) {
     campaignName: base.campaignName,
     usageRightsPolicy: creator.usage_rights_policy || 'no_rights',
     agreedFee: fee,
+    // How the deal pays (flat / commission / hybrid / product) and, when it
+    // isn't a flat fee, its exact terms — see the compensation rules.
+    compensationModel: base.compensationModel,
+    agreedTerms: terms && !dealTerms.isFlat(terms) ? dealTerms.termsSummary(terms) : null,
+    // The creator's opening ask. On a commission / product deal it is NOT what
+    // was agreed and must not become the compensation.
     quotedRate: creator.quoted_rate != null ? Number(creator.quoted_rate) : null,
     acceptedOffer: offer || null,
     igStats: creator.ig_scraped_data || null,
@@ -966,6 +1043,10 @@ async function extractContractData(creator, opts = {}) {
   merged.totalPayment = mergedIsBonus && merged.compensation != null
     ? Number(merged.compensation) + mBonus
     : merged.compensation;
+  // A commission / hybrid / product deal: the pay terms are the agreed terms,
+  // full stop. The extraction only ever fills wording (deliverables,
+  // platforms, timeline) — never the money.
+  if (terms && !dealTerms.isFlat(terms)) Object.assign(merged, termsContractFields(terms));
   return merged;
 }
 
@@ -1797,6 +1878,8 @@ async function attachContracts(rows) {
 }
 
 module.exports = {
+  agreedTermsFor,
+  termsContractFields,
   generateToken,
   contractUrl,
   extractContractData,

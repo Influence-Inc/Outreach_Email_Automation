@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Influence Outreach Automator",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "Influence Outreach: scrape Instagram profiles into the dashboard, decide creator offers from a panel on their Instagram profile, and send Priority DM outreach to creators without an email.",
   "permissions": [
     "tabs",
@@ -29,7 +29,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["panel.html", "panel.js", "panel.css"],
+      "resources": ["panel.html", "panel.js", "panel.css", "composer.js", "composer.css"],
       "matches": ["https://www.instagram.com/*"]
     }
   ],

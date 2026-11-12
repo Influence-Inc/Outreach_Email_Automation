@@ -187,7 +187,10 @@ async function addLeadToCampaign({ email, firstName, campaignId, companyName }) 
 // comes from the reply_received webhook payload and routes the reply into the
 // correct thread; eaccount is the connected sending mailbox to reply FROM
 // (Instantly requires it — it's the email_account from the reply webhook).
-async function replyToEmail({ replyToUuid, eaccount, subject, body, cc }) {
+// `html` / `text` (optional): a pre-rendered body — the rich-text composer's
+// sanitised HTML and its plain-text twin (see services/emailHtml.js). When
+// given they're sent as-is instead of rendering `body` as markdown.
+async function replyToEmail({ replyToUuid, eaccount, subject, body, cc, html = null, text = null }) {
   // `sendOnce`: sending an email isn't idempotent — a timeout after the server
   // has already accepted the request produces a real duplicate email in the
   // creator's inbox. Retrying on timeout/network is what caused the "showed
@@ -199,7 +202,9 @@ async function replyToEmail({ replyToUuid, eaccount, subject, body, cc }) {
     subject,
     // text = markdown-stripped so text-only clients see clean prose;
     // html = markdown-rendered so bold and links land as formatting.
-    body: { text: stripMarkdown(body), html: renderMarkdown(body) },
+    body: html
+      ? { text: text != null ? String(text) : stripMarkdown(body), html: String(html) }
+      : { text: stripMarkdown(body), html: renderMarkdown(body) },
   };
   // Keep everyone else from the inbound email on the thread. /emails/reply
   // addresses only the original sender unless we pass the CC list explicitly.
