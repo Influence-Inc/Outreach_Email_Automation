@@ -26,10 +26,14 @@ function isConfigured() {
 
 async function request(method, path, body, opts = {}) {
   const key = process.env.CREATOR_DB_API_KEY || '';
+  // Callers on an interactive path (the dashboard's creators list) pass a tighter
+  // budget; background sync keeps the patient defaults.
+  const timeoutMs = opts.timeoutMs || TIMEOUT_MS;
+  const maxAttempts = opts.attempts || MAX_ATTEMPTS;
   let lastErr;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const res = await fetch(`${baseUrl()}${path}`, {
         method,
@@ -54,7 +58,7 @@ async function request(method, path, body, opts = {}) {
     } catch (err) {
       lastErr = err;
       const retryable = err.retryable || err.name === 'AbortError' || err.name === 'TypeError';
-      if (!retryable || attempt === MAX_ATTEMPTS) throw err;
+      if (!retryable || attempt === maxAttempts) throw err;
       await sleep(2 ** attempt * 1000); // 2s, 4s
     } finally {
       clearTimeout(timer);
@@ -183,7 +187,11 @@ function buildPayload(contract, creator) {
 }
 
 async function syncSignedCreator(contract, creator) {
-  return request('POST', '/contracts', buildPayload(contract, creator));
+  const res = await request('POST', '/contracts', buildPayload(contract, creator));
+  // A newly signed creator flips Unused/New → Used; drop cached badges so the
+  // dashboard reflects it on the next load instead of after the cache TTL.
+  clearCategorizeCache();
+  return res;
 }
 
 // Fetch the compliant legal contract document (the "Creator Services
@@ -271,6 +279,123 @@ async function categorizeCreators(keys) {
   }
 }
 
+// ── Dashboard categorize: cached + time-boxed ───────────────────────────────
+// The creators list used to await categorizeCreators() on every load, and the
+// request helper's retry policy (15s timeout × 3 attempts + 2s/4s backoff) meant
+// a slow or unreachable Creator-DB held the whole Deal Studio table for up to
+// ~50s on every campaign switch. The badge is decoration, so the list path now:
+//   • serves results from a short-lived in-memory cache (switching back to a
+//     campaign costs no Creator-DB round-trip at all), and
+//   • only waits CATEGORIZE_BUDGET_MS for the keys it hasn't seen. Past that the
+//     list renders without those badges (`null`, not a false 'new') while the
+//     request finishes in the background and fills the cache for the next load.
+const CATEGORIZE_CACHE_TTL_MS = Number(process.env.CREATOR_DB_CATEGORIZE_TTL_MS || 10 * 60 * 1000);
+const CATEGORIZE_BUDGET_MS = Number(process.env.CREATOR_DB_CATEGORIZE_BUDGET_MS || 2500);
+const CATEGORIZE_CACHE_MAX = 20000;
+const _categorizeCache = new Map(); // keyId -> { value, at }
+// keyId -> Promise<value|null> for lookups already on the wire, so a reload (or
+// a quick switch back) while Creator-DB is still answering joins that request
+// instead of firing another one at a struggling upstream.
+const _categorizeInflight = new Map();
+
+function categorizeKeyId(k) {
+  const email = String((k && k.email) || '').trim().toLowerCase();
+  const ig = String((k && k.instagramUsername) || '').trim().replace(/^@/, '').toLowerCase();
+  return `${email}|${ig}`;
+}
+
+function _cacheGet(id) {
+  const hit = _categorizeCache.get(id);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > CATEGORIZE_CACHE_TTL_MS) {
+    _categorizeCache.delete(id);
+    return undefined;
+  }
+  return hit.value;
+}
+
+function _cacheSet(id, value) {
+  if (_categorizeCache.size >= CATEGORIZE_CACHE_MAX) {
+    // Map iterates in insertion order — drop the oldest tenth.
+    let n = Math.ceil(CATEGORIZE_CACHE_MAX / 10);
+    for (const k of _categorizeCache.keys()) {
+      _categorizeCache.delete(k);
+      if (--n <= 0) break;
+    }
+  }
+  _categorizeCache.set(id, { value, at: Date.now() });
+}
+
+function clearCategorizeCache() {
+  _categorizeCache.clear();
+  _categorizeInflight.clear();
+}
+
+// Same contract as categorizeCreators() (results in input order), except a key
+// whose answer isn't available inside the budget comes back as null. When the
+// background request later lands, `onLate(keys, results)` is called with the
+// keys that missed the budget so the caller can do follow-up work (name sync).
+async function categorizeCreatorsCached(keys, { budgetMs = CATEGORIZE_BUDGET_MS, onLate } = {}) {
+  if (!Array.isArray(keys) || !keys.length) return [];
+  if (!isConfigured()) return keys.map(() => ({ category: 'new', creator: null }));
+
+  const ids = keys.map(categorizeKeyId);
+  const out = ids.map((id) => _cacheGet(id) || null);
+  const missIdx = [];
+  const waits = [];
+  const seen = new Set();
+  for (let i = 0; i < ids.length; i += 1) {
+    if (out[i] || seen.has(ids[i])) continue;
+    seen.add(ids[i]);
+    if (_categorizeInflight.has(ids[i])) waits.push(_categorizeInflight.get(ids[i]));
+    else missIdx.push(i);
+  }
+  if (!missIdx.length && !waits.length) return out;
+
+  const missKeys = missIdx.map((i) => keys[i]);
+  let fetchP = Promise.resolve(null);
+  if (missKeys.length) {
+    // The background half keeps the normal per-attempt timeout (only the wait
+    // is bounded) so a slow-but-alive Creator-DB still warms the cache.
+    fetchP = request('POST', '/creators/categorize', { keys: missKeys }, { attempts: 2 })
+      .then((results) => {
+        const list = Array.isArray(results) ? results : [];
+        missIdx.forEach((i, j) => {
+          if (list[j]) _cacheSet(ids[i], list[j]);
+        });
+        return list;
+      })
+      .catch((err) => {
+        console.warn('[creatorDb] categorize failed:', err.message);
+        return null;
+      })
+      .finally(() => {
+        for (const i of missIdx) _categorizeInflight.delete(ids[i]);
+      });
+    missIdx.forEach((i, j) => {
+      _categorizeInflight.set(ids[i], fetchP.then((list) => (list && list[j]) || null));
+    });
+  }
+
+  let timer;
+  const budget = new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), budgetMs); });
+  const first = await Promise.race([Promise.all([fetchP, ...waits]), budget]);
+  clearTimeout(timer);
+
+  if (first === 'timeout') {
+    console.warn(`[creatorDb] categorize exceeded ${budgetMs}ms — rendering without badges for some creators`);
+    if (onLate && missKeys.length) {
+      fetchP.then((list) => { if (list) onLate(missKeys, list); }).catch(() => {});
+    }
+  }
+  // Fill every row (including duplicates of a missed key) from the cache, which
+  // the fetch has populated if it finished in time.
+  for (let i = 0; i < ids.length; i += 1) {
+    if (!out[i]) out[i] = _cacheGet(ids[i]) || null;
+  }
+  return out;
+}
+
 // Fetch the master creator record by ID (GET /creator/:id). Returns the full
 // creator row including cpm / acceptedRate / quotedRate — used to price a Used-
 // creator's new-campaign offer at their prior CPM. Returns null on any miss so
@@ -327,6 +452,9 @@ module.exports = {
   isConfigured,
   lookupParticipation,
   categorizeCreators,
+  categorizeCreatorsCached,
+  categorizeKeyId,
+  clearCategorizeCache,
   getCreatorById,
   lookupCpmFromCreatorDb,
   searchCreators,
