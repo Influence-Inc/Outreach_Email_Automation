@@ -942,3 +942,21 @@ CREATE TABLE IF NOT EXISTS creator_list_profiles (
 -- The indexed creator's data, copied onto every creators row with that handle so the pricing
 -- code (cpmEstimate.dealCpmFor) can read it from the row it already has.
 ALTER TABLE creators ADD COLUMN IF NOT EXISTS creator_list JSONB;
+
+-- Case-insensitive handle lookups run on hot paths: the creators list's
+-- returning-creator check (routes/creators.js attachSegment) on every campaign
+-- load, the extension panel's open-by-username, the duplicate guard on every
+-- add, and creator-list's copy-onto-every-row. Without an index on the
+-- expression each one scanned the whole creators table.
+CREATE INDEX IF NOT EXISTS idx_creators_lower_instagram_username ON creators(LOWER(instagram_username));
+-- The planner only uses an expression index once it has statistics for the
+-- expression, which a plain CREATE INDEX doesn't gather. Analyze once, the
+-- first time this index appears; later boots find its stats and skip.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_stats WHERE tablename = 'idx_creators_lower_instagram_username'
+  ) THEN
+    ANALYZE creators;
+  END IF;
+END $$;
