@@ -6,6 +6,7 @@ const db = require('../db');
 const negotiation = require('../services/negotiation');
 const contracts = require('../services/contracts');
 const callContract = require('../services/callContract');
+const referrals = require('../services/referrals');
 const offers = require('../services/offers');
 const briefs = require('../services/briefs');
 const { computeOffers } = require('../services/pricing');
@@ -274,6 +275,19 @@ router.post('/:id/call-contract', async (req, res, next) => {
   try {
     const result = await callContract.createContractFromCall(req.params.id, req.body || {});
     res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Change a referral contract's code from the Deals column, or take it off the
+// contract with a blank code (services/referrals.js setReferralCode). Body:
+// { code: 'MAYA' | '' }. The previous code keeps crediting this creator.
+router.patch('/:id/referral-code', async (req, res, next) => {
+  try {
+    const by = (req.user && (req.user.email || req.user.name)) || null;
+    res.json(await referrals.setReferralCode(req.params.id, (req.body || {}).code, { by }));
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);

@@ -190,7 +190,12 @@ function platformName() {
 }
 
 function referralTrackingPhrase(c) {
-  const code = c.promo_code ? `referral code ${c.promo_code}` : 'their referral code';
+  // No code on the contract (left blank, so one was assigned behind the scenes
+  // for the link): name neither a code nor a link — just how brands come in.
+  if (!c.promo_code) {
+    return c.attribution === 'code' ? "the creator's referral code, entered at sign-up" : "the creator's referral link";
+  }
+  const code = `referral code ${c.promo_code}`;
   if (c.attribution === 'code') return `the creator's ${code}, entered at sign-up`;
   if (c.attribution === 'link') return `the creator's referral link`;
   return `the creator's referral link or ${code} entered at sign-up`;

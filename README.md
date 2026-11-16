@@ -91,6 +91,14 @@ sign-up. `services/referrals.js` owns it:
   creators (typed, or derived from the handle), plus a link: `/r/<CODE>`. The
   link logs the visit and forwards the brand to `REFERRAL_SIGNUP_URL` with
   `?ref=<CODE>&rt=<visit id>`.
+- **On the contract.** A typed code is named on the contract along with its
+  link. If the code was left blank, one is still assigned for the link, but
+  the contract names neither the code nor the link. It says only "Brands are
+  credited when they sign up through the creator's referral link."
+- **Editing.** The Deals column's CODE line changes the code. A new code goes
+  on the contract and becomes the link; clearing it takes it back off the
+  contract. Earlier codes stay reserved to the creator and keep crediting them,
+  so links already shared never break.
 - **Sign-ups.** The platform reports each new brand account to
   `POST /api/bot/referrals/signups` with the code typed at sign-up and the
   link visit(s) it saw. One decision is made and stored permanently, along with

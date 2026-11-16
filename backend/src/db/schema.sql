@@ -976,7 +976,13 @@ CREATE TABLE IF NOT EXISTS referral_codes (
   contract_id  INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_codes_contract ON referral_codes(contract_id);
+-- A code edited from Deal Studio replaces the contract's PRIMARY code; the old
+-- one stays as an alias (is_primary = FALSE) so links and codes the creator
+-- already shared keep crediting them, and nobody else can take it. One primary
+-- per contract.
+ALTER TABLE referral_codes ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT TRUE;
+DROP INDEX IF EXISTS idx_referral_codes_contract;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_codes_contract_primary ON referral_codes(contract_id) WHERE is_primary;
 CREATE INDEX IF NOT EXISTS idx_referral_codes_creator ON referral_codes(creator_id);
 
 -- Every visit to a referral link. Its id rides to the platform's sign-up page

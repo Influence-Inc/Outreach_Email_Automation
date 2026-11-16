@@ -372,7 +372,9 @@ async function createContractFromCall(creatorId, rawInput, { now = new Date() } 
     // reserved with the contract or not at all.
     const q = (sql, params) => client.query(sql, params);
     const referralCode = dealTerms.isReferral(terms) ? await referrals.chooseCode(q, creator, terms) : null;
-    if (referralCode) referrals.applyReferralCode(data, terms, referralCode);
+    if (referralCode) {
+      referrals.applyReferralCode(data, terms, referralCode, { shown: referrals.isTypedCode(terms, referralCode) });
+    }
 
     const inserted = await client.query(
       `INSERT INTO contracts (token, creator_id, campaign_id, status, data)

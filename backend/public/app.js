@@ -1329,11 +1329,14 @@ function appendEditableDealLine(cell, r, { label, value, editValue, placeholder,
 // admin can correct anything the extraction got wrong straight from the Deals
 // column. Works for both pending and signed contracts (signed edits are
 // persisted silently without re-triggering signing or notifying the creator).
-// A referral-commission deal's line in the Deals column: the creator's referral
-// code (click to copy the link they share with brands) and, once brands have
-// signed up through it, how many were credited and what they've earned. The
-// totals load lazily — only referral deals ask (services/referrals.js).
-function renderReferralLine(r, c) {
+// A referral-commission deal's lines in the Deals column:
+//   REFERRAL  copy the creator's referral link, plus (loaded lazily, only for
+//             referral deals) how many brands were credited and what they've
+//             earned — services/referrals.js.
+//   CODE      the code named on the contract. Click to change it (the old code
+//             keeps crediting the creator) or clear it to take it off the
+//             contract, which then only mentions "the creator's referral link".
+function renderReferralLines(cell, r, c) {
   const line = document.createElement('div');
   line.className = 'deal-line';
   line.innerHTML = '<span class="deal-tag">REFERRAL</span>';
@@ -1343,36 +1346,47 @@ function renderReferralLine(r, c) {
     const copy = document.createElement('button');
     copy.type = 'button';
     copy.className = 'ghost small cr-referral-copy';
-    copy.textContent = c.referralCode;
-    copy.title = `Copy referral link — ${c.referralUrl}`;
+    copy.textContent = 'Copy link';
+    copy.title = c.referralUrl;
     copy.onclick = async () => {
       try {
         await navigator.clipboard.writeText(c.referralUrl);
         copy.textContent = 'Copied ✓';
-        setTimeout(() => { copy.textContent = c.referralCode; }, 1400);
+        setTimeout(() => { copy.textContent = 'Copy link'; }, 1400);
       } catch {
         window.prompt('Referral link', c.referralUrl);
       }
     };
     val.appendChild(copy);
   } else {
-    val.textContent = 'Code assigned when the contract is made';
+    val.textContent = 'Link assigned when the contract is made';
   }
   const stats = document.createElement('span');
   stats.className = 'cr-referral-stats';
   val.appendChild(stats);
   line.appendChild(val);
-  if (c.referralCode) {
-    api(`/api/referrals/creators/${r.id}`)
-      .then((res) => {
-        const n = (res.brands || []).length;
-        stats.textContent = n
-          ? ` ${n} brand${n === 1 ? '' : 's'} · $${fmtNum(res.total_commission)} earned`
-          : ' no brands yet';
-      })
-      .catch(() => {});
-  }
-  return line;
+  cell.appendChild(line);
+  if (!c.referralCode) return;
+  api(`/api/referrals/creators/${r.id}`)
+    .then((res) => {
+      const n = (res.brands || []).length;
+      stats.textContent = n
+        ? ` ${n} brand${n === 1 ? '' : 's'} · $` + fmtNum(res.total_commission) + ' earned'
+        : ' no brands yet';
+    })
+    .catch(() => {});
+
+  // Contracts made before codeOnContract existed always named their code.
+  const shown = c.codeOnContract != null ? !!c.codeOnContract : !!c.promoCode;
+  appendEditableDealLine(cell, r, {
+    label: 'CODE',
+    value: shown ? c.referralCode : 'Not on contract',
+    editValue: shown ? c.referralCode : '',
+    valueClass: shown ? 'cr-referral-code' : 'cr-referral-code off',
+    placeholder: 'e.g. MAYA · blank = keep off the contract',
+    onSave: (v) =>
+      api(`/api/creators/${r.id}/referral-code`, { method: 'PATCH', body: JSON.stringify({ code: v }) }),
+  });
 }
 
 function renderEditableDeal(cell, r, data) {
@@ -1404,7 +1418,7 @@ function renderEditableDeal(cell, r, data) {
     }
     payLine.appendChild(payVal);
     cell.appendChild(payLine);
-    if (data.commission && data.commission.basis === 'referral') cell.appendChild(renderReferralLine(r, data.commission));
+    if (data.commission && data.commission.basis === 'referral') renderReferralLines(cell, r, data.commission);
   }
   // Offer-type toggle: cycles View-based → Video-based → Video + bonus when the
   // extraction shaped the wrong kind of deal (or to add a performance bonus).

@@ -1259,7 +1259,9 @@ async function createContractForCreator(creatorId) {
         ...terms, commission: { ...terms.commission, promo_code: null },
       });
     }
-    referrals.applyReferralCode(data, terms, referralCode);
+    // Only a code the team typed is named on the contract; an assigned one
+    // (left blank, or a typed one that clashed) stays behind the link.
+    referrals.applyReferralCode(data, terms, referralCode, { shown: referrals.isTypedCode(terms, referralCode) });
   }
   const contract = await db.one(
     `INSERT INTO contracts (token, creator_id, campaign_id, status, data)

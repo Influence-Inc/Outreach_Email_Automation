@@ -791,7 +791,7 @@
         : { link: 'Tracked link', code: 'Promo code', link_and_code: 'Link + promo code' };
       [...els.attr.options].forEach((o) => { o.textContent = optText[o.value]; });
       q('.tp-code-label').textContent = referral ? 'Referral code' : 'Promo code';
-      q('.tp-code-opt').textContent = referral ? 'blank = assigned for you' : 'optional';
+      q('.tp-code-opt').textContent = referral ? 'optional · blank keeps it off the contract' : 'optional';
       els.code.placeholder = referral ? 'e.g. MAYA' : 'e.g. SAM15';
       // A referral always has a code (the referral link is built from it).
       els.codeField.hidden = els.attr.value === 'link' && !referral;

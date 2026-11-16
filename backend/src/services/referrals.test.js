@@ -367,3 +367,48 @@ test('an unattributed brand names the reason when every claim failed the same wa
     'no_eligible_claims',
   );
 });
+
+test('a code left blank stays off the contract: no code, no link, just the plain sentence', () => {
+  const terms = dealTerms.normalizeTerms({ model: 'commission', commission: { basis: 'referral', rate_pct: 10 } });
+  const data = contracts.baseContractData({ full_name: 'Maya', usage_rights_policy: 'no_rights' }, null, { offer_type: 'video_based', num_videos: 1 }, terms);
+  referrals.applyReferralCode(data, terms, 'MAYAMAKES', { shown: referrals.isTypedCode(terms, 'MAYAMAKES') });
+  const c = data.commission;
+  assert.strictEqual(c.codeOnContract, false);
+  assert.strictEqual(c.tracking, "Brands are credited when they sign up through the creator's referral link.");
+  assert.strictEqual(c.promoCode, null);
+  // Stored for Deal Studio's "Copy link", but never in the contract's wording.
+  assert.strictEqual(c.referralCode, 'MAYAMAKES');
+  assert.match(c.referralUrl, /\/r\/MAYAMAKES$/);
+  for (const text of [c.summary, c.tracking, c.rules, c.reporting, c.returns, data.paymentTerms]) {
+    assert.doesNotMatch(text, /MAYAMAKES|\/r\//);
+  }
+  assert.match(c.summary, /through the creator's referral link, on that brand's first 2 campaigns/);
+});
+
+test('code-only tracking with no code on the contract names the code without a value', () => {
+  const terms = dealTerms.normalizeTerms({ model: 'commission', commission: { basis: 'referral', rate_pct: 10, attribution: 'code' } });
+  const data = contracts.baseContractData({}, null, { offer_type: 'video_based', num_videos: 1 }, terms);
+  referrals.applyReferralCode(data, terms, 'REF9', { shown: false });
+  assert.strictEqual(data.commission.tracking, "Brands are credited when they enter the creator's referral code at sign-up.");
+  assert.doesNotMatch(data.commission.summary, /REF9/);
+});
+
+test('a typed code is named on the contract; isTypedCode tells them apart', () => {
+  const terms = dealTerms.normalizeTerms({ model: 'commission', commission: { basis: 'referral', rate_pct: 10, promo_code: 'maya' } });
+  assert.strictEqual(referrals.isTypedCode(terms, 'MAYA'), true);
+  assert.strictEqual(referrals.isTypedCode(terms, 'MAYA2'), false); // a clash fell back to another code
+  const data = contracts.baseContractData({}, null, { offer_type: 'video_based', num_videos: 1 }, terms);
+  referrals.applyReferralCode(data, terms, 'MAYA', { shown: true });
+  assert.strictEqual(data.commission.codeOnContract, true);
+  assert.match(data.commission.tracking, /\/r\/MAYA\) or enter the creator's referral code MAYA/);
+});
+
+test('termsFromContractData rebuilds the terms a stored contract was written from', () => {
+  const terms = dealTerms.normalizeTerms({
+    model: 'hybrid', fee: 800,
+    commission: { basis: 'referral', rate_pct: 12.5, attribution: 'code', cookie_days: 60, term_months: null, campaigns_per_brand: 3, campaign_window_months: 6 },
+  });
+  const data = contracts.baseContractData({}, 800, { offer_type: 'video_based', num_videos: 1 }, terms);
+  const back = referrals.termsFromContractData(data);
+  assert.deepStrictEqual(back, { ...terms, commission: { ...terms.commission, promo_code: null } });
+});
