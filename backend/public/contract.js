@@ -219,6 +219,66 @@
     return html;
   }
 
+  // ── The deal at a glance ───────────────────────────────────────────────
+  // The four things a creator checks first — what they're paid, what they
+  // make, by when, and where — above the full terms, so the long document
+  // below reads as the detail behind a deal they already understand. Every
+  // value is the same field the sections render; nothing here is new data.
+  function renderSummary(d) {
+    // The headline: what they're paid. [label, value, sub-line, long-value]
+    var pay = null;
+    var model = d.compensationModel;
+    if (model === 'product') {
+      pay = ['Your pay', 'Product only', d.productDescription || null, true];
+    } else if (model && model !== 'flat') {
+      pay = ['Your pay', d.offerLabel || 'Commission',
+        model === 'hybrid' && d.compensation != null ? fmtMoney(d.compensation, d.currency) + ' upfront, plus commission' : null, true];
+    } else {
+      var base = d.compensation != null ? d.compensation : d.totalPayment;
+      var subs = [];
+      if (d.bonusAmount && d.bonusThresholdViews) {
+        subs.push('+ ' + fmtMoney(d.bonusAmount, d.currency) + ' bonus at ' + fmtNum(d.bonusThresholdViews) + ' views');
+      }
+      if (Number(d.upfrontPercent) > 0) subs.push(d.upfrontPercent + '% upfront on your first draft');
+      if (base != null) pay = ['Your pay', fmtMoney(base, d.currency), subs.join(' · ') || null];
+    }
+    // The facts beneath it. [label, value, sub-line, wide-on-phones]
+    var cells = [];
+    var views = d.minTotalViews != null ? d.minTotalViews : d.guaranteedViews;
+    if (d.offerType === 'view_based' && views) {
+      cells.push(['Deliverable', fmtNum(views) + ' views', 'Guaranteed, across your posts']);
+    } else if (d.deliverables) {
+      cells.push(['Deliverable', stripCadenceFromDeliverables(String(d.deliverables))]);
+    }
+    var due = String(d.postingDeadline || d.deadline || '').replace(/^[A-Za-z]+day,\s*/, '');
+    // "December 7, 2026" → "Dec 7, 2026" so it fits its cell; the Timeline
+    // section below keeps the full date. Anything that isn't a plain date
+    // (an extracted "end of March") is shown as written.
+    var dueDate = /^[A-Za-z]+ \d{1,2}, \d{4}$/.test(due) ? new Date(due + ' 12:00') : null;
+    if (dueDate && !isNaN(dueDate.getTime())) {
+      due = dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+    if (due) cells.push(['Due', due]);
+    var plats = Array.isArray(d.platforms) ? d.platforms : (d.platforms ? [d.platforms] : []);
+    if (plats.length) cells.push(['Platforms', plats.join(', '), null, plats.length > 2]);
+    var el = $('summary');
+    if (!pay && !cells.length) { el.hidden = true; return; }
+    var html = '';
+    if (pay) {
+      html += '<div class="summary-pay"><div class="k">' + esc(pay[0]) + '</div>' +
+        '<div class="v' + (pay[3] ? ' long' : '') + '">' + esc(pay[1]) + '</div>' +
+        (pay[2] ? '<div class="s">' + esc(pay[2]) + '</div>' : '') + '</div>';
+    }
+    if (cells.length) {
+      html += '<div class="summary-facts"' + (pay ? '' : ' style="margin-top:0"') + '>' + cells.map(function (c) {
+        return '<div class="summary-fact' + (c[3] ? ' wide' : '') + '"><div class="k">' + esc(c[0]) + '</div>' +
+          '<div class="v">' + esc(c[1]) + '</div>' + (c[2] ? '<div class="s">' + esc(c[2]) + '</div>' : '') + '</div>';
+      }).join('') + '</div>';
+    }
+    el.innerHTML = html;
+    el.hidden = false;
+  }
+
   // ── Render the read-only contract sections (v1 layout, no Additional Terms) ──
   // `combined` is the server's ready-made Additional Terms list (see the
   // /api/contracts/:token payload); the local merge below is only the fallback
@@ -457,6 +517,12 @@
     }
 
     $('sections').innerHTML = html;
+    // Each section comes into focus a beat after the one above it.
+    var secs = $('sections').querySelectorAll('.section');
+    for (var s = 0; s < secs.length; s += 1) {
+      secs[s].classList.add('blur-in');
+      secs[s].style.setProperty('--i', String(Math.min(s + 2, 8)));
+    }
   }
 
   // ── Drawn signature pad ────────────────────────────────────────────────
@@ -623,6 +689,8 @@
     var sign = page1.querySelector('.sign');
     if (details) details.hidden = true;
     if (sign) sign.hidden = true;
+    // No steps left to take on an executed contract.
+    if ($('steps-nav-1')) $('steps-nav-1').hidden = true;
     page1.hidden = false;
   }
 
@@ -635,6 +703,7 @@
         var d = c.data || {};
         $('eyebrow').textContent = [d.brandName, d.campaignName].filter(Boolean).join(' · ') || 'Collaboration';
         $('subhead').textContent = d.creatorName ? 'Prepared for ' + d.creatorName : '';
+        renderSummary(d);
         renderSections(d, c.combinedTerms);
 
 

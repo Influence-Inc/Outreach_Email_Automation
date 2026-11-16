@@ -4,419 +4,483 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#ffffff" />
   <title>Creator Collaboration Agreement — INFLUENCE</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
   <style>
+    /* The creator signing page, in the INFLUENCE design language shared with the
+       creator-list app (influence.technology): one face (Inter, the very files
+       that site serves), weights on Inter's "wght" axis via --w, no strokes —
+       surfaces separate by fill and space, and only floating things get a soft
+       shadow — flat pill buttons, and spring motion that comes into focus. */
+    @font-face { font-family: "Inter"; src: url("/fonts/inter/inter-latin.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; unicode-range: U+0-FF, U+131, U+152-153, U+2BB-2BC, U+2C6, U+2DA, U+2DC, U+2000-206F, U+2070, U+2074-207E, U+2080-208E, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+    @font-face { font-family: "Inter"; src: url("/fonts/inter/inter-latin-ext.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; unicode-range: U+100-24F, U+259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+    @font-face { font-family: "Inter"; src: url("/fonts/inter/inter-vietnamese.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; unicode-range: U+102-103, U+110-111, U+128-129, U+168-169, U+1A0-1A1, U+1AF-1B0, U+1EA0-1EF9, U+20AB; }
+    @font-face { font-family: "Inter"; src: url("/fonts/inter/inter-greek.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; unicode-range: U+370-3FF; }
+    @font-face { font-family: "Inter"; src: url("/fonts/inter/inter-greek-ext.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; unicode-range: U+1F00-1FFF; }
+    @font-face { font-family: "Inter"; src: url("/fonts/inter/inter-cyrillic.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; unicode-range: U+301, U+400-45F, U+490-491, U+4B0-4B1, U+2116; }
+    @font-face { font-family: "Inter"; src: url("/fonts/inter/inter-cyrillic-ext.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; unicode-range: U+460-52F, U+1C80-1C88, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F; }
+
     :root {
-      --bg: #f5f4f0; --surface: #ffffff; --surface-2: #faf9f6; --surface-3: #f2f0eb;
-      --ink: #191817; --ink-2: #4d4b46; --muted: #8a8880; --faint: #a3a19b; --faint-2: #b4b2ac;
-      --line: #e6e4de; --line-2: #dcdad3; --line-3: #eeece6;
-      --accent: #191817; --accent-strong: #000000;
-      --green: #147a52; --green-bg: #e7f2ec; --danger: #FF3140;
-      --radius: 16px; --radius-md: 12px; --radius-sm: 10px; --radius-xs: 8px;
-      --shadow-card: 0 1px 2px rgba(20,18,15,.04); --shadow-btn: 0 2px 6px rgba(20,18,15,.18);
-      --ring: 0 0 0 3px rgba(25,24,23,.12);
-      --font: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      --bg: #fff;
+      --ink: #111111;
+      --ink-2: #707070;
+      --ink-3: #999999;
+      --fill: #f0f0f3;
+      --fill-2: #e8e8ed;
+      --fill-3: #f5f5f7;
+      --blue: #0071e3;
+      --blue-2: #0077ed;
+      --green: #24c45f;
+      --green-ink: #248a3d;
+      --tint-green: rgba(36, 196, 95, 0.12);
+      --red-ink: #ff3e42;
+      --tint-red: rgba(255, 62, 66, 0.1);
+      --lift: 0 2px 6px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.08);
+      --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+      --spring: linear(0, 0.05, 0.152, 0.278, 0.412, 0.541, 0.668, 0.766, 0.846, 0.908, 0.955, 0.988, 1.011, 1.024, 1.031, 1.033, 1.032, 1.029, 1.025, 1.02, 1.016, 1.012, 1.009, 1.006, 1.004, 1.002, 1.001, 1);
+      --spring-soft: linear(0, 0.083, 0.229, 0.383, 0.522, 0.638, 0.73, 0.801, 0.855, 0.895, 0.925, 0.946, 0.961, 0.972, 0.98, 0.986, 0.99, 0.993, 0.995, 0.997, 0.998, 0.999, 1);
+      --font: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      color-scheme: light;
     }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
+    html { -webkit-text-size-adjust: 100%; }
     html, body { margin: 0; padding: 0; }
     body {
-      font-family: var(--font); color: var(--ink); background: var(--bg);
-      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
-      line-height: 1.5;
+      background: var(--bg); color: var(--ink);
+      font-family: var(--font); font-optical-sizing: auto; font-size: 14px; line-height: 1.5714;
+      --w: 460; letter-spacing: -0.09px; -webkit-font-smoothing: antialiased;
     }
+    /* Weights as influence.technology sets them: every element at font-weight
+       400, the real weight on Inter's own axis from --w. Never font-weight. */
+    *, *::before, *::after { font-weight: 400; font-variation-settings: "wght" var(--w); }
+    b, strong, h1, h2, h3 { --w: 600; }
+    button, input, select, textarea { font-family: inherit; letter-spacing: inherit; color: inherit; }
+    button { cursor: pointer; }
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .num { font-variant-numeric: tabular-nums; }
-    .wrap { max-width: 760px; margin: 0 auto; padding: 40px 22px 80px; }
 
-    /* Brand bar */
-    .brandbar { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 8px 0 36px; }
-    .brandbar svg { height: 24px; width: auto; display: block; fill: var(--ink); }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 28px 24px 120px; }
+    @media (max-width: 560px) { .wrap { padding: 20px 16px 96px; } }
 
-    /* Document card */
-    .doc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-      box-shadow: var(--shadow-card); overflow: hidden; margin-bottom: 22px; }
-    .doc-head { padding: 34px 38px 26px; border-bottom: 1px solid var(--line); }
-    .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-      color: var(--faint); margin-bottom: 10px; }
-    .doc-head h1 { font-size: 27px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 8px; }
-    .doc-head p.sub { margin: 0; color: var(--ink-2); font-size: 14px; }
+    .brandbar { display: flex; justify-content: center; margin: 4px 0 48px; }
+    .brandbar svg { height: 15px; width: auto; display: block; fill: var(--ink); }
 
-    .banner { margin: 0; padding: 13px 38px; font-size: 13.5px; font-weight: 500; display: flex;
-      align-items: center; gap: 9px; }
-    .banner.signed { background: var(--green-bg); color: var(--green); border-bottom: 1px solid #d3e7db; }
-    .banner .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    /* ---- Document head ---------------------------------------------------- */
+    .doc-head { margin-bottom: 28px; }
+    .eyebrow { font-size: 14px; color: var(--ink-2); margin-bottom: 8px; }
+    .doc-head h1 { margin: 0; font-size: 30px; line-height: 1.25; --w: 600; text-wrap: balance; }
+    .doc-head p.sub { margin: 10px 0 0; font-size: 18px; line-height: 1.4; color: var(--ink-2); text-wrap: pretty; }
+    @media (max-width: 560px) { .doc-head h1 { font-size: 26px; } .doc-head p.sub { font-size: 16px; } }
 
-    /* Sections */
-    .section { padding: 24px 38px; border-bottom: 1px solid var(--line-3); }
-    .section:last-of-type { border-bottom: 0; }
-    .section h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-      color: var(--faint); margin: 0 0 16px; }
-    .rows { display: grid; grid-template-columns: 190px 1fr; gap: 12px 20px; }
-    @media (max-width: 560px) { .rows { grid-template-columns: 1fr; gap: 4px 0; } .rows .k { margin-top: 12px; } }
-    .rows .k { color: var(--muted); font-size: 13.5px; }
-    .rows .v { color: var(--ink); font-size: 14.5px; font-weight: 500; }
-    .rows .v.big { font-size: 16px; font-weight: 600; }
-    .pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
-    .pill { background: var(--surface-3); border: 1px solid var(--line); border-radius: 999px;
-      padding: 3px 11px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
-    .prose { font-size: 14px; color: var(--ink-2); }
-    /* Additional-terms bullet list — extra points the team adds to a specific
-       contract, rendered under their own section. */
-    .term-list { margin: 0; padding-left: 20px; }
-    /* pre-line keeps the line breaks inside a single pasted clause (e.g. a
-       termination clause listing its 25% / 50% / 100% tiers on their own lines)
-       instead of running them together into one paragraph. */
-    .term-list li { font-size: 14.5px; color: var(--ink); line-height: 1.5; margin-bottom: 8px;
-      white-space: pre-line; }
-    .term-list li:last-child { margin-bottom: 0; }
+    /* Where the creator is in the two steps — quiet pills, the current one dark. */
+    .steps-nav { display: flex; align-items: center; gap: 8px; margin-top: 20px; font-size: 13px; color: var(--ink-3); }
+    .steps-nav span { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px 5px 6px; border-radius: 999px; background: var(--fill-3); }
+    .steps-nav i { font-style: normal; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; --w: 600; background: var(--fill-2); color: var(--ink-2); }
+    .steps-nav .on { background: var(--ink); color: #fff; --w: 560; }
+    .steps-nav .on i { background: rgba(255, 255, 255, 0.18); color: #fff; }
+    .steps-nav .done i { background: var(--green); color: #fff; }
+    .steps-nav .sep { width: 16px; height: 2px; padding: 0; border-radius: 1px; background: var(--fill-2); }
 
-    /* Editable form controls */
-    .field { margin-bottom: 14px; }
-    .field-label { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2);
-      margin-bottom: 6px; letter-spacing: .01em; }
-    .field-hint { display: block; font-size: 12px; color: var(--muted); margin: -2px 0 6px; }
-    input[type=text], input[type=email], input[type=tel], input[type=date], input[type=password], select, textarea {
-      width: 100%; font-family: var(--font); font-size: 14.5px; color: var(--ink);
-      padding: 11px 13px; background: var(--surface); border: 1px solid var(--line-2);
-      border-radius: var(--radius-sm); outline: none; transition: border-color .12s, box-shadow .12s;
+    .banner { display: inline-flex; align-items: center; gap: 8px; margin-top: 20px; padding: 8px 14px 8px 8px;
+      border-radius: 18px; background: var(--tint-green); color: var(--green-ink); font-size: 14px; --w: 500; }
+    .banner .dot { width: 22px; height: 22px; border-radius: 50%; background: var(--green); flex: none;
+      display: inline-flex; align-items: center; justify-content: center; }
+    .banner .dot svg { width: 12px; height: 12px; }
+
+    /* ---- The deal at a glance ---------------------------------------------
+       One card, one obvious thing: what they're paid, as the headline. The
+       rest — what to make, by when, where — sits beneath as a quiet row of
+       facts. Hierarchy from size and weight alone; no boxes inside the box. */
+    .summary { padding: 24px 28px 26px; border-radius: 28px; background: var(--fill-3); margin-bottom: 44px; }
+    .summary-pay .k, .summary-fact .k { font-size: 13px; line-height: 18px; color: var(--ink-2); }
+    .summary-pay .v { margin-top: 2px; font-size: 34px; line-height: 1.15; --w: 600; letter-spacing: -0.6px;
+      font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .summary-pay .v.long { font-size: 24px; line-height: 1.25; letter-spacing: -0.3px; }
+    .summary-pay .s { margin-top: 6px; font-size: 14px; color: var(--ink-2); }
+    .summary-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px 28px; margin-top: 24px; }
+    .summary-fact { min-width: 0; }
+    .summary-fact .v { margin-top: 2px; font-size: 15px; line-height: 21px; --w: 560; overflow-wrap: anywhere; }
+    .summary-fact .s { font-size: 13px; line-height: 18px; color: var(--ink-2); }
+    @media (max-width: 560px) {
+      .summary { padding: 20px 20px 22px; border-radius: 24px; margin-bottom: 36px; }
+      .summary-pay .v { font-size: 30px; }
+      .summary-facts { grid-template-columns: 1fr 1fr; gap: 14px 20px; margin-top: 20px; }
+      .summary-fact.wide { grid-column: 1 / -1; }
     }
-    /* Selects: drop the native OS widget so they share the text inputs' height,
-       metrics, and a consistently placed chevron (was misaligned before). */
+
+    /* ---- Sections ---------------------------------------------------------- */
+    .section { margin-bottom: 36px; }
+    .section h2 { margin: 0 0 14px; font-size: 16px; line-height: 1.25; --w: 560; }
+    .rows { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px 24px; }
+    @media (max-width: 560px) { .rows { grid-template-columns: 1fr; gap: 2px 0; } .rows .k { margin-top: 12px; } .rows .k:first-child { margin-top: 0; } }
+    .rows .k { color: var(--ink-2); font-size: 14px; }
+    .rows .v { color: var(--ink); font-size: 14px; --w: 500; text-wrap: pretty; }
+    .rows .v.big { font-size: 16px; --w: 600; }
+    .pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .pill { background: var(--fill); border-radius: 999px; padding: 3px 10px; font-size: 13px; --w: 500; color: var(--ink); }
+    .prose { font-size: 14px; color: var(--ink-2); }
+    .term-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+    .term-list li { font-size: 14px; --w: 500; white-space: pre-line; padding-left: 2px; }
+    .term-list li::marker { color: var(--ink-3); }
+
+    /* The parts the creator fills in: sections on the same white page, set
+       apart by a heading and room to breathe — not by a box. */
+    .panel { margin: 56px 0 16px; }
+    .panel > h2 { margin: 0; font-size: 22px; line-height: 1.25; --w: 600; }
+    .panel > p.note { margin: 6px 0 20px; font-size: 14px; color: var(--ink-2); text-wrap: pretty; }
+    @media (max-width: 560px) { .panel { margin-top: 44px; } }
+
+    /* ---- Fields --------------------------------------------------------------
+       As in Apple's own forms and Benji's: a soft grey fill, no outline, no
+       shadow. Hovering deepens it a touch; focusing deepens it a touch more and
+       shows the blue caret — the field never jumps or glows. */
+    .field { margin-bottom: 14px; }
+    .field-label { display: block; font-size: 13px; --w: 560; color: var(--ink); margin-bottom: 6px; }
+    .field-hint { display: block; font-size: 13px; color: var(--ink-2); margin: -2px 0 8px; }
+    input[type=text], input[type=email], input[type=tel], input[type=date], input[type=password], select, textarea {
+      width: 100%; height: 48px; font-size: 15px; color: var(--ink); padding: 0 16px; caret-color: var(--blue);
+      background: var(--fill-3); border: none; border-radius: 12px; outline: none; box-shadow: none;
+      -webkit-appearance: none; appearance: none; transition: background-color 0.15s ease-out;
+    }
+    input::placeholder { color: var(--ink-3); }
+    input:hover, select:hover { background-color: var(--fill); }
+    input:focus, select:focus, textarea:focus { background-color: var(--fill-2); box-shadow: none; }
+    input:focus-visible, select:focus-visible { outline: none; }
     select {
-      appearance: none; -webkit-appearance: none; -moz-appearance: none;
-      padding-right: 38px; line-height: 1.5; text-overflow: ellipsis;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%238a8880' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat; background-position: right 13px center; background-size: 12px 8px;
+      padding-right: 40px; text-overflow: ellipsis; cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%23707070' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 16px center; background-size: 12px 8px;
     }
     select::-ms-expand { display: none; }
-    input:focus, select:focus, textarea:focus { border-color: var(--faint); box-shadow: var(--ring); }
-    /* Brief red ring on the first missing field when the user tries to
-       advance without filling everything on page 1. */
-    .field-focus, input.field-focus, select.field-focus, canvas.field-focus {
-      border-color: var(--danger) !important;
-      box-shadow: 0 0 0 3px rgba(255,49,64,.16) !important;
-    }
-    .agree.field-focus > span { color: var(--danger); }
+    /* Nothing chosen yet reads as a placeholder, like an empty text field. */
+    select:has(option[value=""]:checked) { color: var(--ink-3); }
+    select option { color: var(--ink); }
+    /* A missing field turns softly red instead of growing an outline. */
+    .field-focus, input.field-focus, select.field-focus, canvas.field-focus { background-color: var(--tint-red) !important; box-shadow: none !important; }
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-    @media (max-width: 560px) { .row-2, .row-3 { grid-template-columns: 1fr; } }
-    /* Phone: country-code select alongside the local-number input. The
-       select's COLLAPSED view shows just the dial code (e.g. "+1"), so it
-       only needs room for a short code + the chevron — the full "+1 · United
-       States" label is only visible in the open dropdown. Tighter padding +
-       chevron position than the generic select rule so "+1" isn't swimming
-       in whitespace; still fits the longest 4-char code (e.g. "+998"). */
+    .row-2 + .row-2 { margin-top: 12px; }
+    .row-2 > .field { margin-bottom: 0; }
+    .row-2 + .field, .field + .row-2 { margin-top: 0; }
+    @media (max-width: 560px) { .row-2 { grid-template-columns: 1fr; } }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
     .phone-row { display: flex; gap: 8px; }
-    .phone-row select {
-      flex: 0 0 82px;
-      padding-right: 26px;
-      background-position: right 8px center;
-    }
+    .phone-row select { flex: 0 0 92px; padding-right: 28px; background-position: right 12px center; }
     .phone-row input { flex: 1 1 auto; min-width: 0; }
-    /* "Your details" section uses light tinted background to signal editable */
-    .section.editable { background: var(--surface-2); }
 
-    /* Sign block */
-    .sign { padding: 30px 38px 34px; background: var(--surface-2); border-top: 1px solid var(--line); }
-    .sign h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.01em; }
-    .sign p.note { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
+    /* ---- Signature --------------------------------------------------------- */
+    .sig-wrap { position: relative; margin-top: 2px; }
+    canvas.sig { display: block; width: 100%; height: 180px; background: var(--fill-3); border-radius: 16px;
+      cursor: crosshair; touch-action: none; transition: background-color 0.15s ease-out; }
+    .sig-baseline { position: absolute; left: 8%; right: 8%; bottom: 46px; height: 2px; border-radius: 1px;
+      background: var(--fill-2); pointer-events: none; }
+    .sig-caption { position: absolute; bottom: 20px; left: 0; right: 0; text-align: center; font-size: 12px; color: var(--ink-3); pointer-events: none; }
+    .sig-tools { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+    .sig-tools button { border: none; background: var(--fill); color: var(--ink); height: 30px; padding: 0 12px; border-radius: 999px; font-size: 13px; --w: 500;
+      transition: background 0.2s, transform 0.5s var(--spring); }
+    .sig-tools button:hover { background: var(--fill-2); }
 
-    .sig-wrap { position: relative; margin-top: 6px; }
-    canvas.sig {
-      display: block; width: 100%; height: 170px; background: var(--surface);
-      border: 1px solid var(--line-2); border-radius: var(--radius-sm);
-      cursor: crosshair; touch-action: none;
+    /* The agreement checkbox, as on a Mac: a rounded square that fills with
+       blue and a white check. Still a real checkbox — the label toggles it,
+       Space toggles it, screen readers read it — only its look is drawn here.
+       It presses in the instant it's pressed, and the check grows in on a
+       critically-damped spring (no bounce: nothing was thrown). */
+    .agree { display: flex; align-items: flex-start; gap: 12px; margin: 24px 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .agree input {
+      flex: none; width: 20px; height: 20px; margin: 1px 0 0; cursor: pointer;
+      -webkit-appearance: none; appearance: none; border: none; border-radius: 6px;
+      background: #d1d1d6 no-repeat center / 0 0; /* Apple's systemGray4 — findable on white */
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='5 12.5 10 17.5 19 7.5'/%3E%3C/svg%3E");
+      transition: background-color 0.15s ease-out, background-size 0.3s var(--spring-soft), transform 0.12s ease-out;
     }
-    .sig-baseline {
-      position: absolute; left: 10%; right: 10%; bottom: 42px;
-      border-bottom: 1px dashed var(--faint-2); pointer-events: none;
-    }
-    .sig-caption {
-      position: absolute; bottom: 22px; left: 0; right: 0; text-align: center;
-      font-size: 11.5px; color: var(--faint-2); pointer-events: none;
-    }
-    .sig-tools {
-      display: flex; justify-content: space-between; align-items: center;
-      margin-top: 6px; font-size: 12px; color: var(--muted);
-    }
-    .sig-tools button {
-      appearance: none; background: none; border: 0; color: var(--muted);
-      font-family: var(--font); font-size: 12px; cursor: pointer;
-      text-decoration: underline; padding: 4px 0;
-    }
-    .sig-tools button:hover { color: var(--ink); }
+    .agree:hover input:not(:checked) { background-color: #c7c7cc; }
+    .agree input:checked { background-color: var(--blue); background-size: 14px 14px; }
+    .agree:hover input:checked { background-color: var(--blue-2); }
+    .agree:active input { transform: scale(0.88); transition-duration: 0.06s; }
+    .agree input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .agree span { font-size: 14px; color: var(--ink-2); text-wrap: pretty; transition: color 0.15s ease-out; }
+    .agree:has(input:checked) span { color: var(--ink); }
 
-    .agree { display: flex; align-items: flex-start; gap: 11px; margin: 20px 0 22px; cursor: pointer; }
-    .agree input { margin-top: 3px; width: 17px; height: 17px; accent-color: var(--accent); flex: none; }
-    .agree span { font-size: 13.5px; color: var(--ink-2); }
+    /* ---- Buttons: flat pills ---------------------------------------------- */
+    .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .btn { height: 48px; padding: 0 28px; border-radius: 999px; border: none; font-size: 16px; --w: 500;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+      background: var(--blue); color: #fff; transition: background 0.2s, opacity 0.2s, transform 0.5s var(--spring); }
+    .btn:hover { background: var(--blue-2); }
+    .btn-soft { background: var(--fill); color: var(--ink); }
+    .btn-soft:hover { background: var(--fill-2); }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn:active:not(:disabled), .sig-tools button:active { transform: scale(0.96); transition-duration: 0.08s; }
+    @media (max-width: 560px) { .actions .btn:not(.btn-soft) { flex: 1; } }
+    .err { color: var(--red-ink); font-size: 13px; margin-top: 12px; min-height: 18px; }
 
-    .btn { appearance: none; border: 0; cursor: pointer; font-family: var(--font); font-weight: 600;
-      font-size: 15px; color: #fff; background: var(--accent); padding: 13px 22px;
-      border-radius: var(--radius-sm); box-shadow: var(--shadow-btn); transition: transform .06s, opacity .12s; }
-    .btn:hover { background: var(--accent-strong); }
-    .btn:active { transform: translateY(1px); }
-    .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .err { color: var(--danger); font-size: 13px; margin-top: 12px; min-height: 16px; }
-
-    /* States */
-    .state { text-align: center; padding: 70px 24px; }
-    .state h1 { font-size: 22px; margin: 0 0 8px; }
-    .state p { color: var(--muted); margin: 0; }
-    .spinner { width: 26px; height: 26px; border: 3px solid var(--line-2); border-top-color: var(--accent);
-      border-radius: 50%; margin: 0 auto 16px; animation: spin .8s linear infinite; }
+    /* ---- States ------------------------------------------------------------ */
+    .state { text-align: center; padding: 96px 24px; }
+    .state h1 { font-size: 22px; line-height: 1.25; margin: 0 0 8px; --w: 600; }
+    .state p { color: var(--ink-2); margin: 0; font-size: 15px; }
+    .spinner { width: 22px; height: 22px; border-radius: 50%; margin: 0 auto 16px; border: 2.5px solid var(--fill);
+      border-top-color: var(--ink); animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .foot { text-align: center; color: var(--faint-2); font-size: 12px; margin-top: 26px; }
+    .foot { text-align: center; color: var(--ink-2); font-size: 13px; margin-top: 20px; }
 
-    /* Confirmation — contract signed. A big checkmark + "what happens next"
-       checklist rather than a paragraph of prose, so a creator glancing at
-       their phone sees the shape of the whole process at once. */
-    .confirm { text-align: center; padding: 52px 36px 36px; }
-    .confirm-icon { width: 72px; height: 72px; border-radius: 50%; background: var(--green-bg);
-      color: var(--green); display: flex; align-items: center; justify-content: center;
-      margin: 0 auto 22px; }
-    .confirm-icon svg { width: 30px; height: 30px; }
-    .confirm-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em;
-      text-transform: uppercase; color: var(--green); margin-bottom: 10px; }
-    .confirm-title { font-size: 32px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 30px; }
+    /* ---- Signed ------------------------------------------------------------ */
+    .confirm { text-align: center; padding: 32px 0 8px; }
+    .confirm-icon { width: 64px; height: 64px; border-radius: 50%; background: var(--green); color: #fff;
+      display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; animation: pop-in 0.6s var(--spring) both; }
+    .confirm-icon svg { width: 28px; height: 28px; }
+    .confirm-title { margin: 0; font-size: 30px; line-height: 1.25; --w: 600; }
+    .confirm-sub { margin: 8px 0 32px; font-size: 18px; line-height: 1.4; color: var(--ink-2); }
 
-    /* Steps checklist — one completed step, one up-next, the rest to come. */
-    .steps { text-align: left; border: 1px solid var(--line); border-radius: var(--radius-md);
-      overflow: hidden; margin-bottom: 24px; }
-    .step { display: flex; gap: 14px; padding: 18px 22px; border-bottom: 1px solid var(--line-3); }
-    .step:last-child { border-bottom: 0; }
-    .step-icon { flex: none; width: 30px; height: 30px; border-radius: 50%; margin-top: 2px;
-      display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
-    .step-icon.is-done { background: var(--green-bg); color: var(--green); }
-    .step-icon.is-done svg { width: 15px; height: 15px; }
-    .step-icon.is-num { border: 1.5px solid var(--line-2); color: var(--muted); }
-    .step-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 3px; flex-wrap: wrap; }
-    .step-title { font-size: 15.5px; font-weight: 700; color: var(--ink); }
-    .step-tag { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
-    .step-tag.is-done { color: var(--green); }
-    .step-tag.is-next { color: var(--muted); }
-    .step-desc { margin: 0; font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }
+    .steps { text-align: left; background: var(--fill-3); border-radius: 24px; padding: 8px; margin-bottom: 20px; }
+    .step { display: flex; gap: 14px; padding: 14px 16px; border-radius: 18px; }
+    .step:first-child { background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 20px rgba(0, 0, 0, 0.04); }
+    .step-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; margin-top: 1px;
+      display: flex; align-items: center; justify-content: center; font-size: 13px; --w: 600; }
+    .step-icon.is-done { background: var(--green); color: #fff; }
+    .step-icon.is-done svg { width: 14px; height: 14px; }
+    .step-icon.is-num { background: var(--fill-2); color: var(--ink-2); }
+    .step-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; flex-wrap: wrap; }
+    .step-title { font-size: 16px; --w: 560; color: var(--ink); }
+    .step-tag { font-size: 12px; --w: 600; padding: 2px 8px; border-radius: 999px; }
+    .step-tag.is-done { background: var(--tint-green); color: var(--green-ink); }
+    .step-tag.is-next { background: var(--fill-2); color: var(--ink-2); }
+    .step-desc { margin: 0; font-size: 14px; color: var(--ink-2); }
 
-    /* WhatsApp CTA, shown under the checklist. Subscribing is a one-time thing
-       per creator, so this is hidden once they've already messaged us. */
-    .wa-cta-btn { display: flex; align-items: center; justify-content: center; gap: 10px;
-      width: 100%; text-decoration: none; font-weight: 700; font-size: 15.5px; color: #fff;
-      background: var(--green); padding: 15px 20px; border-radius: var(--radius-sm);
-      box-shadow: var(--shadow-btn); transition: background .15s ease; }
-    .wa-cta-btn:hover { background: #0f5f40; }
-    .wa-cta-btn svg { width: 19px; height: 19px; flex: none; }
-    .wa-num { display: block; text-align: center; font-size: 12px; color: var(--muted);
-      margin-top: 10px; }
+    .wa-cta-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 52px;
+      text-decoration: none; font-size: 16px; --w: 500; color: #fff; background: #25d366; border-radius: 999px;
+      transition: background 0.2s, transform 0.5s var(--spring); }
+    .wa-cta-btn:hover { background: #20bd5a; }
+    .wa-cta-btn:active { transform: scale(0.97); transition-duration: 0.08s; }
+    .wa-cta-btn svg { width: 20px; height: 20px; flex: none; }
+    .wa-num { display: block; text-align: center; font-size: 13px; color: var(--ink-2); margin-top: 10px; }
+
+    /* ---- Motion: things come into focus on a spring ------------------------ */
+    .blur-in { animation: blur-in 0.55s var(--spring-soft) both; animation-delay: calc(var(--i, 0) * 40ms); }
+    @keyframes blur-in { from { opacity: 0; filter: blur(8px); transform: translateY(6px); } }
+    @keyframes pop-in { from { opacity: 0; transform: scale(0.6); filter: blur(6px); } }
+    @media (prefers-reduced-motion: reduce) {
+      .blur-in, .confirm-icon, .spinner { animation: none; }
+      .agree input { transition: background-color 0.15s ease-out; }
+      .btn, .wa-cta-btn, .sig-tools button { transition: background 0.2s; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="brandbar">
-      <svg viewBox="0 0 793 70" role="img" aria-label="Influence">
+    <div class="brandbar"><svg viewBox="0 0 793 70" role="img" aria-label="Influence">
         <path d="M20.01 68.6729H1.35348e-05V1.03334H20.01V68.6729ZM126.221 69.8941L55.1993 29.4044V68.6729H42.5169V-4.03086e-05L113.538 40.3018V1.03334H126.221V69.8941ZM209.764 44.2475H168.992V68.6729H148.794V1.03334H219.816V11.9308H169.086V33.35H209.764V44.2475ZM306.528 68.6729H236.54V1.03334H256.738V57.7754H306.528V68.6729ZM389.07 34.6652V1.03334H401.847V34.6652C401.847 40.8029 400.813 46.1577 398.747 50.7296C396.742 55.3015 393.861 58.934 390.104 61.6271C386.409 64.3201 382.15 66.3243 377.327 67.6395C372.505 68.9547 367.119 69.6123 361.169 69.6123C348.706 69.6123 338.81 66.7627 331.483 61.0634C324.218 55.3642 320.585 46.6274 320.585 34.8531V1.03334H341.065V34.6652C341.065 38.8614 341.754 42.4939 343.132 45.5627C344.51 48.6315 346.357 51.0114 348.675 52.7024C351.054 54.3934 353.591 55.646 356.284 56.4602C359.04 57.2117 361.983 57.5875 365.115 57.5875C368.246 57.5875 371.158 57.2117 373.851 56.4602C376.607 55.646 379.144 54.3934 381.461 52.7024C383.841 51.0114 385.688 48.6315 387.004 45.5627C388.381 42.4939 389.07 38.8614 389.07 34.6652ZM494.814 68.6729H423.041V1.03334H494.814V11.9308H443.238V28.7468H484.386V39.6442H443.238V57.7754H494.814V68.6729ZM596.325 69.8941L525.303 29.4044V68.6729H512.621V-4.03086e-05L583.643 40.3018V1.03334H596.325V69.8941ZM702.321 52.6085V63.7878C692.989 67.796 681.778 69.8002 668.689 69.8002C657.917 69.8002 648.428 68.4536 640.224 65.7606C632.082 63.0049 625.694 58.9653 621.059 53.6418C616.425 48.3184 614.108 42.0555 614.108 34.8531C614.108 24.0809 619.087 15.6259 629.045 9.48828C639.003 3.28799 652.217 0.187845 668.689 0.187845C681.966 0.187845 693.177 2.19198 702.321 6.20025V18.5069C693.302 13.4965 682.78 10.9914 670.756 10.9914C659.545 10.9914 650.84 13.246 644.639 17.7553C638.439 22.202 635.339 27.9013 635.339 34.8531C635.339 41.8676 638.439 47.6294 644.639 52.1387C650.902 56.648 659.796 58.9027 671.319 58.9027C682.029 58.9027 692.363 56.8046 702.321 52.6085ZM792.821 68.6729H721.048V1.03334H792.821V11.9308H741.246V28.7468H782.393V39.6442H741.246V57.7754H792.821V68.6729Z" />
-      </svg>
-    </div>
+      </svg></div>
 
     <!-- Loading -->
-    <div id="loading" class="doc"><div class="state"><div class="spinner"></div><p>Loading your contract…</p></div></div>
+    <div id="loading" class="state"><div class="spinner"></div><p>Loading your contract…</p></div>
 
     <!-- Not found -->
-    <div id="notfound" class="doc" hidden><div class="state">
+    <div id="notfound" class="state blur-in" hidden>
       <h1>Contract not found</h1>
       <p>This link may be incorrect or expired. Please check with your contact at INFLUENCE.</p>
-    </div></div>
+    </div>
 
     <!-- PAGE 1 — contract review + your details + sign -->
-    <form id="page1" hidden>
-      <div class="doc">
-        <div class="doc-head">
-          <div class="eyebrow" id="eyebrow"></div>
-          <h1>Creator Collaboration Agreement</h1>
-          <p class="sub" id="subhead"></p>
+    <form id="page1" novalidate hidden>
+      <div class="doc-head blur-in">
+        <div class="eyebrow" id="eyebrow"></div>
+        <h1>Creator Collaboration Agreement</h1>
+        <p class="sub" id="subhead"></p>
+        <div class="steps-nav" id="steps-nav-1" aria-label="Step 1 of 2">
+          <span class="on"><i>1</i>Review &amp; sign</span>
+          <span class="sep" aria-hidden="true"></span>
+          <span><i>2</i>Bank details</span>
         </div>
-        <div id="signed-banner" class="banner signed" hidden>
-          <span class="dot"></span><span id="signed-banner-text"></span>
+        <div id="signed-banner" class="banner" hidden>
+          <span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 13 10 18 19 7"></polyline></svg></span>
+          <span id="signed-banner-text"></span>
         </div>
-        <div id="sections"></div>
+      </div>
 
-        <div class="section editable">
-          <h2>Your details</h2>
+      <!-- The deal at a glance, filled by contract.js (renderSummary). -->
+      <div id="summary" class="summary blur-in" style="--i:1" hidden></div>
+
+      <div id="sections"></div>
+
+      <div class="panel section editable blur-in">
+        <h2>Your details</h2>
+        <p class="note">As they should appear on the agreement.</p>
+        <div class="field">
+          <label class="field-label" for="legalName">Full legal name</label>
+          <input id="legalName" type="text" placeholder="Your full legal name" autocomplete="name" required />
+        </div>
+        <div class="row-2">
           <div class="field">
-            <label class="field-label" for="legalName">Full legal name</label>
-            <input id="legalName" type="text" placeholder="Your full legal name" autocomplete="name" required />
-          </div>
-          <div class="row-2">
-            <div class="field">
-              <label class="field-label" for="gender">Gender</label>
-              <select id="gender">
-                <option value="">Select…</option>
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-                <option value="Non-binary">Non-binary</option>
-              </select>
-            </div>
-            <div class="field">
-              <label class="field-label" for="phone">Phone number</label>
-              <div class="phone-row">
-                <select id="phoneCountry" autocomplete="tel-country-code" aria-label="Country code"></select>
-                <input id="phone" type="tel" placeholder="(555) 123-4567" autocomplete="tel-national" />
-              </div>
-            </div>
+            <label class="field-label" for="gender">Gender</label>
+            <select id="gender">
+              <option value="">Select…</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Non-binary">Non-binary</option>
+            </select>
           </div>
           <div class="field">
-            <label class="field-label">Address</label>
-            <div class="field"><input id="addrLine1" type="text" placeholder="Address line 1" autocomplete="address-line1" /></div>
-            <div class="field"><input id="addrLine2" type="text" placeholder="Address line 2 (optional)" autocomplete="address-line2" /></div>
+            <label class="field-label" for="phone">Phone number</label>
+            <div class="phone-row">
+              <select id="phoneCountry" autocomplete="tel-country-code" aria-label="Country code"></select>
+              <input id="phone" type="tel" placeholder="(555) 123-4567" autocomplete="tel-national" />
+            </div>
+          </div>
+        </div>
+        <div class="field" style="margin-top:14px;">
+          <label class="field-label" for="addrLine1">Address</label>
+          <div class="stack">
+            <input id="addrLine1" type="text" placeholder="Address line 1" autocomplete="address-line1" />
+            <input id="addrLine2" type="text" placeholder="Address line 2 (optional)" autocomplete="address-line2" />
             <div class="row-2">
               <input id="addrCity" type="text" placeholder="City" autocomplete="address-level2" />
               <input id="addrState" type="text" placeholder="State / Province" autocomplete="address-level1" />
             </div>
-            <div class="row-2" style="margin-top:12px;">
+            <div class="row-2" style="margin-top:0;">
               <input id="addrZip" type="text" placeholder="Pincode / Zip / Postal code" autocomplete="postal-code" />
-              <select id="addrCountry" autocomplete="country-name"></select>
+              <select id="addrCountry" autocomplete="country-name" aria-label="Country"></select>
             </div>
           </div>
         </div>
+      </div>
 
-        <div class="sign">
-          <h2>Review &amp; sign</h2>
-          <p class="note">By signing below and submitting, you agree to the terms of this agreement. Drawing your signature constitutes your electronic signature.</p>
+      <div class="panel sign blur-in">
+        <h2>Review &amp; sign</h2>
+        <p class="note">Drawing your signature and submitting is your electronic signature on this agreement.</p>
 
-          <label class="field-label" for="sig">Your signature</label>
-          <div class="sig-wrap">
-            <canvas id="sig" class="sig" width="1600" height="340"></canvas>
-            <div class="sig-baseline"></div>
-            <div class="sig-caption">Signature</div>
-          </div>
-          <div class="sig-tools">
-            <span>Draw your signature above (mouse or touch)</span>
-            <button type="button" id="sig-clear">Clear</button>
-          </div>
-
-          <div class="row-2" style="margin-top:18px;">
-            <div class="field">
-              <label class="field-label" for="signedDate">Date</label>
-              <input id="signedDate" type="date" />
-            </div>
-            <div></div>
-          </div>
-
-          <label class="agree">
-            <input id="agree" type="checkbox" />
-            <span>I confirm I have read, understood, and agree to the terms of this Creator Collaboration Agreement. I understand this agreement is legally binding.</span>
-          </label>
-
-          <button id="btn-continue" class="btn" type="submit">Continue to bank details →</button>
-          <div id="err1" class="err" role="alert"></div>
+        <label class="field-label" for="sig">Your signature</label>
+        <div class="sig-wrap">
+          <canvas id="sig" class="sig" width="1600" height="360"></canvas>
+          <div class="sig-baseline"></div>
+          <div class="sig-caption">Sign above the line</div>
         </div>
+        <div class="sig-tools">
+          <span>Use your mouse, trackpad or finger</span>
+          <button type="button" id="sig-clear">Clear</button>
+        </div>
+
+        <div class="row-2" style="margin-top:18px;">
+          <div class="field">
+            <label class="field-label" for="signedDate">Date</label>
+            <input id="signedDate" type="date" />
+          </div>
+          <div></div>
+        </div>
+
+        <label class="agree">
+          <input id="agree" class="agree-box" type="checkbox" />
+          <span>I confirm I have read, understood, and agree to the terms of this Creator Collaboration Agreement. I understand this agreement is legally binding.</span>
+        </label>
+
+        <div class="actions">
+          <button id="btn-continue" class="btn" type="submit">Continue to bank details</button>
+        </div>
+        <div id="err1" class="err" role="alert"></div>
       </div>
     </form>
 
     <!-- PAGE 2 — bank account -->
-    <form id="page2" hidden>
-      <div class="doc">
-        <div class="doc-head">
-          <div class="eyebrow">Step 2 of 2</div>
-          <h1>Your bank account</h1>
-          <p class="sub">We'll send your <span id="payCurrency">USD</span> payments to this bank account.</p>
-        </div>
-
-        <div class="section">
-          <div class="field">
-            <label class="field-label" for="bankHolder">Account holder name</label>
-            <p class="field-hint">Must match the name on your bank account exactly.</p>
-            <input id="bankHolder" type="text" />
-          </div>
-          <div class="field">
-            <label class="field-label" for="bankName">Bank name</label>
-            <input id="bankName" type="text" />
-          </div>
-          <div class="row-2" id="accountNumBlock">
-            <div class="field">
-              <label class="field-label" for="bankAccount">Account number</label>
-              <input id="bankAccount" class="secret" type="password" autocomplete="off"
-                     spellcheck="false" autocapitalize="off"
-                     data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-            </div>
-            <div class="field">
-              <label class="field-label" for="bankAccountConfirm">Confirm account number</label>
-              <input id="bankAccountConfirm" class="secret" type="password" autocomplete="off"
-                     spellcheck="false" autocapitalize="off"
-                     data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-            </div>
-          </div>
-
-          <div class="row-2" id="ibanBlock">
-            <div class="field">
-              <label class="field-label" for="bankIban">IBAN</label>
-              <input id="bankIban" class="secret secret-pastable" type="password" autocomplete="off"
-                     spellcheck="false" autocapitalize="off"
-                     data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-            </div>
-            <div class="field">
-              <label class="field-label" for="bankIbanConfirm">Confirm IBAN</label>
-              <input id="bankIbanConfirm" class="secret secret-pastable" type="password" autocomplete="off"
-                     spellcheck="false" autocapitalize="off"
-                     data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-            </div>
-          </div>
-
-          <div class="field" id="routingBlock" hidden>
-            <label class="field-label" for="bankRouting">Routing number</label>
-            <p class="field-hint">A nine-digit number printed on the bottom left corner of your cheques.</p>
-            <input id="bankRouting" type="text" autocomplete="off" />
-          </div>
-
-          <div class="row-2" id="indiaRow" hidden>
-            <div class="field" id="ifscBlock">
-              <label class="field-label" for="bankIfsc">IFSC code</label>
-              <input id="bankIfsc" type="text" autocomplete="off" />
-            </div>
-            <div class="field" id="panBlock">
-              <label class="field-label" for="bankPan">PAN number</label>
-              <input id="bankPan" type="text" autocomplete="off" />
-            </div>
-          </div>
-
-          <div class="field" id="swiftBlock">
-            <label class="field-label" for="bankSwift">SWIFT code</label>
-            <input id="bankSwift" type="text" autocomplete="off" />
-          </div>
-
-          <div class="field">
-            <label class="field-label" for="bankTaxId">Tax ID Number</label>
-            <p class="field-hint">Enter the tax number issued by your country of residence.</p>
-            <input id="bankTaxId" type="text" autocomplete="off" />
-          </div>
-        </div>
-
-        <div class="sign">
-          <div style="display:flex; gap:10px; align-items:center;">
-            <button id="btn-back" type="button" class="btn" style="background:transparent;color:var(--ink);box-shadow:none;border:1px solid var(--line-2);">← Back</button>
-            <button id="btn-submit" class="btn" type="submit">Sign &amp; submit contract</button>
-          </div>
-          <div id="err2" class="err" role="alert"></div>
+    <form id="page2" novalidate hidden>
+      <div class="doc-head blur-in">
+        <div class="eyebrow">Last step</div>
+        <h1>Your bank account</h1>
+        <p class="sub">We'll send your <span id="payCurrency">USD</span> payments here.</p>
+        <div class="steps-nav" aria-label="Step 2 of 2">
+          <span class="done"><i><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 13 10 18 19 7"></polyline></svg></i>Review &amp; sign</span>
+          <span class="sep" aria-hidden="true"></span>
+          <span class="on"><i>2</i>Bank details</span>
         </div>
       </div>
+
+      <div class="panel blur-in" style="--i:1">
+        <div class="field">
+          <label class="field-label" for="bankHolder">Account holder name</label>
+          <p class="field-hint">Must match the name on your bank account exactly.</p>
+          <input id="bankHolder" type="text" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="bankName">Bank name</label>
+          <input id="bankName" type="text" />
+        </div>
+        <div class="row-2" id="accountNumBlock">
+          <div class="field">
+            <label class="field-label" for="bankAccount">Account number</label>
+            <input id="bankAccount" class="secret" type="password" autocomplete="off"
+                   spellcheck="false" autocapitalize="off"
+                   data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="bankAccountConfirm">Confirm account number</label>
+            <input id="bankAccountConfirm" class="secret" type="password" autocomplete="off"
+                   spellcheck="false" autocapitalize="off"
+                   data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+          </div>
+        </div>
+
+        <div class="row-2" id="ibanBlock">
+          <div class="field">
+            <label class="field-label" for="bankIban">IBAN</label>
+            <input id="bankIban" class="secret secret-pastable" type="password" autocomplete="off"
+                   spellcheck="false" autocapitalize="off"
+                   data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="bankIbanConfirm">Confirm IBAN</label>
+            <input id="bankIbanConfirm" class="secret secret-pastable" type="password" autocomplete="off"
+                   spellcheck="false" autocapitalize="off"
+                   data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+          </div>
+        </div>
+
+        <div class="field" id="routingBlock" hidden style="margin-top:14px;">
+          <label class="field-label" for="bankRouting">Routing number</label>
+          <p class="field-hint">The nine-digit number at the bottom left of your cheques.</p>
+          <input id="bankRouting" type="text" autocomplete="off" />
+        </div>
+
+        <div class="row-2" id="indiaRow" hidden style="margin-top:14px;">
+          <div class="field" id="ifscBlock">
+            <label class="field-label" for="bankIfsc">IFSC code</label>
+            <input id="bankIfsc" type="text" autocomplete="off" />
+          </div>
+          <div class="field" id="panBlock">
+            <label class="field-label" for="bankPan">PAN number</label>
+            <input id="bankPan" type="text" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="field" id="swiftBlock" style="margin-top:14px;">
+          <label class="field-label" for="bankSwift">SWIFT code</label>
+          <input id="bankSwift" type="text" autocomplete="off" />
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="bankTaxId">Tax ID number</label>
+          <p class="field-hint">The tax number issued by your country of residence.</p>
+          <input id="bankTaxId" type="text" autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="actions blur-in" style="--i:2">
+        <button id="btn-back" type="button" class="btn btn-soft">Back</button>
+        <button id="btn-submit" class="btn" type="submit">Sign &amp; submit contract</button>
+      </div>
+      <div id="err2" class="err" role="alert"></div>
     </form>
 
     <!-- Confirmation -->
-    <div id="done" class="doc" hidden><div class="confirm">
+    <div id="done" hidden><div class="confirm">
       <div class="confirm-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <polyline points="5 13 10 18 19 7"></polyline>
         </svg>
       </div>
-      <div class="confirm-eyebrow">Confirmed</div>
-      <h1 class="confirm-title">Contract signed</h1>
+      <h1 class="confirm-title blur-in" style="--i:2">Contract signed</h1>
+      <p class="confirm-sub blur-in" style="--i:3">You're all set. Here's what happens next.</p>
 
-      <!-- "What happens next" checklist, in place of a paragraph of prose — a
-           creator glancing at their phone sees the shape of the whole process
-           at once instead of having to read it. -->
-      <div class="steps">
+      <!-- "What happens next" — the shape of the whole process at a glance. -->
+      <div class="steps blur-in" style="--i:4">
         <div class="step">
           <div class="step-icon is-done">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
@@ -426,7 +490,7 @@
           </div>
           <div class="step-body">
             <div class="step-head"><span class="step-title">Contract signed</span><span class="step-tag is-done">Done</span></div>
-            <p class="step-desc">Signature and payment method verified.</p>
+            <p class="step-desc">Signature and payment details received.</p>
           </div>
         </div>
         <div class="step">
@@ -447,7 +511,7 @@
 
       <!-- Revealed only when we have a WhatsApp number configured AND this
            creator hasn't already subscribed — see contract.js. -->
-      <div id="wa-optin" hidden>
+      <div id="wa-optin" class="blur-in" style="--i:5" hidden>
         <a id="wa-link" class="wa-cta-btn" href="#" target="_blank" rel="noopener noreferrer">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M17.5 14.4c-.3-.2-1.7-.9-2-1-.3-.1-.5-.1-.7.1-.2.3-.7 1-.9 1.2-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.9-.8-1.4-1.7-1.6-2-.2-.3 0-.5.1-.6l.5-.5c.1-.2.2-.3.3-.5 0-.2 0-.4 0-.5 0-.2-.7-1.6-.9-2.2-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.4s1 2.8 1.2 3c.1.2 2 3.1 5 4.3.7.3 1.2.5 1.6.6.7.2 1.3.2 1.8.1.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.2.2-1.4-.1-.1-.3-.2-.5-.3z"/>
