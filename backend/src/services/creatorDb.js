@@ -104,10 +104,16 @@ const cleanNested = (o) => {
 // Plain-text pay terms for a non-flat deal (Creator-DB has no fields for them).
 function payTermsLines(d) {
   const lines = [];
-  if (d.compensationModel === 'commission' && d.commission) lines.push(`Commission only: ${d.commission.summary}`);
-  if (d.compensationModel === 'hybrid' && d.commission) {
-    lines.push(`Upfront fee of $${Number(d.compensation || 0).toLocaleString('en-US')} plus ${d.commission.summary}`);
+  const referral = !!(d.commission && d.commission.basis === 'referral');
+  if (d.compensationModel === 'commission' && d.commission) {
+    lines.push(`${referral ? 'Referral commission only' : 'Commission only'}: ${d.commission.summary}`);
   }
+  if (d.compensationModel === 'hybrid' && d.commission) {
+    lines.push(`Upfront fee of $${Number(d.compensation || 0).toLocaleString('en-US')} plus ${referral ? 'a referral commission: ' : ''}${d.commission.summary}`);
+  }
+  // The referral rules (one brand, one creator; precedence; exclusions) are
+  // part of what was signed, so they travel with the terms.
+  if (referral && d.commission.rules) lines.push(`Referral rules: ${d.commission.rules}`);
   if (d.compensationModel === 'product') lines.push(`Product only, no cash payment: ${d.productDescription || 'product as agreed'}`);
   return lines;
 }

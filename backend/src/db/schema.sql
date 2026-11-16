@@ -960,3 +960,88 @@ BEGIN
     ANALYZE creators;
   END IF;
 END $$;
+
+-- ── Referral commission ─────────────────────────────────────────────────────
+-- A creator on a referral-commission deal (dealTerms commission.basis =
+-- 'referral') earns a share of the campaign spend of each NEW brand they refer
+-- to the platform, on that brand's first N campaigns. services/referrals.js
+-- owns all of it; the platform reports brand sign-ups and campaign spend to the
+-- bot API (/api/bot/referrals/*).
+
+-- One referral code per referral contract, unique across EVERY creator so a
+-- code can never point at two people. The referral link is /r/<code>.
+CREATE TABLE IF NOT EXISTS referral_codes (
+  code         TEXT PRIMARY KEY,
+  creator_id   INTEGER NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  contract_id  INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_codes_contract ON referral_codes(contract_id);
+CREATE INDEX IF NOT EXISTS idx_referral_codes_creator ON referral_codes(creator_id);
+
+-- Every visit to a referral link. Its id rides to the platform's sign-up page
+-- (?ref=CODE&rt=ID), so the sign-up event can name the exact visit and the
+-- referral window is measured from OUR timestamp, not one the client supplied.
+CREATE TABLE IF NOT EXISTS referral_touches (
+  id          BIGSERIAL PRIMARY KEY,
+  code        TEXT NOT NULL,
+  touched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ip_hash     TEXT,
+  user_agent  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_referral_touches_code ON referral_touches(code, touched_at);
+
+-- One row per brand account that signed up, with the attribution decision.
+-- The decision is made once, when the sign-up is reported, and is permanent;
+-- only an explicit admin override changes it. `candidates` is the audit trail:
+-- every referral claim the platform reported, with why it won or lost.
+-- `brand_key` (normalised domain, else name) identifies the COMPANY, so a second
+-- account of an already-referred company is caught.
+CREATE TABLE IF NOT EXISTS referral_signups (
+  id             SERIAL PRIMARY KEY,
+  brand_ref      TEXT NOT NULL UNIQUE,
+  brand_name     TEXT,
+  brand_domain   TEXT,
+  brand_key      TEXT,
+  contact_email  TEXT,
+  signed_up_at   TIMESTAMPTZ NOT NULL,
+  claims         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  outcome        TEXT NOT NULL,             -- attributed | unattributed | rejected
+  reason         TEXT,
+  contested      BOOLEAN NOT NULL DEFAULT FALSE,
+  code           TEXT,
+  creator_id     INTEGER REFERENCES creators(id) ON DELETE SET NULL,
+  contract_id    INTEGER REFERENCES contracts(id) ON DELETE SET NULL,
+  candidates     JSONB,
+  overridden_by  TEXT,
+  override_note  TEXT,
+  overridden_at  TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_referral_signups_brand_key ON referral_signups(brand_key);
+CREATE INDEX IF NOT EXISTS idx_referral_signups_creator ON referral_signups(creator_id);
+
+-- The referred brands' campaigns and the commission each earns. Keyed by the
+-- platform's campaign id and stored by brand_ref (not signup id), so a campaign
+-- reported before its brand's sign-up event is kept and counted once it lands.
+-- counted/rank/reason/commission are recomputed for the whole brand on every
+-- change (referrals.recomputeBrand), so a late or corrected report can't leave
+-- the first-N ranking stale.
+CREATE TABLE IF NOT EXISTS referral_campaigns (
+  id            SERIAL PRIMARY KEY,
+  campaign_ref  TEXT NOT NULL UNIQUE,
+  brand_ref     TEXT NOT NULL,
+  campaign_name TEXT,
+  started_at    TIMESTAMPTZ,
+  status        TEXT NOT NULL DEFAULT 'active',   -- active | cancelled
+  paid_spend    NUMERIC(14,2) NOT NULL DEFAULT 0, -- paid by the brand, excl. tax, net of refunds
+  currency      TEXT NOT NULL DEFAULT 'USD',
+  counted       BOOLEAN NOT NULL DEFAULT FALSE,
+  rank          INTEGER,
+  reason        TEXT,
+  commission    NUMERIC(14,2) NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_referral_campaigns_brand ON referral_campaigns(brand_ref);

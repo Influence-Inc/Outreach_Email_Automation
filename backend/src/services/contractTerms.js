@@ -66,10 +66,13 @@ function nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct }) 
     out.push({ label: 'Compensation', value: 'Commission only — no upfront fee', big: true });
   }
   if (c) {
-    out.push({ label: 'Commission', value: c.summary });
-    out.push({ label: 'Tracking', value: trackingText(c) });
-    out.push({ label: 'Reporting', value: "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout" });
-    out.push({ label: 'Returns', value: 'Commission on orders later refunded, returned or charged back is deducted from the next payout' });
+    // Mirrors public/contract.js: a referral deal's rows come from the server.
+    const referral = c.basis === 'referral';
+    out.push({ label: referral ? 'Referral commission' : 'Commission', value: c.summary });
+    out.push({ label: 'Tracking', value: c.tracking || trackingText(c) });
+    out.push({ label: 'Reporting', value: c.reporting || "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout" });
+    out.push({ label: referral ? 'Refunds' : 'Returns', value: c.returns || 'Commission on orders later refunded, returned or charged back is deducted from the next payout' });
+    if (c.rules) out.push({ label: 'Referral rules', value: c.rules });
   }
   out.push({ label: 'Currency', value: d.currency });
   if (model === 'hybrid') {

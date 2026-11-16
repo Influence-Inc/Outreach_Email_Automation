@@ -577,13 +577,27 @@
     hybrid: 'An upfront fee plus a share of the sales they drive. Their “yes” books both.',
     product: 'Product / gifting only, no cash. Their “yes” books it and the contract says so.',
   };
+  // Commission on referred brands (commission.basis 'referral', see
+  // backend/src/services/dealTerms.js): what the hint says instead.
+  const REFERRAL_HINTS = {
+    commission: 'No fee — a share of the campaign spend of each new brand they bring to the platform, on its first campaigns.',
+    hybrid: 'An upfront fee plus a share of the campaign spend of each new brand they bring to the platform.',
+  };
+  // Defaults per basis — switching basis moves a field that still holds the
+  // other basis's default, and leaves anything the admin typed alone.
+  const BASIS_DEFAULTS = {
+    sales: { cookie: '30', term: '6', attr: 'link' },
+    referral: { cookie: '90', term: '12', attr: 'link_and_code' },
+  };
   const fmtMoney = (n) => '$' + Number(n).toLocaleString('en-US');
+  const isReferral = (t) => !!(t && t.commission && t.commission.basis === 'referral');
 
   function describeTerms(t) {
     if (!t) return '';
+    const kind = isReferral(t) ? 'referral commission' : 'commission';
     if (t.model === 'flat') return fmtMoney(t.fee);
-    if (t.model === 'commission') return `${t.commission.rate_pct}% commission`;
-    if (t.model === 'hybrid') return `${fmtMoney(t.fee)} + ${t.commission.rate_pct}% commission`;
+    if (t.model === 'commission') return `${t.commission.rate_pct}% ${kind}`;
+    if (t.model === 'hybrid') return `${fmtMoney(t.fee)} + ${t.commission.rate_pct}% ${kind}`;
     if (t.model === 'product') return 'Product only';
     return '';
   }
@@ -592,7 +606,17 @@
   function summarizeTerms(t) {
     if (!t) return '';
     const c = t.commission;
-    const commission = c
+    const referral = c && c.basis === 'referral'
+      ? `${c.rate_pct}% of the campaign spend of each new brand they refer, on its first ${
+          c.campaigns_per_brand === 1 ? 'campaign' : `${c.campaigns_per_brand} campaigns`
+        } (started within ${c.campaign_window_months} months of sign-up), via ${
+          c.attribution === 'code' ? 'their referral code'
+            : c.attribution === 'link' ? 'their referral link' : 'their referral link or code'
+        }${c.promo_code ? ` ${c.promo_code}` : ''} (${c.cookie_days}-day referral window), ${
+          c.term_months ? `for brands referred within ${c.term_months} month${c.term_months === 1 ? '' : 's'}` : 'ongoing'
+        }, paid monthly within ${c.payout_net_days} days`
+      : null;
+    const commission = referral || (c
       ? `${c.rate_pct}% commission on net sales via ${
           c.attribution === 'code' ? `promo code ${c.promo_code || '(to be assigned)'}`
             : c.attribution === 'link_and_code' ? `their tracked link or promo code ${c.promo_code || '(to be assigned)'}`
@@ -600,7 +624,7 @@
         } (${c.cookie_days}-day window), paid monthly within ${c.payout_net_days} days, ${
           c.term_months ? `for ${c.term_months} month${c.term_months === 1 ? '' : 's'}` : 'ongoing'
         }`
-      : '';
+      : '');
     if (t.model === 'flat') return `A flat fee of ${fmtMoney(t.fee)}.`;
     if (t.model === 'commission') return `No upfront fee — ${commission}.`;
     if (t.model === 'hybrid') return `${fmtMoney(t.fee)} upfront, plus ${commission}.`;
@@ -625,22 +649,35 @@
             <span class="tp-money"><span class="tp-affix">$</span><input type="number" min="0" step="50" class="tp-input tp-fee" inputmode="decimal"></span></label>
         </div>
         <div class="tp-commission">
+          <div class="tp-basis-row">
+            <span class="tp-flabel">Commission on</span>
+            <div class="tp-basis" role="radiogroup" aria-label="Commission on">
+              <button type="button" class="tp-basis-btn" role="radio" data-basis="sales">Product sales</button>
+              <button type="button" class="tp-basis-btn" role="radio" data-basis="referral">Brands they refer</button>
+            </div>
+          </div>
           <div class="tp-row">
             <label class="tp-field tp-narrow"><span class="tp-flabel">Commission</span>
               <span class="tp-money"><input type="number" min="0" max="100" step="0.5" class="tp-input tp-rate" inputmode="decimal"><span class="tp-affix tp-affix-r">%</span></span></label>
-            <label class="tp-field"><span class="tp-flabel">Sales tracked by</span>
+            <label class="tp-field"><span class="tp-flabel tp-attr-label">Sales tracked by</span>
               <select class="tp-input tp-attr">
                 <option value="link">Tracked link</option>
                 <option value="code">Promo code</option>
                 <option value="link_and_code">Link + promo code</option>
               </select></label>
-            <label class="tp-field tp-code-field" hidden><span class="tp-flabel">Promo code <span class="tp-opt">optional</span></span>
+            <label class="tp-field tp-code-field" hidden><span class="tp-flabel"><span class="tp-code-label">Promo code</span> <span class="tp-opt tp-code-opt">optional</span></span>
               <input type="text" class="tp-input tp-code" maxlength="40" placeholder="e.g. SAM15" spellcheck="false" autocomplete="off"></label>
           </div>
+          <div class="tp-row tp-ref-row" hidden>
+            <label class="tp-field tp-narrow"><span class="tp-flabel">Paid on each brand's first</span>
+              <span class="tp-money"><input type="number" min="1" max="12" class="tp-input tp-per-brand" value="2"><span class="tp-affix tp-affix-r">campaigns</span></span></label>
+            <label class="tp-field tp-narrow" title="A campaign only counts if it starts within this long of the brand's sign-up"><span class="tp-flabel">Starting within, of sign-up</span>
+              <span class="tp-money"><input type="number" min="1" max="36" class="tp-input tp-camp-window" value="12"><span class="tp-affix tp-affix-r">months</span></span></label>
+          </div>
           <div class="tp-row">
-            <label class="tp-field tp-narrow"><span class="tp-flabel">Attribution window</span>
+            <label class="tp-field tp-narrow"><span class="tp-flabel tp-cookie-label">Attribution window</span>
               <span class="tp-money"><input type="number" min="1" max="365" class="tp-input tp-cookie" value="30"><span class="tp-affix tp-affix-r">days</span></span></label>
-            <label class="tp-field tp-narrow"><span class="tp-flabel">Term</span>
+            <label class="tp-field tp-narrow"><span class="tp-flabel tp-term-label">Term</span>
               <select class="tp-input tp-term">
                 <option value="1">1 month</option><option value="3">3 months</option><option value="6" selected>6 months</option>
                 <option value="12">12 months</option><option value="24">24 months</option><option value="">Ongoing</option>
@@ -661,8 +698,19 @@
       fee: q('.tp-fee'), feeLabel: q('.tp-fee-label'), rate: q('.tp-rate'), attr: q('.tp-attr'),
       code: q('.tp-code'), codeField: q('.tp-code-field'), cookie: q('.tp-cookie'), term: q('.tp-term'),
       net: q('.tp-net'), product: q('.tp-product'), suggest: q('.tp-suggest'), summary: q('.tp-summary'),
+      perBrand: q('.tp-per-brand'), campWindow: q('.tp-camp-window'),
     };
     let model = allowNone ? 'none' : 'flat';
+    let basis = 'sales';
+    function setBasis(next) {
+      if (next === basis) return;
+      const from = BASIS_DEFAULTS[basis];
+      const to = BASIS_DEFAULTS[next];
+      if (els.cookie.value === from.cookie) els.cookie.value = to.cookie;
+      if (els.term.value === from.term) els.term.value = to.term;
+      if (els.attr.value === from.attr) els.attr.value = to.attr;
+      basis = next;
+    }
     const listeners = [];
     const emit = () => { render(); listeners.forEach((fn) => { try { fn(); } catch { /* local */ } }); };
 
@@ -683,17 +731,33 @@
           return { error: 'Enter the commission rate (0–100%).', el: els.rate };
         }
         const code = els.code.value.trim();
+        const referral = basis === 'referral';
         if (code && !/^[A-Za-z0-9_-]{2,40}$/.test(code)) {
-          return { error: 'Promo codes use letters, numbers, "-" and "_" only.', el: els.code };
+          return { error: `${referral ? 'Referral' : 'Promo'} codes use letters, numbers, "-" and "_" only.`, el: els.code };
         }
         t.commission = {
           rate_pct: Math.round(rate * 100) / 100,
           attribution: els.attr.value,
-          promo_code: els.attr.value === 'link' || !code ? null : code.toUpperCase(),
-          cookie_days: Math.round(Number(els.cookie.value) || 30),
+          // A referral always has a code (its link is built from it); blank
+          // means "assign one" when the contract is made.
+          promo_code: (els.attr.value === 'link' && !referral) || !code ? null : code.toUpperCase(),
+          cookie_days: Math.round(Number(els.cookie.value) || (referral ? 90 : 30)),
           term_months: els.term.value === '' ? null : Number(els.term.value),
           payout_net_days: Math.round(Number(els.net.value) >= 0 && els.net.value !== '' ? Number(els.net.value) : 30),
         };
+        if (referral) {
+          const n = Number(els.perBrand.value);
+          if (!els.perBrand.value || !Number.isInteger(n) || n < 1 || n > 12) {
+            return { error: 'Campaigns per brand must be a whole number from 1 to 12.', el: els.perBrand };
+          }
+          const w = Number(els.campWindow.value);
+          if (!els.campWindow.value || !Number.isInteger(w) || w < 1 || w > 36) {
+            return { error: 'The campaign window must be 1 to 36 months.', el: els.campWindow };
+          }
+          t.commission.basis = 'referral';
+          t.commission.campaigns_per_brand = n;
+          t.commission.campaign_window_months = w;
+        }
       }
       if (model === 'product') {
         const p = els.product.value.trim();
@@ -714,12 +778,46 @@
       els.feeLabel.textContent = model === 'hybrid' ? 'Upfront fee' : 'Fee';
       q('.tp-commission').hidden = !(model === 'commission' || model === 'hybrid');
       q('.tp-product-row').hidden = model !== 'product';
-      els.codeField.hidden = els.attr.value === 'link';
+      const referral = basis === 'referral';
+      root.querySelectorAll('.tp-basis-btn').forEach((b) => {
+        const on = b.dataset.basis === basis;
+        b.classList.toggle('is-on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
+      q('.tp-ref-row').hidden = !referral;
+      q('.tp-attr-label').textContent = referral ? 'Brands tracked by' : 'Sales tracked by';
+      const optText = referral
+        ? { link: 'Referral link', code: 'Referral code', link_and_code: 'Link + referral code' }
+        : { link: 'Tracked link', code: 'Promo code', link_and_code: 'Link + promo code' };
+      [...els.attr.options].forEach((o) => { o.textContent = optText[o.value]; });
+      q('.tp-code-label').textContent = referral ? 'Referral code' : 'Promo code';
+      q('.tp-code-opt').textContent = referral ? 'blank = assigned for you' : 'optional';
+      els.code.placeholder = referral ? 'e.g. MAYA' : 'e.g. SAM15';
+      // A referral always has a code (the referral link is built from it).
+      els.codeField.hidden = els.attr.value === 'link' && !referral;
+      q('.tp-cookie-label').textContent = referral ? 'Referral window' : 'Attribution window';
+      q('.tp-cookie-label').title = referral
+        ? 'How long after visiting the referral link a brand can sign up and still count as referred'
+        : 'How long after clicking the link a purchase still counts as the creator’s sale';
+      q('.tp-term-label').textContent = referral ? 'Referrals count for' : 'Term';
       const r = read();
-      const hint = TERMS_HINTS[model] || '';
+      // opts.hints overrides the email-offer wording where the picker isn't
+      // pricing an email (e.g. the call-contract form, where nothing is "sent as
+      // your offer"); `<model>_referral` keys cover a referral commission.
+      const hints = { ...TERMS_HINTS, ...(referral ? REFERRAL_HINTS : {}), ...(opts.hints || {}) };
+      const hint = (referral && opts.hints && opts.hints[`${model}_referral`] != null
+        ? opts.hints[`${model}_referral`]
+        : hints[model]) || '';
       els.summary.innerHTML = r.terms ? `<b>${esc(summarizeTerms(r.terms))}</b> ${esc(hint)}` : esc(hint);
     }
 
+    root.querySelectorAll('.tp-basis-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        setBasis(b.dataset.basis);
+        emit();
+        if (!els.rate.value && opts.focusOnSwitch !== false) els.rate.focus();
+      });
+    });
     root.querySelectorAll('.tp-model').forEach((b) => {
       b.addEventListener('click', () => {
         model = b.dataset.model;
@@ -770,6 +868,9 @@
       if (t.fee != null) els.fee.value = t.fee;
       const c = t.commission;
       if (c) {
+        basis = c.basis === 'referral' ? 'referral' : 'sales';
+        if (c.campaigns_per_brand) els.perBrand.value = c.campaigns_per_brand;
+        if (c.campaign_window_months) els.campWindow.value = c.campaign_window_months;
         if (c.rate_pct != null) els.rate.value = c.rate_pct;
         if (c.attribution) els.attr.value = c.attribution;
         if (c.promo_code) els.code.value = c.promo_code;

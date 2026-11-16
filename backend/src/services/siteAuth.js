@@ -15,6 +15,7 @@
 //   /contract/:token, /contracts/:token   creator contract signing page
 //   /o/:token                             creator offer page
 //   /go/imessage                          iMessage deep-link redirect
+//   /r/:code                              creator referral link → platform sign-up
 //   /api/contracts/*, /api/offers/*       the data those two pages fetch
 //   /webhook/*                            Instantly / Twilio / Meta / Linq
 //   /api/bot/*                            server-to-server, x-bot-token
@@ -164,6 +165,7 @@ const PUBLIC_PREFIXES = [
   '/contract',
   '/o/',
   '/go/',
+  '/r/',
   '/auth/slack',
 ];
 

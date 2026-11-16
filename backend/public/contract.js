@@ -199,10 +199,13 @@
       ? row('Upfront fee', fmtMoney(d.compensation, d.currency), { big: true })
       : row('Compensation', 'Commission only — no upfront fee', { big: true });
     if (c) {
-      html += row('Commission', c.summary) +
-        row('Tracking', trackingText(c)) +
-        row('Reporting', "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout") +
-        row('Returns', 'Commission on orders later refunded, returned or charged back is deducted from the next payout');
+      // A referral deal ships its own rows (tracking, reporting, refunds and
+      // the referral rules) from the server; a sales commission uses these.
+      html += row(c.basis === 'referral' ? 'Referral commission' : 'Commission', c.summary) +
+        row('Tracking', c.tracking || trackingText(c)) +
+        row('Reporting', c.reporting || "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout") +
+        row(c.basis === 'referral' ? 'Refunds' : 'Returns', c.returns || 'Commission on orders later refunded, returned or charged back is deducted from the next payout');
+      if (c.rules) html += row('Referral rules', c.rules);
     }
     html += row('Currency', d.currency);
     var commissionPay = c ? 'Direct bank transfer, monthly, within ' + c.payoutNetDays + " days of each month's end" : '';

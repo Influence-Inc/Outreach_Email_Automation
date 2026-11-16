@@ -14,6 +14,7 @@ const { runBackfill } = require('../services/contractBackfill');
 const { runBackfill: runDashboardBackfill } = require('../services/dashboardBackfill');
 const creatorUpdates = require('../services/creatorUpdates');
 const scoutedCreators = require('../services/scoutedCreators');
+const referrals = require('../services/referrals');
 
 const router = express.Router();
 
@@ -257,6 +258,40 @@ router.post('/scouted-creators', requireBotToken, async (req, res, next) => {
   } catch (err) {
     if (err.code === 'BAD_REQUEST') return res.status(400).json({ error: err.message });
     if (err.code === 'NO_CAMPAIGN') return res.status(404).json({ error: err.message });
+    next(err);
+  }
+});
+
+// ── Referral commission (services/referrals.js) ────────────────────────────
+// The platform reports the two facts a referral commission is computed from.
+
+// POST /api/bot/referrals/signups — a new brand account signed up. Body:
+//   { brand_id, brand_name, brand_domain?, contact_email?, signed_up_at,
+//     entered_code?,                      the referral code typed at sign-up
+//     link_touch_id?,                     the `rt` from the referral link they arrived from
+//     link_code?, link_clicked_at?,       the `ref` when no `rt` was kept
+//     touches?: [{ touch_id } | { code, clicked_at }],  earlier referral visits kept
+//     existing_customer? }                true if the company was already a customer
+// Returns the attribution decision. Idempotent per brand_id (decisions are final).
+router.post('/referrals/signups', requireBotToken, async (req, res, next) => {
+  try {
+    res.json(await referrals.recordSignup(req.body || {}));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// POST /api/bot/referrals/campaigns — a referred (or any) brand's campaign was
+// created or changed. Body: { brand_id, campaign_id, campaign_name?, started_at?,
+// status: 'active'|'cancelled', paid_spend, currency? }. paid_spend is the
+// running total the brand has paid for it (excl. tax, net of refunds). Send it
+// again on every change; the brand's ledger is recomputed each time.
+router.post('/referrals/campaigns', requireBotToken, async (req, res, next) => {
+  try {
+    res.json(await referrals.recordCampaign(req.body || {}));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 });

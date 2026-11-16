@@ -15,7 +15,19 @@
 //               'product'    product / gifting only, no cash
 //   fee         flat fee, or the hybrid's upfront fee; null otherwise
 //   commission  { rate_pct, attribution, promo_code, cookie_days, term_months,
-//                 payout_net_days } for commission + hybrid; null otherwise
+//                 payout_net_days } for commission + hybrid; null otherwise.
+//               Its `basis` says what the percentage is OF:
+//                 'sales'    (the default; absent on older terms) a share of the
+//                            product sales the creator drives for the brand
+//                 'referral' a share of the campaign spend of each NEW brand the
+//                            creator refers to the platform, on that brand's
+//                            first `campaigns_per_brand` campaigns started within
+//                            `campaign_window_months` of its sign-up. For a
+//                            referral, cookie_days is the REFERRAL window (sign-up
+//                            within N days of the link visit), term_months is how
+//                            long referrals keep counting, and promo_code is the
+//                            creator's referral code (assigned when the contract
+//                            is made if left blank — see services/referrals.js).
 //   product     what they receive, for product deals; null otherwise
 //
 // Pay model is deliberately separate from the deal SHAPE (offer_type: view /
@@ -28,6 +40,16 @@
 const MODELS = ['flat', 'commission', 'hybrid', 'product'];
 const ATTRIBUTION = ['link', 'code', 'link_and_code'];
 const DEFAULTS = Object.freeze({ cookie_days: 30, term_months: 6, payout_net_days: 30, attribution: 'link' });
+const BASES = ['sales', 'referral'];
+const REFERRAL_DEFAULTS = Object.freeze({
+  cookie_days: 90,
+  term_months: 12,
+  payout_net_days: 30,
+  attribution: 'link_and_code',
+  campaigns_per_brand: 2,
+  campaign_window_months: 12,
+});
+const isReferral = (t) => !!(t && t.commission && t.commission.basis === 'referral');
 
 function badTerms(message) {
   const err = new Error(message);
@@ -68,25 +90,47 @@ function normalizeTerms(raw) {
 
   if (hasCommission(out)) {
     const c = raw.commission && typeof raw.commission === 'object' ? raw.commission : {};
+    const basis = BASES.includes(c.basis) ? c.basis : 'sales';
+    const D = basis === 'referral' ? REFERRAL_DEFAULTS : DEFAULTS;
     const rate = num(c.rate_pct);
     if (rate == null || !Number.isFinite(rate) || rate <= 0 || rate > 100) {
       throw badTerms('Enter the commission rate (a percentage between 0 and 100).');
     }
-    const attribution = ATTRIBUTION.includes(c.attribution) ? c.attribution : DEFAULTS.attribution;
+    const attribution = ATTRIBUTION.includes(c.attribution) ? c.attribution : D.attribution;
     let promo = c.promo_code == null ? '' : String(c.promo_code).trim();
     if (promo && !/^[A-Za-z0-9_-]{2,40}$/.test(promo)) {
-      throw badTerms('Promo codes can only use letters, numbers, "-" and "_" (2–40 characters).');
+      throw badTerms(
+        basis === 'referral'
+          ? 'Referral codes can only use letters, numbers, "-" and "_" (2–40 characters).'
+          : 'Promo codes can only use letters, numbers, "-" and "_" (2–40 characters).',
+      );
     }
-    if (attribution === 'link') promo = '';
+    // A sales deal tracked by link alone has no code. A referral always has
+    // one: the referral link is built from it (/r/CODE).
+    if (attribution === 'link' && basis === 'sales') promo = '';
     out.commission = {
       rate_pct: Math.round(rate * 100) / 100,
       attribution,
       promo_code: promo ? promo.toUpperCase() : null,
-      cookie_days: intIn(c.cookie_days, 1, 365, DEFAULTS.cookie_days, 'The attribution window (days)'),
+      cookie_days: intIn(
+        c.cookie_days, 1, 365, D.cookie_days,
+        basis === 'referral' ? 'The referral window (days)' : 'The attribution window (days)',
+      ),
       // null = no end date ("ongoing"): only when the picker explicitly sends it.
-      term_months: c.term_months === null ? null : intIn(c.term_months, 1, 60, DEFAULTS.term_months, 'The term (months)'),
-      payout_net_days: intIn(c.payout_net_days, 0, 120, DEFAULTS.payout_net_days, 'Payout days'),
+      term_months: c.term_months === null ? null : intIn(c.term_months, 1, 60, D.term_months, 'The term (months)'),
+      payout_net_days: intIn(c.payout_net_days, 0, 120, D.payout_net_days, 'Payout days'),
     };
+    // Only a referral carries `basis` (and its two extra limits), so every
+    // sales-commission shape stored before this stays byte-for-byte the same.
+    if (basis === 'referral') {
+      out.commission.basis = 'referral';
+      out.commission.campaigns_per_brand = intIn(
+        c.campaigns_per_brand, 1, 12, D.campaigns_per_brand, 'Campaigns per referred brand',
+      );
+      out.commission.campaign_window_months = intIn(
+        c.campaign_window_months, 1, 36, D.campaign_window_months, 'The campaign window (months)',
+      );
+    }
   }
 
   if (model === 'product') {
@@ -124,8 +168,8 @@ function describeTerms(t) {
   if (!t) return '';
   switch (t.model) {
     case 'flat': return money(t.fee);
-    case 'commission': return `${pct(t.commission.rate_pct)} commission`;
-    case 'hybrid': return `${money(t.fee)} + ${pct(t.commission.rate_pct)} commission`;
+    case 'commission': return `${pct(t.commission.rate_pct)} ${isReferral(t) ? 'referral ' : ''}commission`;
+    case 'hybrid': return `${money(t.fee)} + ${pct(t.commission.rate_pct)} ${isReferral(t) ? 'referral ' : ''}commission`;
     case 'product': return 'Product only';
     default: return '';
   }
@@ -140,8 +184,35 @@ function attributionPhrase(c) {
 
 // One plain-English sentence of the commission terms — the contract's
 // Commission row, the Creator-DB sync text, and the AI prompt all use it.
+// The platform referred brands sign up to — named in the referral clause.
+function platformName() {
+  return process.env.PLATFORM_NAME || 'INFLUENCE';
+}
+
+function referralTrackingPhrase(c) {
+  const code = c.promo_code ? `referral code ${c.promo_code}` : 'their referral code';
+  if (c.attribution === 'code') return `the creator's ${code}, entered at sign-up`;
+  if (c.attribution === 'link') return `the creator's referral link`;
+  return `the creator's referral link or ${code} entered at sign-up`;
+}
+
+function referralSentence(t) {
+  const c = t.commission;
+  const n = c.campaigns_per_brand;
+  const term = c.term_months
+    ? `Brands that sign up within ${c.term_months} month${c.term_months === 1 ? '' : 's'} of signing qualify`
+    : 'Brands that sign up while this agreement is in force qualify';
+  return (
+    `${pct(c.rate_pct)} of the campaign spend of each new brand that signs up to ${platformName()} through ${referralTrackingPhrase(c)},` +
+    ` on that brand's first ${n === 1 ? 'campaign' : `${n} campaigns`} started within ${c.campaign_window_months} month${c.campaign_window_months === 1 ? '' : 's'} of its sign-up.` +
+    ` A link referral counts when the brand signs up within ${c.cookie_days} day${c.cookie_days === 1 ? '' : 's'} of using the link. ${term}.` +
+    ` Paid monthly within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid.`
+  );
+}
+
 function commissionSentence(t) {
   if (!hasCommission(t)) return '';
+  if (isReferral(t)) return referralSentence(t);
   const c = t.commission;
   const term = c.term_months ? `for ${c.term_months} month${c.term_months === 1 ? '' : 's'} from signing` : 'until either party ends it in writing';
   return (
@@ -156,8 +227,8 @@ function termsSummary(t) {
   if (!t) return '';
   switch (t.model) {
     case 'flat': return `A flat fee of ${money(t.fee)}.`;
-    case 'commission': return `Commission only (no upfront fee): ${commissionSentence(t)}`;
-    case 'hybrid': return `An upfront fee of ${money(t.fee)}, plus ${commissionSentence(t)}`;
+    case 'commission': return `${isReferral(t) ? 'Referral commission only' : 'Commission only'} (no upfront fee): ${commissionSentence(t)}`;
+    case 'hybrid': return `An upfront fee of ${money(t.fee)}, plus ${isReferral(t) ? 'a referral commission: ' : ''}${commissionSentence(t)}`;
     case 'product': return `Product only, no cash payment: ${t.product}.`;
     default: return '';
   }
@@ -167,6 +238,11 @@ module.exports = {
   MODELS,
   ATTRIBUTION,
   DEFAULTS,
+  BASES,
+  REFERRAL_DEFAULTS,
+  isReferral,
+  platformName,
+  referralTrackingPhrase,
   normalizeTerms,
   termsFromOffer,
   termsFromDetail,

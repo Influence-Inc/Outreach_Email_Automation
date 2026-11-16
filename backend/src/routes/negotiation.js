@@ -5,6 +5,7 @@ const express = require('express');
 const db = require('../db');
 const negotiation = require('../services/negotiation');
 const contracts = require('../services/contracts');
+const callContract = require('../services/callContract');
 const offers = require('../services/offers');
 const briefs = require('../services/briefs');
 const { computeOffers } = require('../services/pricing');
@@ -252,6 +253,29 @@ router.post('/:id/contract', async (req, res, next) => {
     const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
     res.json({ ...fresh, contract_result: result });
   } catch (err) {
+    next(err);
+  }
+});
+
+// "Create contract" for a deal agreed on a CALL (services/callContract.js).
+// GET returns the form's defaults + which delivery options work for this
+// creator; POST builds the contract from the entered terms, books the deal and
+// delivers the signing link (thread reply, direct email, or link only).
+router.get('/:id/call-contract', async (req, res, next) => {
+  try {
+    res.json(await callContract.callContractDefaults(req.params.id));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+router.post('/:id/call-contract', async (req, res, next) => {
+  try {
+    const result = await callContract.createContractFromCall(req.params.id, req.body || {});
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 });
