@@ -347,18 +347,116 @@ async function chooseCode(q, creator, terms) {
   throw httpError(409, 'Could not find a free referral code — type one in.');
 }
 
-// Fill the referral code into a contract's data (code, link and the commission
-// wording that quotes them). `terms` are the deal's normalized terms.
-function applyReferralCode(data, terms, code) {
+// Fill the referral code into a contract's data. `terms` are the deal's
+// normalized terms. The code and link are always stored (Deal Studio copies the
+// link from them), but the contract's WORDING only names them when `shown`: a
+// code the team typed. A code left blank is assigned behind the scenes for the
+// link, and the contract then says only "Brands are credited when they sign up
+// through the creator's referral link." — no code, no link.
+function applyReferralCode(data, terms, code, { shown = true } = {}) {
   if (!data || !data.commission || !dealTerms.isReferral(terms)) return data;
-  const withCode = { ...terms, commission: { ...terms.commission, promo_code: code } };
+  const worded = { ...terms, commission: { ...terms.commission, promo_code: shown ? code : null } };
   const c = data.commission;
-  c.promoCode = code;
   c.referralCode = code;
   c.referralUrl = referralUrl(code);
-  c.summary = dealTerms.commissionSentence(withCode);
-  Object.assign(c, referralContractTexts(withCode.commission, c.referralUrl));
+  c.codeOnContract = !!shown;
+  c.promoCode = shown ? code : null;
+  c.summary = dealTerms.commissionSentence(worded);
+  Object.assign(c, referralContractTexts(worded.commission, shown ? c.referralUrl : null));
   return data;
+}
+
+// Is `code` the one the team typed into the terms (so it goes on the contract)?
+function isTypedCode(terms, code) {
+  const typed = normCode(terms && terms.commission && terms.commission.promo_code);
+  return !!typed && typed === code;
+}
+
+// Rebuild a referral deal's normalized terms from a stored contract's data
+// (the contract holds them camelCased), so its wording can be regenerated.
+function termsFromContractData(data) {
+  const c = (data && data.commission) || {};
+  return dealTerms.normalizeTerms({
+    model: data.compensationModel,
+    fee: data.compensation,
+    commission: {
+      basis: 'referral',
+      rate_pct: c.ratePct,
+      attribution: c.attribution,
+      promo_code: null,
+      cookie_days: c.cookieDays,
+      term_months: c.termMonths,
+      payout_net_days: c.payoutNetDays,
+      campaigns_per_brand: c.campaignsPerBrand,
+      campaign_window_months: c.campaignWindowMonths,
+    },
+  });
+}
+
+// Deal Studio: change the code on a creator's referral contract, or take it
+// off the contract (blank). A new code becomes the PRIMARY one — the link
+// changes to /r/<new> — and the previous code stays as an alias of the same
+// contract, so links and codes already shared keep crediting this creator.
+// A code another creator holds is refused (409). Works on a signed contract too,
+// like every Deals-column edit: the wording updates in place, nothing is re-sent.
+async function setReferralCode(creatorId, rawCode, { by = null } = {}) {
+  const contract = await db.one(
+    `SELECT ct.* FROM contracts ct
+       JOIN referral_codes rc ON rc.contract_id = ct.id AND rc.is_primary
+      WHERE ct.creator_id = $1
+      ORDER BY CASE ct.status WHEN 'completed' THEN 0 WHEN 'signed' THEN 1 ELSE 2 END, ct.created_at DESC
+      LIMIT 1`,
+    [creatorId],
+  );
+  if (!contract) throw httpError(404, 'This creator has no referral contract.');
+  const blank = rawCode == null || String(rawCode).trim() === '';
+  const code = blank ? null : normCode(rawCode);
+  if (!blank && !code) throw httpError(400, 'Referral codes use 2–40 letters, numbers, "-" or "_".');
+
+  const terms = termsFromContractData(contract.data);
+  const result = await db.withTransaction(async (client) => {
+    const q = (sql, params) => client.query(sql, params);
+    // Serialise edits to this contract's codes.
+    await q(`SELECT id FROM contracts WHERE id = $1 FOR UPDATE`, [contract.id]);
+    const primary = (await q(
+      `SELECT code FROM referral_codes WHERE contract_id = $1 AND is_primary`,
+      [contract.id],
+    )).rows[0];
+    const before = { code: primary.code, shown: !!(contract.data.commission && contract.data.commission.codeOnContract) };
+    let next = primary.code;
+    if (code && code !== primary.code) {
+      const holder = (await q(`SELECT contract_id FROM referral_codes WHERE code = $1`, [code])).rows[0];
+      if (holder && holder.contract_id !== contract.id) {
+        throw httpError(409, `Referral code ${code} is already taken by another creator.`);
+      }
+      await q(`UPDATE referral_codes SET is_primary = FALSE WHERE contract_id = $1 AND is_primary`, [contract.id]);
+      if (holder) {
+        // One of this contract's own earlier codes: make it primary again.
+        await q(`UPDATE referral_codes SET is_primary = TRUE WHERE code = $1`, [code]);
+      } else {
+        await q(
+          `INSERT INTO referral_codes (code, creator_id, contract_id, is_primary) VALUES ($1, $2, $3, TRUE)`,
+          [code, contract.creator_id, contract.id],
+        );
+      }
+      next = code;
+    }
+    const data = applyReferralCode({ ...contract.data, commission: { ...contract.data.commission } }, terms, next, {
+      shown: !blank,
+    });
+    await q(`UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1`, [contract.id, JSON.stringify(data)]);
+    await q(`INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'referral_code_changed', $2)`, [
+      contract.creator_id,
+      { from: before.code, to: next, was_on_contract: before.shown, on_contract: !blank, by },
+    ]);
+    return { code: next, url: referralUrl(next), onContract: !blank, data };
+  });
+  return {
+    code: result.code,
+    url: result.url,
+    on_contract: result.onContract,
+    contract: { token: contract.token, status: contract.status, data: result.data },
+  };
 }
 
 async function reserveCode(q, { code, creatorId, contractId }) {
@@ -375,12 +473,20 @@ async function reserveCode(q, { code, creatorId, contractId }) {
 // PDF exactly as given, so the two can't drift apart).
 function referralContractTexts(c, url) {
   const platform = dealTerms.platformName();
-  const code = c.promo_code ? `referral code ${c.promo_code}` : 'their referral code';
-  const tracking = c.attribution === 'code'
-    ? `Brands are credited when they enter the creator's ${code} at sign-up`
-    : c.attribution === 'link'
-      ? `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''}`
-      : `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''} or enter the creator's ${code} at sign-up`;
+  let tracking;
+  if (!c.promo_code) {
+    // No code on the contract: no code, no link — just how brands come in.
+    tracking = c.attribution === 'code'
+      ? "Brands are credited when they enter the creator's referral code at sign-up."
+      : "Brands are credited when they sign up through the creator's referral link.";
+  } else {
+    const code = `referral code ${c.promo_code}`;
+    tracking = c.attribution === 'code'
+      ? `Brands are credited when they enter the creator's ${code} at sign-up`
+      : c.attribution === 'link'
+        ? `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''}`
+        : `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''} or enter the creator's ${code} at sign-up`;
+  }
   return {
     tracking,
     reporting: `Commission is calculated from ${platform}'s billing records for each referred brand, shared with the creator with each payout`,
@@ -758,9 +864,9 @@ async function listSignups({ outcome = null, contested = null, limit = 200 } = {
 // to them, and what those brands' counted campaigns have earned.
 async function creatorReferrals(creatorId) {
   const codes = await db.many(
-    `SELECT rc.code, rc.contract_id, ct.status AS contract_status
+    `SELECT rc.code, rc.contract_id, rc.is_primary, ct.status AS contract_status
        FROM referral_codes rc JOIN contracts ct ON ct.id = rc.contract_id
-      WHERE rc.creator_id = $1 ORDER BY rc.created_at`,
+      WHERE rc.creator_id = $1 ORDER BY rc.is_primary DESC, rc.created_at DESC`,
     [creatorId],
   );
   const brands = await db.many(
@@ -776,7 +882,8 @@ async function creatorReferrals(creatorId) {
   );
   const total = brands.reduce((n, b) => n + Number(b.commission), 0);
   return {
-    codes: codes.map((c) => ({ code: c.code, url: referralUrl(c.code), contract_status: c.contract_status })),
+    // The primary code first; the rest are earlier codes that still credit.
+    codes: codes.map((c) => ({ code: c.code, url: referralUrl(c.code), primary: c.is_primary, contract_status: c.contract_status })),
     brands: brands.map((b) => ({
       signup_id: b.id,
       brand_id: b.brand_ref,
@@ -811,6 +918,9 @@ module.exports = {
   chooseCode,
   reserveCode,
   applyReferralCode,
+  isTypedCode,
+  termsFromContractData,
+  setReferralCode,
   // routes
   handleReferralLink,
   recordSignup,
