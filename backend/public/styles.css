@@ -1331,3 +1331,57 @@ button:disabled { opacity: 0.5; cursor: default; }
 .cr-referral-code.off { font-family: inherit; letter-spacing: 0; color: var(--muted); font-style: italic; }
 .cr-referral-stats { font-size: 12px; color: var(--muted); }
 .deal-val-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: help; }
+
+/* ---- Create contract form: the creator-list design language, scoped ------
+   Same rules as the signing page (public/contract.html): no strokes — wells,
+   fields and chips separate by fill; a field lifts when focused; choices are
+   segmented pills; the delivery options are cards that lift when picked; the
+   action is a flat pill. Scoped to .cc-form so the rest of Deal Studio (and the
+   shared email composer's picker) keep their look. */
+.cc-form { --cc-lift: 0 2px 6px rgba(20, 18, 15, 0.05), 0 8px 24px rgba(20, 18, 15, 0.08); gap: 24px; }
+.cc-well, .cc-form .tp-fields:has(> :not([hidden])) { border: none; background: var(--surface-3); border-radius: 18px; padding: 14px; }
+.cc-form .tp-input, .cc-form .tp-money { border: none; background: var(--surface); border-radius: 10px; box-shadow: none; transition: box-shadow 0.25s cubic-bezier(0.2, 0.8, 0.2, 1); }
+/* Focus never glows or lifts: the field keeps its fill and shows the blue caret. */
+.cc-form .tp-input, .cc-form .tp-money input { caret-color: #0071e3; }
+.cc-form .tp-input:focus, .cc-form .tp-money:focus-within { box-shadow: none; border: none; }
+.cc-form .tp-money .tp-input:focus { box-shadow: none; }
+.cc-form textarea.tp-input { padding: 10px 12px; }
+.cc-form .tp-label, .cc-form .cc-section > .tp-label { font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink); }
+
+/* Pay model and deal shape as segmented pills: a fill track, the chosen one a
+   lifted white pill. */
+.cc-form .tp-models { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface-3); align-self: flex-start; }
+.cc-form .tp-model { border: none; background: transparent; color: var(--muted); padding: 6px 14px; font-size: 13px;
+  transition: color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.cc-form .tp-model:hover { background: transparent; color: var(--ink); }
+.cc-form .tp-model.is-on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04); }
+.cc-form .tp-model:disabled { opacity: 0.35; }
+.cc-form .tp-model:active:not(:disabled), .cc-chip:active span, .cc-form .btn-primary:active { transform: scale(0.96); transition-duration: 0.08s; }
+.cc-form .tp-basis { border: none; }
+
+.cc-chip span { border: none; background: var(--surface); }
+.cc-chip:hover span { background: var(--surface); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
+
+/* Delivery: three cards; the chosen one lifts onto white. */
+.cc-delivery { gap: 4px; padding: 4px; }
+.cc-delivery .cc-radio { padding: 12px 14px; border-radius: 14px; transition: background 0.2s, box-shadow 0.25s; }
+.cc-delivery .cc-radio:has(input:checked) { background: var(--surface); box-shadow: var(--cc-lift); }
+.cc-delivery .cc-radio.is-disabled { opacity: 0.6; }
+.cc-delivery .cc-to { margin-left: 24px; }
+.cc-delivery .cc-stop { border-top: none; margin: 4px 0 0; padding: 12px 14px; }
+
+/* Footer: no rule — the form fades under it. */
+.cc-foot { border-top: none; background: linear-gradient(to bottom, rgba(255, 255, 255, 0), var(--surface) 14px); padding-top: 18px; }
+.cc-form .btn-primary { border-radius: 999px; height: 40px; padding: 0 20px; transition: background 0.2s, transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+/* Done: a flat green circle and the link on a fill. */
+.cc-done .cc-link-row .cc-link { border: none; background: var(--surface-3); border-radius: 10px; }
+.cc-done .ghost.small { border: none; border-radius: 999px; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-form .tp-model, .cc-form .btn-primary, .cc-delivery .cc-radio { transition: none; }
+}
+/* A field sitting on white (inside the chosen card, or on the modal itself)
+   takes the fill instead, so it never vanishes white-on-white. */
+.cc-delivery .cc-to, .cc-form .cc-notes { background: var(--surface-3); }
+.cc-delivery .cc-to:focus, .cc-form .cc-notes:focus { background: var(--surface); }
+.cc-done .btn-primary { border-radius: 999px; height: 40px; padding: 0 20px; }

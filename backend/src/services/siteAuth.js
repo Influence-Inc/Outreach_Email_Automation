@@ -16,6 +16,7 @@
 //   /o/:token                             creator offer page
 //   /go/imessage                          iMessage deep-link redirect
 //   /r/:code                              creator referral link → platform sign-up
+//   /fonts/*                              the Inter files the signing page loads
 //   /api/contracts/*, /api/offers/*       the data those two pages fetch
 //   /webhook/*                            Instantly / Twilio / Meta / Linq
 //   /api/bot/*                            server-to-server, x-bot-token
@@ -166,6 +167,7 @@ const PUBLIC_PREFIXES = [
   '/o/',
   '/go/',
   '/r/',
+  '/fonts/',
   '/auth/slack',
 ];
 

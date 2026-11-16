@@ -56,6 +56,11 @@ app.use(cors());
 // often several MB of highly repetitive JSON per campaign switch. Compressed it's
 // a fraction of that over the wire.
 app.use(compression());
+// Local development only: Agentation's annotation toolbar on every page, its
+// notes reaching the coding agent (npm run dev:agentation; src/devtools).
+if (/^(1|true|yes)$/i.test(String(process.env.AGENTATION || ''))) {
+  require('./devtools/agentation').install(app);
+}
 // A paired phone answers a `screenshot` command with the PNG inline as base64,
 // and a full-resolution phone screen easily clears 1 MB once base64-encoded.
 // Under the global 1 MB parser below that POST 413s, the agent's result never
