@@ -2544,7 +2544,9 @@ async function handleAcceptedReply(creatorId) {
         ? 'Creator changed deal terms after accepting — their (unsigned) contract has been re-synced from the thread; a human should confirm the new terms and re-send the contract link.'
         : res.signed
           ? 'Creator changed deal terms after accepting, but their contract is already SIGNED — it was NOT auto-changed; a human must handle this amendment.'
-          : 'Creator changed deal terms after accepting — a human should review (no contract on file yet to update).',
+          : res.handEntered
+            ? 'Creator changed deal terms after accepting. Their contract was drawn up from a call, so it was NOT auto-changed from the email thread — update its terms from the Deals column if needed, then re-share the link.'
+            : 'Creator changed deal terms after accepting — a human should review (no contract on file yet to update).',
     );
     await markHandled();
     return { termsChanged: true, contractUpdated: res.updated, signed: res.signed };
@@ -3250,6 +3252,12 @@ module.exports = {
   asksUsToQuoteFirst,
   latestCreatorMessage,
   draftAcknowledgmentLine,
+  // Shared with services/callContract.js (contracts for deals agreed on a call).
+  sendNegotiationEmail,
+  templateVars,
+  composedOffer,
+  termsDetail,
+  hasPortalDeal,
   // Test-only.
   _setClient,
 };

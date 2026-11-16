@@ -56,6 +56,63 @@ admin picks a campaign → adds creator IG URL → status: pending_extraction
   ↓ status: followup_sent
 ```
 
+## Contracts for deals agreed on a call
+
+Every other contract path waits for the creator's "yes" in the email thread and
+writes the contract by extracting the deal from that thread. A deal settled on a
+call has neither, so each creator row without a contract has a **Create
+contract** icon (also reachable from a hand-off's "Record the final terms"). The
+team enters what was agreed — pay terms, deal shape, videos / views / bonus,
+platforms, deadline, paid-ad rights, upfront split, exclusivity, extra clauses —
+and `services/callContract.js`:
+
+1. builds the contract from exactly those terms (no thread extraction) and marks
+   it `termsSource: 'call'`, so a later email reply that "changes terms" never
+   re-extracts over it — the reply is handed to a human instead;
+2. books the deal as accepted with the brand go-ahead recorded (creating it is
+   the explicit human "send"), in the same transaction as the contract;
+3. delivers the signing link the way the team picks: a reply in the creator's
+   email thread, a direct email from `CONTRACT_EMAIL_FROM` (needs
+   `RESEND_API_KEY`), or not at all — the team shares the link themselves. A
+   failed send never loses the contract; the link is always shown.
+
+For a creator who was emailed but never replied, the form also offers to stop
+their Instantly follow-ups (removes the lead from this campaign only).
+
+## Referral commission
+
+A commission deal can be on **product sales** (the default) or on **brands the
+creator refers**. "Commission on: Brands they refer" is in the terms picker.
+The creator earns a % of the campaign spend of each new brand that signs up
+through them, on that brand's first N campaigns started within M months of
+sign-up. `services/referrals.js` owns it:
+
+- **Codes.** Each referral contract gets a code that is unique across all
+  creators (typed, or derived from the handle), plus a link: `/r/<CODE>`. The
+  link logs the visit and forwards the brand to `REFERRAL_SIGNUP_URL` with
+  `?ref=<CODE>&rt=<visit id>`.
+- **Sign-ups.** The platform reports each new brand account to
+  `POST /api/bot/referrals/signups` with the code typed at sign-up and the
+  link visit(s) it saw. One decision is made and stored permanently, along with
+  every claim's verdict:
+  1. A company already referred keeps its first credit, including through a
+     second account (matched by domain, else name). A company that was already
+     a customer gets none.
+  2. A claim counts only if its agreement is **signed**, the brand signed up
+     after signing and within the referral period, a link visit was within the
+     referral window, and the brand isn't the creator's own business.
+  3. A valid code entered at sign-up beats any link visit. Otherwise the most
+     recent valid visit wins. Ties go to the earlier-signed agreement, then the
+     lower creator id. A brand two creators competed for is flagged `contested`.
+- **Campaigns.** `POST /api/bot/referrals/campaigns` takes each campaign's
+  start date, status and running paid spend. The brand's ledger is recomputed
+  on every report: cancelled or unstarted campaigns don't use a slot, a late
+  report re-ranks, and refunds lower the commission.
+- **Team.** The Deals column shows the code (click to copy the link) and
+  brands / earnings. `GET /api/referrals/signups?contested=1` lists decisions,
+  and `POST /api/referrals/signups/:id/override {code, note}` settles a dispute
+  by hand. The note is required and kept.
+
 ## Signed contracts
 
 Whenever a creator signs, they get their executed copy by email with the PDF

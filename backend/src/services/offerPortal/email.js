@@ -426,6 +426,41 @@ async function sendBriefReadyEmail({ to, firstName, brandName, briefUrl }) {
   return deliver({ to, subject, text, html });
 }
 
+// Contract signing link for a deal agreed on a CALL (services/callContract.js),
+// when the creator has no email thread to reply in — or the team chose a clean
+// direct email over the thread. It names the call, because that is the
+// creator's only context for why a contract is arriving: nothing in their inbox
+// led up to it. Sent from the contracts@ sender, like the signed copy that will
+// follow it, so "is this right?" replies reach the contract team.
+function renderContractReadyEmail({ firstName, brandName, contractUrl }) {
+  const brand = brandName || 'the brand';
+  const subject = `Your ${brand} contract is ready to sign`;
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `Great speaking with you! As discussed on our call, here's your contract with ${brand} for review and signing:`,
+    ``,
+    contractUrl,
+    ``,
+    `It sets out everything we agreed. Once it's signed, we'll share a quick content brief so you can get started.`,
+    ``,
+    `INFLUENCE Contracts`,
+  ].join('\n');
+
+  const html = shell(`    <p>Hi ${escapeHtml(firstName)},</p>
+    <p>Great speaking with you! As discussed on our call, here's your contract with <strong>${escapeHtml(brand)}</strong> for review and signing.</p>
+    <p style="text-align:center;margin:32px 0;"><a href="${escapeHtml(contractUrl)}" style="background:#171717;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">Review &amp; sign</a></p>
+    <p>It sets out everything we agreed. Once it's signed, we'll share a quick content brief so you can get started.</p>
+    <p style="margin-top:24px;">INFLUENCE Contracts</p>`);
+
+  return { subject, text, html };
+}
+
+async function sendContractReadyEmail({ to, firstName, brandName, contractUrl }) {
+  const { subject, text, html } = renderContractReadyEmail({ firstName, brandName, contractUrl });
+  return deliver({ to, from: contractFromAddress(), subject, text, html });
+}
+
 // Signed-agreement copy — sent to the creator the moment they sign, with the
 // executed PDF attached (services/signedContractEmail.js builds it). Creators
 // routinely ask for "a copy of what I signed" days later; this puts it in their
@@ -509,6 +544,8 @@ module.exports = {
   sendGraduationEmail,
   renderBriefReadyEmail,
   sendBriefReadyEmail,
+  renderContractReadyEmail,
+  sendContractReadyEmail,
   renderSignedContractEmail,
   sendSignedContractEmail,
   renderProseEmail,

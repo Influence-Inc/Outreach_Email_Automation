@@ -142,3 +142,13 @@ select.tp-input { font-weight: 500; }
 .tp-suggest:hover { background: #ebe2fd; }
 .tp-summary { font-size: 12.5px; line-height: 1.45; color: var(--muted, #8a8880); }
 .tp-summary b { color: var(--ink, #191817); font-weight: 600; }
+/* "Commission on: Product sales | Brands they refer" — what the % is of. */
+.tp-basis-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tp-basis { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--surface-3, #f2f0eb); border: 1px solid var(--line-3, #eeece6); }
+.tp-basis-btn {
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; padding: 5px 10px; border-radius: 6px;
+  border: none; background: transparent; color: var(--muted, #8a8880);
+}
+.tp-basis-btn:hover { color: var(--ink, #191817); background: transparent; }
+.tp-basis-btn.is-on { background: var(--surface, #fff); color: var(--ink, #191817); box-shadow: 0 1px 2px rgba(20, 18, 15, 0.08); }
+.tp-ref-row[hidden] { display: none; }

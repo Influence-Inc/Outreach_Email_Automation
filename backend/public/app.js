@@ -1329,6 +1329,52 @@ function appendEditableDealLine(cell, r, { label, value, editValue, placeholder,
 // admin can correct anything the extraction got wrong straight from the Deals
 // column. Works for both pending and signed contracts (signed edits are
 // persisted silently without re-triggering signing or notifying the creator).
+// A referral-commission deal's line in the Deals column: the creator's referral
+// code (click to copy the link they share with brands) and, once brands have
+// signed up through it, how many were credited and what they've earned. The
+// totals load lazily — only referral deals ask (services/referrals.js).
+function renderReferralLine(r, c) {
+  const line = document.createElement('div');
+  line.className = 'deal-line';
+  line.innerHTML = '<span class="deal-tag">REFERRAL</span>';
+  const val = document.createElement('span');
+  val.className = 'deal-val';
+  if (c.referralCode && c.referralUrl) {
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'ghost small cr-referral-copy';
+    copy.textContent = c.referralCode;
+    copy.title = `Copy referral link — ${c.referralUrl}`;
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(c.referralUrl);
+        copy.textContent = 'Copied ✓';
+        setTimeout(() => { copy.textContent = c.referralCode; }, 1400);
+      } catch {
+        window.prompt('Referral link', c.referralUrl);
+      }
+    };
+    val.appendChild(copy);
+  } else {
+    val.textContent = 'Code assigned when the contract is made';
+  }
+  const stats = document.createElement('span');
+  stats.className = 'cr-referral-stats';
+  val.appendChild(stats);
+  line.appendChild(val);
+  if (c.referralCode) {
+    api(`/api/referrals/creators/${r.id}`)
+      .then((res) => {
+        const n = (res.brands || []).length;
+        stats.textContent = n
+          ? ` ${n} brand${n === 1 ? '' : 's'} · $${fmtNum(res.total_commission)} earned`
+          : ' no brands yet';
+      })
+      .catch(() => {});
+  }
+  return line;
+}
+
 function renderEditableDeal(cell, r, data) {
   const signed = r.contract && r.contract.status !== 'pending';
   const hint = document.createElement('div');
@@ -1350,8 +1396,15 @@ function renderEditableDeal(cell, r, data) {
       data.compensationModel === 'product'
         ? `Product only${data.productDescription ? ` — ${data.productDescription}` : ''}`
         : (data.commission && data.commission.summary) || data.offerLabel || '';
+    // A commission sentence is long for this narrow column: show three lines,
+    // the whole of it on hover (it's on the contract in full).
+    if (data.commission && data.commission.summary) {
+      payVal.classList.add('deal-val-clamp');
+      payVal.title = data.commission.summary;
+    }
     payLine.appendChild(payVal);
     cell.appendChild(payLine);
+    if (data.commission && data.commission.basis === 'referral') cell.appendChild(renderReferralLine(r, data.commission));
   }
   // Offer-type toggle: cycles View-based → Video-based → Video + bonus when the
   // extraction shaped the wrong kind of deal (or to add a performance bonus).
@@ -1627,6 +1680,17 @@ function renderRateCell(r, cell) {
 
 const TRASH_SVG =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+
+// "Create contract" — a document with a pen line, for the square icon button
+// that opens the call-contract form.
+const CONTRACT_SVG =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><polyline points="14 3 14 8 19 8"></polyline><line x1="9" y1="13" x2="15" y2="13"></line><line x1="9" y1="17" x2="13" y2="17"></line></svg>';
+
+// A contract can be drawn up from a call for any creator who doesn't have one
+// yet — except a portal deal, whose signature on the offer page IS the contract.
+function canCreateCallContract(r) {
+  return !(r.contract && r.contract.status) && !isPortalDeal(r);
+}
 
 // "Stop outreach" — a ban/no-entry glyph for the square icon button that sits
 // beside the delete button on every creator row.
@@ -2057,6 +2121,26 @@ function renderStatusCell(r, cell) {
 
   top.appendChild(left);
 
+  // The row's square icon actions (create contract, stop, delete) sit in one
+  // cluster so a long status pill wraps them as a group, never splitting them.
+  const icons = document.createElement('div');
+  icons.className = 'cr-status-icons';
+
+  // Create contract — for a deal agreed on a CALL, which never produces the
+  // email "yes" every other contract path waits for. Offered on any creator
+  // without a contract (portal deals sign their own mini contract on the
+  // offer page); opens the call-contract form (public/callContract.js).
+  if (canCreateCallContract(r)) {
+    const mk = document.createElement('button');
+    mk.type = 'button';
+    mk.className = 'icon-btn-sq neutral cr-call-contract';
+    mk.title = 'Create contract — for a deal agreed on a call';
+    mk.setAttribute('aria-label', 'Create contract');
+    mk.innerHTML = CONTRACT_SVG;
+    mk.onclick = () => openCallContractModal(r);
+    icons.appendChild(mk);
+  }
+
   // Stop outreach — a square icon button beside delete, available on every
   // creator at any lifecycle stage (only hidden once already stopped, where it
   // would be a no-op). Removes the creator's lead from THIS Instantly campaign
@@ -2087,7 +2171,7 @@ function renderStatusCell(r, cell) {
         stop.disabled = false;
       }
     };
-    top.appendChild(stop);
+    icons.appendChild(stop);
   }
 
   const del = document.createElement('button');
@@ -2115,7 +2199,8 @@ function renderStatusCell(r, cell) {
       del.disabled = false;
     }
   };
-  top.appendChild(del);
+  icons.appendChild(del);
+  top.appendChild(icons);
 
   // Dismiss sits beside delete (rather than down with the type-specific
   // launcher) so the two dismissive actions on a flagged row — snooze the flag
@@ -2441,6 +2526,7 @@ function openInterventionModal(r) {
   m.meta.hidden = false;
   // The offer configurator is a wide three-card layout — give it room.
   m.dialog.classList.toggle('wide', offer);
+  m.dialog.classList.remove('cc-modal');
 
   if (offer) {
     // Dashboard fallback for the extension: the full offer configurator, sending
@@ -5456,9 +5542,10 @@ function buildRecordTermsBlock(r) {
   const block = document.createElement('details');
   block.className = 'record-terms-block';
   block.innerHTML = `
-    <summary>Agreed a deal by email? Record the final terms</summary>
+    <summary>Agreed a deal by email or on a call? Record the final terms</summary>
     <div class="record-terms-body">
       <div class="record-terms-desc">Nothing is emailed. The deal moves to “awaiting brand approval”, and the contract is written from these terms — use it when the agreement happened in your own emails.</div>
+      <button class="record-terms-call" type="button">Agreed on a call instead? Write the contract from the call and send it →</button>
       <div class="record-terms-picker"></div>
       <div class="delegate-reply-foot">
         <span class="delegate-status hint"></span>
@@ -5469,6 +5556,7 @@ function buildRecordTermsBlock(r) {
   const offer = r.custom_offer && typeof r.custom_offer === 'object' ? r.custom_offer : null;
   if (offer && offer.terms) picker.setTerms(offer.terms);
   block.querySelector('.record-terms-picker').appendChild(picker.el);
+  block.querySelector('.record-terms-call').onclick = () => openCallContractModal(r);
   const statusEl = block.querySelector('.delegate-status');
   const btn = block.querySelector('.record-terms-btn');
   btn.onclick = async () => {

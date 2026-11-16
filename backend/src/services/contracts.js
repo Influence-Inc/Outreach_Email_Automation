@@ -365,12 +365,27 @@ function termsContractFields(terms) {
           termMonths: c.term_months,
           payoutNetDays: c.payout_net_days,
           summary: dealTerms.commissionSentence(terms),
+          // A referral deal (a share of referred brands' campaign spend) adds
+          // its limits and the contract rows it renders verbatim; the code and
+          // link are filled in once reserved (referrals.applyReferralCode).
+          ...(dealTerms.isReferral(terms)
+            ? {
+                basis: 'referral',
+                campaignsPerBrand: c.campaigns_per_brand,
+                campaignWindowMonths: c.campaign_window_months,
+                referralCode: c.promo_code || null,
+                referralUrl: null,
+                ...require('./referrals').referralContractTexts(c, null),
+              }
+            : {}),
         }
       : null,
     productDescription: terms.product || null,
   };
   // Payment-method clause for the cash that actually moves.
-  if (terms.model === 'commission') {
+  if (terms.model === 'commission' && dealTerms.isReferral(terms)) {
+    fields.paymentTerms = `Referral commission is paid by direct bank transfer, monthly, within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid`;
+  } else if (terms.model === 'commission') {
     fields.paymentTerms = `Commission is paid by direct bank transfer, monthly, within ${c.payout_net_days} days of each month's end`;
   } else if (terms.model === 'product') {
     fields.paymentTerms = 'No cash payment — the product is shipped to the creator before content production';
@@ -1227,12 +1242,36 @@ async function createContractForCreator(creatorId) {
 
   const data = await extractContractData(creator);
   const token = generateToken();
+  // A referral-commission deal needs its referral code before the creator sees
+  // the contract (the code and link are quoted in it). Typed codes that clash
+  // fall back to a free one here — this runs unattended on acceptance, so there
+  // is nobody to ask; the call-contract form asks instead.
+  const terms = await agreedTermsFor(creator);
+  let referralCode = null;
+  if (dealTerms.isReferral(terms)) {
+    const referrals = require('./referrals');
+    const q = (sql, params) => db.query(sql, params);
+    try {
+      referralCode = await referrals.chooseCode(q, creator, terms);
+    } catch (err) {
+      if (err.status !== 409) throw err;
+      referralCode = await referrals.chooseCode(q, creator, {
+        ...terms, commission: { ...terms.commission, promo_code: null },
+      });
+    }
+    referrals.applyReferralCode(data, terms, referralCode);
+  }
   const contract = await db.one(
     `INSERT INTO contracts (token, creator_id, campaign_id, status, data)
      VALUES ($1, $2, $3, 'pending', $4::jsonb)
      RETURNING *`,
     [token, creatorId, creator.campaign_id, JSON.stringify(data)],
   );
+  if (referralCode) {
+    await require('./referrals').reserveCode((sql, params) => db.query(sql, params), {
+      code: referralCode, creatorId, contractId: contract.id,
+    });
+  }
   await db.query(
     `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_created', $2)`,
     [creatorId, { token, contract_id: contract.id }],
@@ -1242,6 +1281,126 @@ async function createContractForCreator(creatorId) {
 
 async function getByToken(token) {
   return db.one(`SELECT * FROM contracts WHERE token = $1`, [token]);
+}
+
+// ── Contracts for deals agreed on a CALL ─────────────────────────────────────
+// Every other path writes the contract by extracting the deal from the email
+// thread. A deal settled on a call has no thread to extract from — or a thread
+// that stops at "let's jump on a call" — so extraction would fill the contract
+// with defaults the creator never agreed to. These contracts are instead built
+// deterministically from the terms the team entered (services/callContract.js
+// validates them), and marked termsSource: 'call' so a later thread
+// re-extraction (updateContractTermsFromThread) never overwrites them.
+
+const CALL_SHAPE_LABELS = {
+  video_based: 'Video-based deal',
+  view_based: 'View-based deal',
+  video_bonus: 'Video + bonus deal',
+};
+
+// The offer object a call-agreed deal is booked as — stored on the creator's
+// custom_offer (what the Deals column and resolveOffer read) and fed through
+// baseContractData so the contract carries exactly the same fields an
+// email-negotiated deal of that shape would. `input` is the normalized shape
+// from callContract.normalizeCallContractInput.
+function callContractOffer(input) {
+  const t = input.terms;
+  const offer = {
+    offer_id: 'call_agreed',
+    offer_type: input.shape,
+    compensation_model: t.model,
+    terms: t,
+    label: dealTerms.isFlat(t) ? CALL_SHAPE_LABELS[input.shape] : dealTerms.describeTerms(t),
+    summary: dealTerms.termsSummary(t),
+    flat_fee: t.fee,
+    note: 'Agreed with the creator on a call and entered by our team.',
+  };
+  if (input.shape === 'view_based') {
+    offer.view_guarantee = input.minTotalViews;
+    offer.min_videos = input.minVideos || null;
+    offer.view_counting_days = input.viewCountingDays;
+  } else {
+    offer.num_videos = input.numberOfVideos;
+  }
+  if (input.shape === 'video_bonus') {
+    // The fee entered is the GUARANTEED BASE; the bonus is paid on top, so the
+    // offer's aggregate flat_fee is base + bonus — the same split the panel
+    // offers carry, which baseContractData already knows how to read.
+    offer.base_fee = t.fee;
+    offer.flat_fee = t.fee + input.bonusAmount;
+    offer.bonus_amount = input.bonusAmount;
+    offer.bonus_threshold_views = input.bonusThresholdViews;
+    offer.view_counting_days = input.viewCountingDays;
+  }
+  return offer;
+}
+
+// "2026-12-04" → "Friday, December 4, 2026", the human form every other
+// contract carries (the Deals column strips the weekday for display). Read in
+// UTC so the date the team picked is the date on the contract, whatever the
+// server's timezone.
+function humanDeadline(isoDate) {
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  return d.toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+  });
+}
+
+// The full contract data for a call-agreed deal. Pure: `creator` is the row
+// loadCreator returns (with the campaign's brand + usage_rights_policy joined).
+function buildCallContractData(creator, input, { now = new Date() } = {}) {
+  const terms = input.terms;
+  const flat = dealTerms.isFlat(terms);
+  const offer = callContractOffer(input);
+  const data = baseContractData(creator, terms.fee, offer, flat ? null : terms);
+
+  data.platforms = input.platforms.slice();
+  // Only a view-based deal promises a view FLOOR. guaranteedViewsOf falls back
+  // to a bonus offer's threshold, which is the number that unlocks the bonus,
+  // not a guarantee (coerceContractPatch clears it the same way).
+  if (input.shape !== 'view_based') {
+    data.minTotalViews = null;
+    data.guaranteedViews = null;
+  }
+
+  const deadlineDate = new Date(`${input.postingDeadline}T12:00:00Z`);
+  data.postingDeadline = humanDeadline(input.postingDeadline);
+  data.deadline = data.postingDeadline;
+  data.postingWindows = input.shape === 'view_based'
+    ? []
+    : suggestPostingWindows(input.numberOfVideos, deadlineDate);
+
+  // Paid-ad rights are whatever was agreed on the call. Keep the policy's own
+  // wording when the campaign REQUIRES them, else the "included at no extra
+  // cost" phrasing the Deals-column toggle uses.
+  const policy = creator.usage_rights_policy;
+  Object.assign(
+    data,
+    usageRightsFor(input.paidAdsIncluded ? (policy === 'required' ? 'required' : 'free_only') : 'no_rights'),
+  );
+  data.exclusivity = input.exclusivity || 'None';
+
+  // An upfront split only applies to cash that moves at signing: a commission
+  // or product deal has no fee to split (normalize already refuses it).
+  const upfront = input.upfrontPercent != null && terms.fee != null;
+  Object.assign(data, paymentScheduleFor(upfront, input.upfrontPercent));
+  if (terms.model === 'flat' || terms.model === 'hybrid') {
+    data.paymentTerms = paymentTermsFor(data.paymentTermsDays, { hasSchedule: upfront });
+  }
+
+  data.manualTerms = input.manualTerms.slice();
+  data.additionalTerms = [];
+  if (!data.email && input.delivery && input.delivery.to) data.email = input.delivery.to;
+
+  data.termsSource = 'call';
+  data.callAgreedAt = now.toISOString();
+  return data;
+}
+
+// Does this contract's data come from terms the team entered by hand (a call),
+// rather than from the email thread? Those must never be re-extracted.
+function isHandEnteredContract(data) {
+  return !!(data && data.termsSource === 'call');
 }
 
 // ── Usage-rights dispute handling (free_only policy) ──────────────────────
@@ -1757,6 +1916,12 @@ async function updateContractTermsFromThread(creatorId) {
   );
   if (!existing) return { updated: false, signed: false, row: null };
   if (existing.status !== 'pending') return { updated: false, signed: true, row: existing };
+  // A contract drawn up from a CALL holds terms the thread never saw — a
+  // re-extraction would replace them with thread defaults. Leave it for a human
+  // (the caller delegates), who edits it from the Deals column.
+  if (isHandEnteredContract(existing.data)) {
+    return { updated: false, signed: false, handEntered: true, row: existing };
+  }
 
   const creator = await loadCreatorForContract(creatorId);
   if (!creator) return { updated: false, signed: false, row: existing };
@@ -1892,6 +2057,11 @@ module.exports = {
   coveredByManual,
   createContractForCreator,
   getByToken,
+  callContractOffer,
+  buildCallContractData,
+  isHandEnteredContract,
+  humanDeadline,
+  suggestPostingWindows,
   recordSubmission,
   markSynced,
   markDashboardSynced,

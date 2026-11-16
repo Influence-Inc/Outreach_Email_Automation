@@ -16,6 +16,8 @@ const { api: offersApi, page: offerPage } = require('./routes/offers');
 const { api: briefsApi, page: briefPage } = require('./routes/briefs');
 const offerReview = require('./routes/offerReview');
 const bot = require('./routes/bot');
+const referralsAdmin = require('./routes/referrals');
+const referrals = require('./services/referrals');
 const creatorDbRoutes = require('./routes/creatorDb');
 const sourcing = require('./routes/sourcing');
 const scheduler = require('./services/scheduler');
@@ -190,6 +192,8 @@ app.use('/api/contract-pdf', contractPdf);
 // counter here (resolved by unguessable token only).
 app.use('/api/offers', offersApi);
 app.use('/api/offer-review', offerReview);
+// Referral commission — the team's view of referred brands and disputes.
+app.use('/api/referrals', referralsAdmin);
 // Bot API for the campaigns dashboard (influence-stats) to fetch per-creator
 // contract URLs so it can render the "Contract submission" column.
 app.use('/api/bot', bot);
@@ -216,6 +220,10 @@ app.get('/brief/:token', briefPage);
 // Public iMessage redirect. The email "Text us on iMessage" button links here
 // (an https link email clients keep clickable, unlike a raw sms: link Gmail
 // strips); this opens the visitor's Messages app to our business number.
+// Public referral link (/r/<code>): logs the visit and forwards the brand to the
+// platform's sign-up page with ?ref=<code>&rt=<visit id>. services/referrals.js.
+app.get('/r/:code', referrals.handleReferralLink);
+
 app.get('/go/imessage', (_req, res) => {
   res.set('Content-Type', 'text/html; charset=utf-8').send(offerImessage.renderRedirectPage());
 });

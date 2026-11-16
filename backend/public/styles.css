@@ -1259,3 +1259,74 @@ button:disabled { opacity: 0.5; cursor: default; }
   border: 1px solid var(--line-2); border-radius: var(--radius-xs);
   background: var(--surface-3); color: var(--ink);
 }
+
+/* ---- Create contract (deal agreed on a call) — public/callContract.js ---- */
+/* A neutral variant of the square row icon: creating a contract is not a
+   destructive action like its Stop / Delete neighbours. */
+.icon-btn-sq.neutral { color: var(--ink-2); }
+.icon-btn-sq.neutral:hover { background: var(--surface-3); border-color: var(--line-2); color: var(--ink); }
+
+.intervene-modal.cc-modal { width: min(720px, 100%); }
+.cc-form { display: flex; flex-direction: column; gap: 20px; }
+.cc-form [hidden] { display: none !important; }
+.cc-intro { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.cc-section { display: flex; flex-direction: column; gap: 10px; }
+.cc-well {
+  display: flex; flex-direction: column; gap: 12px; padding: 12px;
+  border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line-3);
+}
+.cc-shape-note { justify-content: flex-end; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.cc-sub { font-size: 12px; font-weight: 400; color: var(--muted); line-height: 1.45; }
+
+.cc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cc-chip { position: relative; cursor: pointer; }
+.cc-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.cc-chip span {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  border: 1px solid var(--line-2); background: var(--surface);
+}
+.cc-chip span::before { content: '+'; color: var(--faint); font-weight: 600; }
+.cc-chip:hover span { background: var(--surface-3); }
+.cc-chip input:checked + span { background: var(--ink); border-color: var(--ink); color: #fff; }
+.cc-chip input:checked + span::before { content: '✓'; color: #fff; }
+.cc-chip input:focus-visible + span { box-shadow: var(--ring); }
+
+.cc-toggle, .cc-radio {
+  display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+  font-size: 13px; color: var(--ink); cursor: pointer; line-height: 1.4;
+}
+.cc-toggle > span:first-of-type, .cc-radio > span:first-of-type { flex: 1 1 260px; min-width: 0; }
+.cc-toggle b, .cc-radio b { font-weight: 600; }
+.cc-toggle input[type=checkbox], .cc-radio input[type=radio] { margin: 2px 0 0; accent-color: var(--ink); flex-shrink: 0; }
+.cc-radio.is-disabled { cursor: default; color: var(--faint); }
+.cc-radio.is-disabled b { color: var(--muted); }
+.cc-delivery .cc-to { flex: 1 1 100%; margin-left: 24px; max-width: 360px; }
+.cc-upfront-pct { width: 140px; margin-left: 24px; }
+.cc-delivery .cc-stop { margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--line-3); }
+.cc-form textarea.tp-input { font-weight: 500; resize: vertical; line-height: 1.45; }
+.cc-foot { margin-top: 0; position: sticky; bottom: -20px; padding: 12px 0; background: var(--surface); border-top: 1px solid var(--line-3); }
+
+.cc-done { display: flex; flex-direction: column; gap: 14px; }
+.cc-done-head { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; font-weight: 600; color: var(--ink); line-height: 1.45; }
+.cc-done-icon {
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; color: #fff; background: var(--green);
+}
+.cc-done-head.warn .cc-done-icon { background: var(--warn); }
+.cc-done-note { margin-top: -6px; padding-left: 32px; }
+.cc-link-row { display: flex; gap: 8px; align-items: center; }
+.cc-link-row .cc-link { flex: 1; font-weight: 500; font-size: 12.5px; color: var(--ink-2); }
+.cc-link-row a.ghost.small { text-decoration: none; }
+
+/* "Agreed on a call instead?" — the shortcut from Record agreed terms. */
+.record-terms-call {
+  align-self: flex-start; padding: 0; border: none; background: none; cursor: pointer;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px;
+}
+.record-terms-call:hover { background: none; color: var(--ink); }
+.cr-status-icons { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.cc-form .tp-field.tp-narrow { flex: 0 1 150px; }
+.cr-referral-copy { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.02em; }
+.cr-referral-stats { font-size: 12px; color: var(--muted); }
+.deal-val-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: help; }

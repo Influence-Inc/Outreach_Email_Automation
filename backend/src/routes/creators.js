@@ -267,6 +267,7 @@ function rateLogEntry(type, detail, msg, summary) {
     case 'rate_accepted': {
       if (d.model && d.label) {
         // Terms the team recorded by hand vs. the creator saying yes by email.
+        if (d.source === 'call') return { text: `Deal agreed on a call ✓ — ${d.label}`, tone: 'success' };
         return d.source === 'recorded'
           ? { text: `Terms agreed ✓ — ${d.label} (recorded)`, tone: 'success' }
           : { text: `Creator accepted ✓ — ${d.label}`, tone: 'success' };
@@ -343,7 +344,9 @@ function rateLogEntry(type, detail, msg, summary) {
     case 'contract_approved':
       return { text: 'Deal approved ✓', tone: 'success' };
     case 'contract_sent':
-      return { text: 'Contract sent', tone: 'active' };
+      // A call contract emailed directly (no thread to reply in) says so, so
+      // the team knows to look in the creator's inbox, not the thread.
+      return { text: d.channel === 'email' ? 'Contract emailed' : 'Contract sent', tone: 'active' };
     case 'contract_signed':
       return { text: 'Contract signed ✓', tone: 'success' };
     case 'mini_contract_signed':
