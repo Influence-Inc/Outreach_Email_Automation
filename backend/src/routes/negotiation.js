@@ -235,6 +235,13 @@ router.post('/:id/approve-contract', async (req, res, next) => {
 // at any stage). An explicit human "send the contract" counts as the brand
 // go-ahead, so the approval is recorded here before sending — ensureContractSent
 // refuses to send without it. Idempotent — reuses any existing contract.
+//
+// Re-sending: when this request is the one that records the approval it is a
+// first send, so an existing contract is NOT re-emailed — that's the race where
+// the scheduler backfill sees the fresh approval and sends the contract at the
+// same moment (two signing emails for one creator). A request on an
+// already-approved creator is a deliberate re-send and re-emails the existing
+// link, unless a concurrent caller created that contract moments ago.
 router.post('/:id/contract', async (req, res, next) => {
   try {
     const exists = await db.one(`SELECT id FROM creators WHERE id = $1`, [req.params.id]);
@@ -250,7 +257,7 @@ router.post('/:id/contract', async (req, res, next) => {
         [req.params.id, { by: 'admin', via: 'manual_contract' }],
       );
     }
-    const result = await negotiation.ensureContractSent(req.params.id);
+    const result = await negotiation.ensureContractSent(req.params.id, { resend: !claimed });
     const fresh = await db.one(`SELECT * FROM creators WHERE id = $1`, [req.params.id]);
     res.json({ ...fresh, contract_result: result });
   } catch (err) {

@@ -2197,6 +2197,16 @@ async function requestContractApproval(creator, fee, terms = null) {
 // design: any failure here is logged but never thrown out of the approval —
 // the approval is already recorded, and the scheduler's contract backfill
 // (pollNegotiations) retries any approved ACCEPTED creator with no contract.
+//
+// The signing email goes out only when THIS call created the contract. A
+// contract that already existed (reused) means someone else already sent it —
+// most importantly a concurrent caller: the manual /contract route or an
+// approval racing the scheduler backfill, where createContractForCreator hands
+// the loser the winner's contract (reused + raced). Emailing then would send
+// the creator the same signing link twice. result.resend opts in to emailing
+// an existing contract again (a deliberate human re-send), but never one a
+// concurrent caller created moments ago (raced) — that caller is sending it.
+// Returns { sent, reused } for callers that report it; never throws.
 async function sendContractOnAcceptance(creator, ctx, result) {
   // Used creators sign the offer-portal mini-contract for confirmation, so we
   // already hold their signed agreement — don't generate + email a separate
@@ -2215,13 +2225,19 @@ async function sendContractOnAcceptance(creator, ctx, result) {
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_skipped_portal_signed', $2)`,
         [creator.id, {}],
       );
-      return;
+      return { sent: false, reused: false };
     }
   } catch (err) {
     console.error(`[contracts] portal-signed check failed for creator ${creator.id}:`, err.message);
   }
   try {
-    const { url } = await contracts.createContractForCreator(creator.id);
+    const { url, reused, raced } = await contracts.createContractForCreator(creator.id);
+    if (reused && (raced || !result.resend)) {
+      console.log(
+        `[contracts] creator ${creator.id} already has a contract${raced ? ' (created concurrently)' : ''} — not re-emailing it`,
+      );
+      return { sent: false, reused: true };
+    }
     const v = templateVars(ctx);
     // Personalize the (otherwise fixed) contract email with one short line that
     // acknowledges the creator's acceptance message — the contract link and all
@@ -2244,8 +2260,10 @@ async function sendContractOnAcceptance(creator, ctx, result) {
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_sent', $2)`,
       [creator.id, { url }],
     );
+    return { sent: true, reused: !!reused };
   } catch (err) {
     console.error(`[contracts] failed to send contract for creator ${creator.id}:`, err.message);
+    return { sent: false, error: err.message };
   }
 }
 
@@ -2278,15 +2296,21 @@ async function hasPortalDeal(creatorId) {
 // the brand POC's recorded go-ahead (contract_approved) — approveContract and
 // the manual contract route record it before calling here, and the scheduler
 // backfill filters on it.
-async function ensureContractSent(creatorId) {
+//
+// opts.resend: re-email the signing link when the contract already exists (a
+// deliberate human re-send from the manual route). Off for the scheduler, so a
+// backfill that loses a race to an approval never sends a second email; see
+// sendContractOnAcceptance. When nothing is emailed because the contract was
+// already there, the result carries reused: true.
+async function ensureContractSent(creatorId, { resend = false } = {}) {
   const creator = await loadCreator(creatorId);
   if (!creator) return { skipped: 'no creator' };
   if (!creator.contract_approved) return { skipped: 'not approved' };
   // The scheduler query already excludes portal deals; re-checked here so every
   // caller of this entry point is covered.
   if (await hasPortalDeal(creatorId)) return { skipped: 'portal_deal' };
-  await sendContractOnAcceptance(creator, ctxFor(creator), { send_now: true });
-  return { ok: true };
+  const sent = await sendContractOnAcceptance(creator, ctxFor(creator), { send_now: true, resend });
+  return sent && sent.reused && !sent.sent ? { ok: true, reused: true } : { ok: true };
 }
 
 // Email the creator's published content brief as a threaded reply in the

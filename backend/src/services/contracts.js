@@ -1311,66 +1311,102 @@ function mergeContractData(base, out) {
 // every read pick the one that matters.
 const CONTRACT_STATUS_RANK = "CASE status WHEN 'completed' THEN 0 WHEN 'signed' THEN 1 ELSE 2 END";
 
+const FIND_CONTRACT_SQL = `SELECT * FROM contracts WHERE creator_id = $1
+     ORDER BY ${CONTRACT_STATUS_RANK}, created_at DESC LIMIT 1`;
+
+function reusedContract(existing, { raced = false } = {}) {
+  return {
+    token: existing.token,
+    url: contractUrl(existing.token),
+    data: existing.data,
+    contract: existing,
+    reused: true,
+    raced,
+  };
+}
+
 // Generate (or reuse) the creator's contract. Idempotent: a creator never gets a
 // second contract, so scheduler retries + the accepted hook can't duplicate.
+//
+// Concurrency: the approval / manual-send path and the scheduler's contract
+// backfill can call this for the same creator at the same moment, and the
+// thread extraction between "is there a contract?" and the INSERT takes ~10s
+// (a Claude call). Without serialisation both callers pass the check and both
+// INSERT — two contracts, two signing emails. So the INSERT runs in a
+// transaction that first locks the creator's row (SELECT … FOR UPDATE, the
+// same per-creator lock callContract.createContractFromCall takes, so the two
+// create paths also exclude each other) and re-checks for a contract under the
+// lock. The loser gets the winner's contract back with reused + raced set.
+//
+// The slow extraction deliberately runs BEFORE the lock: holding a row lock
+// (and a pooled connection) across a 10s model call would block every other
+// write to the creator. The cost is that a losing racer's extraction is thrown
+// away — rare, and cheaper than the alternative.
+//
+// Why a row lock rather than a partial unique index + ON CONFLICT: existing
+// databases already hold duplicate rows from this race (see
+// CONTRACT_STATUS_RANK), so a unique index would fail to build without a data
+// clean-up first, and ON CONFLICT alone would still let both racers run the
+// extraction and reserve referral codes before one INSERT lost.
+//
+// Returns { token, url, data, contract, reused, raced }: reused when a contract
+// already existed, raced when it was found only on the re-check under the lock
+// (a concurrent caller created it while this one was extracting).
 async function createContractForCreator(creatorId) {
   const creator = await loadCreatorForContract(creatorId);
   if (!creator) throw new Error(`contracts: creator ${creatorId} not found`);
 
-  const existing = await db.one(
-    `SELECT * FROM contracts WHERE creator_id = $1
-     ORDER BY ${CONTRACT_STATUS_RANK}, created_at DESC LIMIT 1`,
-    [creatorId],
-  );
-  if (existing) {
-    return {
-      token: existing.token,
-      url: contractUrl(existing.token),
-      data: existing.data,
-      contract: existing,
-      reused: true,
-    };
-  }
+  // Fast path — no lock needed to see a contract that's already there.
+  const existing = await db.one(FIND_CONTRACT_SQL, [creatorId]);
+  if (existing) return reusedContract(existing);
 
   const data = await extractContractData(creator);
-  const token = generateToken();
-  // A referral-commission deal needs its referral code before the creator sees
-  // the contract (the code and link are quoted in it). Typed codes that clash
-  // fall back to a free one here — this runs unattended on acceptance, so there
-  // is nobody to ask; the call-contract form asks instead.
   const terms = await agreedTermsFor(creator);
-  let referralCode = null;
-  if (dealTerms.isReferral(terms)) {
-    const referrals = require('./referrals');
-    const q = (sql, params) => db.query(sql, params);
-    try {
-      referralCode = await referrals.chooseCode(q, creator, terms);
-    } catch (err) {
-      if (err.status !== 409) throw err;
-      referralCode = await referrals.chooseCode(q, creator, {
-        ...terms, commission: { ...terms.commission, promo_code: null },
+
+  return db.withTransaction(async (client) => {
+    await client.query(`SELECT id FROM creators WHERE id = $1 FOR UPDATE`, [creatorId]);
+    const raced = (await client.query(FIND_CONTRACT_SQL, [creatorId])).rows[0];
+    if (raced) return reusedContract(raced, { raced: true });
+
+    const token = generateToken();
+    const q = (sql, params) => client.query(sql, params);
+    // A referral-commission deal needs its referral code before the creator sees
+    // the contract (the code and link are quoted in it). Typed codes that clash
+    // fall back to a free one here — this runs unattended on acceptance, so there
+    // is nobody to ask; the call-contract form asks instead. Chosen and reserved
+    // inside the transaction, so the code is held with the contract or not at all.
+    let referralCode = null;
+    if (dealTerms.isReferral(terms)) {
+      const referrals = require('./referrals');
+      try {
+        referralCode = await referrals.chooseCode(q, creator, terms);
+      } catch (err) {
+        if (err.status !== 409) throw err;
+        referralCode = await referrals.chooseCode(q, creator, {
+          ...terms, commission: { ...terms.commission, promo_code: null },
+        });
+      }
+      // Only a code the team typed is named on the contract; an assigned one
+      // (left blank, or a typed one that clashed) stays behind the link.
+      referrals.applyReferralCode(data, terms, referralCode, { shown: referrals.isTypedCode(terms, referralCode) });
+    }
+    const contract = (await client.query(
+      `INSERT INTO contracts (token, creator_id, campaign_id, status, data, thread_terms)
+       VALUES ($1, $2, $3, 'pending', $4::jsonb, $5::jsonb)
+       RETURNING *`,
+      [token, creatorId, creator.campaign_id, JSON.stringify(data), JSON.stringify(materialTerms(data))],
+    )).rows[0];
+    if (referralCode) {
+      await require('./referrals').reserveCode(q, {
+        code: referralCode, creatorId, contractId: contract.id,
       });
     }
-    // Only a code the team typed is named on the contract; an assigned one
-    // (left blank, or a typed one that clashed) stays behind the link.
-    referrals.applyReferralCode(data, terms, referralCode, { shown: referrals.isTypedCode(terms, referralCode) });
-  }
-  const contract = await db.one(
-    `INSERT INTO contracts (token, creator_id, campaign_id, status, data, thread_terms)
-     VALUES ($1, $2, $3, 'pending', $4::jsonb, $5::jsonb)
-     RETURNING *`,
-    [token, creatorId, creator.campaign_id, JSON.stringify(data), JSON.stringify(materialTerms(data))],
-  );
-  if (referralCode) {
-    await require('./referrals').reserveCode((sql, params) => db.query(sql, params), {
-      code: referralCode, creatorId, contractId: contract.id,
-    });
-  }
-  await db.query(
-    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_created', $2)`,
-    [creatorId, { token, contract_id: contract.id }],
-  );
-  return { token, url: contractUrl(token), data, contract, reused: false };
+    await client.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_created', $2)`,
+      [creatorId, { token, contract_id: contract.id }],
+    );
+    return { token, url: contractUrl(token), data, contract, reused: false, raced: false };
+  });
 }
 
 async function getByToken(token) {
