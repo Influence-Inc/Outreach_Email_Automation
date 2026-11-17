@@ -1342,7 +1342,7 @@ test('baseContractData: no upfront split by default (paid in full on completion)
 test('paymentTermsFor: standard bank-transfer clause with the given net days', () => {
   assert.strictEqual(
     contracts.paymentTermsFor(7),
-    'Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables',
+    'Payment is sent by direct bank transfer within 7 working days of completing and posting all agreed deliverables.',
   );
   assert.match(contracts.paymentTermsFor(14), /within 14 working days/);
   // Junk / missing days -> defaults to 7 so the clause is never broken.

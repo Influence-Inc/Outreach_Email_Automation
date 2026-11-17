@@ -181,7 +181,7 @@
     .sig-tools button:hover { background: var(--fill-2); }
 
     /* The agreement checkbox, as on a Mac: a rounded square that fills with
-       blue and a white check. Still a real checkbox — the label toggles it,
+       black and a white check. Still a real checkbox — the label toggles it,
        Space toggles it, screen readers read it — only its look is drawn here.
        It presses in the instant it's pressed, and the check grows in on a
        critically-damped spring (no bounce: nothing was thrown). */
@@ -194,8 +194,8 @@
       transition: background-color 0.15s ease-out, background-size 0.3s var(--spring-soft), transform 0.12s ease-out;
     }
     .agree:hover input:not(:checked) { background-color: #c7c7cc; }
-    .agree input:checked { background-color: var(--blue); background-size: 14px 14px; }
-    .agree:hover input:checked { background-color: var(--blue-2); }
+    .agree input:checked { background-color: var(--ink); background-size: 14px 14px; }
+    .agree:hover input:checked { background-color: #000; }
     .agree:active input { transform: scale(0.88); transition-duration: 0.06s; }
     .agree input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .agree span { font-size: 14px; color: var(--ink-2); text-wrap: pretty; transition: color 0.15s ease-out; }

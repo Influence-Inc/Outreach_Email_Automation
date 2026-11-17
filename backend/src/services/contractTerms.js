@@ -34,6 +34,18 @@ function rows(list) {
   return list.filter((r) => r && r.value != null && r.value !== '');
 }
 
+// Every contract sentence ends with a full stop — including text stored on
+// older contracts and terms pulled from the email thread, which often don't.
+// A trailing comma or semicolon becomes the full stop; text already ending in
+// . ! ? (or one inside a closing quote/bracket) is left alone. Mirrored as
+// sentence() in public/contract.js.
+function sentence(text) {
+  if (text == null) return text;
+  const t = String(text).trim().replace(/[,;]+$/, '');
+  if (!t || /[.!?…:]["'”’)\]]*$/.test(t)) return t;
+  return `${t}.`;
+}
+
 // Build the read-only term sections for a contract's `data` blob. Returns
 // [{ title, rows: [{ label, value, big }] }] plus an Additional Terms section
 // carrying `bullets` instead of rows.
@@ -42,51 +54,94 @@ function rows(list) {
 //
 // The Reporting / Returns rows are standard affiliate terms; their wording is
 // pending the team's legal review.
-function trackingText(c) {
-  const code = c.promoCode ? `promo code ${c.promoCode}` : 'a personal promo code (provided by us)';
-  if (c.attribution === 'code') return `Sales are attributed to the creator's ${code}`;
-  if (c.attribution === 'link_and_code') return `Sales are attributed to the creator's tracked link or ${code}`;
-  return "Sales are attributed to the creator's tracked link (provided by us)";
+// Contract wording. Version 2 (dealTerms.CONTRACT_COPY_VERSION) leads with
+// what the creator gets, then states every condition in full; a contract
+// created before it (no copyVersion) keeps the original wording, so a signed
+// contract never reads differently from what was signed. Mirrored as COPY in
+// public/contract.js.
+const COPY = {
+  1: {
+    tracking: {
+      code: (code) => `Sales are attributed to the creator's ${code}.`,
+      link_and_code: (code) => `Sales are attributed to the creator's tracked link or ${code}.`,
+      link: () => "Sales are attributed to the creator's tracked link (provided by us).",
+    },
+    reporting: "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout.",
+    returns: 'Commission on orders later refunded, returned or charged back is deducted from the next payout.',
+    commissionOnly: () => 'Commission only — no upfront fee',
+    productOnly: 'Product only — no cash payment',
+    productPayment: 'No cash payment',
+    commissionPay: (days) => `Direct bank transfer, monthly, within ${days} days of each month's end.`,
+    feePay: (days, anchor) => `Direct bank transfer, initiated within ${days} working days of ${anchor}.`,
+    exclusivity: (v) => v,
+  },
+  2: {
+    tracking: {
+      code: (code) => `Every sale made with the creator's ${code} is credited to them.`,
+      link_and_code: (code) => `Every sale through the creator's tracked link or ${code} is credited to them.`,
+      link: () => "Every sale through the creator's tracked link (provided by us) is credited to them.",
+    },
+    reporting: "Each payout comes with the brand's monthly sales report, so the creator can see exactly how their commission was calculated.",
+    returns: 'The creator earns on every completed order. Commission on orders later refunded, returned or charged back is deducted from the next payout.',
+    commissionOnly: (referral) => (referral ? 'Referral commission — no limit on the brands the creator refers' : 'Uncapped commission'),
+    productOnly: 'Gifted product — the creator keeps it',
+    productPayment: 'The product ships to the creator before content production begins.',
+    commissionPay: (days) => `Paid to the creator's bank account every month, within ${days} days of each month's end.`,
+    feePay: (days, anchor) => `Payment is sent by direct bank transfer within ${days} working days of ${anchor}.`,
+    exclusivity: (v) => (/^\s*(none|no|n\/a|no exclusivity)\.?\s*$/i.test(String(v || '')) ? 'None — the creator is free to work with any brand' : v),
+  },
+};
+function copyFor(d) {
+  return Number(d && d.copyVersion) >= 2 ? COPY[2] : COPY[1];
 }
 
-function nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct }) {
+function trackingText(c, copy) {
+  const code = c.promoCode ? `promo code ${c.promoCode}` : 'personal promo code (provided by us)';
+  const t = copy.tracking;
+  if (c.attribution === 'code') return t.code(code);
+  if (c.attribution === 'link_and_code') return t.link_and_code(code);
+  return t.link();
+}
+
+function nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct, copy }) {
   const model = d.compensationModel;
   if (!model || model === 'flat') return null;
   const c = d.commission || null;
   const out = [];
   if (model === 'product') {
-    out.push({ label: 'Compensation', value: 'Product only — no cash payment', big: true });
+    out.push({ label: 'Compensation', value: copy.productOnly, big: true });
     out.push({ label: 'Product', value: d.productDescription || 'As agreed in writing' });
-    out.push({ label: 'Payment terms', value: d.paymentTerms || 'No cash payment' });
+    out.push({ label: 'Payment terms', value: sentence(d.paymentTerms || copy.productPayment) });
     return out;
   }
   if (model === 'hybrid') {
     out.push({ label: 'Upfront fee', value: fmtMoney(d.compensation, d.currency), big: true });
   } else {
-    out.push({ label: 'Compensation', value: 'Commission only — no upfront fee', big: true });
+    out.push({ label: 'Compensation', value: copy.commissionOnly(!!(c && c.basis === 'referral')), big: true });
   }
   if (c) {
     // Mirrors public/contract.js: a referral deal's rows come from the server.
     const referral = c.basis === 'referral';
-    out.push({ label: referral ? 'Referral commission' : 'Commission', value: c.summary });
-    out.push({ label: 'Tracking', value: c.tracking || trackingText(c) });
-    out.push({ label: 'Reporting', value: c.reporting || "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout" });
-    out.push({ label: referral ? 'Refunds' : 'Returns', value: c.returns || 'Commission on orders later refunded, returned or charged back is deducted from the next payout' });
-    if (c.rules) out.push({ label: 'Referral rules', value: c.rules });
+    out.push({ label: referral ? 'Referral commission' : 'Commission', value: sentence(c.summary) });
+    out.push({ label: 'Tracking', value: sentence(c.tracking || trackingText(c, copy)) });
+    out.push({ label: 'Reporting', value: sentence(c.reporting || copy.reporting) });
+    out.push({ label: referral ? 'Refunds' : 'Returns', value: sentence(c.returns || copy.returns) });
+    if (c.rules) out.push({ label: 'Referral rules', value: sentence(c.rules) });
   }
   out.push({ label: 'Currency', value: d.currency });
   if (model === 'hybrid') {
-    out.push({ label: 'Upfront fee payment', value: termsText });
+    out.push({ label: 'Upfront fee payment', value: sentence(termsText) });
     if (hasSchedule) out.push({ label: 'Payment schedule', value: `${upPct}% upfront, ${remPct}% ${d.remainderTrigger || 'on completion'}` });
-    if (c) out.push({ label: 'Commission payment', value: `Direct bank transfer, monthly, within ${c.payoutNetDays} days of each month's end` });
+    if (c) out.push({ label: 'Commission payment', value: copy.commissionPay(c.payoutNetDays) });
   } else {
-    out.push({ label: 'Payment terms', value: d.paymentTerms || (c ? `Direct bank transfer, monthly, within ${c.payoutNetDays} days of each month's end` : '') });
+    out.push({ label: 'Payment terms', value: sentence(d.paymentTerms || (c ? copy.commissionPay(c.payoutNetDays) : '')) });
   }
   return out;
 }
 
 function contractSections(data) {
   const d = data && typeof data === 'object' ? data : {};
+  const copy = copyFor(d);
   const sections = [];
 
   sections.push({
@@ -191,13 +246,13 @@ function contractSections(data) {
   const termsAnchor = hasSchedule
     ? 'each payment milestone'
     : 'completing and posting all agreed deliverables';
-  const termsText = `Direct bank transfer, initiated within ${daysN} working days of ${termsAnchor}`;
+  const termsText = copy.feePay(daysN, termsAnchor);
   const hasBonus = !!(d.bonusAmount && d.bonusThresholdViews);
   const totalIncl = hasBonus && baseComp != null ? baseComp + Number(d.bonusAmount) : baseComp;
 
   // Commission / fee + commission / product deals (see dealTerms.js) have their
   // own pay rows; a flat-fee deal keeps the rows below unchanged.
-  const nonFlat = nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct });
+  const nonFlat = nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct, copy });
   if (nonFlat) {
     sections.push({ title: 'Compensation & Payment', rows: rows(nonFlat) });
   } else sections.push({
@@ -229,15 +284,15 @@ function contractSections(data) {
     rows: rows([
       { label: 'Usage rights', value: d.paidAdsIncluded ? 'Included' : 'Not included' },
       { label: 'Paid ads', value: d.paidAdsIncluded ? 'Included' : 'Not included' },
-      { label: 'Exclusivity', value: d.exclusivity },
+      { label: 'Exclusivity', value: copy.exclusivity(d.exclusivity) },
       { label: 'Posts remain live for', value: `${d.postLiveMonths || 6} months` },
     ]),
   });
 
-  const bullets = combinedAdditionalTerms(d);
+  const bullets = combinedAdditionalTerms(d).map(sentence);
   if (bullets.length) sections.push({ title: 'Additional Terms', bullets });
 
   return sections;
 }
 
-module.exports = { contractSections };
+module.exports = { contractSections, sentence };
