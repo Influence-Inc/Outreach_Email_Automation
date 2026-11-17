@@ -176,11 +176,18 @@ function describeTerms(t) {
 }
 
 function attributionPhrase(c) {
-  const code = c.promo_code ? `promo code ${c.promo_code}` : 'a personal promo code';
+  const code = c.promo_code ? `promo code ${c.promo_code}` : 'personal promo code';
   if (c.attribution === 'code') return `the creator's ${code}`;
   if (c.attribution === 'link_and_code') return `the creator's tracked link or ${code}`;
   return "the creator's tracked link";
 }
+
+// Contract wording version. Contract copy is written to lead with what the
+// creator earns, then the conditions, in full (see contractTerms.js and
+// public/contract.js). A contract keeps the wording it was created with, so a
+// signed contract never reads differently from what was signed: data without
+// a copyVersion renders the original (v1) wording.
+const CONTRACT_COPY_VERSION = 2;
 
 // One plain-English sentence of the commission terms — the contract's
 // Commission row, the Creator-DB sync text, and the AI prompt all use it.
@@ -204,14 +211,17 @@ function referralTrackingPhrase(c) {
 function referralSentence(t) {
   const c = t.commission;
   const n = c.campaigns_per_brand;
+  const s = (k) => (k === 1 ? '' : 's');
   const term = c.term_months
-    ? `Brands that sign up within ${c.term_months} month${c.term_months === 1 ? '' : 's'} of signing qualify`
-    : 'Brands that sign up while this agreement is in force qualify';
+    ? `Every brand that signs up within ${c.term_months} month${s(c.term_months)} of signing counts.`
+    : 'Every brand that signs up while this agreement is in force counts.';
+  // Leads with what the creator earns; every limit stays, stated in full.
   return (
-    `${pct(c.rate_pct)} of the campaign spend of each new brand that signs up to ${platformName()} through ${referralTrackingPhrase(c)},` +
-    ` on that brand's first ${n === 1 ? 'campaign' : `${n} campaigns`} started within ${c.campaign_window_months} month${c.campaign_window_months === 1 ? '' : 's'} of its sign-up.` +
-    ` A link referral counts when the brand signs up within ${c.cookie_days} day${c.cookie_days === 1 ? '' : 's'} of using the link. ${term}.` +
-    ` Paid monthly within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid.`
+    `The creator earns ${pct(c.rate_pct)} of the campaign spend of every new brand that signs up to ${platformName()} through ${referralTrackingPhrase(c)},` +
+    ` on that brand's first ${n === 1 ? 'campaign' : `${n} campaigns`} started within ${c.campaign_window_months} month${s(c.campaign_window_months)} of its sign-up.` +
+    ` There is no limit on how many brands the creator can refer. ${term}` +
+    ` A brand that uses the creator's referral link counts if it signs up within ${c.cookie_days} day${s(c.cookie_days)}.` +
+    ` Paid monthly, within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid.`
   );
 }
 
@@ -219,11 +229,14 @@ function commissionSentence(t) {
   if (!hasCommission(t)) return '';
   if (isReferral(t)) return referralSentence(t);
   const c = t.commission;
-  const term = c.term_months ? `for ${c.term_months} month${c.term_months === 1 ? '' : 's'} from signing` : 'until either party ends it in writing';
+  const term = c.term_months ? `for ${c.term_months} month${c.term_months === 1 ? '' : 's'} from signing` : 'until either party ends this agreement in writing';
+  // Leads with what the creator earns. "No cap" is literal: no deal type
+  // carries an earnings cap — if one is ever added, this line must change.
   return (
-    `${pct(c.rate_pct)} commission on net sales (excluding taxes, shipping, refunds and returns) attributed to ${attributionPhrase(c)}` +
-    ` within ${c.cookie_days} day${c.cookie_days === 1 ? '' : 's'} of a click or code use, paid monthly within ${c.payout_net_days} days` +
-    ` of each month's end against the brand's sales report, ${term}.`
+    `The creator earns ${pct(c.rate_pct)} of net sales on every order placed through ${attributionPhrase(c)},` +
+    ` up to ${c.cookie_days} day${c.cookie_days === 1 ? '' : 's'} after a click or code use, ${term}, with no cap on earnings.` +
+    ` Net sales exclude taxes, shipping, refunds and returns.` +
+    ` Paid monthly, within ${c.payout_net_days} days of each month's end, against the brand's sales report.`
   );
 }
 
@@ -254,6 +267,7 @@ module.exports = {
   hasCommission,
   isFlat,
   describeTerms,
+  CONTRACT_COPY_VERSION,
   commissionSentence,
   termsSummary,
 };

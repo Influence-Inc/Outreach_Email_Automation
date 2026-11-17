@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const zlib = require('zlib');
 
 const { renderContractPdf, contractFilename, maskTail, formatAddress } = require('./contractPdf');
-const { contractSections } = require('./contractTerms');
+const { contractSections, sentence } = require('./contractTerms');
 const { stringWidth, wrapText, encodeWinAnsi } = require('./pdf/metrics');
 const { decodeSignature } = require('./pdf/png');
 const { PdfDocument } = require('./pdf/document');
@@ -314,14 +314,14 @@ test('contractSections mirrors the signing page derivations', () => {
   assert.strictEqual(valueOf('Compensation & Payment', 'Total (incl. bonus)'), '$6,000');
   assert.strictEqual(
     valueOf('Compensation & Payment', 'Payment terms'),
-    'Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables',
+    'Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables.',
   );
   assert.strictEqual(valueOf('Usage Rights & Exclusivity', 'Posts remain live for'), '6 months');
   // "Full creative freedom" is a standing perk pitched in every template — it
   // must never show automatically (contracts.isAutoSuppressedTerm).
   assert.deepStrictEqual(byTitle['Additional Terms'].bullets, [
-    'Brand tagged in all posts',
-    'One round of revisions per video',
+    'Brand tagged in all posts.',
+    'One round of revisions per video.',
   ]);
 });
 
@@ -357,4 +357,77 @@ test('a flat video-based deal never shows a guaranteed-views floor', () => {
   });
   const deliverables = sections.find((s) => s.title === 'Campaign & Deliverables');
   assert.ok(!deliverables.rows.some((r) => /guaranteed views/i.test(r.label)));
+});
+
+test('sentence: every contract sentence ends with a full stop', () => {
+  assert.strictEqual(sentence('Spend is deducted from the next payout'), 'Spend is deducted from the next payout.');
+  assert.strictEqual(sentence('Already done.'), 'Already done.');
+  assert.strictEqual(sentence('Is it? '), 'Is it?');
+  assert.strictEqual(sentence('Tracked link (provided by us)'), 'Tracked link (provided by us).');
+  assert.strictEqual(sentence('Ends inside a bracket (like this.)'), 'Ends inside a bracket (like this.)');
+  assert.strictEqual(sentence('A list item;'), 'A list item.');
+  assert.strictEqual(sentence(''), '');
+  assert.strictEqual(sentence(null), null);
+});
+
+test('contractSections: prose rows and additional terms end with full stops, even on older contracts', () => {
+  const sections = contractSections({
+    compensationModel: 'commission',
+    currency: 'USD',
+    commission: {
+      summary: '10% commission on net sales',
+      tracking: 'Sales are attributed to the creator\'s promo code X',
+      reporting: 'Commission is calculated from the brand\'s monthly sales report',
+      returns: 'Refunds are deducted from the next payout',
+      payoutNetDays: 30,
+    },
+    paymentTerms: 'Commission is paid by direct bank transfer, monthly',
+    additionalTerms: ['Brand sends product samples', 'Creator tags the brand.'],
+  });
+  const pay = sections.find((s) => s.title === 'Compensation & Payment').rows;
+  for (const label of ['Commission', 'Tracking', 'Reporting', 'Returns', 'Payment terms']) {
+    assert.match(pay.find((r) => r.label === label).value, /\.$/, label);
+  }
+  assert.deepStrictEqual(sections.find((s) => s.title === 'Additional Terms').bullets, [
+    'Brand sends product samples.',
+    'Creator tags the brand.',
+  ]);
+});
+
+test('contract wording: new contracts lead with the benefit; older contracts keep the wording they were signed with', () => {
+  const deal = {
+    compensationModel: 'commission',
+    currency: 'USD',
+    exclusivity: 'None',
+    paymentTermsDays: 7,
+    commission: { ratePct: 15, attribution: 'code', promoCode: 'DEV15', payoutNetDays: 30, summary: 'x' },
+  };
+  const rowsOf = (data) => {
+    const out = {};
+    for (const s of contractSections(data)) for (const r of s.rows || []) out[r.label] = r.value;
+    return out;
+  };
+  const v1 = rowsOf(deal);
+  assert.strictEqual(v1.Compensation, 'Commission only — no upfront fee');
+  assert.strictEqual(v1.Tracking, "Sales are attributed to the creator's promo code DEV15.");
+  assert.strictEqual(v1.Exclusivity, 'None');
+  assert.strictEqual(v1['Payment terms'], "Direct bank transfer, monthly, within 30 days of each month's end.");
+
+  const v2 = rowsOf({ ...deal, copyVersion: 2 });
+  assert.strictEqual(v2.Compensation, 'Uncapped commission');
+  assert.strictEqual(v2.Tracking, "Every sale made with the creator's promo code DEV15 is credited to them.");
+  assert.match(v2.Reporting, /^Each payout comes with the brand's monthly sales report/);
+  // Positive framing never drops a condition: the deduction is still spelled out.
+  assert.match(v2.Returns, /deducted from the next payout\.$/);
+  assert.strictEqual(v2.Exclusivity, 'None — the creator is free to work with any brand');
+  assert.strictEqual(v2['Payment terms'], "Paid to the creator's bank account every month, within 30 days of each month's end.");
+
+  const referral = rowsOf({ ...deal, copyVersion: 2, commission: { ...deal.commission, basis: 'referral' } });
+  assert.strictEqual(referral.Compensation, 'Referral commission — no limit on the brands the creator refers');
+
+  const flat = rowsOf({ copyVersion: 2, compensation: 500, currency: 'USD', paymentTermsDays: 7 });
+  assert.strictEqual(flat['Payment terms'], 'Payment is sent by direct bank transfer within 7 working days of completing and posting all agreed deliverables.');
+  const product = rowsOf({ copyVersion: 2, compensationModel: 'product', productDescription: 'Skincare set' });
+  assert.strictEqual(product.Compensation, 'Gifted product — the creator keeps it');
+  assert.strictEqual(product['Payment terms'], 'The product ships to the creator before content production begins.');
 });

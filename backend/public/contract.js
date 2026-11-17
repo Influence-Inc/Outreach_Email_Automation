@@ -165,6 +165,15 @@
     return '<div class="k">' + esc(k) + '</div><div class="v' + (opts.big ? ' big' : '') + '">' +
       (opts.html ? v : esc(v)) + '</div>';
   }
+  // Every contract sentence ends with a full stop — including text stored on
+  // older contracts and terms pulled from the email thread, which often don't.
+  // Mirrors sentence() in backend/src/services/contractTerms.js.
+  function sentence(text) {
+    if (text == null) return text;
+    var t = String(text).trim().replace(/[,;]+$/, '');
+    if (!t || /[.!?…:]["'”’)\]]*$/.test(t)) return t;
+    return t + '.';
+  }
   function pills(arr) {
     if (!arr || !arr.length) return null;
     return '<div class="pill-list">' + arr.map(function (p) {
@@ -179,42 +188,83 @@
   // Pay rows for a deal that isn't a flat fee (commission / fee + commission /
   // product). Mirrors nonFlatPayRows in backend/src/services/contractTerms.js
   // (the PDF copy) — keep the two in step. Returns '' for a flat deal.
-  function trackingText(c) {
-    var code = c.promoCode ? 'promo code ' + c.promoCode : 'a personal promo code (provided by us)';
-    if (c.attribution === 'code') return "Sales are attributed to the creator's " + code;
-    if (c.attribution === 'link_and_code') return "Sales are attributed to the creator's tracked link or " + code;
-    return "Sales are attributed to the creator's tracked link (provided by us)";
+  // Contract wording. Version 2 leads with what the creator gets, then states
+  // every condition in full; a contract created before it (no copyVersion)
+  // keeps the original wording, so a signed contract never reads differently
+  // from what was signed. Mirrors COPY in backend/src/services/contractTerms.js.
+  var COPY = {
+    1: {
+      tracking: {
+        code: function (code) { return "Sales are attributed to the creator's " + code + '.'; },
+        link_and_code: function (code) { return "Sales are attributed to the creator's tracked link or " + code + '.'; },
+        link: function () { return "Sales are attributed to the creator's tracked link (provided by us)."; }
+      },
+      reporting: "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout.",
+      returns: 'Commission on orders later refunded, returned or charged back is deducted from the next payout.',
+      commissionOnly: function () { return 'Commission only — no upfront fee'; },
+      productOnly: 'Product only — no cash payment',
+      productPayment: 'No cash payment',
+      commissionPay: function (days) { return 'Direct bank transfer, monthly, within ' + days + " days of each month's end."; },
+      feePay: function (days, anchor) { return 'Direct bank transfer, initiated within ' + days + ' working days of ' + anchor + '.'; },
+      exclusivity: function (v) { return v; }
+    },
+    2: {
+      tracking: {
+        code: function (code) { return "Every sale made with the creator's " + code + ' is credited to them.'; },
+        link_and_code: function (code) { return "Every sale through the creator's tracked link or " + code + ' is credited to them.'; },
+        link: function () { return "Every sale through the creator's tracked link (provided by us) is credited to them."; }
+      },
+      reporting: "Each payout comes with the brand's monthly sales report, so the creator can see exactly how their commission was calculated.",
+      returns: 'The creator earns on every completed order. Commission on orders later refunded, returned or charged back is deducted from the next payout.',
+      commissionOnly: function (referral) { return referral ? 'Referral commission — no limit on the brands the creator refers' : 'Uncapped commission'; },
+      productOnly: 'Gifted product — the creator keeps it',
+      productPayment: 'The product ships to the creator before content production begins.',
+      commissionPay: function (days) { return "Paid to the creator's bank account every month, within " + days + " days of each month's end."; },
+      feePay: function (days, anchor) { return 'Payment is sent by direct bank transfer within ' + days + ' working days of ' + anchor + '.'; },
+      exclusivity: function (v) {
+        return /^\s*(none|no|n\/a|no exclusivity)\.?\s*$/i.test(String(v || '')) ? 'None — the creator is free to work with any brand' : v;
+      }
+    }
+  };
+  function copyFor(d) { return Number(d && d.copyVersion) >= 2 ? COPY[2] : COPY[1]; }
+
+  function trackingText(c, copy) {
+    var code = c.promoCode ? 'promo code ' + c.promoCode : 'personal promo code (provided by us)';
+    if (c.attribution === 'code') return copy.tracking.code(code);
+    if (c.attribution === 'link_and_code') return copy.tracking.link_and_code(code);
+    return copy.tracking.link();
   }
   function nonFlatPayHtml(d, termsText, hasSchedule, upPct, remPct) {
     var model = d.compensationModel;
     if (!model || model === 'flat') return '';
+    var copy = copyFor(d);
     var c = d.commission || null;
     var html = '';
     if (model === 'product') {
-      return row('Compensation', 'Product only — no cash payment', { big: true }) +
+      return row('Compensation', copy.productOnly, { big: true }) +
         row('Product', d.productDescription || 'As agreed in writing') +
-        row('Payment terms', d.paymentTerms || 'No cash payment');
+        row('Payment terms', sentence(d.paymentTerms || copy.productPayment));
     }
     html += model === 'hybrid'
       ? row('Upfront fee', fmtMoney(d.compensation, d.currency), { big: true })
-      : row('Compensation', 'Commission only — no upfront fee', { big: true });
+      : row('Compensation', copy.commissionOnly(!!(c && c.basis === 'referral')), { big: true });
     if (c) {
       // A referral deal ships its own rows (tracking, reporting, refunds and
       // the referral rules) from the server; a sales commission uses these.
-      html += row(c.basis === 'referral' ? 'Referral commission' : 'Commission', c.summary) +
-        row('Tracking', c.tracking || trackingText(c)) +
-        row('Reporting', c.reporting || "Commission is calculated from the brand's monthly sales report, shared with the creator with each payout") +
-        row(c.basis === 'referral' ? 'Refunds' : 'Returns', c.returns || 'Commission on orders later refunded, returned or charged back is deducted from the next payout');
-      if (c.rules) html += row('Referral rules', c.rules);
+      html += row(c.basis === 'referral' ? 'Referral commission' : 'Commission', sentence(c.summary)) +
+        row('Tracking', sentence(c.tracking || trackingText(c, copy))) +
+        row('Reporting', sentence(c.reporting || copy.reporting)) +
+        row(c.basis === 'referral' ? 'Refunds' : 'Returns', sentence(c.returns || copy.returns));
+      if (c.rules) html += row('Referral rules', sentence(c.rules));
     }
     html += row('Currency', d.currency);
-    var commissionPay = c ? 'Direct bank transfer, monthly, within ' + c.payoutNetDays + " days of each month's end" : '';
+    var commissionPay = c ? copy.commissionPay(c.payoutNetDays) : '';
     if (model === 'hybrid') {
-      html += row('Upfront fee payment', termsText);
+      html += row('Upfront fee payment', sentence(termsText));
       if (hasSchedule) html += row('Payment schedule', upPct + '% upfront, ' + remPct + '% ' + (d.remainderTrigger || 'on completion'));
       if (c) html += row('Commission payment', commissionPay);
     } else {
-      html += row('Payment terms', d.paymentTerms || commissionPay);
+      html += row('Payment terms', sentence(d.paymentTerms || commissionPay));
     }
     return html;
   }
@@ -228,11 +278,39 @@
     // The headline: what they're paid. [label, value, sub-line, long-value]
     var pay = null;
     var model = d.compensationModel;
-    if (model === 'product') {
+    // Framed by what the creator gets: the commission is uncapped (no deal
+    // type carries a cap), a referral pays on every brand they bring.
+    var c = d.commission || null;
+    var rate = c && c.ratePct != null ? c.ratePct + '%' : null;
+    var referral = !!(c && c.basis === 'referral');
+    var perBrand = c && Number(c.campaignsPerBrand) > 0 ? Number(c.campaignsPerBrand) : null;
+    var commissionHead = rate ? (referral ? rate + ' on every brand you refer' : rate + ' uncapped commission') : null;
+    var current = copyFor(d) === COPY[2];
+    if (!current && model === 'product') {
+      // Created before the current wording: the card reads as it always did.
       pay = ['Your pay', 'Product only', d.productDescription || null, true];
-    } else if (model && model !== 'flat') {
+    } else if (!current && model && model !== 'flat') {
       pay = ['Your pay', d.offerLabel || 'Commission',
         model === 'hybrid' && d.compensation != null ? fmtMoney(d.compensation, d.currency) + ' upfront, plus commission' : null, true];
+    } else if (model === 'product') {
+      pay = ['Your pay', 'Gifted product', d.productDescription ? d.productDescription + ', yours to keep' : 'Yours to keep', true];
+    } else if (model === 'hybrid') {
+      pay = ['Your pay', d.offerLabel || 'Fee + commission',
+        d.compensation != null
+          ? fmtMoney(d.compensation, d.currency) + ' upfront, plus ' + (commissionHead || 'commission')
+          : null, true];
+    } else if (model && model !== 'flat') {
+      var sub = null;
+      if (referral) {
+        sub = perBrand ? "On each brand's first " + (perBrand === 1 ? 'campaign' : perBrand + ' campaigns') : null;
+      } else if (c) {
+        var via = c.attribution === 'link' ? 'through your link'
+          : c.promoCode ? 'with code ' + c.promoCode
+          : c.attribution === 'code' ? 'with your code' : 'through your link or code';
+        sub = 'On every sale ' + via +
+          (c.termMonths ? ', for ' + c.termMonths + ' month' + (Number(c.termMonths) === 1 ? '' : 's') : '');
+      }
+      pay = ['Your pay', commissionHead || d.offerLabel || 'Commission', sub, true];
     } else {
       var base = d.compensation != null ? d.compensation : d.totalPayment;
       var subs = [];
@@ -421,7 +499,7 @@
     var termsAnchor = hasSchedule
       ? 'each payment milestone'
       : 'completing and posting all agreed deliverables';
-    var termsText = 'Direct bank transfer, initiated within ' + daysN + ' working days of ' + termsAnchor;
+    var termsText = copyFor(d).feePay(daysN, termsAnchor);
     var hasBonus = d.bonusAmount && d.bonusThresholdViews;
     var totalIncl = hasBonus && baseComp != null ? baseComp + Number(d.bonusAmount) : baseComp;
     // Commission / fee + commission / product deals have their own pay rows
@@ -450,7 +528,7 @@
     html += section('Usage Rights & Exclusivity', rowsWrap(
       row('Usage rights', d.paidAdsIncluded ? 'Included' : 'Not included') +
       row('Paid ads', d.paidAdsIncluded ? 'Included' : 'Not included') +
-      row('Exclusivity', d.exclusivity) +
+      row('Exclusivity', copyFor(d).exclusivity(d.exclusivity)) +
       // Standard on every contract — defaults to 6 months, never conditional,
       // so it's never silently dropped if a field comes back empty.
       row('Posts remain live for', (d.postLiveMonths || 6) + ' months')
@@ -512,7 +590,7 @@
     })();
     if (extraTerms.length) {
       html += '<div class="section"><h2>Additional Terms</h2><ul class="term-list">' +
-        extraTerms.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') +
+        extraTerms.map(function (t) { return '<li>' + esc(sentence(t)) + '</li>'; }).join('') +
         '</ul></div>';
     }
 

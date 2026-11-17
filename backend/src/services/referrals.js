@@ -363,6 +363,9 @@ function applyReferralCode(data, terms, code, { shown = true } = {}) {
   c.promoCode = shown ? code : null;
   c.summary = dealTerms.commissionSentence(worded);
   Object.assign(c, referralContractTexts(worded.commission, shown ? c.referralUrl : null));
+  // The texts above are in the current wording, so the page renders the rest
+  // of the contract in it too.
+  data.copyVersion = dealTerms.CONTRACT_COPY_VERSION;
   return data;
 }
 
@@ -482,20 +485,20 @@ function referralContractTexts(c, url) {
   } else {
     const code = `referral code ${c.promo_code}`;
     tracking = c.attribution === 'code'
-      ? `Brands are credited when they enter the creator's ${code} at sign-up`
+      ? `Brands are credited when they enter the creator's ${code} at sign-up.`
       : c.attribution === 'link'
-        ? `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''}`
-        : `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''} or enter the creator's ${code} at sign-up`;
+        ? `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''}.`
+        : `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''} or enter the creator's ${code} at sign-up.`;
   }
   return {
     tracking,
-    reporting: `Commission is calculated from ${platform}'s billing records for each referred brand, shared with the creator with each payout`,
-    returns: 'Campaign spend excludes taxes. Spend later refunded or cancelled is deducted from the next payout',
+    reporting: `Each payout comes with ${platform}'s billing records for every referred brand, so the creator can see exactly how their commission was calculated.`,
+    returns: 'The creator earns on campaign spend before tax. Spend later refunded or cancelled is deducted from the next payout.',
     rules:
-      `Each referred brand is credited to one creator only, and the credit is permanent. A valid referral code entered at sign-up takes precedence; ` +
-      `otherwise the most recent qualifying referral-link visit within the referral window does. A brand doesn't qualify if it was already a customer of ${platform}, ` +
-      `was already referred (including through another account of the same company), or is a business the creator owns or works for. ` +
-      `Referrals count only once this agreement is signed.`,
+      `Once a brand is credited to the creator, the credit is permanent; each brand is credited to one creator only. A valid referral code entered at sign-up takes precedence; ` +
+      `otherwise the most recent qualifying referral-link visit within the referral window does. Brands that were already customers of ${platform} or already referred ` +
+      `(including through another account of the same company), and businesses the creator owns or works for, are not eligible. ` +
+      `Referrals count from the moment this agreement is signed.`,
   };
 }
 

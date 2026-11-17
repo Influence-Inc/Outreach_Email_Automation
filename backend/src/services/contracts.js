@@ -281,7 +281,7 @@ function paymentTermsFor(days, opts) {
   const anchor = hasSchedule
     ? 'each payment milestone'
     : 'completing and posting all agreed deliverables';
-  return `Direct bank transfer, initiated within ${d} working days of ${anchor}`;
+  return `Payment is sent by direct bank transfer within ${d} working days of ${anchor}.`;
 }
 
 // Payment schedule fields for the contract. The upfront/remainder split is
@@ -350,6 +350,8 @@ function termsContractFields(terms) {
   if (!terms || dealTerms.isFlat(terms)) return { compensationModel: 'flat', commission: null, productDescription: null };
   const c = terms.commission;
   const fields = {
+    // The stored sentences below are in the current contract wording.
+    copyVersion: dealTerms.CONTRACT_COPY_VERSION,
     compensationModel: terms.model,
     offerLabel: dealTerms.describeTerms(terms),
     compensation: terms.fee != null ? terms.fee : null,
@@ -384,11 +386,11 @@ function termsContractFields(terms) {
   };
   // Payment-method clause for the cash that actually moves.
   if (terms.model === 'commission' && dealTerms.isReferral(terms)) {
-    fields.paymentTerms = `Referral commission is paid by direct bank transfer, monthly, within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid`;
+    fields.paymentTerms = `Referral commission is paid to the creator's bank account every month, within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid.`;
   } else if (terms.model === 'commission') {
-    fields.paymentTerms = `Commission is paid by direct bank transfer, monthly, within ${c.payout_net_days} days of each month's end`;
+    fields.paymentTerms = `Commission is paid to the creator's bank account every month, within ${c.payout_net_days} days of each month's end.`;
   } else if (terms.model === 'product') {
-    fields.paymentTerms = 'No cash payment — the product is shipped to the creator before content production';
+    fields.paymentTerms = 'The product ships to the creator before content production begins.';
   }
   return fields;
 }
@@ -505,6 +507,8 @@ function baseContractData(creator, fee, offer, terms = null) {
     usageRightsList: ['ads', 'reposting', 'promotion', 'testimonials', 'paid and organic marketing across any channels'],
     usageScope: 'non exclusive, royalty free, and worldwide',
     exclusivity: 'None',
+    // Contract wording version (see dealTerms.CONTRACT_COPY_VERSION).
+    copyVersion: dealTerms.CONTRACT_COPY_VERSION,
 
     // Content availability.
     postLiveMonths: 6,
@@ -888,7 +892,7 @@ Rules:
   - "required" — paidAdsIncluded is ALWAYS true. usageRights should state paid ad rights ARE included.
   - "free_only" — paidAdsIncluded is true UNLESS the negotiation timeline shows the creator explicitly asked for SEPARATE or ADDITIONAL payment specifically in exchange for granting paid-ad/usage rights (e.g. "I'd need extra for ad rights", "that's a separate fee", "usage rights cost more on top"). Only in that specific case, set it to false and write usageRights as "Organic only — no paid ad rights required". Otherwise (not mentioned, or the creator agreed to include them), paidAdsIncluded is true and usageRights should state paid ad rights are included.
 - "upfrontPercent" / "remainderPercent": leave BOTH null unless the CREATOR explicitly demanded an upfront / advance / deposit payment in the thread. Payment is made in full on completion by default — do NOT invent an upfront split. When the creator did demand it, "upfrontPercent" is the portion up front and "remainderPercent" is the balance, and the two sum to 100. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
-- "paymentTerms" is the standard payment-METHOD clause only (e.g. "Direct bank transfer, initiated within 7 working days of completing and posting all agreed deliverables"). It is NOT the upfront/remainder SCHEDULE — never describe a split here ("50% upfront…", "half now, half on delivery"): the split lives in upfrontPercent/remainderPercent. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
+- "paymentTerms" is the standard payment-METHOD clause only (e.g. "Payment is sent by direct bank transfer within 7 working days of completing and posting all agreed deliverables"). It is NOT the upfront/remainder SCHEDULE — never describe a split here ("50% upfront…", "half now, half on delivery"): the split lives in upfrontPercent/remainderPercent. (This field is re-pinned deterministically after extraction, so accuracy here is a hint, not the final word.)
 - If a field is genuinely unknown, use null (or [] for array fields).
 - Put any extra negotiated terms (whitelisting, exclusivity windows, special timelines) into "additionalTerms" as short strings.
 - Do NOT put the deal's STANDING PERKS that appear in every pitch into "additionalTerms". Specifically leave out "full creative freedom" / "no overly promotional feel" / "won't feel like an ad", "no paid ad rights required" / "organic use only", and "no exclusivity required" / "non-exclusive" — these are handled by other fields and must never be echoed back as additional terms. (A genuinely negotiated exclusivity WINDOW, e.g. "30-day category exclusivity", IS campaign-specific and still belongs here — only the standing "no exclusivity" perk is excluded.) Include only genuinely campaign-specific negotiated points.`;
