@@ -425,6 +425,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .creator-badge.cat-used   { background: #dceee5; color: #147a52; border-color: #b7dfcc; }
 .creator-badge.cat-unused { background: #f6ecd8; color: #9a6412; border-color: #ead9b6; }
 .creator-badge.cat-new    { background: #eef1f8; color: #47566e; border-color: #d9dfec; }
+/* Platform tag for non-Instagram creators (TikTok / YouTube). */
+.creator-badge.platform-badge { margin-left: 6px; }
+.creator-badge.platform-tiktok  { background: #eaf6f7; color: #0f6f78; border-color: #c4e6e9; }
+.creator-badge.platform-youtube { background: #fbe9e9; color: #a32121; border-color: #f2c9c9; }
 
 /* --- "Add creators" card: tabs + Creator-DB search + results ---------------- */
 .add-creators-card { padding: 26px 28px; }

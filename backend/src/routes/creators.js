@@ -17,6 +17,7 @@ const creatorDb = require('../services/creatorDb');
 const { syncCreatorNames } = require('../services/creatorNameSync');
 const { resolveHandle } = require('../services/creatorIdentity');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
+const { parseProfileUrl, detectPlatform, platformOf } = require('../services/creatorPlatform');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
 const { flagDismissedSql, flagFingerprintSql } = require('../db/flagFingerprint');
@@ -46,7 +47,9 @@ function buildEnrichContext(creator, scraped) {
 // is found. Scrape failures are swallowed (best-effort).
 async function enrichCreator(creator) {
   let scraped = null;
-  if (!Array.isArray(creator.bio_links) || !creator.bio_links.length) {
+  // The server-side scrape reads Instagram only; TikTok / YouTube creators are
+  // enriched from the links the extension captured off their profile.
+  if (platformOf(creator) === 'instagram' && (!Array.isArray(creator.bio_links) || !creator.bio_links.length)) {
     scraped = await scrapeProfile({
       instagramUrl: creator.instagram_url,
       instagramUsername: creator.instagram_username,
@@ -634,17 +637,6 @@ async function attachRateLog(rows) {
 
 const router = express.Router();
 
-function parseUsername(url) {
-  try {
-    const u = new URL(url);
-    if (!/instagram\.com$/i.test(u.hostname.replace(/^www\./, ''))) return null;
-    const parts = u.pathname.split('/').filter(Boolean);
-    return parts[0] || null;
-  } catch {
-    return null;
-  }
-}
-
 // Effective new-vs-old segment for the dashboard chip. Prefers the Creator-DB
 // verdict cached on the row (creator_segment); when that hasn't been computed
 // yet (Creator-DB unreachable / not configured), it falls back to a LOCAL
@@ -654,7 +646,7 @@ function parseUsername(url) {
 // still uses the authoritative creator_segment set by the segmentation job.
 async function attachSegment(rows) {
   if (!rows.length) return;
-  const need = rows.filter((r) => !r.creator_segment && r.instagram_username);
+  const need = rows.filter((r) => !r.creator_segment && r.instagram_username && platformOf(r) === 'instagram');
   const localReturning = new Set();
   if (need.length) {
     const handles = [...new Set(need.map((r) => String(r.instagram_username).toLowerCase()))];
@@ -748,14 +740,20 @@ router.post('/segment', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    const { campaign_id, instagram_url, email, first_name, full_name } = req.body || {};
+    const { campaign_id, email, first_name, full_name } = req.body || {};
+    // `profile_url` is the platform-neutral name; `instagram_url` is kept for
+    // older callers. Instagram, TikTok and YouTube profile URLs are accepted.
+    const instagram_url = (req.body && (req.body.profile_url || req.body.instagram_url)) || null;
     if (!campaign_id || !instagram_url) {
-      return res.status(400).json({ error: 'campaign_id and instagram_url are required' });
+      return res.status(400).json({ error: 'campaign_id and profile_url are required' });
     }
-    const username = parseUsername(instagram_url);
-    const normalizedUrl = username
-      ? `https://www.instagram.com/${username}/`
-      : instagram_url;
+    const profile = parseProfileUrl(instagram_url);
+    if (!profile && detectPlatform(instagram_url)) {
+      return res.status(400).json({ error: 'not a creator profile URL' });
+    }
+    const platform = profile ? profile.platform : 'instagram';
+    const username = profile ? profile.username : null;
+    const normalizedUrl = profile ? profile.url : instagram_url;
 
     // Auto-reject a creator the campaign is already reaching out to (same
     // handle or email under a different row), so the outreach email never goes
@@ -766,6 +764,7 @@ router.post('/', async (req, res, next) => {
       username,
       email,
       excludeUrl: normalizedUrl,
+      platform,
     });
 
     let status;
@@ -779,8 +778,8 @@ router.post('/', async (req, res, next) => {
     }
 
     const row = await db.one(
-      `INSERT INTO creators (campaign_id, instagram_url, instagram_username, email, first_name, full_name, status, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO creators (campaign_id, instagram_url, instagram_username, email, first_name, full_name, status, notes, platform)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (campaign_id, instagram_url) DO UPDATE SET
          email = COALESCE(EXCLUDED.email, creators.email),
          -- Names here come from the extension's Instagram read. Re-adding a
@@ -791,7 +790,7 @@ router.post('/', async (req, res, next) => {
          instagram_username = COALESCE(EXCLUDED.instagram_username, creators.instagram_username),
          updated_at = NOW()
        RETURNING *`,
-      [campaign_id, normalizedUrl, username, email || null, first_name || null, full_name || null, status, notes],
+      [campaign_id, normalizedUrl, username, email || null, first_name || null, full_name || null, status, notes, platform],
     );
 
     // Only when the row was actually inserted as a duplicate (not an ON CONFLICT
@@ -878,14 +877,16 @@ async function attachCpmEstimate(row, { lookup = true } = {}) {
     ? await db.one(`SELECT max_cpm FROM campaigns WHERE id = $1`, [row.campaign_id])
     : null;
   let cl = null;
-  if (lookup && row.instagram_username) {
+  // creator-list indexes Instagram handles; a TikTok / YouTube handle isn't one.
+  const igHandle = platformOf(row) === 'instagram' ? row.instagram_username : null;
+  if (lookup && igHandle) {
     cl = await creatorList.sync(row.instagram_username, { queue: true, timeoutMs: 4000 }).catch((e) => ({ status: 'error', error: e.message }));
     if (cl && cl.status === 'indexed') {
       const fresh = await db.one(`SELECT creator_list FROM creators WHERE id = $1`, [row.id]).catch(() => null);
       if (fresh) row.creator_list = fresh.creator_list;
     }
-  } else if (row.instagram_username) {
-    cl = await creatorList.status(row.instagram_username).catch(() => null);
+  } else if (igHandle) {
+    cl = await creatorList.status(igHandle).catch(() => null);
   }
   row.cpm_estimate = cpmEstimate.panelEstimate({ ...row, max_cpm: campaign ? campaign.max_cpm : null });
   row.cpm_options = cpmEstimate.OPTIONS;
@@ -903,7 +904,9 @@ async function creatorListRoute(req, res, next) {
       [req.params.id],
     );
     if (!creator) return res.status(404).json({ error: 'not found' });
-    if (!creator.instagram_username) return res.status(400).json({ error: 'this creator has no Instagram handle' });
+    if (!creator.instagram_username || platformOf(creator) !== 'instagram') {
+      return res.status(400).json({ error: 'this creator has no Instagram handle' });
+    }
     const force = req.method === 'POST';
     const st = await creatorList.sync(creator.instagram_username, { queue: true, force });
     const fresh = await db.one(
@@ -1226,7 +1229,7 @@ router.patch('/:id', async (req, res, next) => {
     );
     // A fresh extension scrape: look the creator up in creator-list, and have it analyse them
     // if its index doesn't have them yet. In the background: the scrape doesn't wait for it.
-    if (Array.isArray(body.reel_views) && row && row.instagram_username) {
+    if (Array.isArray(body.reel_views) && row && row.instagram_username && platformOf(row) === 'instagram') {
       creatorList.sync(row.instagram_username, { queue: true })
         .catch((err) => console.error('[creators] creator-list lookup failed', err.message));
     }
@@ -1240,7 +1243,7 @@ router.post('/bulk/fetch-email', async (req, res) => {
     if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
     const pending = await db.many(
       `SELECT id FROM creators
-       WHERE campaign_id = $1 AND status = 'pending_extraction'
+       WHERE campaign_id = $1 AND status = 'pending_extraction' AND platform = 'instagram'
        ORDER BY created_at ASC`,
       [campaign_id],
     );
@@ -1417,6 +1420,8 @@ function buildIgDmJob(creator, campaign) {
   if (!creator.instagram_username && !creator.instagram_url) {
     return { skip: 'no_instagram_handle' };
   }
+  // TikTok / YouTube creators have no Instagram profile to DM.
+  if (platformOf(creator) !== 'instagram') return { skip: 'no_instagram_handle' };
   const body = renderIgDm(campaign.ig_dm_body, igDmVars(creator, campaign));
   if (!body) return { skip: 'no_template' };
   return {
@@ -1460,6 +1465,7 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
     let where = `campaign_id = $1
          AND (email IS NULL OR email = '')
          AND ig_dm_sent_at IS NULL
+         AND platform = 'instagram'
          AND status = ANY($2::text[])`;
     if (scoped) {
       // Row-level "Send DM" is the manual path — bypass the dormant-reel filter
@@ -1660,6 +1666,13 @@ router.post('/:id/fetch-email', async (req, res) => {
     if (creator.status !== 'pending_extraction') {
       return res.status(409).json({
         error: `Scraping only runs for creators pending extraction (creator ${creator.id} is '${creator.status}')`,
+      });
+    }
+    // The server-side scraper reads Instagram only. TikTok / YouTube profiles
+    // are scraped by the Chrome extension from the dashboard.
+    if (platformOf(creator) !== 'instagram') {
+      return res.status(400).json({
+        error: 'Server-side scraping is Instagram-only; TikTok and YouTube creators are scraped by the extension.',
       });
     }
 

@@ -1056,7 +1056,7 @@ function statusPillFor(r) {
   // email_found pill styling so the row still reads as "ready to reach out"
   // rather than muted/failed. The Send IG DM button below carries the actual
   // action; this pill just names the state so it lines up with the button.
-  if (st === 'no_email' && (r.instagram_username || r.instagram_url)) {
+  if (st === 'no_email' && (r.instagram_username || r.instagram_url) && isInstagramCreator(r)) {
     return { cls: 'email_found', text: 'IG DM' };
   }
   return { cls: st, text: st.replace(/_/g, ' ') };
@@ -1794,6 +1794,24 @@ function canCreateCallContract(r) {
 const STOP_SVG =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"></line></svg>';
 
+// Which platform a creator row's profile lives on. Rows store the profile URL
+// in instagram_url / the handle in instagram_username for every platform;
+// `platform` says which site (mirrors backend services/creatorPlatform.js).
+function detectProfilePlatform(url) {
+  const s = String(url || '');
+  if (/^(https?:\/\/)?([a-z]+\.)?tiktok\.com\//i.test(s)) return 'tiktok';
+  if (/^(https?:\/\/)?([a-z]+\.)?youtube\.com\//i.test(s)) return 'youtube';
+  if (/^(https?:\/\/)?([a-z]+\.)?instagram\.com\//i.test(s)) return 'instagram';
+  return null;
+}
+function creatorPlatform(r) {
+  return (r && r.platform) || detectProfilePlatform(r && r.instagram_url) || 'instagram';
+}
+function isInstagramCreator(r) {
+  return creatorPlatform(r) === 'instagram';
+}
+const PLATFORM_LABELS = { instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
+
 // "Decide offer": open this creator's Instagram profile in a new tab with the
 // Chrome extension's offer panel latched to the right. The extension handles the
 // hand-off (see dashboard-bridge.js → background.js openDecideOffer); here we
@@ -1881,6 +1899,7 @@ function isIgDmEligible(r) {
   if (r.email) return false;
   if (r.ig_dm_sent_at) return false;
   if (!r.instagram_username && !r.instagram_url) return false;
+  if (!isInstagramCreator(r)) return false;
   const st = r.status || 'pending_extraction';
   return (
     st === 'no_email' ||
@@ -2362,8 +2381,14 @@ function renderStatusCell(r, cell) {
   } else if (isOfferActionable(r)) {
     const offerActions = document.createElement('div');
     offerActions.className = 'cr-offer-actions';
-    offerActions.appendChild(makeDecideOfferButton(r));
-    offerActions.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+    // The extension's offer panel latches onto Instagram only; TikTok / YouTube
+    // creators configure their offer here on the dashboard.
+    if (isInstagramCreator(r)) {
+      offerActions.appendChild(makeDecideOfferButton(r));
+      offerActions.appendChild(makeInterveneButton(r, { label: 'Configure here', plain: true }));
+    } else {
+      offerActions.appendChild(makeInterveneButton(r, { label: 'Decide offer' }));
+    }
     cell.appendChild(offerActions);
   } else if (isContractApprovalPending(r)) {
     cell.appendChild(makeInterveneButton(r, { label: 'Approve deal' }));
@@ -3732,7 +3757,7 @@ function buildOfferConfigurator(r, onRefresh) {
   // Let the admin jump to the creator's Instagram profile with this same offer
   // panel latched to the side, straight from the offer pop-up.
   const sendbarActions = root.querySelector('.oc-sendbar-actions');
-  if (sendbarActions && r.instagram_username) {
+  if (sendbarActions && r.instagram_username && isInstagramCreator(r)) {
     sendbarActions.insertBefore(makeDecideOfferButton(r, { label: 'Open on IG' }), sendbarActions.firstChild);
   }
 
@@ -3913,6 +3938,12 @@ function renderCreators() {
     const handle = document.createElement('div');
     handle.className = 'cr-handle';
     handle.innerHTML = `<a href="${r.instagram_url}" target="_blank" rel="noopener">@${escapeHtml(r.instagram_username || r.instagram_url)}</a>`;
+    if (!isInstagramCreator(r)) {
+      const plat = document.createElement('span');
+      plat.className = `creator-badge platform-badge platform-${creatorPlatform(r)}`;
+      plat.textContent = PLATFORM_LABELS[creatorPlatform(r)] || creatorPlatform(r);
+      handle.appendChild(plat);
+    }
     // Used / Unused / New badge — comes from Creator-DB's categorize call
     // (see routes/creators.js attachCategories). Rendered inline with the
     // handle so the row's provenance reads at a glance. Replaces the older
@@ -4191,11 +4222,11 @@ el('creator-form').addEventListener('submit', async (e) => {
       raw
         .split(/[\s,]+/)
         .map((s) => s.trim())
-        .filter((s) => /instagram\.com/i.test(s)),
+        .filter((s) => detectProfilePlatform(s)),
     ),
   );
   if (!urls.length) {
-    toast('Paste at least one Instagram URL.', 'warn');
+    toast('Paste at least one Instagram, TikTok or YouTube profile URL.', 'warn');
     return;
   }
   const status = el('add-status');
@@ -4214,7 +4245,7 @@ el('creator-form').addEventListener('submit', async (e) => {
         method: 'POST',
         body: JSON.stringify({
           campaign_id: state.selectedCampaignId,
-          instagram_url: urls[i],
+          profile_url: urls[i],
         }),
       });
       added += 1;
@@ -4833,6 +4864,9 @@ async function startExtensionScrape({ onlyPending = false, creators: explicitRow
     }
     const creators = list.map((r) => ({
       id: r.id,
+      // Field names predate TikTok / YouTube; `platform` tells the extension
+      // which site the URL + handle belong to.
+      platform: creatorPlatform(r),
       instagramUrl: r.instagram_url,
       instagramUsername: r.instagram_username,
     }));
@@ -4875,6 +4909,11 @@ function emailSourceLabel(src) {
   if (/^instagram_bio$/i.test(src) || /^(bio_regex|html_text)$/i.test(src))
     return 'Instagram (bio)';
   if (/^instagram/i.test(src)) return 'Instagram';
+  if (/^tiktok_contact$/i.test(src)) return 'TikTok (contact)';
+  if (/^tiktok_bio$/i.test(src)) return 'TikTok (bio)';
+  if (/^tiktok/i.test(src)) return 'TikTok';
+  if (/^youtube_bio$/i.test(src)) return 'YouTube (bio)';
+  if (/^youtube/i.test(src)) return 'YouTube';
   if (/^provider:/i.test(src)) {
     const p = src.slice(src.indexOf(':') + 1);
     return p ? p[0].toUpperCase() + p.slice(1) : 'provider';

@@ -2,9 +2,26 @@
 
 A Chrome extension for the Influence Deal Studio. It has three jobs:
 
-1. **Scrape** Instagram profiles into the dashboard (email, name, recent reel views) — driven from the dashboard's "Scrape Via Extension" button.
+1. **Scrape** Instagram, TikTok and YouTube profiles into the dashboard (email, name, bio, links, recent video views, latest upload date) — runs automatically when creators are added to a campaign.
 2. **Decide offers on Instagram** — a vertical offer panel that latches to the right of a creator's Instagram profile so you can settle their rate without tab-hopping to the dashboard.
 3. **Send Priority DM outreach** — for creators the dashboard couldn't find an email for, sends the campaign's Instagram DM template as a Priority Message Request so it lands in the recipient's main inbox instead of the general Requests queue. Driven from the "Send Instagram DMs" button on the campaign page.
+
+## Scraping TikTok and YouTube creators
+
+Paste TikTok (`https://www.tiktok.com/@handle`) or YouTube (`https://www.youtube.com/@handle`, `/channel/UC…`, `/c/…`, `/user/…`) profile URLs into a campaign's **Add creators** box, alongside or instead of Instagram URLs. The backend stores each row with its `platform`, and the extension scrapes it the same way it scrapes Instagram: it opens the profile in a foreground tab, reads the data, closes the tab, and PATCHes the same `/api/creators/:id` fields. When the queue finishes, the same off-platform email enrichment runs for anyone still without an email.
+
+| Platform | Tab opened | Script | What it reads |
+| --- | --- | --- | --- |
+| Instagram | `/<handle>/reels/` | `instagram-content.js` | Contact-button email (private API), bio email, name, bio and category, bio links, ~12 recent reel views (pinned skipped), latest reel date |
+| TikTok | `/@<handle>` | `tiktok-content.js` | Name, bio (`signature`) and bio link from the server-rendered profile JSON (DOM as fallback), any email field or bio email, ~12 recent video play counts (pinned skipped), latest upload date (decoded from the video id) |
+| YouTube | `/@<handle>/shorts` | `youtube-content.js` | Channel name, description and header links from `ytInitialData`, the email in the description, ~12 recent Shorts view counts (falls back to the Videos tab when a channel has no Shorts), latest upload date |
+
+`scrape-common.js` holds the email, name and count helpers the TikTok and YouTube scripts share (same rules as `instagram-content.js`).
+
+Limits:
+- YouTube only shows a channel's business email after a captcha, so a YouTube email comes from the channel description, or from the enrichment pass that follows the channel's links.
+- TikTok only loads the video grid for a real browser session. Stay signed in to TikTok in that Chrome profile and keep the scrape tab focused. If TikTok shows "Something went wrong" in place of the grid, the script clicks Refresh once and tries again.
+- The Instagram-only features (the Decide-offer side panel, Priority DMs, the server-side Instagram scrape, creator-list lookups) skip TikTok and YouTube rows. Those creators' offers are configured from the dashboard's **Decide offer** pop-up.
 
 ## Priority DM sender
 
