@@ -18,6 +18,7 @@ const { syncCreatorNames } = require('../services/creatorNameSync');
 const { resolveHandle } = require('../services/creatorIdentity');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
 const { parseProfileUrl, detectPlatform, platformOf } = require('../services/creatorPlatform');
+const { formatOriginal } = require('../services/currency');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
 const { flagDismissedSql, flagFingerprintSql } = require('../db/flagFingerprint');
@@ -188,7 +189,13 @@ function rateLogEntry(type, detail, msg, summary) {
       return { text: gist ? `Replied: “${gist}”` : 'Creator replied', tone: 'done' };
     }
     case 'rate_quoted': {
-      const to = d.to != null ? fmtMoney(d.to) : null;
+      // A quote the creator made in another currency is stored converted to
+      // USD (d.to) with what they wrote in d.original — show both:
+      // "Creator quoted $2,347 (₱150,000)".
+      const orig = d.original && d.original.currency && d.original.currency !== 'USD' ? d.original : null;
+      const to = d.to != null
+        ? `${fmtMoney(d.to)}${orig ? ` (${formatOriginal(orig.amount, orig.currency)})` : ''}`
+        : null;
       // If the creator quoted MULTIPLE rates in one reply, attach them to the
       // entry so the client can render this step as an expandable group
       // ("Creator quoted (3) ▾") — same collapse-and-reveal pattern used for
@@ -212,7 +219,7 @@ function rateLogEntry(type, detail, msg, summary) {
         if (options) {
           text = 'Creator quoted rates';
         } else if (to) {
-          const deliverable = d.to != null ? deliverableForAmount(msg, Number(d.to)) : '';
+          const deliverable = d.to != null ? deliverableForAmount(msg, Number(orig ? orig.amount : d.to)) : '';
           text = deliverable ? `Creator quoted ${to} ${deliverable}` : `Creator quoted ${to}`;
         } else {
           text = 'Creator shared a rate';

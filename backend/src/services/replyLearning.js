@@ -106,11 +106,11 @@ function _setStore(s) {
 const LABEL_SYSTEM = `You are labeling reply pairs for the INFLUENCE outreach team's negotiation model.
 
 Given (a) a creator's inbound message and (b) the manager's actual reply, classify what the inbound was asking for, using one of these labels:
-- "shared_rate": creator stated a specific rate/budget. quoted_rate = the USD amount (plain number, no symbols).
+- "shared_rate": creator stated a specific rate/budget. quoted_rate = the amount exactly as written, in the creator's own currency (plain number, no symbols, no conversion).
 - "asking_details": creator is interested but has not seen the standard collab pitch yet.
 - "answer_question": creator asked a factual question about an already-discussed deal (platform, format, payment timing, exclusivity, timeline).
 - "request_counter_rate": creator pushed back on the offer without naming a new number.
-- "counter": creator pushed back on the offer with a specific number. quoted_rate = the USD amount.
+- "counter": creator pushed back on the offer with a specific number. quoted_rate = the amount exactly as written, in the creator's own currency.
 - "accepted": creator accepted the offer.
 - "declined": creator is genuinely not interested.
 - "escalate": anything that requires a human (usage rights, legal/IP, custom terms, special timeline, atypical format).

@@ -21,6 +21,7 @@
 const db = require('../db');
 const { stripQuotedHistory } = require('./replyLearning');
 const { parseRateOptionsFromText } = require('./negotiation');
+const currency = require('./currency');
 const { callClaudeText } = require('./claudeClient');
 
 function summarizeMessage(body, { maxLen = 90 } = {}) {
@@ -83,12 +84,24 @@ async function summarizeEmail(body, { maxLen = 100 } = {}) {
   return s;
 }
 
-// Strip the $-amount token(s) and any leading filler out of a rate label,
+// Strip the money token(s) and any leading filler out of a rate label,
 // leaving just the deliverable the money covers. "$3,500 for 300,000 combined
-// views" -> "for 300,000 combined views"; "I can do $900 per reel" -> "per
-// reel". Returns '' when the label is only a bare amount.
-const AMOUNT_RE = /\$\s*\d[\d,]*(?:\.\d+)?\s*[kKmM]?/;
-const AMOUNT_RE_G = /\$\s*\d[\d,]*(?:\.\d+)?\s*[kKmM]?/g;
+// views" -> "for 300,000 combined views"; "Php 150,000 per reel" -> "per
+// reel". Returns '' when the label is only a bare amount. Any currency counts
+// ($, €, ₹, Php, …) — see services/currency.js.
+
+// The first currency-marked amount in `s` as { index, length }, or null.
+function firstAmount(s) {
+  const m = currency.parseMoneyMentions(s).find((x) => x.marked);
+  if (!m) return null;
+  const at = s.indexOf(m.raw, m.index);
+  return { index: at >= 0 ? at : m.index, length: m.raw.length };
+}
+function stripAmounts(s) {
+  let out = s;
+  for (const m of currency.parseMoneyMentions(s).filter((x) => x.marked)) out = out.replace(m.raw, ' ');
+  return out;
+}
 
 function deliverableFromLabel(label, _amount) {
   const full = String(label || '').replace(/\s+/g, ' ').trim();
@@ -97,11 +110,11 @@ function deliverableFromLabel(label, _amount) {
   // keep the text AFTER the first amount and drop the preamble before it
   // ("Thanks! My rate is"). When nothing follows (the amount trails, e.g.
   // "300k views for $3,500"), fall back to the text before it.
-  const m = AMOUNT_RE.exec(full);
-  let s = m ? full.slice(m.index + m[0].length).trim() : full;
+  const m = firstAmount(full);
+  let s = m ? full.slice(m.index + m.length).trim() : full;
   if (!s && m) s = full.slice(0, m.index).trim();
   // Remove any remaining amount tokens (inline alternatives) and tidy edges.
-  s = s.replace(AMOUNT_RE_G, ' ').replace(/\s+/g, ' ').trim();
+  s = stripAmounts(s).replace(/\s+/g, ' ').trim();
   s = s
     .replace(/^(?:my\s+rate\s+is|rate\s+is|price\s+is|cost\s+is|i\s+(?:usually\s+)?charge)\b[\s:,–—-]*/i, '')
     .replace(/\b(?:for|at|is|of)\s*$/i, '')
