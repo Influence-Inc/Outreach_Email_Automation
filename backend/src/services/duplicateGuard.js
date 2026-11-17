@@ -18,11 +18,14 @@ const db = require('../db');
 //
 // Returns the ORIGINAL (oldest) matching row, or null when this is the first
 // time we've seen the creator in the campaign.
-async function findDuplicateCreator({ campaignId, username, email, excludeUrl }) {
+async function findDuplicateCreator({ campaignId, username, email, excludeUrl, platform = 'instagram' }) {
   if (!campaignId) return null;
   const uname = username ? String(username).trim() : null;
   const mail = email ? String(email).trim() : null;
   if (!uname && !mail) return null;
+  // A handle only identifies a person on its own platform (@foo on TikTok may
+  // be someone else than @foo on Instagram), so handle matches are scoped to
+  // the platform; an email match counts across platforms.
   return db.one(
     `SELECT id, instagram_username, email, instagram_url
        FROM creators
@@ -30,12 +33,12 @@ async function findDuplicateCreator({ campaignId, username, email, excludeUrl })
         AND status <> 'duplicate'
         AND ($2::text IS NULL OR instagram_url <> $2)
         AND (
-          ($3::text IS NOT NULL AND LOWER(instagram_username) = LOWER($3))
+          ($3::text IS NOT NULL AND LOWER(instagram_username) = LOWER($3) AND platform = $5)
           OR ($4::text IS NOT NULL AND LOWER(email) = LOWER($4))
         )
       ORDER BY created_at ASC, id ASC
       LIMIT 1`,
-    [campaignId, excludeUrl || null, uname, mail],
+    [campaignId, excludeUrl || null, uname, mail, platform || 'instagram'],
   );
 }
 

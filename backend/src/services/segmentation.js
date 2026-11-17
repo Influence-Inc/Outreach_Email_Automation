@@ -32,6 +32,9 @@ function parseUsernameFromUrl(url) {
 }
 
 function handleFor(creator) {
+  // Creator-DB is keyed by Instagram handle; a TikTok / YouTube handle in the
+  // same column isn't one, so those rows have no handle to look up.
+  if (creator.platform && creator.platform !== 'instagram') return null;
   let h = creator.instagram_username;
   if (!h && creator.instagram_url) h = parseUsernameFromUrl(creator.instagram_url);
   h = String(h || '').replace(/^@/, '').trim();
@@ -129,7 +132,7 @@ async function runSegmentCampaign(campaignId, { force }) {
   const campaign = await db.one(`SELECT id, name FROM campaigns WHERE id = $1`, [campaignId]);
   if (!campaign) return { skipped: 'campaign not found' };
   const creators = await db.many(
-    `SELECT id, instagram_username, instagram_url, whatsapp, imessage, segment_checked_at
+    `SELECT id, instagram_username, instagram_url, platform, whatsapp, imessage, segment_checked_at
      FROM creators WHERE campaign_id = $1`,
     [campaignId],
   );

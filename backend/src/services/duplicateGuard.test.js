@@ -85,3 +85,27 @@ test('duplicateMatchReason reports handle vs email', () => {
     'email',
   );
 });
+
+test('findDuplicateCreator scopes handle matches to the platform (TikTok @foo is not Instagram @foo)', async () => {
+  let captured;
+  db.one = async (sql, params) => {
+    captured = { sql, params };
+    return null;
+  };
+  try {
+    await findDuplicateCreator({
+      campaignId: 'camp-1',
+      username: 'foo',
+      email: null,
+      excludeUrl: 'https://www.tiktok.com/@foo',
+      platform: 'tiktok',
+    });
+    assert.match(captured.sql, /LOWER\(instagram_username\) = LOWER\(\$3\) AND platform = \$5/);
+    assert.strictEqual(captured.params[4], 'tiktok');
+    // Default stays Instagram for existing callers.
+    await findDuplicateCreator({ campaignId: 'camp-1', username: 'foo' });
+    assert.strictEqual(captured.params[4], 'instagram');
+  } finally {
+    restore();
+  }
+});

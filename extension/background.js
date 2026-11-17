@@ -179,6 +179,47 @@ async function patchCreator(apiBase, id, body) {
   return resp.json();
 }
 
+// Which platform a queued creator's profile is on. The dashboard sends
+// `platform`; older dashboards don't, so fall back to the URL's host.
+function creatorPlatformOf(creator) {
+  if (creator && ['instagram', 'tiktok', 'youtube'].includes(creator.platform)) return creator.platform;
+  const url = String((creator && creator.instagramUrl) || '');
+  if (/^(https?:\/\/)?([a-z]+\.)?tiktok\.com\//i.test(url)) return 'tiktok';
+  if (/^(https?:\/\/)?([a-z]+\.)?youtube\.com\//i.test(url)) return 'youtube';
+  return 'instagram';
+}
+
+// The page to open for a creator's scrape, and the message its content script
+// answers. Each platform opens the tab where recent per-video views render:
+//   • Instagram → /reels/   (instagram-content.js, extractInstagramData)
+//   • TikTok    → profile   (tiktok-content.js,    extractCreatorData)
+//   • YouTube   → /shorts   (youtube-content.js,   extractCreatorData)
+function scrapeTargetFor(creator) {
+  const platform = creatorPlatformOf(creator);
+  const handle = creator.instagramUsername ? String(creator.instagramUsername).replace(/^@/, '') : null;
+  if (platform === 'tiktok') {
+    const base = creator.instagramUrl || (handle ? `https://www.tiktok.com/@${handle}` : null);
+    if (!base) return null;
+    return { platform, url: base.split(/[?#]/)[0].replace(/\/+$/, ''), action: 'extractCreatorData', timeoutMs: 30000 };
+  }
+  if (platform === 'youtube') {
+    const base = creator.instagramUrl || (handle ? `https://www.youtube.com/@${handle}` : null);
+    if (!base) return null;
+    const root = base
+      .split(/[?#]/)[0]
+      .replace(/\/+$/, '')
+      .replace(/\/(shorts|videos|streams|featured|about|playlists|community)$/i, '');
+    return { platform, url: `${root}/shorts?hl=en`, action: 'extractCreatorData', timeoutMs: 40000 };
+  }
+  const base = creator.instagramUrl || (handle ? `https://www.instagram.com/${handle}/` : null);
+  if (!base) return null;
+  // Open the Reels tab: per-reel view counts render there as persistent
+  // overlays (on the main grid they often only appear on hover). The
+  // profile header — name, bio and email — is present on this tab too,
+  // so we still scrape username + email + views in one pass.
+  return { platform, url: base.replace(/\/+$/, '') + '/reels/', action: 'extractInstagramData', timeoutMs: 20000 };
+}
+
 async function runScrapeQueue(payload, sender) {
   const { apiBase, creators, pacingMs } = payload;
   const senderTabId = sender && sender.tab && sender.tab.id;
@@ -220,19 +261,11 @@ async function runScrapeQueue(payload, sender) {
       let error = null;
 
       try {
-        const baseUrl =
-          creator.instagramUrl ||
-          (creator.instagramUsername
-            ? `https://www.instagram.com/${creator.instagramUsername}/`
-            : null);
-        if (!baseUrl) throw new Error('no instagram url');
-        // Open the Reels tab: per-reel view counts render there as persistent
-        // overlays (on the main grid they often only appear on hover). The
-        // profile header — name, bio and email — is present on this tab too,
-        // so we still scrape username + email + views in one pass.
-        const url = baseUrl.replace(/\/+$/, '') + '/reels/';
+        const target = scrapeTargetFor(creator);
+        if (!target) throw new Error('no profile url');
+        const url = target.url;
 
-        // Open it FOREGROUND (active). Instagram's reels grid lazy-loads on
+        // Open it FOREGROUND (active). Instagram's reels grid (and TikTok's video grid) lazy-loads on
         // scroll via IntersectionObserver, and Chrome throttles hidden/occluded
         // tabs — so a background tab often never populates the grid, yielding 0
         // views. A visible tab renders and scrolls reliably (matches what you
@@ -248,9 +281,10 @@ async function runScrapeQueue(payload, sender) {
         // because the content script scrolls to lazy-load the reels grid.
         scraped = await sendMessageToTab(
           tabId,
-          { action: 'extractInstagramData', includeReels: true },
-          20000,
+          { action: target.action, includeReels: true },
+          target.timeoutMs,
         );
+        if (scraped && scraped.error && !scraped.username) throw new Error(scraped.error);
       } catch (err) {
         error = err.message;
       } finally {
@@ -271,11 +305,11 @@ async function runScrapeQueue(payload, sender) {
         const patchBody = {};
         if (scraped.email) {
           patchBody.email = scraped.email;
-          // The extension only ever reads a profile from Instagram, so a scraped
+          // The extension only ever reads a creator's own profile, so a scraped
           // email is never a hand-typed "manual" entry. Send an explicit source
-          // (contact-button / bio when known, generic 'instagram' otherwise) so
+          // (contact-button / bio when known, the platform name otherwise) so
           // the backend never falls back to labelling it 'manual'.
-          patchBody.email_source = scraped.emailSource || 'instagram';
+          patchBody.email_source = scraped.emailSource || creatorPlatformOf(creator);
         }
         if (scraped.firstName) patchBody.first_name = scraped.firstName;
         if (scraped.fullName) patchBody.full_name = scraped.fullName;
@@ -311,7 +345,7 @@ async function runScrapeQueue(payload, sender) {
       // Persistent diagnostic (visible in the service-worker console): what we
       // scraped vs what the backend actually stored.
       console.log(
-        `[OEA] @${creator.instagramUsername}: scraped ${viewCount} reel views`,
+        `[OEA] ${creatorPlatformOf(creator)} @${creator.instagramUsername}: scraped ${viewCount} video views`,
         cleanViews,
         `| backend stored reel_count=${storedViews}`,
       );

@@ -1051,3 +1051,15 @@ CREATE TABLE IF NOT EXISTS referral_campaigns (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_referral_campaigns_brand ON referral_campaigns(brand_ref);
+
+-- Multi-platform creators. Deal Studio started Instagram-only, so the profile
+-- URL and handle still live in instagram_url / instagram_username for every
+-- platform; `platform` says which site they point at ('instagram' | 'tiktok' |
+-- 'youtube'). The Chrome extension scrapes TikTok and YouTube profiles the same
+-- way it scrapes Instagram (name, email, bio, recent video views) and PATCHes
+-- the same columns. See services/creatorPlatform.js.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'instagram';
+UPDATE creators SET platform = 'tiktok'
+ WHERE platform = 'instagram' AND instagram_url ~* '^https?://([a-z]+\.)?tiktok\.com/';
+UPDATE creators SET platform = 'youtube'
+ WHERE platform = 'instagram' AND instagram_url ~* '^https?://([a-z]+\.)?youtube\.com/';
