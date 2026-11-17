@@ -79,6 +79,19 @@ and `services/callContract.js`:
 For a creator who was emailed but never replied, the form also offers to stop
 their Instantly follow-ups (removes the lead from this campaign only).
 
+### Term changes a creator emails after accepting
+
+A contract is never changed by an email on its own. When a creator writes back
+to change a term (more videos, a platform, the deadline, the fee, paid-ad
+rights…), the thread is re-read and only what the email changed is proposed on
+the contract (`contracts.pending_change`). Deal Studio shows it in the Deals
+column — each term's current → requested value and the creator's words — with
+**Apply to contract** / **Keep as is**, and the creator is flagged for a reply.
+`contracts.thread_terms` remembers what the thread said at the last read, so a
+proposal never undoes the team's own Deals-column edits. A call contract is left
+to the team (the thread can't speak for it). Run the schema migration to add the
+two columns.
+
 ## Referral commission
 
 A commission deal can be on **product sales** (the default) or on **brands the

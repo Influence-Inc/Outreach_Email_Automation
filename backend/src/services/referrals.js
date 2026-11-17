@@ -353,19 +353,20 @@ async function chooseCode(q, creator, terms) {
 // code the team typed. A code left blank is assigned behind the scenes for the
 // link, and the contract then says only "Brands are credited when they sign up
 // through the creator's referral link." — no code, no link.
-function applyReferralCode(data, terms, code, { shown = true } = {}) {
+// The wording stays in the contract's own version (dealTerms.CONTRACT_COPY_VERSION):
+// changing the code on a signed contract changes the code, nothing else.
+function applyReferralCode(data, terms, code, { shown = true, version } = {}) {
   if (!data || !data.commission || !dealTerms.isReferral(terms)) return data;
+  const v = version != null ? Number(version) : Number(data.copyVersion) >= 2 ? Number(data.copyVersion) : 1;
   const worded = { ...terms, commission: { ...terms.commission, promo_code: shown ? code : null } };
   const c = data.commission;
   c.referralCode = code;
   c.referralUrl = referralUrl(code);
   c.codeOnContract = !!shown;
   c.promoCode = shown ? code : null;
-  c.summary = dealTerms.commissionSentence(worded);
-  Object.assign(c, referralContractTexts(worded.commission, shown ? c.referralUrl : null));
-  // The texts above are in the current wording, so the page renders the rest
-  // of the contract in it too.
-  data.copyVersion = dealTerms.CONTRACT_COPY_VERSION;
+  c.summary = dealTerms.commissionSentence(worded, { version: v });
+  Object.assign(c, referralContractTexts(worded.commission, shown ? c.referralUrl : null, { version: v }));
+  if (v >= 2) data.copyVersion = v;
   return data;
 }
 
@@ -474,7 +475,7 @@ async function reserveCode(q, { code, creatorId, contractId }) {
 
 // The contract rows a referral deal adds (rendered by the signing page and the
 // PDF exactly as given, so the two can't drift apart).
-function referralContractTexts(c, url) {
+function referralContractTexts(c, url, { version = dealTerms.CONTRACT_COPY_VERSION } = {}) {
   const platform = dealTerms.platformName();
   let tracking;
   if (!c.promo_code) {
@@ -489,6 +490,19 @@ function referralContractTexts(c, url) {
       : c.attribution === 'link'
         ? `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''}.`
         : `Brands are credited when they sign up through the creator's referral link${url ? ` (${url})` : ''} or enter the creator's ${code} at sign-up.`;
+  }
+  if (Number(version) < 2) {
+    // The original wording, kept verbatim for contracts created with it.
+    return {
+      tracking,
+      reporting: `Commission is calculated from ${platform}'s billing records for each referred brand, shared with the creator with each payout.`,
+      returns: 'Campaign spend excludes taxes. Spend later refunded or cancelled is deducted from the next payout.',
+      rules:
+        `Each referred brand is credited to one creator only, and the credit is permanent. A valid referral code entered at sign-up takes precedence; ` +
+        `otherwise the most recent qualifying referral-link visit within the referral window does. A brand doesn't qualify if it was already a customer of ${platform}, ` +
+        `was already referred (including through another account of the same company), or is a business the creator owns or works for. ` +
+        `Referrals count only once this agreement is signed.`,
+    };
   }
   return {
     tracking,

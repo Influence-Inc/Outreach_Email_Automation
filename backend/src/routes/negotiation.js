@@ -294,6 +294,23 @@ router.patch('/:id/referral-code', async (req, res, next) => {
   }
 });
 
+// A creator's emailed term change waits on the contract for the team
+// (contracts.updateContractTermsFromThread). Apply puts it on the contract;
+// dismiss keeps the contract as it is.
+router.post('/:id/contract-change/:action(apply|dismiss)', async (req, res, next) => {
+  try {
+    const by = (req.user && (req.user.email || req.user.name)) || null;
+    const result = req.params.action === 'apply'
+      ? await contracts.applyPendingChange(req.params.id, { by })
+      : await contracts.dismissPendingChange(req.params.id, { by });
+    if (result.missing) return res.status(404).json({ error: 'No contract for this creator yet.' });
+    if (result.none) return res.status(409).json({ error: 'There is no change waiting on this contract.' });
+    res.json({ ok: true, contract: { token: result.row.token, status: result.row.status, data: result.row.data } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Edit a contract's deal terms straight from the dashboard Deals column
 // (videos, min views, platforms, deadline, paid-ad rights, exclusivity).
 // By default a signed contract returns 409; pass ?force=1 to update a signed

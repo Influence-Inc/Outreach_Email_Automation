@@ -820,8 +820,8 @@ test('coerceContractPatch: deadline aliases, exclusivity defaults, and unknown k
     exclusivity: '  ',
     compensation: 999, // not whitelisted — must be ignored
   });
-  assert.strictEqual(out.postingDeadline, 'April 20, 2026');
-  assert.strictEqual(out.deadline, 'April 20, 2026');
+  assert.strictEqual(out.postingDeadline, 'Monday, April 20, 2026');
+  assert.strictEqual(out.deadline, 'Monday, April 20, 2026');
   assert.strictEqual(out.exclusivity, 'None');
   assert.ok(!('compensation' in out), 'non-whitelisted fields are ignored');
 });

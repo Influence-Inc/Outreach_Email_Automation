@@ -564,6 +564,43 @@ button:disabled { opacity: 0.5; cursor: default; }
   overflow: hidden;
 }
 
+/* A creator's emailed term change, waiting for the team: a soft fill (no
+   stroke) above the deal lines, current value struck through → requested. */
+.cr-rate .cr-change {
+  margin: 8px 0 4px;
+  padding: 10px 11px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.cr-rate .cr-change-head {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--warn);
+}
+.cr-rate .cr-change-line { display: flex; align-items: baseline; gap: 6px; font-size: 12px; line-height: 1.35; min-width: 0; }
+.cr-rate .cr-change-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.cr-rate .cr-change-val s { color: var(--faint); }
+.cr-rate .cr-change-val b { color: var(--ink); font-weight: 600; }
+.cr-rate .cr-change-quote {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ink-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cr-rate .cr-change-note { font-size: 11px; color: var(--warn); }
+.cr-rate .cr-change-actions { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.cr-rate .cr-change-actions button { border-radius: 999px; }
+.cr-rate .cr-change-actions .ghost.small { border: none; background: var(--surface); }
+
 /* Editable Deals column (pending contracts). A faint header tells the admin the
    terms below are editable; the paid-ads value is a click-to-toggle chip. */
 .cr-rate .deal-edit-hint {

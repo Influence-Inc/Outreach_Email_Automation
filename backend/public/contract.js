@@ -135,6 +135,19 @@
       return (cur ? cur + ' ' : '$') + Number(n).toLocaleString('en-US');
     }
   }
+  // Does the deliverables text already say how many? A digit alone isn't
+  // enough — a promo code like KAI12 isn't a count. Mirrors statesCount in
+  // backend/src/services/contractTerms.js.
+  function statesCount(text) {
+    return /(^|[^A-Za-z0-9])\d+\s*(x\s*)?([A-Za-z-]+\s+){0,2}(videos?|reels?|posts?|tiktoks?|shorts|stories|story|deliverables?|uploads?|clips?)\b/i.test(String(text || ''));
+  }
+  // "N short-form videos" when the deliverables text doesn't say how many.
+  function deliverableHeadline(d) {
+    var text = stripCadenceFromDeliverables(String(d.deliverables || ''));
+    var n = Number(d.numberOfDeliverables != null ? d.numberOfDeliverables : d.numberOfVideos);
+    if (statesCount(text) || !(n > 0)) return text;
+    return n + ' short-form video' + (n === 1 ? '' : 's');
+  }
   function fmtNum(n) {
     return n == null || isNaN(Number(n)) ? null : Number(n).toLocaleString('en-US');
   }
@@ -206,7 +219,9 @@
       productPayment: 'No cash payment',
       commissionPay: function (days) { return 'Direct bank transfer, monthly, within ' + days + " days of each month's end."; },
       feePay: function (days, anchor) { return 'Direct bank transfer, initiated within ' + days + ' working days of ' + anchor + '.'; },
-      exclusivity: function (v) { return v; }
+      exclusivity: function (v) { return v; },
+      usageRights: function (included) { return included ? 'Included' : 'Not included'; },
+      paidAds: function (included) { return included ? 'Included' : 'Not included'; }
     },
     2: {
       tracking: {
@@ -223,6 +238,13 @@
       feePay: function (days, anchor) { return 'Payment is sent by direct bank transfer within ' + days + ' working days of ' + anchor + '.'; },
       exclusivity: function (v) {
         return /^\s*(none|no|n\/a|no exclusivity)\.?\s*$/i.test(String(v || '')) ? 'None — the creator is free to work with any brand' : v;
+      },
+      // Same grant as v1's Included / Not included, said from the creator's side.
+      usageRights: function (included) {
+        return included ? "Included — the brand can feature the creator's content in its marketing" : 'Retained by the creator';
+      },
+      paidAds: function (included) {
+        return included ? "Included — the brand can boost the creator's content with paid ads" : "The creator's content stays organic — it won't run as paid ads";
       }
     }
   };
@@ -326,7 +348,7 @@
     if (d.offerType === 'view_based' && views) {
       cells.push(['Deliverable', fmtNum(views) + ' views', 'Guaranteed, across your posts']);
     } else if (d.deliverables) {
-      cells.push(['Deliverable', stripCadenceFromDeliverables(String(d.deliverables))]);
+      cells.push(['Deliverable', deliverableHeadline(d)]);
     }
     var due = String(d.postingDeadline || d.deadline || '').replace(/^[A-Za-z]+day,\s*/, '');
     // "December 7, 2026" → "Dec 7, 2026" so it fits its cell; the Timeline
@@ -397,7 +419,7 @@
     // contracts stop duplicating the Cadence row inside this value.
     var deliverablesText = stripCadenceFromDeliverables(String(d.deliverables || ''));
     d.deliverables = deliverablesText;
-    var deliverablesHasCount = /\d/.test(deliverablesText);
+    var deliverablesHasCount = statesCount(deliverablesText);
     // View-based deals are priced by a guaranteed TOTAL Instagram view count
     // aggregated across every post the creator publishes on Instagram — the
     // fee doesn't buy a fixed number of videos, it buys that view total. The
@@ -526,8 +548,8 @@
     // paidAdsIncluded (not the stored prose) so it stays correct for every
     // contract, old or new. No separate Scope row.
     html += section('Usage Rights & Exclusivity', rowsWrap(
-      row('Usage rights', d.paidAdsIncluded ? 'Included' : 'Not included') +
-      row('Paid ads', d.paidAdsIncluded ? 'Included' : 'Not included') +
+      row('Usage rights', copyFor(d).usageRights(!!d.paidAdsIncluded)) +
+      row('Paid ads', copyFor(d).paidAds(!!d.paidAdsIncluded)) +
       row('Exclusivity', copyFor(d).exclusivity(d.exclusivity)) +
       // Standard on every contract — defaults to 6 months, never conditional,
       // so it's never silently dropped if a field comes back empty.

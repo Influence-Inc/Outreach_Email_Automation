@@ -277,6 +277,13 @@ app.listen(port, () => {
     console.error('seedDefaultIfEmpty failed:', err.message),
   );
 
+  // Unsigned contracts move to the current contract wording (signed ones keep
+  // the words that were signed). See contracts.updateUnsignedContractWording.
+  require('./services/contracts')
+    .updateUnsignedContractWording()
+    .then((r) => { if (r.updated) console.log(`Updated the wording of ${r.updated} unsigned contract(s)`); })
+    .catch((err) => console.error('updateUnsignedContractWording failed:', err.message));
+
   syncCampaigns()
     .then((r) => console.log(`Synced ${r.upserted} campaigns from upstream`))
     .catch((err) => console.error('Initial campaigns sync failed:', err.message));
