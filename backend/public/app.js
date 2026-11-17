@@ -857,14 +857,23 @@ function makeEditable(td, { value, placeholder, onSave, allowEmpty = false, mult
     input.select();
 
     let finished = false;
+    // Enter / Escape leave the field: the table only redraws once nothing in it
+    // has focus (renderCreatorsWhenIdle), so without this the saved field sat
+    // open as a text box — raw input like "100k" — until the next click away.
+    // `finished` is set first, so the blur this fires is a no-op.
+    const leave = () => {
+      if (document.activeElement === input) input.blur();
+    };
     const restore = () => {
       if (finished) return;
       finished = true;
+      leave();
       refreshCreators();
     };
     const commit = async () => {
       if (finished) return;
       finished = true;
+      leave();
       const next = input.value.trim();
       if (next === (value || '')) {
         refreshCreators();
@@ -1389,7 +1398,81 @@ function renderReferralLines(cell, r, c) {
   });
 }
 
+// A creator emailed a change to the deal terms. Nothing is on the contract
+// until the team says so: each term's current → requested value, the creator's
+// words, and Apply / Keep. Applying works on a signed contract too (in place,
+// like any Deals-column edit), so it says so.
+function renderPendingChange(cell, r, pending) {
+  const signed = r.contract && r.contract.status !== 'pending';
+  const card = document.createElement('div');
+  card.className = 'cr-change';
+  const head = document.createElement('div');
+  head.className = 'cr-change-head';
+  head.textContent = 'Creator asked to change';
+  card.appendChild(head);
+  for (const c of pending.changes || []) {
+    const line = document.createElement('div');
+    line.className = 'cr-change-line';
+    const tag = document.createElement('span');
+    tag.className = 'deal-tag';
+    tag.textContent = String(c.label || c.key).toUpperCase();
+    const val = document.createElement('span');
+    val.className = 'cr-change-val';
+    const from = document.createElement('s');
+    from.textContent = c.from;
+    const arrow = document.createTextNode(' → ');
+    const to = document.createElement('b');
+    to.textContent = c.to;
+    val.append(from, arrow, to);
+    val.title = `${c.from} → ${c.to}`;
+    line.append(tag, val);
+    card.appendChild(line);
+  }
+  const said = (pending.messages || []).slice(-1)[0];
+  if (said) {
+    const quote = document.createElement('div');
+    quote.className = 'cr-change-quote';
+    quote.textContent = `“${said.replace(/\s+/g, ' ').trim()}”`;
+    quote.title = said;
+    card.appendChild(quote);
+  }
+  if (signed) {
+    const note = document.createElement('div');
+    note.className = 'cr-change-note';
+    note.textContent = 'Already signed — applying changes the signed contract.';
+    card.appendChild(note);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'cr-change-actions';
+  const apply = document.createElement('button');
+  apply.type = 'button';
+  apply.className = 'btn-primary small';
+  apply.textContent = 'Apply to contract';
+  const keep = document.createElement('button');
+  keep.type = 'button';
+  keep.className = 'ghost small';
+  keep.textContent = 'Keep as is';
+  const act = async (action, btn) => {
+    apply.disabled = true;
+    keep.disabled = true;
+    btn.textContent = action === 'apply' ? 'Applying…' : 'Keeping…';
+    try {
+      await api(`/api/creators/${r.id}/contract-change/${action}`, { method: 'POST' });
+      toast(action === 'apply' ? 'Change applied to the contract' : 'Contract kept as it is', 'success');
+    } catch (err) {
+      toast(err.message);
+    }
+    refreshCreators();
+  };
+  apply.onclick = () => act('apply', apply);
+  keep.onclick = () => act('dismiss', keep);
+  actions.append(apply, keep);
+  card.appendChild(actions);
+  cell.appendChild(card);
+}
+
 function renderEditableDeal(cell, r, data) {
+  if (r.contract && r.contract.pendingChange) renderPendingChange(cell, r, r.contract.pendingChange);
   const signed = r.contract && r.contract.status !== 'pending';
   const hint = document.createElement('div');
   hint.className = 'deal-edit-hint';

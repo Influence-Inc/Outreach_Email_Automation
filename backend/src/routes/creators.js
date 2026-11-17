@@ -92,6 +92,9 @@ const RATE_LOG_TYPES = [
   'contract_approved',
   'contract_sent',
   'contract_signed',
+  'contract_change_proposed',
+  'contract_change_applied',
+  'contract_change_dismissed',
   'mini_contract_signed',
   'contract_copy_emailed',
   'contract_synced',
@@ -349,6 +352,12 @@ function rateLogEntry(type, detail, msg, summary) {
       return { text: d.channel === 'email' ? 'Contract emailed' : 'Contract sent', tone: 'active' };
     case 'contract_signed':
       return { text: 'Contract signed ✓', tone: 'success' };
+    case 'contract_change_proposed':
+      return { text: 'Creator asked to change the contract', tone: 'active' };
+    case 'contract_change_applied':
+      return { text: 'Requested change applied to the contract', tone: 'done' };
+    case 'contract_change_dismissed':
+      return { text: 'Requested change not applied', tone: 'muted' };
     case 'mini_contract_signed':
       // The offer-portal mini contract. A used creator's drawn signature on the
       // page IS their contract, so it earns the same milestone step as the full

@@ -2512,44 +2512,49 @@ async function handleAcceptedReply(creatorId) {
     return { action: 'delegated', reason: 'video_draft_review' };
   }
 
-  // 1. Usage-rights dispute on a free_only campaign — drop ad rights from the
-  //    (unsigned) contract and hand to a human. Usage-rights conversations
-  //    always go through a person (same posture as the "escalate" rule during
-  //    negotiation), so this is a delegate, never an auto-reply.
+  // 1. Usage-rights dispute on a free_only campaign — propose dropping ad
+  //    rights from the contract and hand to a human. Nothing changes on the
+  //    contract until the team applies the proposal in Deal Studio.
+  //    Usage-rights conversations always go through a person (same posture as
+  //    the "escalate" rule during negotiation), so this is a delegate, never an
+  //    auto-reply.
   if (
     creator.usage_rights_policy === 'free_only' &&
     (await contracts.disputesUsageRights(inbound))
   ) {
-    const updated = await contracts.removeUsageRightsFromContract(creator.id);
+    const proposed = await contracts.proposeUsageRightsRemoval(creator.id, { message: inbound });
     await delegate(
       creator,
       { text: inbound },
-      'Creator disputed usage rights after accepting — ad rights have been removed from their (unsigned) contract; a human should confirm with them.',
+      proposed
+        ? 'Creator disputed usage rights after accepting — removing paid-ad rights is waiting for your OK on their contract in the Deals column (Apply or Keep).'
+        : 'Creator disputed usage rights after accepting — a human should confirm with them.',
     );
     await markHandled();
-    return { disputed: true, contractUpdated: !!updated };
+    return { disputed: true, contractUpdated: false, proposed: !!proposed };
   }
 
   // 1b. A material term change after accepting (more videos, a platform added
-  //     or dropped, a new deadline, a different rate). Re-sync the contract from
-  //     the now-updated thread so the contract link AND the dashboard Deals
-  //     column stay truthful, then hand to a human to confirm and re-send. A
-  //     SIGNED contract is executed — never auto-changed; we delegate only.
+  //     or dropped, a new deadline, a different rate). Re-read the thread and
+  //     PROPOSE what changed — the contract is never changed from an email on
+  //     its own. The team applies or keeps the proposal in Deal Studio's Deals
+  //     column, and replies to the creator.
   if (await contracts.changesContractTerms(inbound)) {
-    const res = await contracts.updateContractTermsFromThread(creator.id);
+    const res = await contracts.updateContractTermsFromThread(creator.id, { message: inbound });
+    const what = res.changes ? res.changes.map((c) => `${c.label}: ${c.from} → ${c.to}`).join('; ') : '';
     await delegate(
       creator,
       { text: inbound },
-      res.updated
-        ? 'Creator changed deal terms after accepting — their (unsigned) contract has been re-synced from the thread; a human should confirm the new terms and re-send the contract link.'
-        : res.signed
-          ? 'Creator changed deal terms after accepting, but their contract is already SIGNED — it was NOT auto-changed; a human must handle this amendment.'
-          : res.handEntered
-            ? 'Creator changed deal terms after accepting. Their contract was drawn up from a call, so it was NOT auto-changed from the email thread — update its terms from the Deals column if needed, then re-share the link.'
+      res.proposed
+        ? `Creator asked to change deal terms (${what}). Nothing has changed on their ${res.signed ? 'SIGNED ' : ''}contract — apply or keep it in the Deals column, then reply.`
+        : res.handEntered
+          ? 'Creator changed deal terms after accepting. Their contract was drawn up from a call, so the email thread can\'t update it — change its terms in the Deals column if you agree, then re-share the link.'
+          : res.noChange
+            ? 'Creator wrote about the deal terms after accepting, but nothing on their contract would change — a human should review and reply.'
             : 'Creator changed deal terms after accepting — a human should review (no contract on file yet to update).',
     );
     await markHandled();
-    return { termsChanged: true, contractUpdated: res.updated, signed: res.signed };
+    return { termsChanged: true, contractUpdated: false, proposed: !!res.proposed, signed: res.signed };
   }
 
   // AI auto-reply off -> hand every post-acceptance reply to a human.

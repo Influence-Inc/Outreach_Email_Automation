@@ -390,9 +390,97 @@ function termsContractFields(terms) {
   } else if (terms.model === 'commission') {
     fields.paymentTerms = `Commission is paid to the creator's bank account every month, within ${c.payout_net_days} days of each month's end.`;
   } else if (terms.model === 'product') {
-    fields.paymentTerms = 'The product ships to the creator before content production begins.';
+    fields.paymentTerms = PRODUCT_PAYMENT_TERMS;
   }
   return fields;
+}
+
+const PRODUCT_PAYMENT_TERMS = 'The product ships to the creator before content production begins.';
+
+// The stored wording of a contract, brought up to the current contract copy
+// (dealTerms.CONTRACT_COPY_VERSION) without changing a single term: the money,
+// rates, windows, codes and deliverables stay exactly as they are — only the
+// sentences built from them are rewritten. Returns the patch to merge into the
+// contract's data ({ copyVersion, commission?, paymentTerms? }), or null when
+// it's already current or its terms can't be read back (it then keeps its
+// original wording whole, never a mix of the two).
+function currentWordingPatch(data) {
+  const d = data && typeof data === 'object' ? data : null;
+  if (!d || Number(d.copyVersion) >= dealTerms.CONTRACT_COPY_VERSION) return null;
+  const patch = { copyVersion: dealTerms.CONTRACT_COPY_VERSION };
+  const model = d.compensationModel || 'flat';
+  const c = d.commission;
+  try {
+    if ((model === 'commission' || model === 'hybrid') && c) {
+      const referrals = require('./referrals');
+      const referral = c.basis === 'referral';
+      const terms = referral
+        ? referrals.termsFromContractData(d)
+        : dealTerms.normalizeTerms({
+            model,
+            fee: d.compensation,
+            commission: {
+              basis: 'sales',
+              rate_pct: c.ratePct,
+              attribution: c.attribution,
+              promo_code: c.promoCode || null,
+              cookie_days: c.cookieDays,
+              term_months: c.termMonths,
+              payout_net_days: c.payoutNetDays,
+            },
+          });
+      if (!terms || !terms.commission) return null;
+      const fields = termsContractFields(terms);
+      const next = { ...c, summary: fields.commission.summary };
+      if (referral && c.referralCode) {
+        // Re-words the summary and the referral rows, keeping the code (and
+        // whether it's shown on the contract) as it is.
+        referrals.applyReferralCode({ commission: next }, terms, c.referralCode, {
+          shown: !!c.promoCode,
+          version: dealTerms.CONTRACT_COPY_VERSION,
+        });
+      } else if (referral) {
+        Object.assign(next, referrals.referralContractTexts(terms.commission, null));
+      }
+      patch.commission = next;
+      if (model === 'commission') patch.paymentTerms = fields.paymentTerms;
+    } else if (model === 'commission' || model === 'hybrid') {
+      return null;
+    }
+    if (model === 'product') patch.paymentTerms = PRODUCT_PAYMENT_TERMS;
+    if (model === 'flat' || model === 'hybrid') {
+      const hasSchedule = Number(d.upfrontPercent) > 0 && Number(d.remainderPercent) > 0;
+      patch.paymentTerms = paymentTermsFor(d.paymentTermsDays, { hasSchedule });
+    }
+  } catch {
+    return null;
+  }
+  return patch;
+}
+
+// Contracts already sent but not yet signed read in the current wording too.
+// Run at boot; idempotent (a contract already current is skipped). A signed
+// contract is never touched — it keeps the words that were signed — and the
+// UPDATE re-checks that, so a contract signed meanwhile is left alone.
+async function updateUnsignedContractWording() {
+  const rows = await db.many(
+    `SELECT id, data FROM contracts
+      WHERE status = 'pending' AND signed_at IS NULL
+        AND COALESCE((data->>'copyVersion')::int, 1) < $1`,
+    [dealTerms.CONTRACT_COPY_VERSION],
+  );
+  let updated = 0;
+  for (const row of rows) {
+    const patch = currentWordingPatch(row.data);
+    if (!patch) continue;
+    const res = await db.query(
+      `UPDATE contracts SET data = data || $2::jsonb, updated_at = NOW()
+        WHERE id = $1 AND status = 'pending' AND signed_at IS NULL`,
+      [row.id, JSON.stringify(patch)],
+    );
+    updated += res.rowCount || 0;
+  }
+  return { checked: rows.length, updated };
 }
 
 function baseContractData(creator, fee, offer, terms = null) {
@@ -1268,10 +1356,10 @@ async function createContractForCreator(creatorId) {
     referrals.applyReferralCode(data, terms, referralCode, { shown: referrals.isTypedCode(terms, referralCode) });
   }
   const contract = await db.one(
-    `INSERT INTO contracts (token, creator_id, campaign_id, status, data)
-     VALUES ($1, $2, $3, 'pending', $4::jsonb)
+    `INSERT INTO contracts (token, creator_id, campaign_id, status, data, thread_terms)
+     VALUES ($1, $2, $3, 'pending', $4::jsonb, $5::jsonb)
      RETURNING *`,
-    [token, creatorId, creator.campaign_id, JSON.stringify(data)],
+    [token, creatorId, creator.campaign_id, JSON.stringify(data), JSON.stringify(materialTerms(data))],
   );
   if (referralCode) {
     await require('./referrals').reserveCode((sql, params) => db.query(sql, params), {
@@ -1345,6 +1433,31 @@ function callContractOffer(input) {
 // contract carries (the Deals column strips the weekday for display). Read in
 // UTC so the date the team picked is the date on the contract, whatever the
 // server's timezone.
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+// A typed deadline in the contract's own format, or the text as typed when it
+// isn't an unambiguous full date (numeric d/m vs m/d forms are left alone).
+function formatDeadlineInput(text) {
+  const s = String(text || '').trim();
+  let y;
+  let m;
+  let d;
+  let hit = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (hit) [, y, m, d] = hit.map(Number);
+  if (!hit) {
+    hit = s.match(/^(?:[A-Za-z]+,?\s+)?([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/);
+    if (hit) { m = MONTHS.indexOf(hit[1].slice(0, 3).toLowerCase()) + 1; d = Number(hit[2]); y = Number(hit[3]); }
+  }
+  if (!hit) {
+    hit = s.match(/^(?:[A-Za-z]+,?\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\.?,?\s+(\d{4})$/);
+    if (hit) { d = Number(hit[1]); m = MONTHS.indexOf(hit[2].slice(0, 3).toLowerCase()) + 1; y = Number(hit[3]); }
+  }
+  if (!hit || !(m >= 1 && m <= 12) || !(d >= 1 && d <= 31)) return s;
+  const date = new Date(Date.UTC(y, m - 1, d, 12));
+  if (date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return s; // e.g. February 30
+  return humanDeadline(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+}
+
 function humanDeadline(isoDate) {
   const d = new Date(`${isoDate}T12:00:00Z`);
   return d.toLocaleDateString('en-US', {
@@ -1759,9 +1872,14 @@ function coerceContractPatch(patch, existing = {}) {
     out.platforms = arr.map((s) => String(s).trim()).filter(Boolean);
   }
   if (has('postingDeadline')) {
+    // A date typed in the Deals column ("2027-01-15", "Jan 15 2027",
+    // "15 January 2027") reads on the contract the way a generated one does —
+    // "Friday, January 15, 2027". Anything that isn't a full date ("end of
+    // March") is kept as typed.
     const s = String(patch.postingDeadline || '').trim();
-    out.postingDeadline = s || null;
-    out.deadline = s || null;
+    const v = s ? formatDeadlineInput(s) : null;
+    out.postingDeadline = v;
+    out.deadline = v;
   }
   if (has('paidAdsIncluded')) {
     // usageRightsFor keeps the "Usage rights" wording and the "Paid ads" chip in
@@ -1905,32 +2023,27 @@ async function changesContractTerms(text) {
   return term && change;
 }
 
-// Re-sync a creator's contract from the current (persisted) email thread after
-// a post-acceptance term change. ONLY touches a contract that is still pending —
-// a signed contract is executed and must never be silently altered (a human
-// handles that amendment). Re-runs the same extraction used at creation, so the
-// updated data flows to both the contract page and the dashboard Deals column
-// (both read this row). Returns {updated, signed, row}:
-//   updated:true  — the pending contract's data was refreshed
-//   signed:true   — a contract exists but is already signed (left untouched)
-//   both false    — no contract on file yet
-async function updateContractTermsFromThread(creatorId) {
-  const existing = await db.one(
-    `SELECT * FROM contracts WHERE creator_id = $1
-     ORDER BY ${CONTRACT_STATUS_RANK}, created_at DESC LIMIT 1`,
-    [creatorId],
-  );
+// After a creator emails a term change: re-read the thread and PROPOSE what it
+// changed — nothing is applied until the team says so in Deal Studio
+// (applyPendingChange / dismissPendingChange). Works on a signed contract too:
+// applying there edits it in place, like a Deals-column edit. Returns:
+//   proposed:true — a change is waiting for the team (`changes`)
+//   noChange:true — the thread changes nothing material on the contract
+//   handEntered   — a call contract; the thread can't speak for it
+//   row:null      — no contract on file yet
+// `signed` says whether the contract is already signed.
+async function updateContractTermsFromThread(creatorId, opts = {}) {
+  const existing = await latestContract(creatorId);
   if (!existing) return { updated: false, signed: false, row: null };
-  if (existing.status !== 'pending') return { updated: false, signed: true, row: existing };
   // A contract drawn up from a CALL holds terms the thread never saw — a
   // re-extraction would replace them with thread defaults. Leave it for a human
   // (the caller delegates), who edits it from the Deals column.
   if (isHandEnteredContract(existing.data)) {
-    return { updated: false, signed: false, handEntered: true, row: existing };
+    return { updated: false, signed: existing.status !== 'pending', handEntered: true, row: existing };
   }
 
   const creator = await loadCreatorForContract(creatorId);
-  if (!creator) return { updated: false, signed: false, row: existing };
+  if (!creator) return { updated: false, signed: existing.status !== 'pending', row: existing };
 
   // Preserve the offer type already committed on this contract (including a
   // manual view↔video correction) so a re-extraction of a legacy deal — one
@@ -1944,23 +2057,226 @@ async function updateContractTermsFromThread(creatorId) {
     preferOfferType: priorData.offerType || null,
     preferNumVideos: priorCount,
   });
-  // Manual extra points (added by hand from the Deals column) are NOT derived
-  // from the thread, so the fresh extraction doesn't reproduce them — carry the
-  // prior contract's manual points across so a post-acceptance term change never
-  // silently drops them. They still render / sync merged with the re-extracted
-  // additionalTerms via combinedAdditionalTerms.
-  if (Array.isArray(priorData.manualTerms) && priorData.manualTerms.length) {
-    data.manualTerms = priorData.manualTerms;
+  // Nothing is applied here: the terms the creator's email changed become a
+  // proposal the team applies or dismisses in Deal Studio.
+  const signed = existing.status !== 'pending';
+  const proposal = proposeFromThread(existing, data);
+  if (!proposal) {
+    // The thread changed nothing material — remember what it says now.
+    await db.query(`UPDATE contracts SET thread_terms = $2::jsonb WHERE id = $1`, [
+      existing.id,
+      JSON.stringify(materialTerms(data)),
+    ]);
+    return { updated: false, signed, noChange: true, row: existing };
   }
+  const row = await savePendingChange(existing, { ...proposal, message: opts.message });
+  return { updated: false, signed, proposed: true, changes: row.pending_change.changes, row };
+}
+
+// ── Emailed term changes wait for the team ────────────────────────────────
+// The terms a creator's email can change, as Deal Studio shows them. `patch`
+// is every contract field that moves with the term; `show` is its value as
+// the team reads it in the proposal.
+const fmtMoney = (n) => (n == null || n === '' ? '—' : `$${Number(n).toLocaleString('en-US')}`);
+const fmtCount = (n) => (n == null || n === '' ? '—' : Number(n).toLocaleString('en-US'));
+const OFFER_TYPE_NAMES = { view_based: 'View-based', video_based: 'Video-based', video_bonus: 'Video + bonus' };
+const CHANGE_FIELDS = [
+  { key: 'compensation', label: 'Fee', patch: ['compensation', 'totalPayment'], show: (d) => fmtMoney(d.compensation) },
+  { key: 'offerType', label: 'Deal type', patch: ['offerType', 'offerLabel'], show: (d) => OFFER_TYPE_NAMES[d.offerType] || d.offerLabel || '—' },
+  {
+    key: 'numberOfVideos',
+    label: 'Videos',
+    patch: ['numberOfVideos', 'numberOfDeliverables', 'deliverables'],
+    show: (d) => fmtCount(d.numberOfVideos != null ? d.numberOfVideos : d.numberOfDeliverables),
+  },
+  { key: 'minTotalViews', label: 'Guaranteed views', patch: ['minTotalViews', 'guaranteedViews'], show: (d) => fmtCount(d.minTotalViews != null ? d.minTotalViews : d.guaranteedViews) },
+  { key: 'minVideos', label: 'Minimum videos', patch: ['minVideos'], show: (d) => fmtCount(d.minVideos) },
+  { key: 'platforms', label: 'Platforms', patch: ['platforms'], show: (d) => (Array.isArray(d.platforms) && d.platforms.length ? d.platforms.join(', ') : '—') },
+  { key: 'postingDeadline', label: 'Deadline', patch: ['postingDeadline', 'deadline', 'postingWindows'], show: (d) => d.postingDeadline || d.deadline || '—' },
+  { key: 'timeline', label: 'Cadence', patch: ['timeline'], show: (d) => d.timeline || '—' },
+  { key: 'paidAdsIncluded', label: 'Paid ads', patch: ['paidAdsIncluded', 'usageRights'], show: (d) => (d.paidAdsIncluded ? 'Included' : 'Not included') },
+  { key: 'exclusivity', label: 'Exclusivity', patch: ['exclusivity'], show: (d) => d.exclusivity || 'None' },
+  {
+    key: 'upfrontPercent',
+    label: 'Upfront',
+    patch: ['upfrontPercent', 'upfrontTrigger', 'remainderPercent', 'remainderTrigger', 'paymentTerms'],
+    show: (d) => (Number(d.upfrontPercent) > 0 && Number(d.remainderPercent) > 0 ? `${d.upfrontPercent}% upfront` : 'Paid on completion'),
+  },
+  {
+    key: 'bonus',
+    label: 'Bonus',
+    patch: ['bonusAmount', 'bonusThresholdViews', 'totalPayment'],
+    show: (d) => (Number(d.bonusAmount) > 0 && d.bonusThresholdViews ? `${fmtMoney(d.bonusAmount)} at ${fmtCount(d.bonusThresholdViews)} views` : 'None'),
+  },
+  { key: 'viewCountingDays', label: 'View window', patch: ['viewCountingDays', 'bonusWindowDays'], show: (d) => (d.viewCountingDays ? `${d.viewCountingDays} days` : '—') },
+  {
+    key: 'additionalTerms',
+    label: 'Additional terms',
+    patch: ['additionalTerms'],
+    show: (d) => (Array.isArray(d.additionalTerms) && d.additionalTerms.length ? d.additionalTerms.join(' · ') : 'None'),
+  },
+];
+
+// The material terms of a contract, normalised so two reads of the same
+// thread compare equal (order, case and spacing don't count as a change).
+function materialTerms(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  const n = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+  const list = (arr) =>
+    (Array.isArray(arr) ? arr : [])
+      .map((s) => String(s).trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.;]+$/, ''))
+      .filter(Boolean)
+      .sort();
+  const text = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ') || null;
+  const split = Number(d.upfrontPercent) > 0 && Number(d.remainderPercent) > 0;
+  const excl = text(d.exclusivity);
+  return {
+    compensation: n(d.compensation),
+    offerType: d.offerType || null,
+    numberOfVideos: n(d.numberOfVideos != null ? d.numberOfVideos : d.numberOfDeliverables),
+    minTotalViews: n(d.minTotalViews != null ? d.minTotalViews : d.guaranteedViews),
+    minVideos: n(d.minVideos),
+    platforms: list(d.platforms),
+    postingDeadline: text(d.postingDeadline || d.deadline),
+    timeline: text(d.timeline),
+    paidAdsIncluded: !!d.paidAdsIncluded,
+    exclusivity: !excl || excl === 'none' ? 'none' : excl,
+    upfrontPercent: split ? n(d.upfrontPercent) : 0,
+    bonus: Number(d.bonusAmount) > 0 && d.bonusThresholdViews ? [n(d.bonusAmount), n(d.bonusThresholdViews)] : null,
+    viewCountingDays: n(d.viewCountingDays),
+    additionalTerms: list(d.additionalTerms),
+  };
+}
+
+const sameTerm = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+
+// What a fresh read of the thread (`next`) changes, compared with what the
+// thread said last time (the contract's thread_terms; for a contract made
+// before that was kept, the contract itself). A term the team has since set
+// by hand is only proposed if the email moved it to something new.
+function proposeFromThread(existing, next) {
+  const current = existing.data || {};
+  const baseline = existing.thread_terms || materialTerms(current);
+  const now = materialTerms(current);
+  const said = materialTerms(next);
+  const changes = [];
+  const patch = {};
+  for (const f of CHANGE_FIELDS) {
+    if (sameTerm(baseline[f.key], said[f.key])) continue; // the email didn't touch it
+    if (sameTerm(now[f.key], said[f.key])) continue; // the contract already says so
+    changes.push({ key: f.key, label: f.label, from: f.show(current), to: f.show(next) });
+    for (const k of f.patch) patch[k] = next[k] === undefined ? null : next[k];
+  }
+  if (!changes.length) return null;
+  return { changes, patch, threadTerms: said };
+}
+
+// Store a proposal on the contract, folding it into one already waiting (a
+// second email before the team got to the first): the newer value of a term
+// wins, the rest are kept.
+async function savePendingChange(existing, { changes, patch, threadTerms, message, source = 'email' }) {
+  const prev = existing.pending_change || null;
+  const byKey = new Map((prev ? prev.changes : []).map((c) => [c.key, c]));
+  for (const c of changes) {
+    const before = byKey.get(c.key);
+    byKey.set(c.key, before ? { ...c, from: before.from } : c);
+  }
+  const messages = [...((prev && prev.messages) || []), ...(message ? [String(message).slice(0, 2000)] : [])].slice(-3);
+  const pending = {
+    source,
+    proposedAt: new Date().toISOString(),
+    changes: [...byKey.values()],
+    patch: { ...((prev && prev.patch) || {}), ...patch },
+    threadTerms: threadTerms || (prev && prev.threadTerms) || null,
+    messages,
+  };
   const row = await db.one(
-    `UPDATE contracts SET data = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
-    [existing.id, JSON.stringify(data)],
+    `UPDATE contracts SET pending_change = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(pending)],
   );
   await db.query(
-    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_terms_updated', $2)`,
-    [creatorId, { token: existing.token }],
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_change_proposed', $2)`,
+    [existing.creator_id, { token: existing.token, fields: changes.map((c) => c.key) }],
   );
-  return { updated: true, signed: false, row };
+  return row;
+}
+
+// A creator disputing paid-ad rights (a free_only campaign): proposed like any
+// other emailed change, never applied on its own.
+async function proposeUsageRightsRemoval(creatorId, { message } = {}) {
+  const existing = await latestContract(creatorId);
+  if (!existing || !(existing.data && existing.data.paidAdsIncluded)) return null;
+  const next = { ...existing.data, ...usageRightsFor('no_rights') };
+  const f = CHANGE_FIELDS.find((x) => x.key === 'paidAdsIncluded');
+  const row = await savePendingChange(existing, {
+    changes: [{ key: f.key, label: f.label, from: f.show(existing.data), to: f.show(next) }],
+    patch: Object.fromEntries(f.patch.map((k) => [k, next[k]])),
+    message,
+  });
+  return row;
+}
+
+function latestContract(creatorId) {
+  return db.one(
+    `SELECT * FROM contracts WHERE creator_id = $1
+     ORDER BY ${CONTRACT_STATUS_RANK}, created_at DESC LIMIT 1`,
+    [creatorId],
+  );
+}
+
+// The team applies the waiting change: its terms go onto the contract (signed
+// or not — the same as a Deals-column edit), everything else stays as it is.
+async function applyPendingChange(creatorId, { by = null } = {}) {
+  const existing = await latestContract(creatorId);
+  if (!existing) return { missing: true };
+  const pending = existing.pending_change;
+  if (!pending) return { none: true, row: existing };
+  const data = { ...existing.data, ...(pending.patch || {}) };
+  // Keep the fee, the bonus and the total in step, as a Deals-column edit does.
+  if (data.compensation != null) {
+    const bonus = Number(data.bonusAmount);
+    const isBonus = data.offerType === 'video_bonus' && Number.isFinite(bonus) && bonus > 0;
+    data.totalPayment = isBonus ? Number(data.compensation) + bonus : Number(data.compensation);
+  }
+  const row = await db.one(
+    `UPDATE contracts SET data = $2::jsonb, pending_change = NULL,
+            thread_terms = COALESCE($3::jsonb, thread_terms), updated_at = NOW()
+      WHERE id = $1 RETURNING *`,
+    [existing.id, JSON.stringify(data), pending.threadTerms ? JSON.stringify(pending.threadTerms) : null],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_change_applied', $2)`,
+    [creatorId, { token: existing.token, fields: (pending.changes || []).map((c) => c.key), by }],
+  );
+  const feeBefore = existing.data && existing.data.compensation != null ? Number(existing.data.compensation) : null;
+  const feeAfter = data.compensation != null ? Number(data.compensation) : null;
+  if (feeAfter != null && Number.isFinite(feeAfter) && feeAfter !== feeBefore) {
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_quoted', $2)`,
+      [creatorId, { from: feeBefore, to: feeAfter, by: 'admin' }],
+    );
+    await db.query(`UPDATE creators SET quoted_rate = $2, updated_at = NOW() WHERE id = $1`, [creatorId, feeAfter]);
+  }
+  return { applied: true, row };
+}
+
+// The team keeps the contract as it is. The thread's new reading becomes the
+// baseline, so the same email isn't proposed again.
+async function dismissPendingChange(creatorId, { by = null } = {}) {
+  const existing = await latestContract(creatorId);
+  if (!existing) return { missing: true };
+  const pending = existing.pending_change;
+  if (!pending) return { none: true, row: existing };
+  const row = await db.one(
+    `UPDATE contracts SET pending_change = NULL, thread_terms = COALESCE($2::jsonb, thread_terms), updated_at = NOW()
+      WHERE id = $1 RETURNING *`,
+    [existing.id, pending.threadTerms ? JSON.stringify(pending.threadTerms) : null],
+  );
+  await db.query(
+    `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_change_dismissed', $2)`,
+    [creatorId, { token: existing.token, fields: (pending.changes || []).map((c) => c.key), by }],
+  );
+  return { dismissed: true, row };
 }
 
 // Record the creator's signed submission: pending -> signed. Idempotent — a
@@ -2035,7 +2351,7 @@ async function attachContracts(rows) {
   const ids = (rows || []).map((r) => r.id).filter((x) => x != null);
   if (!ids.length) return rows;
   const contracts = await db.many(
-    `SELECT DISTINCT ON (creator_id) creator_id, token, status, data
+    `SELECT DISTINCT ON (creator_id) creator_id, token, status, data, pending_change
      FROM contracts WHERE creator_id = ANY($1::int[])
      ORDER BY creator_id, ${CONTRACT_STATUS_RANK}, created_at DESC`,
     [ids],
@@ -2043,7 +2359,9 @@ async function attachContracts(rows) {
   const byCreator = new Map(contracts.map((c) => [c.creator_id, c]));
   for (const r of rows) {
     const c = byCreator.get(r.id);
-    r.contract = c ? { token: c.token, status: c.status, url: contractUrl(c.token), data: c.data } : null;
+    r.contract = c
+      ? { token: c.token, status: c.status, url: contractUrl(c.token), data: c.data, pendingChange: c.pending_change || null }
+      : null;
   }
   return rows;
 }
@@ -2051,6 +2369,9 @@ async function attachContracts(rows) {
 module.exports = {
   agreedTermsFor,
   termsContractFields,
+  currentWordingPatch,
+  formatDeadlineInput,
+  updateUnsignedContractWording,
   generateToken,
   contractUrl,
   extractContractData,
@@ -2080,6 +2401,12 @@ module.exports = {
   coerceContractPatch,
   changesContractTerms,
   updateContractTermsFromThread,
+  materialTerms,
+  proposeFromThread,
+  savePendingChange,
+  proposeUsageRightsRemoval,
+  applyPendingChange,
+  dismissPendingChange,
   // exposed for tests / reuse
   resolveOffer,
   agreedFeeFor,

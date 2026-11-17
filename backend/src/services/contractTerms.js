@@ -25,6 +25,15 @@ function fmtMoney(n, cur) {
   }
 }
 
+// Does the deliverables text already say how many ("3 short-form videos",
+// "2 Instagram Reels + 1 TikTok")? A digit alone isn't enough: the text the
+// thread extraction writes for a commission deal often names the promo code
+// ("…promoting promo code KAI12"), and treating that "12" as a count hid the
+// Number of deliverables row. Mirrored in public/contract.js.
+function statesCount(text) {
+  return /(^|[^A-Za-z0-9])\d+\s*(x\s*)?([A-Za-z-]+\s+){0,2}(videos?|reels?|posts?|tiktoks?|shorts|stories|story|deliverables?|uploads?|clips?)\b/i.test(String(text || ''));
+}
+
 function fmtNum(n) {
   return n == null || Number.isNaN(Number(n)) ? null : Number(n).toLocaleString('en-US');
 }
@@ -74,6 +83,8 @@ const COPY = {
     commissionPay: (days) => `Direct bank transfer, monthly, within ${days} days of each month's end.`,
     feePay: (days, anchor) => `Direct bank transfer, initiated within ${days} working days of ${anchor}.`,
     exclusivity: (v) => v,
+    usageRights: (included) => (included ? 'Included' : 'Not included'),
+    paidAds: (included) => (included ? 'Included' : 'Not included'),
   },
   2: {
     tracking: {
@@ -89,6 +100,9 @@ const COPY = {
     commissionPay: (days) => `Paid to the creator's bank account every month, within ${days} days of each month's end.`,
     feePay: (days, anchor) => `Payment is sent by direct bank transfer within ${days} working days of ${anchor}.`,
     exclusivity: (v) => (/^\s*(none|no|n\/a|no exclusivity)\.?\s*$/i.test(String(v || '')) ? 'None — the creator is free to work with any brand' : v),
+    // Same grant as v1's Included / Not included, said from the creator's side.
+    usageRights: (included) => (included ? "Included — the brand can feature the creator's content in its marketing" : 'Retained by the creator'),
+    paidAds: (included) => (included ? "Included — the brand can boost the creator's content with paid ads" : "The creator's content stays organic — it won't run as paid ads"),
   },
 };
 function copyFor(d) {
@@ -164,7 +178,7 @@ function contractSections(data) {
   const minVideos = d.minVideos != null ? Number(d.minVideos) : null;
   const hasMinVideos = isViewBased && Number.isFinite(minVideos) && minVideos > 0;
   const deliverablesText = stripCadenceFromDeliverables(String(d.deliverables || ''));
-  const deliverablesHasCount = /\d/.test(deliverablesText);
+  const deliverablesHasCount = statesCount(deliverablesText);
   const guaranteedViewsLabel = isViewBased ? 'Guaranteed total views' : 'Min. guaranteed views';
   const guaranteedViewsValue =
     isViewBased && minViews
@@ -282,8 +296,8 @@ function contractSections(data) {
   sections.push({
     title: 'Usage Rights & Exclusivity',
     rows: rows([
-      { label: 'Usage rights', value: d.paidAdsIncluded ? 'Included' : 'Not included' },
-      { label: 'Paid ads', value: d.paidAdsIncluded ? 'Included' : 'Not included' },
+      { label: 'Usage rights', value: copy.usageRights(!!d.paidAdsIncluded) },
+      { label: 'Paid ads', value: copy.paidAds(!!d.paidAdsIncluded) },
       { label: 'Exclusivity', value: copy.exclusivity(d.exclusivity) },
       { label: 'Posts remain live for', value: `${d.postLiveMonths || 6} months` },
     ]),
@@ -295,4 +309,4 @@ function contractSections(data) {
   return sections;
 }
 
-module.exports = { contractSections, sentence };
+module.exports = { contractSections, sentence, statesCount };

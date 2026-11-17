@@ -208,7 +208,35 @@ function referralTrackingPhrase(c) {
   return `the creator's referral link or ${code} entered at sign-up`;
 }
 
-function referralSentence(t) {
+// The sentences below come in each contract wording version. A contract keeps
+// the version it was created with, so regenerating its wording later (a new
+// referral code on a signed contract) never rewrites the rest of what was
+// signed. Version 1 is the original wording, kept verbatim.
+function referralSentenceV1(t) {
+  const c = t.commission;
+  const n = c.campaigns_per_brand;
+  const term = c.term_months
+    ? `Brands that sign up within ${c.term_months} month${c.term_months === 1 ? '' : 's'} of signing qualify`
+    : 'Brands that sign up while this agreement is in force qualify';
+  return (
+    `${pct(c.rate_pct)} of the campaign spend of each new brand that signs up to ${platformName()} through ${referralTrackingPhrase(c)},` +
+    ` on that brand's first ${n === 1 ? 'campaign' : `${n} campaigns`} started within ${c.campaign_window_months} month${c.campaign_window_months === 1 ? '' : 's'} of its sign-up.` +
+    ` A link referral counts when the brand signs up within ${c.cookie_days} day${c.cookie_days === 1 ? '' : 's'} of using the link. ${term}.` +
+    ` Paid monthly within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid.`
+  );
+}
+
+function salesSentenceV1(c) {
+  const term = c.term_months ? `for ${c.term_months} month${c.term_months === 1 ? '' : 's'} from signing` : 'until either party ends it in writing';
+  return (
+    `${pct(c.rate_pct)} commission on net sales (excluding taxes, shipping, refunds and returns) attributed to ${attributionPhrase(c)}` +
+    ` within ${c.cookie_days} day${c.cookie_days === 1 ? '' : 's'} of a click or code use, paid monthly within ${c.payout_net_days} days` +
+    ` of each month's end against the brand's sales report, ${term}.`
+  );
+}
+
+function referralSentence(t, { version = CONTRACT_COPY_VERSION } = {}) {
+  if (Number(version) < 2) return referralSentenceV1(t);
   const c = t.commission;
   const n = c.campaigns_per_brand;
   const s = (k) => (k === 1 ? '' : 's');
@@ -225,10 +253,11 @@ function referralSentence(t) {
   );
 }
 
-function commissionSentence(t) {
+function commissionSentence(t, { version = CONTRACT_COPY_VERSION } = {}) {
   if (!hasCommission(t)) return '';
-  if (isReferral(t)) return referralSentence(t);
+  if (isReferral(t)) return referralSentence(t, { version });
   const c = t.commission;
+  if (Number(version) < 2) return salesSentenceV1(c);
   const term = c.term_months ? `for ${c.term_months} month${c.term_months === 1 ? '' : 's'} from signing` : 'until either party ends this agreement in writing';
   // Leads with what the creator earns. "No cap" is literal: no deal type
   // carries an earnings cap — if one is ever added, this line must change.

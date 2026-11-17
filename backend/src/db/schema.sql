@@ -608,6 +608,15 @@ UPDATE creators
 -- pending/signed/completed status (that stays tied to Creator-DB sync only).
 ALTER TABLE contracts ADD COLUMN IF NOT EXISTS synced_to_dashboard BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- A creator's emailed term change is never applied on its own: it waits in
+-- pending_change ({ changes: [{key,label,from,to}], patch, threadTerms, messages })
+-- until the team applies or dismisses it in Deal Studio. thread_terms is what
+-- the email thread said at the last read (contracts.materialTerms), so a new
+-- proposal holds only what the creator's email changed — never a revert of the
+-- team's own Deals-column edits. Neither column is sent to the signing page.
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS thread_terms JSONB;
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS pending_change JSONB;
+
 -- ---------------------------------------------------------------------------
 -- Creator Sourcing (automated Instagram scouting)
 -- ---------------------------------------------------------------------------
