@@ -299,3 +299,12 @@ test('the ig_dm_queued step stays while the extension is still driving', () => {
   const collapsed = collapseSupersededSteps(log);
   assert.deepStrictEqual(collapsed.map((e) => e.type), ['ig_dm_queued']);
 });
+
+test('rate_quoted in another currency shows the USD figure and what the creator wrote', () => {
+  const entry = rateLogEntry(
+    'rate_quoted',
+    { from: null, to: 2346, by: 'creator', original: { amount: 150000, currency: 'PHP' } },
+    'Hi! My rate is Php 150,000 for 2 reels.',
+  );
+  assert.strictEqual(entry.text, 'Creator quoted $2,346 (₱150,000) for 2 reels');
+});

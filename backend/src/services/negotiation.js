@@ -30,6 +30,7 @@ const { formatFirstName } = require('./nameFormat');
 const { splitQuotedReply, stripQuotedReply } = require('./emailQuote');
 const emailHtml = require('./emailHtml');
 const dealTerms = require('./dealTerms');
+const currency = require('./currency');
 const { flagFingerprintSql } = require('../db/flagFingerprint');
 
 // ── Claude client (shared) ────────────────────────────────────────────────
@@ -609,7 +610,85 @@ function nonFlatOfferRule(ctx) {
 }
 
 // ── (a) Understand a reply — ONE Claude call, strict JSON ─────────────────
+// Classify a creator's reply (Claude, else the heuristic fallback), then
+// convert any rate they quoted to USD — every stored rate is in dollars, so
+// "Php 150,000" must be recorded as ~$2,350, never "$150,000".
 async function handleCreatorReply(creator, replyText, ctx) {
+  const result = await classifyCreatorReply(creator, replyText, ctx);
+  return normalizeRateCurrency(result, stripQuotedReply(replyText));
+}
+
+// Which currency an amount in the creator's message was written in: the
+// currency marking the matching mention, else the one currency the message
+// talks in, else `fallback`.
+function currencyForAmount(amount, mentions, ctxCurrency, fallback) {
+  const n = Number(amount);
+  const hit = mentions.find((m) => m.currency && Math.abs(m.amount - n) < 0.01);
+  if (hit) return hit.currency;
+  return ctxCurrency || fallback || 'USD';
+}
+
+// Convert the quoted rate (and every quoted option) on a classifier result to
+// USD. The amounts the classifier returns are in the creator's own currency
+// (Claude is told not to convert; the regex fallback reads them as written).
+// Adds `quoted_rate_original: { amount, currency, rate, source }` when the
+// quote wasn't in dollars; each converted option keeps its original label and
+// gains `original_amount` + `currency`. A result without a rate is returned
+// as-is.
+async function normalizeRateCurrency(result, text) {
+  if (!result || (result.quoted_rate == null && !Array.isArray(result.quoted_rate_options))) return result;
+  const mentions = currency.parseMoneyMentions(replyLearning.stripQuotedHistory(String(text || '')));
+  const ctxCurrency = currency.contextCurrency(text);
+  const claimed = currency.SUPPORTED.has(result.quoted_rate_currency) ? result.quoted_rate_currency : null;
+  // An explicit marker on the amount in the text beats the classifier's
+  // claim; the claim beats context (it can see earlier turns of the thread).
+  const marked = result.quoted_rate != null
+    ? mentions.find((m) => m.currency && Math.abs(m.amount - Number(result.quoted_rate)) < 0.01)
+    : null;
+  const primaryCurrency = (marked && marked.currency) || claimed || ctxCurrency || 'USD';
+
+  const out = { ...result, quoted_rate_currency: primaryCurrency };
+  if (result.quoted_rate != null && primaryCurrency !== 'USD') {
+    const conv = await currency.convertToUsd(result.quoted_rate, primaryCurrency);
+    if (conv) {
+      out.quoted_rate = conv.usd;
+      out.quoted_rate_original = {
+        amount: Number(result.quoted_rate),
+        currency: primaryCurrency,
+        rate: conv.rate,
+        source: conv.source,
+      };
+    }
+  }
+  if (Array.isArray(result.quoted_rate_options)) {
+    out.quoted_rate_options = [];
+    for (const o of result.quoted_rate_options) {
+      const optCur =
+        (currency.SUPPORTED.has(o.currency) && o.currency) ||
+        currencyForAmount(o.amount, mentions, ctxCurrency, primaryCurrency);
+      if (optCur === 'USD' || o.amount == null) {
+        out.quoted_rate_options.push({ amount: o.amount, label: o.label });
+        continue;
+      }
+      const conv = await currency.convertToUsd(o.amount, optCur);
+      out.quoted_rate_options.push({
+        amount: conv ? conv.usd : o.amount,
+        label: o.label,
+        original_amount: Number(o.amount),
+        currency: optCur,
+      });
+    }
+  }
+  if (out.quoted_rate_original) {
+    console.log(
+      `[negotiation] converted quoted rate ${currency.formatOriginal(out.quoted_rate_original.amount, primaryCurrency)}` +
+        ` -> $${out.quoted_rate} (${out.quoted_rate_original.source} rate ${out.quoted_rate_original.rate})`,
+    );
+  }
+  return out;
+}
+
+async function classifyCreatorReply(creator, replyText, ctx) {
   const v = templateVars(ctx);
   const defaultSubject = templates.reply1(v).subject;
 
@@ -646,11 +725,12 @@ async function handleCreatorReply(creator, replyText, ctx) {
     templates.REPLY2_BODY,
     '',
     'Read the creator\'s plain-text reply and respond with STRICT JSON ONLY (no prose, no markdown fences), exactly this shape:',
-    '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"request_our_offer"|"request_counter_rate"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "quoted_rate_options": [{"amount": number, "label": string}] | null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
+    '{"understanding": string, "action": "shared_rate"|"asking_details"|"answer_question"|"request_our_offer"|"request_counter_rate"|"accepted"|"declined"|"counter"|"escalate"|"other", "quoted_rate": number|null, "quoted_rate_currency": string|null, "quoted_rate_options": [{"amount": number, "label": string, "currency": string}] | null, "email": {"subject": string, "body": string} | null, "send_now": boolean}',
     '',
     'Rules:',
     `- Judge the creator's intent from the MEANING and tone of the whole reply, NEVER from specific keywords. Any enthusiasm, curiosity, or request to hear more — e.g. "sounds great", "amazing", "interesting", "cool", "tell me more", "share the details", "what did you have in mind", "I'd love to know more", "I'm in", "sure", a simple "yes", or even just a positive emoji — all mean the creator wants to proceed. Treat those as interest. How to classify that interest depends on the stage: when REPLY 1 has NOT been sent yet, use "asking_details". Once we have already sent a PRICED OFFER (current stage AWAITING_DECISION) and the reply's overall meaning is that they AGREE to that offer or are ready to move ahead with it — "sounds good, let's do it", "perfect, what are the next steps?", "I'm in", "yes let's go", "happy with that", "great, how do we start?" — classify it as "accepted" (they are saying yes to the offer on the table), NOT "answer_question". At AWAITING_DECISION, reserve "answer_question" for replies that actually ASK a specific question instead of agreeing, and "request_counter_rate"/"counter" for replies that push back on the price. If a positive reply at AWAITING_DECISION is genuinely AMBIGUOUS about whether they accept (e.g. "sounds interesting, but I have a few questions first"), prefer "answer_question" — do NOT accept on a soft or conditional signal. At any stage other than AWAITING_DECISION, a generic positive with no question is "asking_details" (pre-REPLY 1) or "answer_question". A creator does NOT have to say the word "yes" or "interested" to be interested. Reserve "declined" strictly for replies whose overall meaning is that they do NOT want to proceed.`,
-    '- "shared_rate": the creator stated a rate/budget/price. Put the primary numeric USD amount in quoted_rate (plain number, no symbols). email=null, send_now=false — an admin must approve an offer before we reply.',
+    '- "shared_rate": the creator stated a rate/budget/price. Put the primary amount in quoted_rate EXACTLY as the creator wrote it, in THEIR currency — do NOT convert it to dollars yourself (plain number, no symbols; expand shorthand: "150k" → 150000, "1.5 lakh" → 150000). email=null, send_now=false — an admin must approve an offer before we reply.',
+    '- quoted_rate_currency: whenever quoted_rate is set, the ISO 4217 code of the currency the creator used — "USD" for $ / dollars, "EUR" for € / euros, "GBP" for £ / pounds, "INR" for ₹ / Rs / rupees / lakh, "PHP" for ₱ / Php / P / pesos, "AED" for dirhams, and so on. If the amount has no currency marker, use the currency the creator used earlier in this thread, else "USD". We convert to USD ourselves, so never put a converted number in quoted_rate. Give each quoted_rate_options entry its own "currency" the same way.',
     '- quoted_rate_options: whenever the creator lists MORE THAN ONE rate — a tiered / performance ladder ("$3,500 for 300k views, $5,000 for 600k views, $7,500 for 1M views"), a per-item + package pair ("$900 per reel, $2,500 for 3 reels"), or any menu of alternatives — return EVERY rate as an ordered array of {"amount": number, "label": string}. `label` is a short human-readable description of what THAT specific rate covers (e.g. "$3,500 for 300k views", "package of 3 reels — $2,500 total"), taken from the surrounding text — don\'t paraphrase, but drop bullet markers and trailing punctuation. Use quoted_rate for the primary/reference amount (usually the lowest tier or the per-item price). If the creator gave exactly ONE rate, set quoted_rate_options to null. Also set this on "counter" when the creator lists multiple counter-numbers.',
     `- "request_our_offer": the creator is interested but turns the rate question back on us — they ask US to name/quote/propose a rate, state a budget, or make the FIRST offer instead of giving their own number ("can you quote a fair rate first?", "what's your budget?", "what are you offering?", "make me an offer", "what do you usually pay for this?", "you tell me a number"). This is NOT a rate from them and NOT a complaint about an existing offer — it's a request for us to price it. email=null, send_now=false — an admin will set the price and send an offer from the dashboard. quoted_rate=null.`,
     '- "counter": the creator pushed back on a prior offer with a different number/terms. Put any numeric amount in quoted_rate. email=null, send_now=false.',
@@ -718,6 +798,7 @@ async function handleCreatorReply(creator, replyText, ctx) {
           .map((o) => ({
             amount: numOrNull(o && o.amount),
             label: typeof (o && o.label) === 'string' ? o.label.trim().slice(0, 120) : '',
+            currency: typeof (o && o.currency) === 'string' ? o.currency.trim().toUpperCase() : null,
           }))
           .filter((o) => o.amount != null && o.label)
       : [];
@@ -729,6 +810,8 @@ async function handleCreatorReply(creator, replyText, ctx) {
       understanding: out.understanding || '',
       action: out.action,
       quoted_rate: numOrNull(out.quoted_rate),
+      quoted_rate_currency:
+        typeof out.quoted_rate_currency === 'string' ? out.quoted_rate_currency.trim().toUpperCase() : null,
       quoted_rate_options: options.length ? options : null,
       email,
       send_now: out.send_now !== false,
@@ -744,20 +827,12 @@ function parseRateFromText(text) {
   // client appends below the new message.
   const s = replyLearning.stripQuotedHistory(String(text));
   if (!s) return null;
-  let m;
-  const dollar = /\$\s*([\d,]+(?:\.\d+)?)\s*([kKmM])?/g;
-  while ((m = dollar.exec(s))) {
-    let val = parseFloat(m[1].replace(/,/g, ''));
-    if (m[2]) val *= m[2].toLowerCase() === 'k' ? 1e3 : 1e6;
-    if (val >= 50) return Math.round(val);
-  }
-  const kg = /(?:^|\s)(\d+(?:\.\d+)?)\s*([kKmM])\b/g;
-  while ((m = kg.exec(s))) {
-    let val = parseFloat(m[1]);
-    val *= m[2].toLowerCase() === 'k' ? 1e3 : 1e6;
-    if (val >= 50) return Math.round(val);
-  }
-  return null;
+  // The amount in the creator's OWN currency ("Php 150,000" -> 150000);
+  // normalizeRateCurrency converts it to USD afterwards. A currency-marked
+  // amount wins over a bare "2.5k".
+  const mentions = currency.parseMoneyMentions(s).filter((m) => m.amount >= 50);
+  const hit = mentions.find((m) => m.marked) || mentions[0];
+  return hit ? Math.round(hit.amount) : null;
 }
 
 // Extract EVERY rate the creator quoted in one reply, with the surrounding
@@ -795,15 +870,12 @@ function parseRateOptionsFromText(text) {
     for (const rawClause of clauses) {
       const clause = rawClause.trim();
       if (!clause) continue;
-      // Find every $-amount in this clause.
-      const amountRe = /\$\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*([kKmM])?/g;
-      let m;
-      const amountsHere = [];
-      while ((m = amountRe.exec(clause)) !== null) {
-        let val = parseFloat(m[1].replace(/,/g, ''));
-        if (m[2]) val *= m[2].toLowerCase() === 'k' ? 1e3 : 1e6;
-        if (Number.isFinite(val) && val >= 50) amountsHere.push(Math.round(val));
-      }
+      // Find every currency-marked amount in this clause ($, €, ₹, Php, …),
+      // in the creator's own currency — normalizeRateCurrency converts later.
+      const amountsHere = currency
+        .parseMoneyMentions(clause)
+        .filter((m) => m.marked && m.amount >= 50)
+        .map((m) => ({ amount: Math.round(m.amount), currency: m.currency }));
       if (!amountsHere.length) continue;
       // The label is the clause with any leading bullet marker stripped, so
       // "- $3,500 for 300,000 combined views" reads as "$3,500 for 300,000
@@ -816,11 +888,11 @@ function parseRateOptionsFromText(text) {
       // One clause can technically hold two amounts ("between $500 and
       // $700"); we still record them as separate options so the reader sees
       // both endpoints — the label carries the surrounding context.
-      for (const amount of amountsHere) {
+      for (const { amount, currency: cur } of amountsHere) {
         const key = `${amount}|${label.toLowerCase()}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        results.push({ amount, label });
+        results.push(cur && cur !== 'USD' ? { amount, label, currency: cur } : { amount, label });
       }
     }
   }
@@ -2798,9 +2870,22 @@ async function applyReply(creator, ctx, result) {
       // we still store a single-option array so the dashboard has a uniform
       // shape; overwriting on each new reply means the latest set wins (a
       // counter with fresh numbers replaces stale tiered pricing).
+      // `rate` is already in USD (normalizeRateCurrency). A quote made in
+      // another currency keeps what the creator wrote in its label / detail.
+      const original = result.quoted_rate_original || null;
       let rateOptions = Array.isArray(result.quoted_rate_options) ? result.quoted_rate_options : null;
       if (!rateOptions && rate != null) {
-        rateOptions = [{ amount: Number(rate), label: `$${Number(rate).toLocaleString('en-US')}` }];
+        const usdLabel = `$${Number(rate).toLocaleString('en-US')}`;
+        rateOptions = [
+          original
+            ? {
+                amount: Number(rate),
+                label: `${currency.formatOriginal(original.amount, original.currency)} (≈ ${usdLabel})`,
+                original_amount: original.amount,
+                currency: original.currency,
+              }
+            : { amount: Number(rate), label: usdLabel },
+        ];
       }
       await db.query(
         `UPDATE creators
@@ -2822,7 +2907,16 @@ async function applyReply(creator, ctx, result) {
         const prevRate = creator.quoted_rate != null ? Number(creator.quoted_rate) : null;
         await db.query(
           `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'rate_quoted', $2)`,
-          [creator.id, { from: prevRate, to: Number(rate), by: 'creator', options: rateOptions || null }],
+          [
+            creator.id,
+            {
+              from: prevRate,
+              to: Number(rate),
+              by: 'creator',
+              options: rateOptions || null,
+              ...(original ? { original: { amount: original.amount, currency: original.currency, fx_rate: original.rate } } : {}),
+            },
+          ],
         );
       }
       return;
@@ -3278,6 +3372,7 @@ module.exports = {
   extractOfferAmount,
   parseRateOptionsFromText,
   parseRateFromText,
+  normalizeRateCurrency,
   asksUsToQuoteFirst,
   latestCreatorMessage,
   draftAcknowledgmentLine,
