@@ -725,40 +725,24 @@
   }
 
   // ── Trust ──────────────────────────────────────────────────────────────
-  // The "Secure & private" pill under the wordmark and the protection card on
-  // the bank step. Every line is something this system actually does (see the
-  // Trust block in contract.html), and "encrypted" is only ever claimed on a
-  // secure context — a page somehow served over plain http says nothing about
-  // encryption rather than something untrue.
+  // The "Private & secure" accessory on the Your details heading and the
+  // protection card on the bank step. Every line is something this system
+  // actually does (see the Trust block in contract.html), and "encrypted" is
+  // only ever claimed on a secure context — a page somehow served over plain
+  // http says nothing about encryption rather than something untrue. Both live
+  // inside the forms, so a signed contract (which hides them) shows neither.
   function initTrust(d) {
     var secure = !!window.isSecureContext;
     $('trust-encrypted').hidden = !secure;
     $('protect-encrypted').hidden = !secure;
-    if (!secure) $('trust-label').textContent = 'Private link';
+    if (!secure) $('trust-label').textContent = 'Private';
     $('protect-brand').textContent = d.brandName || d.brandLegalName || 'The brand';
 
     var pill = $('trust-pill');
-    var sheet = $('trust-sheet');
-    function setOpen(open) {
-      sheet.hidden = !open;
+    pill.addEventListener('click', function () {
+      var open = $('trust-sheet').classList.toggle('is-open');
       pill.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
-    pill.addEventListener('click', function () { setOpen(sheet.hidden); });
-    // Dismissed like any popover: a tap anywhere else, or Escape (which hands
-    // focus back to the pill so keyboard users aren't stranded).
-    document.addEventListener('pointerdown', function (e) {
-      if (!sheet.hidden && !$('trust').contains(e.target)) setOpen(false);
     });
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !sheet.hidden) { setOpen(false); pill.focus(); }
-    });
-    $('trust').hidden = false;
-  }
-  // Nothing left to enter on a signed contract, so the promises about what
-  // happens to entered details no longer apply.
-  function hideTrust() {
-    $('trust').hidden = true;
-    $('trust-sheet').hidden = true;
   }
 
   // ── Bank-detail checks ─────────────────────────────────────────────────
@@ -896,7 +880,6 @@
     var r = res || {};
     var optIn = r.whatsappOptIn;
     $('page1').hidden = true; $('page2').hidden = true; $('done').hidden = false;
-    hideTrust();
     if (r.copyEmailed) $('done-copy').hidden = false;
     if (optIn && optIn.link) {
       $('wa-link').href = optIn.link;
