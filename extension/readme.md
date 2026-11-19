@@ -14,7 +14,7 @@ Paste TikTok (`https://www.tiktok.com/@handle`) or YouTube (`https://www.youtube
 | --- | --- | --- | --- |
 | Instagram | `/<handle>/reels/` | `instagram-content.js` | Contact-button email (private API), bio email, name, bio and category, bio links, ~12 recent reel views (pinned skipped), latest reel date |
 | TikTok | `/@<handle>` | `tiktok-content.js` | Name, bio (`signature`) and bio link from the server-rendered profile JSON (DOM as fallback), any email field or bio email, ~12 recent video play counts (pinned skipped), latest upload date (decoded from the video id) |
-| YouTube | `/@<handle>/shorts` | `youtube-content.js` | Channel name, description and header links from `ytInitialData`, the email in the description, ~12 recent Shorts view counts (falls back to the Videos tab when a channel has no Shorts), latest upload date |
+| YouTube | `/@<handle>/shorts` | `youtube-content.js` | Channel name, description, header links and every About-panel link from `ytInitialData`, the email in the description, ~12 recent Shorts view counts (falls back to the Videos tab when a channel has no Shorts), latest upload date |
 
 `scrape-common.js` holds the email, name and count helpers the TikTok and YouTube scripts share (same rules as `instagram-content.js`).
 
@@ -37,7 +37,13 @@ Requirements and limits:
 - Be signed in to TikTok in the same Chrome profile. The extension reports "not signed in to TikTok" otherwise.
 - TikTok only shows a **Message** button when the creator's privacy settings let you message them. Many accounts only accept messages from people they follow, or from mutual friends. Those sends fail with "TikTok shows no Message button …", and the extension never follows anyone on your behalf.
 - If TikTok opens a conversation with a different account, nothing is sent and the row records why.
-- YouTube has no DMs, so YouTube creators without an email aren't queued.
+### YouTube creators without an email
+
+YouTube has no DMs, so a YouTube creator without an email is messaged on the Instagram or TikTok account their channel links to. Instagram is preferred, because it gets a Priority DM. The YouTube scrape collects the channel's links from the header, the full **About** panel and the description, with Instagram and TikTok profile links listed first. The DM queue then sends the campaign DM to that account through the same Instagram or TikTok flow as above. The timeline reads e.g. "Instagram DM sent (priority) to @MKBHD (linked from YouTube)".
+
+- A channel that links neither account can't be DM'd. The per-row button explains why, and the bulk run skips it.
+- If the linked account is already in the campaign as its own Instagram or TikTok creator, that row handles the outreach, and the YouTube row isn't DM'd too.
+- YouTube creators scraped before extension 1.5.0 only have their header link on file. Re-scrape them to pick up the full About-panel links.
 
 ## Decide-offer panel
 

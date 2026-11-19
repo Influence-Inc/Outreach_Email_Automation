@@ -85,4 +85,58 @@ function platformOf(row) {
 
 const PLATFORM_LABELS = { instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
 
-module.exports = { PLATFORMS, PLATFORM_LABELS, detectPlatform, parseProfileUrl, platformOf };
+// Platforms the extension can send DMs on.
+const DM_PLATFORMS = ['instagram', 'tiktok'];
+
+// Where a creator without an email gets DM'd: { platform, username, url,
+// via }, or null when there's nowhere to send one.
+//   • Instagram / TikTok creator → their own profile (via = null).
+//   • YouTube creator (YouTube has no DMs) → the Instagram account their
+//     channel links to (preferred: it gets a Priority DM), else the linked
+//     TikTok account (via = 'youtube'). The links come from the extension's
+//     channel scrape (creators.bio_links: header + About panel + description).
+function dmTargetFor(row) {
+  if (!row) return null;
+  const platform = platformOf(row);
+  if (DM_PLATFORMS.includes(platform)) {
+    if (!row.instagram_username && !row.instagram_url) return null;
+    const own = parseProfileUrl(row.instagram_url);
+    return {
+      platform,
+      username: row.instagram_username || (own && own.username) || null,
+      url: row.instagram_url || (own && own.url) || null,
+      via: null,
+    };
+  }
+  if (platform !== 'youtube' || !Array.isArray(row.bio_links)) return null;
+  const linked = row.bio_links
+    .map((l) => parseProfileUrl(typeof l === 'string' ? l : l && l.url))
+    .filter((p) => p && DM_PLATFORMS.includes(p.platform));
+  const pick = linked.find((p) => p.platform === 'instagram') || linked.find((p) => p.platform === 'tiktok');
+  return pick ? { ...pick, via: 'youtube' } : null;
+}
+
+// SQL condition: a YouTube row (alias prefix `p`, e.g. 'cr.') whose scraped
+// links include an Instagram or TikTok profile — i.e. dmTargetFor() finds a
+// target — and none of whose linked accounts is already in the campaign as
+// its own creator row (the DM queue skips those: that row reaches them). The
+// JS above is the exact check; this mirrors it for the campaign's "N to DM"
+// count so the button number matches what the queue sends.
+function linkedSocialSql(p = '') {
+  return `(${p}platform = 'youtube' AND jsonb_typeof(${p}bio_links) = 'array' AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements_text(${p}bio_links) AS l(url)
+     WHERE l.url ~* '^https?://([a-z]+\\.)?(instagram\\.com/[A-Za-z0-9._]+/?($|[?#])|tiktok\\.com/@)'
+       AND l.url !~* 'instagram\\.com/(p|reel|reels|tv|explore|stories|accounts|direct)/?($|[?#])'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM jsonb_array_elements_text(${p}bio_links) AS l(url), creators o
+     WHERE o.campaign_id = ${p}campaign_id AND o.id <> ${p}id AND o.status <> 'duplicate'
+       AND (
+         (o.platform = 'instagram' AND LOWER(o.instagram_username) = LOWER(substring(l.url from 'instagram\\.com/([A-Za-z0-9._]+)')))
+         OR (o.platform = 'tiktok' AND LOWER(o.instagram_username) = LOWER(substring(l.url from 'tiktok\\.com/@([A-Za-z0-9._]+)')))
+       )
+  ))`;
+}
+
+module.exports = {
+  PLATFORMS, PLATFORM_LABELS, DM_PLATFORMS, detectPlatform, parseProfileUrl, platformOf, dmTargetFor, linkedSocialSql,
+};

@@ -91,14 +91,14 @@
   }
 
   // Every string inside a (renderer) object, depth-limited.
-  function stringsIn(obj, out = [], depth = 0) {
-    if (obj == null || depth > 12) return out;
+  function stringsIn(obj, out = [], depth = 0, maxDepth = 12) {
+    if (obj == null || depth > maxDepth) return out;
     if (typeof obj === 'string') {
       out.push(obj);
     } else if (Array.isArray(obj)) {
-      for (const v of obj) stringsIn(v, out, depth + 1);
+      for (const v of obj) stringsIn(v, out, depth + 1, maxDepth);
     } else if (typeof obj === 'object') {
-      for (const v of Object.values(obj)) stringsIn(v, out, depth + 1);
+      for (const v of Object.values(obj)) stringsIn(v, out, depth + 1, maxDepth);
     }
     return out;
   }
@@ -238,8 +238,34 @@
     return links;
   }
 
+  // Links written into the description: full URLs, plus scheme-less
+  // Instagram / TikTok profile links ("instagram.com/foo", "tiktok.com/@foo").
   function descriptionLinks(text) {
-    return (String(text || '').match(/\bhttps?:\/\/[^\s)]+/gi) || []);
+    const s = String(text || '');
+    const full = s.match(/\bhttps?:\/\/[^\s)]+/gi) || [];
+    const bare = (s.match(/(?<![\w/.])(?:www\.)?(?:instagram\.com\/[A-Za-z0-9._]+|tiktok\.com\/@[A-Za-z0-9._]+)/gi) || [])
+      .map((l) => `https://${l}`);
+    return [...full, ...bare];
+  }
+
+  // Every link on the channel's About panel. The header only shows the first
+  // one ("example.com and 3 more links"); the About page's ytInitialData has
+  // them all, as youtube.com/redirect?q=… URLs. These are how a YouTube
+  // creator without an email gets reached: the dashboard DMs the Instagram /
+  // TikTok account linked here.
+  async function aboutLinks(base) {
+    if (!base) return [];
+    const about = await fetchInitialData(`${base}/about`);
+    if (!about) return [];
+    const links = [];
+    // The About panel nests its links deep inside the page JSON.
+    for (const s of stringsIn(about, [], 0, 80)) {
+      if (/^https?:\/\/(www\.)?youtube\.com\/redirect\?/i.test(s)) {
+        const target = S.unwrapRedirect(s);
+        if (target) links.push(target);
+      }
+    }
+    return links;
   }
 
   async function extractYouTubeChannel() {
@@ -278,8 +304,19 @@
         result.emailSource = 'youtube_bio';
       }
 
+      let about = [];
+      try {
+        about = await aboutLinks(base);
+      } catch (e) {
+        console.warn('[OEA] YouTube About links fetch failed:', e);
+      }
+      // Instagram / TikTok profile links first: the list is capped at 25 and a
+      // big channel's About panel is full of sponsor links, while the linked
+      // social account is what the dashboard DMs when there's no email.
+      const allLinks = [...headerLinks(data), ...about, ...descriptionLinks(result.biography)];
+      const isSocial = (l) => /^https?:\/\/([a-z]+\.)?(instagram\.com\/|tiktok\.com\/@)/i.test(l);
       result.bioLinks = S.cleanLinks(
-        [...headerLinks(data), ...descriptionLinks(result.biography)],
+        [...allLinks.filter(isSocial), ...allLinks.filter((l) => !isSocial(l))],
         /(^|\.)(youtube\.com|youtu\.be)$/,
       );
 

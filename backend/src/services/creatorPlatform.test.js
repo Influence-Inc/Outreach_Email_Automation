@@ -47,3 +47,29 @@ test('platformOf prefers the stored column and falls back to the URL', () => {
   assert.strictEqual(platformOf({ instagram_url: 'https://www.youtube.com/@a' }), 'youtube');
   assert.strictEqual(platformOf({}), 'instagram');
 });
+
+const { dmTargetFor } = require('./creatorPlatform');
+
+test('dmTargetFor: Instagram / TikTok creators are DM\'d on their own profile', () => {
+  assert.deepStrictEqual(
+    dmTargetFor({ platform: 'tiktok', instagram_url: 'https://www.tiktok.com/@jane', instagram_username: 'jane' }),
+    { platform: 'tiktok', username: 'jane', url: 'https://www.tiktok.com/@jane', via: null },
+  );
+  assert.strictEqual(dmTargetFor({ platform: 'instagram', instagram_url: 'https://www.instagram.com/sam/', instagram_username: 'sam' }).platform, 'instagram');
+});
+
+test('dmTargetFor: a YouTube creator goes to their linked Instagram, else linked TikTok', () => {
+  assert.deepStrictEqual(
+    dmTargetFor({ platform: 'youtube', bio_links: ['https://www.tiktok.com/@mk', 'http://instagram.com/MKBHD'] }),
+    { platform: 'instagram', username: 'MKBHD', url: 'https://www.instagram.com/MKBHD/', via: 'youtube' },
+  );
+  assert.deepStrictEqual(
+    dmTargetFor({ platform: 'youtube', bio_links: ['https://example.com', 'https://www.tiktok.com/@mk?lang=en'] }),
+    { platform: 'tiktok', username: 'mk', url: 'https://www.tiktok.com/@mk', via: 'youtube' },
+  );
+});
+
+test('dmTargetFor: no target for a channel linking no profile (posts / reels don\'t count)', () => {
+  assert.strictEqual(dmTargetFor({ platform: 'youtube', bio_links: ['https://www.instagram.com/p/abc/', 'https://x.com/a'] }), null);
+  assert.strictEqual(dmTargetFor({ platform: 'youtube', bio_links: null }), null);
+});
