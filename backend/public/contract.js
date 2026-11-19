@@ -724,6 +724,130 @@
     }
   }
 
+  // ── Trust ──────────────────────────────────────────────────────────────
+  // The "Private & secure" accessory on the Your details heading and the
+  // protection card on the bank step. Every line is something this system
+  // actually does (see the Trust block in contract.html), and "encrypted" is
+  // only ever claimed on a secure context — a page somehow served over plain
+  // http says nothing about encryption rather than something untrue. Both live
+  // inside the forms, so a signed contract (which hides them) shows neither.
+  function initTrust(d) {
+    var secure = !!window.isSecureContext;
+    $('trust-encrypted').hidden = !secure;
+    $('protect-encrypted').hidden = !secure;
+    if (!secure) $('trust-label').textContent = 'Private';
+    $('protect-brand').textContent = d.brandName || d.brandLegalName || 'The brand';
+
+    var pill = $('trust-pill');
+    pill.addEventListener('click', function () {
+      var open = $('trust-sheet').classList.toggle('is-open');
+      pill.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+
+  // ── Bank-detail checks ─────────────────────────────────────────────────
+  // A creator typing bank details mostly wants to know they got them right.
+  // Fields that have a definitive check say so with a green check the moment
+  // they pass: an IBAN's and a US routing number's own check digits, and the
+  // fixed shapes of SWIFT / IFSC / PAN codes; the confirm fields once they
+  // match. A wrong value is only pointed out once the creator leaves the field
+  // (never mid-typing), and the submit refuses it with the same words.
+  function compact(v) { return String(v == null ? '' : v).replace(/[\s-]+/g, '').toUpperCase(); }
+  // ISO 13616: move the country code and check digits to the end, letters to
+  // numbers (A=10 … Z=35), and the whole thing mod 97 must be 1.
+  function ibanValid(v) {
+    var s = compact(v);
+    if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(s)) return false;
+    var r = s.slice(4) + s.slice(0, 4);
+    var rem = 0;
+    for (var i = 0; i < r.length; i += 1) {
+      var code = r.charCodeAt(i);
+      var digits = code >= 65 ? String(code - 55) : r.charAt(i);
+      for (var j = 0; j < digits.length; j += 1) rem = (rem * 10 + Number(digits.charAt(j))) % 97;
+    }
+    return rem === 1;
+  }
+  // ABA routing number: nine digits weighted 3-7-1, summing to a multiple of 10.
+  function routingValid(v) {
+    var s = compact(v);
+    if (!/^\d{9}$/.test(s)) return false;
+    var d = s.split('').map(Number);
+    return (3 * (d[0] + d[3] + d[6]) + 7 * (d[1] + d[4] + d[7]) + (d[2] + d[5] + d[8])) % 10 === 0;
+  }
+  var FORMAT_CHECKS = {
+    bankIban: { test: ibanValid, block: 'ibanBlock',
+      msg: "This IBAN doesn't add up. Please check it for a typo." },
+    bankRouting: { test: routingValid, block: 'routingBlock',
+      msg: "This routing number doesn't add up. Please check it for a typo." },
+    // ISO 9362: 4-character party prefix, 2-letter country, 2-character
+    // location, optional 3-character branch.
+    bankSwift: { test: function (v) { return /^[A-Z0-9]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(compact(v)); },
+      block: 'swiftBlock', msg: 'A SWIFT code is 8 or 11 letters and numbers, like CHASUS33.' },
+    bankIfsc: { test: function (v) { return /^[A-Z]{4}0[A-Z0-9]{6}$/.test(compact(v)); },
+      block: 'indiaRow', msg: 'An IFSC code is 11 characters, like SBIN0001234.' },
+    bankPan: { test: function (v) { return /^[A-Z]{5}\d{4}[A-Z]$/.test(compact(v)); },
+      block: 'indiaRow', msg: 'A PAN is 10 characters, like ABCDE1234F.' },
+  };
+  var CONFIRMS = {
+    bankAccountConfirm: { of: 'bankAccount', msg: "This doesn't match the account number." },
+    bankIbanConfirm: { of: 'bankIban', msg: "This doesn't match the IBAN." },
+  };
+  // 'empty' | 'ok' | 'bad' | 'open' (filled, nothing definitive to say yet).
+  function bankFieldState(id) {
+    var v = ($(id).value || '').trim();
+    if (!v) return 'empty';
+    var confirm = CONFIRMS[id];
+    if (confirm) {
+      var primary = ($(confirm.of).value || '').trim();
+      if (v !== primary) return 'bad';
+      var check = FORMAT_CHECKS[confirm.of];
+      return check && !check.test(primary) ? 'open' : 'ok';
+    }
+    var format = FORMAT_CHECKS[id];
+    if (format) return format.test(v) ? 'ok' : 'bad';
+    return 'open';
+  }
+  function bankFieldMessage(id) {
+    return (CONFIRMS[id] || FORMAT_CHECKS[id] || {}).msg || '';
+  }
+  // `speak` — the creator has left the field (or tried to submit), so a wrong
+  // value may now be pointed out. Otherwise only good news is shown, and an
+  // earlier message clears the moment the value is fixed.
+  function paintBankField(id, speak) {
+    var el = $(id);
+    var state = bankFieldState(id);
+    var wrap = el.parentNode;
+    if (wrap && wrap.classList.contains('input-wrap')) wrap.classList.toggle('is-ok', state === 'ok');
+    var msg = $(id + '-msg');
+    if (!msg) return;
+    if (state !== 'bad') msg.textContent = '';
+    else if (speak) msg.textContent = bankFieldMessage(id);
+  }
+  function initBankChecks() {
+    var wraps = document.querySelectorAll('#page2 .input-wrap');
+    for (var i = 0; i < wraps.length; i += 1) {
+      var input = wraps[i].querySelector('input');
+      var mark = document.createElement('span');
+      mark.className = 'input-mark';
+      mark.setAttribute('aria-hidden', 'true');
+      mark.innerHTML = (input.classList.contains('secret') ? '<svg class="m-lock"><use href="#i-lock"/></svg>' : '') +
+        '<svg class="m-ok"><use href="#i-ok"/></svg>';
+      wraps[i].appendChild(mark);
+    }
+    var ids = Object.keys(FORMAT_CHECKS).concat(Object.keys(CONFIRMS));
+    ids.forEach(function (id) {
+      $(id).addEventListener('input', function () { paintBankField(id, false); });
+      $(id).addEventListener('blur', function () { paintBankField(id, true); });
+    });
+    // Editing the original re-judges its confirmation: fixing the account
+    // number can make the confirm box right (or wrong) without touching it.
+    Object.keys(CONFIRMS).forEach(function (id) {
+      $(CONFIRMS[id].of).addEventListener('input', function () {
+        if (($(id).value || '').trim()) paintBankField(id, false);
+      });
+    });
+  }
+
   // ── Conditional bank field visibility ──────────────────────────────────
   // Country-driven blocks:
   //   European countries → IBAN only (no plain Account number / Confirm pair)
@@ -854,12 +978,14 @@
         $('signedDate').value = new Date().toISOString().slice(0, 10);
 
         $('loading').hidden = true;
+        $('page-foot').hidden = false;
         if (c.status && c.status !== 'pending') {
           // Already signed: show the contract itself (read-only) with a banner
           // noting the creator has signed, instead of the bare confirmation.
           showSigned(c);
           return;
         }
+        initTrust(d);
         $('page1').hidden = false;
         // Now that the canvas has a real box, size its internal buffer to match.
         // Without this, drawing lands on a 0x0 buffer while the CSS box shows the
@@ -979,6 +1105,20 @@
       }
     }
 
+    // Values with their own check digits or a fixed shape must pass it — a
+    // typo here means a payment that bounces weeks later.
+    var formatIds = Object.keys(FORMAT_CHECKS);
+    for (var f = 0; f < formatIds.length; f += 1) {
+      var fid = formatIds[f];
+      if (!blockVisible(FORMAT_CHECKS[fid].block)) continue;
+      if (bankFieldState(fid) === 'bad') {
+        paintBankField(fid, true);
+        errEl.textContent = FORMAT_CHECKS[fid].msg;
+        highlight(fid);
+        return;
+      }
+    }
+
     var acct = ($('bankAccount').value || '').trim();
     var acct2 = ($('bankAccountConfirm').value || '').trim();
     if (blockVisible('accountNumBlock') && acct !== acct2) {
@@ -1055,6 +1195,7 @@
     sig = initSigPad($('sig'));
     $('sig-clear').addEventListener('click', function () { sig.clear(); });
     lockSecretFields();
+    initBankChecks();
     $('page1').addEventListener('submit', goToPage2);
     $('page2').addEventListener('submit', finalSubmit);
     $('btn-back').addEventListener('click', goBackToPage1);
