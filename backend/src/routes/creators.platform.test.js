@@ -159,21 +159,87 @@ test('DM queue still builds Instagram jobs', async () => {
   }
 });
 
-test('DM queue refuses a YouTube creator (YouTube has no DMs)', async () => {
+test('DM queue refuses a YouTube channel that links no Instagram / TikTok', async () => {
   installDmStub({
     id: 6, campaign_id: 'c1', platform: 'youtube', instagram_url: 'https://www.youtube.com/@a',
-    instagram_username: 'a', status: 'no_email',
+    instagram_username: 'a', status: 'no_email', bio_links: ['https://example.com', 'https://www.instagram.com/p/abc/'],
   });
   try {
     const res = await call('POST', '/6/queue-ig-dm');
     assert.strictEqual(res.status, 400);
-    assert.match(res.body.error, /Instagram or TikTok/);
+    assert.match(res.body.error, /doesn't link an Instagram or TikTok/);
   } finally {
     restore();
   }
 });
 
-test('bulk DM queue covers Instagram + TikTok only', async () => {
+test('DM queue sends a YouTube creator\'s DM to the Instagram account their channel links', async () => {
+  const writes = installDmStub({
+    id: 7, campaign_id: 'c1', platform: 'youtube', instagram_url: 'https://www.youtube.com/@mkbhd',
+    instagram_username: 'mkbhd', first_name: 'Marques', status: 'no_email',
+    bio_links: ['http://twitter.com/MKBHD', 'https://www.tiktok.com/@mkbhd', 'http://instagram.com/MKBHD'],
+  });
+  try {
+    const res = await call('POST', '/7/queue-ig-dm');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(
+      { platform: res.body.job.platform, via: res.body.job.via, url: res.body.job.instagramUrl, handle: res.body.job.instagramUsername },
+      { platform: 'instagram', via: 'youtube', url: 'https://www.instagram.com/MKBHD/', handle: 'MKBHD' },
+      'Instagram is preferred over TikTok when the channel links both',
+    );
+    const ev = writes.find((w) => /'ig_dm_queued'/.test(w.sql));
+    assert.deepStrictEqual(ev.params[1], { username: 'MKBHD', platform: 'instagram', via: 'youtube' });
+  } finally {
+    restore();
+  }
+});
+
+test('DM queue falls back to the linked TikTok account', async () => {
+  installDmStub({
+    id: 8, campaign_id: 'c1', platform: 'youtube', instagram_url: 'https://www.youtube.com/@tt',
+    instagram_username: 'tt', status: 'no_email', bio_links: ['https://www.tiktok.com/@tt.real?lang=en'],
+  });
+  try {
+    const res = await call('POST', '/8/queue-ig-dm');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.job.platform, 'tiktok');
+    assert.strictEqual(res.body.job.instagramUrl, 'https://www.tiktok.com/@tt.real');
+  } finally {
+    restore();
+  }
+});
+
+test('DM queue won\'t DM a linked account that is already its own row in the campaign', async () => {
+  installDmStub({
+    id: 9, campaign_id: 'c1', platform: 'youtube', instagram_url: 'https://www.youtube.com/@dupe',
+    instagram_username: 'dupe', status: 'no_email', bio_links: ['https://www.instagram.com/dupe.ig/'],
+  });
+  const one = db.one;
+  db.one = async (sql, params) => {
+    if (/AND LOWER\(instagram_username\) = LOWER\(\$4\)/.test(sql)) return { id: 42, instagram_username: 'dupe.ig' };
+    return one(sql, params);
+  };
+  try {
+    const res = await call('POST', '/9/queue-ig-dm');
+    assert.strictEqual(res.status, 409);
+    assert.match(res.body.error, /already in this campaign/);
+  } finally {
+    restore();
+  }
+});
+
+test('timeline says when a DM went to a YouTube creator\'s linked account', () => {
+  assert.strictEqual(
+    router.rateLogEntry('ig_dm_sent', { platform: 'instagram', via: 'youtube', username: 'MKBHD' }).text,
+    'Instagram DM sent (priority) to @MKBHD (linked from YouTube)',
+  );
+  assert.strictEqual(
+    router.rateLogEntry('ig_dm_failed', { platform: 'tiktok', via: 'youtube', username: 'tt', error: 'not signed in to TikTok' }).text,
+    'TikTok DM failed — not signed in to TikTok',
+  );
+});
+
+test('bulk DM queue covers Instagram + TikTok + YouTube (via linked accounts)', async () => {
   let selectSql = null;
   let selectParams = null;
   installDmStub({
@@ -192,7 +258,7 @@ test('bulk DM queue covers Instagram + TikTok only', async () => {
     assert.strictEqual(res.body.queued, 1);
     assert.strictEqual(res.body.jobs[0].platform, 'tiktok');
     assert.match(selectSql, /platform = ANY\(\$3::text\[\]\)/);
-    assert.deepStrictEqual(selectParams[2], ['instagram', 'tiktok']);
+    assert.deepStrictEqual(selectParams[2], ['instagram', 'tiktok', 'youtube']);
   } finally {
     restore();
   }

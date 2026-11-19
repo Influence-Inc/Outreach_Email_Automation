@@ -594,9 +594,14 @@ function syncIgDmCounts(c) {
   hint.textContent = bits.join(' · ') || 'ready';
   btn.hidden = queueCount === 0;
   const tiktokCount = c.ig_dm_queue_tiktok_count || 0;
-  const igCount = queueCount - tiktokCount;
-  btn.textContent = tiktokCount
-    ? `Send DMs (${[igCount ? `${igCount} IG` : '', `${tiktokCount} TikTok`].filter(Boolean).join(' · ')})`
+  const youtubeCount = c.ig_dm_queue_youtube_count || 0;
+  const igCount = queueCount - tiktokCount - youtubeCount;
+  btn.textContent = tiktokCount || youtubeCount
+    ? `Send DMs (${[
+        igCount ? `${igCount} IG` : '',
+        tiktokCount ? `${tiktokCount} TikTok` : '',
+        youtubeCount ? `${youtubeCount} YouTube via linked IG/TikTok` : '',
+      ].filter(Boolean).join(' · ')})`
     : `Send Instagram DMs (${queueCount})`;
 }
 
@@ -1887,12 +1892,42 @@ function makeInterveneButton(r, { label = 'Reply hand-off', plain = false } = {}
 
 // Instagram and TikTok creators can be DM'd through the extension; YouTube
 // has no DMs. "IG" / "TikTok" names the platform on pills and buttons.
-function canDmCreator(r) {
+// YouTube has no DMs: a YouTube creator is DM'd on the Instagram (preferred)
+// or TikTok account their channel links to. Mirrors backend
+// services/creatorPlatform.js dmTargetFor. → { platform, username } | null
+const IG_NON_PROFILE = new Set(['p', 'reel', 'reels', 'tv', 'explore', 'stories', 'accounts', 'direct']);
+function linkedSocialFor(r) {
+  if (!r || creatorPlatform(r) !== 'youtube' || !Array.isArray(r.bio_links)) return null;
+  let tiktok = null;
+  for (const raw of r.bio_links) {
+    const url = typeof raw === 'string' ? raw : raw && raw.url;
+    let u;
+    try { u = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`); } catch { continue; }
+    const host = u.hostname.toLowerCase().replace(/^(www|m)\./, '');
+    const seg = u.pathname.split('/').filter(Boolean);
+    if (host === 'instagram.com' && seg[0] && !IG_NON_PROFILE.has(seg[0].toLowerCase())) {
+      return { platform: 'instagram', username: seg[0] };
+    }
+    if (!tiktok && host === 'tiktok.com') {
+      const at = seg.find((x) => x.startsWith('@'));
+      if (at && at.length > 1) tiktok = { platform: 'tiktok', username: at.slice(1) };
+    }
+  }
+  return tiktok;
+}
+// The platform a creator's DM goes out on: their own (Instagram / TikTok), or
+// a YouTube creator's linked account. null when they can't be DM'd.
+function dmPlatformOf(r) {
   const p = creatorPlatform(r);
-  return p === 'instagram' || p === 'tiktok';
+  if (p === 'instagram' || p === 'tiktok') return p;
+  const linked = linkedSocialFor(r);
+  return linked ? linked.platform : null;
+}
+function canDmCreator(r) {
+  return !!dmPlatformOf(r);
 }
 function dmShortLabel(r) {
-  return creatorPlatform(r) === 'tiktok' ? 'TikTok' : 'IG';
+  return dmPlatformOf(r) === 'tiktok' ? 'TikTok' : 'IG';
 }
 
 // Is this creator a candidate for a per-row "Send IG DM" button? Mirrors the
@@ -1931,7 +1966,8 @@ function makeSendIgDmButton(r) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'ghost small cr-send-btn';
-  const isTikTok = creatorPlatform(r) === 'tiktok';
+  const isTikTok = dmPlatformOf(r) === 'tiktok';
+  const linked = linkedSocialFor(r);
   btn.textContent = `Send ${dmShortLabel(r)} DM`;
   // Cache the current campaign's template state so the button self-explains
   // when it can't send — no template = disabled with a clear tooltip that
@@ -1945,6 +1981,9 @@ function makeSendIgDmButton(r) {
     btn.title = isTikTok
       ? 'Send this creator the campaign\'s DM template as a TikTok message.'
       : 'Send this creator the campaign\'s DM template as an Instagram Priority Message Request.';
+    if (linked) {
+      btn.title += ` YouTube has no DMs, so it goes to @${linked.username}, the ${isTikTok ? 'TikTok' : 'Instagram'} account their channel links to.`;
+    }
   }
   btn.onclick = async () => {
     btn.disabled = true;
@@ -4622,7 +4661,7 @@ el('send-ig-dms-btn').addEventListener('click', async () => {
   const queueCount = c ? c.ig_dm_queue_count : 0;
   if (!queueCount) { toast('Nothing to send — every creator either has an email or has already been DM’d.', 'info'); return; }
   const okDms = await confirmDialog({
-    title: (c && c.ig_dm_queue_tiktok_count)
+    title: (c && (c.ig_dm_queue_tiktok_count || c.ig_dm_queue_youtube_count))
       ? `Send DMs to ${queueCount} creator(s) on Instagram and TikTok?`
       : `Send Instagram DMs to ${queueCount} creator(s) as Priority Message Requests?`,
     message:

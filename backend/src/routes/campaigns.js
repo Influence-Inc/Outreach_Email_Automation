@@ -5,6 +5,7 @@ const { computeOffers } = require('../services/pricing');
 const { dealCpmFor } = require('../services/cpmEstimate');
 const { flagDismissedSql } = require('../db/flagFingerprint');
 const { recentReelSql } = require('../db/reelFreshness');
+const { linkedSocialSql } = require('../services/creatorPlatform');
 
 const router = express.Router();
 
@@ -39,10 +40,19 @@ router.get('/', async (_req, res, next) => {
                 COUNT(cr.id) FILTER (
                   WHERE (cr.email IS NULL OR cr.email = '')
                     AND cr.ig_dm_sent_at IS NULL
-                    AND cr.platform IN ('instagram','tiktok')
+                    AND (cr.platform IN ('instagram','tiktok') OR ${linkedSocialSql('cr.')})
                     AND cr.status IN ('no_email','pending_extraction','invalid_email')
                     AND ${recentReelSql('cr.')}
                 )::int AS ig_dm_queue_count,
+                -- YouTube creators reached through the Instagram / TikTok
+                -- account their channel links (YouTube has no DMs).
+                COUNT(cr.id) FILTER (
+                  WHERE (cr.email IS NULL OR cr.email = '')
+                    AND cr.ig_dm_sent_at IS NULL
+                    AND ${linkedSocialSql('cr.')}
+                    AND cr.status IN ('no_email','pending_extraction','invalid_email')
+                    AND ${recentReelSql('cr.')}
+                )::int AS ig_dm_queue_youtube_count,
                 COUNT(cr.id) FILTER (
                   WHERE (cr.email IS NULL OR cr.email = '')
                     AND cr.ig_dm_sent_at IS NULL
@@ -120,6 +130,7 @@ router.get('/', async (_req, res, next) => {
               COALESCE(s.creator_count, 0) AS creator_count,
               COALESCE(s.ig_dm_queue_count, 0) AS ig_dm_queue_count,
               COALESCE(s.ig_dm_queue_tiktok_count, 0) AS ig_dm_queue_tiktok_count,
+              COALESCE(s.ig_dm_queue_youtube_count, 0) AS ig_dm_queue_youtube_count,
               COALESCE(s.ig_dm_sent_count, 0) AS ig_dm_sent_count,
               COALESCE(s.email_found_count, 0) AS email_found_count,
               COALESCE(s.outreach_sent_count, 0) AS outreach_sent_count,

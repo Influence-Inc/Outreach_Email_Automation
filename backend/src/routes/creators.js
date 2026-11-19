@@ -17,7 +17,9 @@ const creatorDb = require('../services/creatorDb');
 const { syncCreatorNames } = require('../services/creatorNameSync');
 const { resolveHandle } = require('../services/creatorIdentity');
 const { findDuplicateCreator, duplicateMatchReason } = require('../services/duplicateGuard');
-const { parseProfileUrl, detectPlatform, platformOf } = require('../services/creatorPlatform');
+const {
+  parseProfileUrl, detectPlatform, platformOf, dmTargetFor, DM_PLATFORMS,
+} = require('../services/creatorPlatform');
 const { formatOriginal } = require('../services/currency');
 const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('../services/timelineSummary');
 const { renderIgDm } = require('../services/templates');
@@ -160,13 +162,19 @@ const fmtViews = (n) => {
 // sentence gist, so the timeline reflects the ENTIRE message. It is deliberately
 // NOT used for 'rate_quoted', whose label is mined from the raw text ("Creator
 // quoted $X for Y") rather than free-form.
-// Platforms whose DMs the extension can send (see the Social DM queue below).
-const DM_PLATFORMS = ['instagram', 'tiktok'];
+// Platform names for DM events (see the Social DM queue below).
 const DM_PLATFORM_LABEL = { instagram: 'Instagram', tiktok: 'TikTok' };
 
 // "Instagram" / "TikTok" for a DM event (older events carry no platform: IG).
 function dmPlatformLabel(d) {
   return (d && DM_PLATFORM_LABEL[d.platform]) || 'Instagram';
+}
+
+// " to @handle (linked from their YouTube channel)" for a DM sent to a YouTube
+// creator's linked Instagram / TikTok account; '' otherwise.
+function dmViaSuffix(d) {
+  if (!d || d.via !== 'youtube') return '';
+  return d.username ? ` to @${d.username} (linked from YouTube)` : ' (linked from YouTube)';
 }
 
 function rateLogEntry(type, detail, msg, summary) {
@@ -186,9 +194,12 @@ function rateLogEntry(type, detail, msg, summary) {
     case 'ig_dm_queued':
       // Extension has been handed the DM and is driving the platform's DM
       // composer (Instagram, or TikTok when detail.platform says so).
-      return { text: `${dmPlatformLabel(d)} DM queued`, tone: 'active' };
+      return { text: `${dmPlatformLabel(d)} DM queued${dmViaSuffix(d)}`, tone: 'active' };
     case 'ig_dm_sent':
-      return { text: d.platform === 'tiktok' ? 'TikTok DM sent' : 'Instagram DM sent (priority)', tone: 'done' };
+      return {
+        text: d.platform === 'tiktok' ? `TikTok DM sent${dmViaSuffix(d)}` : `Instagram DM sent (priority)${dmViaSuffix(d)}`,
+        tone: 'done',
+      };
     case 'ig_dm_failed':
       return { text: d.error ? `${dmPlatformLabel(d)} DM failed — ${d.error}` : `${dmPlatformLabel(d)} DM failed`, tone: 'muted' };
     case 'replied': {
@@ -1403,7 +1414,12 @@ router.post('/bulk/delete', async (req, res, next) => {
 //
 // The columns / endpoints / event types keep their original "ig_dm" names;
 // each job and event carries `platform` so the extension and the timeline know
-// which site it was. YouTube has no DMs, so YouTube creators are never queued.
+// which site it was.
+//
+// YouTube has no DMs: a YouTube creator without an email is DM'd on the
+// Instagram (preferred) or TikTok account their channel links to
+// (creatorPlatform.dmTargetFor), with `via: 'youtube'` on the job / events. A
+// channel that links neither can't be DM'd and is skipped.
 
 
 const IG_DM_ELIGIBLE_STATUSES = new Set([
@@ -1440,25 +1456,49 @@ function igDmVars(creator, campaign) {
 // find the profile and send the DM. Returns null (with a reason) when this
 // creator can't be sent to right now — the caller uses the reason to skip it.
 function buildIgDmJob(creator, campaign) {
-  if (!creator.instagram_username && !creator.instagram_url) {
-    return { skip: 'no_instagram_handle' };
+  // Where to send it: the creator's own Instagram / TikTok profile, or — for a
+  // YouTube creator — the Instagram / TikTok account their channel links to.
+  const target = dmTargetFor(creator);
+  if (!target || !target.url) {
+    return { skip: platformOf(creator) === 'youtube' ? 'no_linked_account' : 'no_instagram_handle' };
   }
-  // Only Instagram and TikTok have DMs the extension can send.
-  const platform = platformOf(creator);
-  if (!DM_PLATFORMS.includes(platform)) return { skip: 'no_instagram_handle' };
   const body = renderIgDm(campaign.ig_dm_body, igDmVars(creator, campaign));
   if (!body) return { skip: 'no_template' };
   return {
     job: {
       id: creator.id,
-      platform,
-      // Field names predate TikTok: for a TikTok job these hold the TikTok
-      // profile URL and handle.
-      instagramUrl: creator.instagram_url,
-      instagramUsername: creator.instagram_username,
+      platform: target.platform,
+      via: target.via,
+      // Field names predate TikTok: these hold the profile URL + handle the DM
+      // goes to (a TikTok profile, or a YouTube creator's linked account).
+      instagramUrl: target.url,
+      instagramUsername: target.username,
       firstName: creator.first_name || null,
       body,
     },
+  };
+}
+
+// A YouTube creator's linked account that's ALSO in this campaign as its own
+// Instagram / TikTok row is reached through that row — DMing it again from the
+// YouTube row would message the same person twice. Returns that row or null.
+async function linkedAccountRow(creator, job) {
+  if (!job || job.via !== 'youtube' || !job.instagramUsername) return null;
+  return db.one(
+    `SELECT id, instagram_username FROM creators
+      WHERE campaign_id = $1 AND id <> $2 AND platform = $3
+        AND LOWER(instagram_username) = LOWER($4) AND status <> 'duplicate'
+      LIMIT 1`,
+    [creator.campaign_id, creator.id, job.platform, job.instagramUsername],
+  );
+}
+
+// The ig_dm_* event detail for a job: who it went to, on which platform.
+function dmEventDetail(job) {
+  return {
+    username: job.instagramUsername || null,
+    platform: job.platform,
+    ...(job.via ? { via: job.via } : {}),
   };
 }
 
@@ -1488,7 +1528,9 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
       if (!scoped.length) return res.json({ ok: true, queued: 0, jobs: [] });
     }
 
-    const params = [campaign_id, [...IG_DM_ELIGIBLE_STATUSES], DM_PLATFORMS];
+    // YouTube rows are fetched too: buildIgDmJob DMs their linked Instagram /
+    // TikTok account, and skips a channel that links neither.
+    const params = [campaign_id, [...IG_DM_ELIGIBLE_STATUSES], [...DM_PLATFORMS, 'youtube']];
     let where = `campaign_id = $1
          AND (email IS NULL OR email = '')
          AND ig_dm_sent_at IS NULL
@@ -1509,9 +1551,13 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
 
     const jobs = [];
     let skipped = 0;
+    const dmed = new Set(); // platform:handle already in this batch
     for (const creator of targets) {
       const built = buildIgDmJob(creator, campaign);
       if (built.skip) { skipped += 1; continue; }
+      const key = `${built.job.platform}:${String(built.job.instagramUsername || '').toLowerCase()}`;
+      if (dmed.has(key) || (await linkedAccountRow(creator, built.job))) { skipped += 1; continue; }
+      dmed.add(key);
       await db.query(
         `UPDATE creators
            SET ig_dm_queued_at = NOW(),
@@ -1523,7 +1569,7 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
       );
       await db.query(
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_queued', $2)`,
-        [creator.id, { username: creator.instagram_username || null, platform: built.job.platform }],
+        [creator.id, dmEventDetail(built.job)],
       );
       jobs.push(built.job);
     }
@@ -1566,6 +1612,17 @@ router.post('/:id/queue-ig-dm', async (req, res, next) => {
     if (built.skip === 'no_instagram_handle') {
       return res.status(400).json({ error: 'creator has no Instagram or TikTok handle to DM' });
     }
+    if (built.skip === 'no_linked_account') {
+      return res.status(400).json({
+        error: "This YouTube channel doesn't link an Instagram or TikTok account to DM. Re-scrape it, or add an email by hand.",
+      });
+    }
+    const linkedRow = await linkedAccountRow(creator, built.job);
+    if (linkedRow) {
+      return res.status(409).json({
+        error: `@${built.job.instagramUsername} is already in this campaign as its own creator (#${linkedRow.id}) — reach them from that row.`,
+      });
+    }
 
     const updated = await db.one(
       `UPDATE creators
@@ -1579,11 +1636,19 @@ router.post('/:id/queue-ig-dm', async (req, res, next) => {
     );
     await db.query(
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_queued', $2)`,
-      [creator.id, { username: creator.instagram_username || null, platform: built.job.platform }],
+      [creator.id, dmEventDetail(built.job)],
     );
     res.json({ ok: true, creator: updated, job: built.job });
   } catch (err) { next(err); }
 });
+
+// Event detail for a DM result: the account the DM went to (for a YouTube
+// creator, their linked Instagram / TikTok account).
+function dmResultDetail(creator) {
+  const t = dmTargetFor(creator);
+  if (!t) return { username: creator.instagram_username || null, platform: platformOf(creator) };
+  return { username: t.username || null, platform: t.platform, ...(t.via ? { via: t.via } : {}) };
+}
 
 // Extension calls back with the result of one DM send. `ok:true` stamps
 // ig_dm_sent_at; `ok:false` records the error and leaves the creator queued so
@@ -1606,7 +1671,7 @@ router.post('/:id/ig-dm-result', async (req, res, next) => {
       );
       await db.query(
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_sent', $2)`,
-        [creator.id, { username: creator.instagram_username || null, platform: platformOf(creator) }],
+        [creator.id, dmResultDetail(creator)],
       );
       return res.json({ ok: true, creator: updated });
     }
@@ -1622,7 +1687,7 @@ router.post('/:id/ig-dm-result', async (req, res, next) => {
     );
     await db.query(
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_failed', $2)`,
-      [creator.id, { error: errMsg, username: creator.instagram_username || null, platform: platformOf(creator) }],
+      [creator.id, { error: errMsg, ...dmResultDetail(creator) }],
     );
     res.json({ ok: false, creator: updated });
   } catch (err) { next(err); }
