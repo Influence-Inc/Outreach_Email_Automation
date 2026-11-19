@@ -29,18 +29,27 @@ router.get('/', async (_req, res, next) => {
        stats AS (
          SELECT cr.campaign_id,
                 COUNT(cr.id)::int AS creator_count,
-                -- ig_dm_queue_count feeds the "Send Instagram DMs" button:
-                -- creators without an email who haven't been DM'd yet AND whose
-                -- newest reel is inside the recency window (dormant accounts are
-                -- excluded from bulk sends — the admin can still DM them by hand
-                -- from the row menu). Keep in sync with routes/creators.js:
+                -- ig_dm_queue_count feeds the "Send DMs" button: Instagram and
+                -- TikTok creators without an email who haven't been DM'd yet AND
+                -- whose newest reel / video is inside the recency window (dormant
+                -- accounts are excluded from bulk sends — the admin can still DM
+                -- them by hand from the row menu). ig_dm_queue_tiktok_count is
+                -- the TikTok share of it. Keep in sync with routes/creators.js:
                 -- POST /bulk/queue-ig-dm.
                 COUNT(cr.id) FILTER (
                   WHERE (cr.email IS NULL OR cr.email = '')
                     AND cr.ig_dm_sent_at IS NULL
+                    AND cr.platform IN ('instagram','tiktok')
                     AND cr.status IN ('no_email','pending_extraction','invalid_email')
                     AND ${recentReelSql('cr.')}
                 )::int AS ig_dm_queue_count,
+                COUNT(cr.id) FILTER (
+                  WHERE (cr.email IS NULL OR cr.email = '')
+                    AND cr.ig_dm_sent_at IS NULL
+                    AND cr.platform = 'tiktok'
+                    AND cr.status IN ('no_email','pending_extraction','invalid_email')
+                    AND ${recentReelSql('cr.')}
+                )::int AS ig_dm_queue_tiktok_count,
                 COUNT(cr.id) FILTER (WHERE cr.ig_dm_sent_at IS NOT NULL)::int AS ig_dm_sent_count,
                 -- email_found_count feeds the "Send outreach" confirmation dialog
                 -- (creators with an email but no outreach yet); not shown as a
@@ -110,6 +119,7 @@ router.get('/', async (_req, res, next) => {
               c.deadline_date,
               COALESCE(s.creator_count, 0) AS creator_count,
               COALESCE(s.ig_dm_queue_count, 0) AS ig_dm_queue_count,
+              COALESCE(s.ig_dm_queue_tiktok_count, 0) AS ig_dm_queue_tiktok_count,
               COALESCE(s.ig_dm_sent_count, 0) AS ig_dm_sent_count,
               COALESCE(s.email_found_count, 0) AS email_found_count,
               COALESCE(s.outreach_sent_count, 0) AS outreach_sent_count,

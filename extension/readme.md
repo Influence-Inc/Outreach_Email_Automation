@@ -4,7 +4,7 @@ A Chrome extension for the Influence Deal Studio. It has three jobs:
 
 1. **Scrape** Instagram, TikTok and YouTube profiles into the dashboard (email, name, bio, links, recent video views, latest upload date) — runs automatically when creators are added to a campaign.
 2. **Decide offers on Instagram** — a vertical offer panel that latches to the right of a creator's Instagram profile so you can settle their rate without tab-hopping to the dashboard.
-3. **Send Priority DM outreach** — for creators the dashboard couldn't find an email for, sends the campaign's Instagram DM template as a Priority Message Request so it lands in the recipient's main inbox instead of the general Requests queue. Driven from the "Send Instagram DMs" button on the campaign page.
+3. **Send DM outreach** — for creators the dashboard couldn't find an email for, sends the campaign's DM template on their own platform: on Instagram as a Priority Message Request (so it lands in the main inbox instead of the Requests queue), on TikTok as a direct message. Driven from the "Send DMs" button on the campaign page, or the per-row "Send IG DM" / "Send TikTok DM" button.
 
 ## Scraping TikTok and YouTube creators
 
@@ -28,6 +28,16 @@ Limits:
 Set the per-campaign IG DM template on the dashboard's campaign page (the "Instagram DM template" card). Clicking **Send Instagram DMs** then hands the queue to the extension: it opens each creator's profile in a foreground tab, clicks **Message**, clicks **Send prioritized message** in the modal Instagram shows for cold profiles (so the DM lands in the recipient's main inbox as a Partnership message instead of the general Requests folder), then types the rendered body into the composer and clicks Send. Warm profiles (mutual follow / existing thread) skip the modal automatically — the composer opens directly and the send proceeds. Each result is POSTed back to the dashboard as an audit event.
 
 Keep the browser window focused during a run: Instagram throttles hidden tabs, and its DM composer will not hydrate when the tab is occluded.
+
+### TikTok DMs
+
+TikTok creators without an email get the same campaign DM template as a TikTok message (`tiktok-dm.js`). For each one the extension opens their profile, clicks **Message**, waits for TikTok's `/messages` page, checks the open conversation is that creator's, pastes the body (line breaks kept), sends it, and confirms the composer cleared. The result is reported back to the dashboard the same way as an Instagram DM. The rows read "TikTok DM queued" and then "TikTok DM sent", or "TikTok DM failed" with the reason on the timeline.
+
+Requirements and limits:
+- Be signed in to TikTok in the same Chrome profile. The extension reports "not signed in to TikTok" otherwise.
+- TikTok only shows a **Message** button when the creator's privacy settings let you message them. Many accounts only accept messages from people they follow, or from mutual friends. Those sends fail with "TikTok shows no Message button …", and the extension never follows anyone on your behalf.
+- If TikTok opens a conversation with a different account, nothing is sent and the row records why.
+- YouTube has no DMs, so YouTube creators without an email aren't queued.
 
 ## Decide-offer panel
 

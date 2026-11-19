@@ -593,7 +593,11 @@ function syncIgDmCounts(c) {
   if (sentCount) bits.push(`${sentCount} sent`);
   hint.textContent = bits.join(' · ') || 'ready';
   btn.hidden = queueCount === 0;
-  btn.textContent = `Send Instagram DMs (${queueCount})`;
+  const tiktokCount = c.ig_dm_queue_tiktok_count || 0;
+  const igCount = queueCount - tiktokCount;
+  btn.textContent = tiktokCount
+    ? `Send DMs (${[igCount ? `${igCount} IG` : '', `${tiktokCount} TikTok`].filter(Boolean).join(' · ')})`
+    : `Send Instagram DMs (${queueCount})`;
 }
 
 // Render the WhatsApp/iMessage brief card for a campaign. Unlike the IG DM
@@ -1042,8 +1046,8 @@ function statusPillFor(r) {
   // that we've since DM'd stops advertising "no email" and shows "IG DM sent"
   // instead. Reuses the outreach_* pill styles — same visual weight, same
   // meaning to the operator (queued → sent).
-  if (r.ig_dm_sent_at) return { cls: 'outreach_sent', text: 'IG DM sent' };
-  if (r.ig_dm_queued_at) return { cls: 'outreach_queued', text: 'IG DM queued' };
+  if (r.ig_dm_sent_at) return { cls: 'outreach_sent', text: `${dmShortLabel(r)} DM sent` };
+  if (r.ig_dm_queued_at) return { cls: 'outreach_queued', text: `${dmShortLabel(r)} DM queued` };
   // Normalize the effective status so a legacy stuck row — one where status
   // is still 'email_found' but the email column has been blanked — reads as
   // 'no_email' here. The schema.sql cleanup rewrites those rows on boot, but
@@ -1056,8 +1060,8 @@ function statusPillFor(r) {
   // email_found pill styling so the row still reads as "ready to reach out"
   // rather than muted/failed. The Send IG DM button below carries the actual
   // action; this pill just names the state so it lines up with the button.
-  if (st === 'no_email' && (r.instagram_username || r.instagram_url) && isInstagramCreator(r)) {
-    return { cls: 'email_found', text: 'IG DM' };
+  if (st === 'no_email' && (r.instagram_username || r.instagram_url) && canDmCreator(r)) {
+    return { cls: 'email_found', text: `${dmShortLabel(r)} DM` };
   }
   return { cls: st, text: st.replace(/_/g, ' ') };
 }
@@ -1881,6 +1885,16 @@ function makeInterveneButton(r, { label = 'Reply hand-off', plain = false } = {}
   return btn;
 }
 
+// Instagram and TikTok creators can be DM'd through the extension; YouTube
+// has no DMs. "IG" / "TikTok" names the platform on pills and buttons.
+function canDmCreator(r) {
+  const p = creatorPlatform(r);
+  return p === 'instagram' || p === 'tiktok';
+}
+function dmShortLabel(r) {
+  return creatorPlatform(r) === 'tiktok' ? 'TikTok' : 'IG';
+}
+
 // Is this creator a candidate for a per-row "Send IG DM" button? Mirrors the
 // backend's IG_DM_ELIGIBLE_STATUSES + prerequisite checks (no email, not
 // already DM'd, has an IG handle we can resolve). The campaign's own template
@@ -1899,7 +1913,7 @@ function isIgDmEligible(r) {
   if (r.email) return false;
   if (r.ig_dm_sent_at) return false;
   if (!r.instagram_username && !r.instagram_url) return false;
-  if (!isInstagramCreator(r)) return false;
+  if (!canDmCreator(r)) return false;
   const st = r.status || 'pending_extraction';
   return (
     st === 'no_email' ||
@@ -1917,7 +1931,8 @@ function makeSendIgDmButton(r) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'ghost small cr-send-btn';
-  btn.textContent = 'Send IG DM';
+  const isTikTok = creatorPlatform(r) === 'tiktok';
+  btn.textContent = `Send ${dmShortLabel(r)} DM`;
   // Cache the current campaign's template state so the button self-explains
   // when it can't send — no template = disabled with a clear tooltip that
   // points at the template card above.
@@ -1925,9 +1940,11 @@ function makeSendIgDmButton(r) {
   const hasTemplate = !!(campaign && campaign.ig_dm_body && String(campaign.ig_dm_body).trim());
   if (!hasTemplate) {
     btn.disabled = true;
-    btn.title = 'Set an Instagram DM template for this campaign first (card above).';
+    btn.title = 'Set a DM template for this campaign first (card above).';
   } else {
-    btn.title = 'Send this creator the campaign\'s IG DM as a Priority Message Request.';
+    btn.title = isTikTok
+      ? 'Send this creator the campaign\'s DM template as a TikTok message.'
+      : 'Send this creator the campaign\'s DM template as an Instagram Priority Message Request.';
   }
   btn.onclick = async () => {
     btn.disabled = true;
@@ -4605,10 +4622,12 @@ el('send-ig-dms-btn').addEventListener('click', async () => {
   const queueCount = c ? c.ig_dm_queue_count : 0;
   if (!queueCount) { toast('Nothing to send — every creator either has an email or has already been DM’d.', 'info'); return; }
   const okDms = await confirmDialog({
-    title: `Send Instagram DMs to ${queueCount} creator(s) as Priority Message Requests?`,
+    title: (c && c.ig_dm_queue_tiktok_count)
+      ? `Send DMs to ${queueCount} creator(s) on Instagram and TikTok?`
+      : `Send Instagram DMs to ${queueCount} creator(s) as Priority Message Requests?`,
     message:
-      'The Chrome extension will drive Instagram — keep the browser window focused ' +
-      "and don't switch away while it runs.",
+      'The Chrome extension will drive Instagram (Priority Message Requests) and TikTok — ' +
+      "stay signed in to both, keep the browser window focused and don't switch away while it runs.",
     confirmLabel: 'Send DMs',
   });
   if (!okDms) return;
@@ -4620,7 +4639,7 @@ el('send-ig-dms-btn').addEventListener('click', async () => {
       body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
     });
     if (!result.queued) {
-      showIgDmProgress(`Nothing to send (${result.skipped || 0} skipped — no IG handle).`);
+      showIgDmProgress(`Nothing to send (${result.skipped || 0} skipped — no Instagram or TikTok handle).`);
       el('ig-dm-cancel-btn').textContent = 'Hide';
       await refreshCreators();
       await refreshCampaigns();
@@ -4681,7 +4700,7 @@ el('ig-dm-cancel-btn').addEventListener('click', () => {
 
 function handleIgDmProgress(msg) {
   if (msg.event === 'start') {
-    showIgDmProgress(`Sending 0/${msg.total} Instagram DMs…`);
+    showIgDmProgress(`Sending 0/${msg.total} DMs…`);
   } else if (msg.event === 'creator-start') {
     showIgDmProgress(
       `DM ${msg.index}/${msg.total} — @${msg.username || msg.creatorId}…`,
@@ -4725,7 +4744,7 @@ function startExtensionIgDmSend(jobs) {
   if (!jobs || !jobs.length) return;
   window.postMessage({ type: 'OEA_PING' }, window.location.origin);
   igDmInFlight = true;
-  showIgDmProgress(`Starting ${jobs.length} Instagram DM(s)…`);
+  showIgDmProgress(`Starting ${jobs.length} DM(s)…`);
   window.postMessage(
     {
       type: 'OEA_RUN_IG_DM_QUEUE',
