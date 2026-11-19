@@ -160,6 +160,15 @@ const fmtViews = (n) => {
 // sentence gist, so the timeline reflects the ENTIRE message. It is deliberately
 // NOT used for 'rate_quoted', whose label is mined from the raw text ("Creator
 // quoted $X for Y") rather than free-form.
+// Platforms whose DMs the extension can send (see the Social DM queue below).
+const DM_PLATFORMS = ['instagram', 'tiktok'];
+const DM_PLATFORM_LABEL = { instagram: 'Instagram', tiktok: 'TikTok' };
+
+// "Instagram" / "TikTok" for a DM event (older events carry no platform: IG).
+function dmPlatformLabel(d) {
+  return (d && DM_PLATFORM_LABEL[d.platform]) || 'Instagram';
+}
+
 function rateLogEntry(type, detail, msg, summary) {
   const d = detail || {};
   switch (type) {
@@ -175,12 +184,13 @@ function rateLogEntry(type, detail, msg, summary) {
       // but the timeline label stays clean — just "Follow-up sent".
       return { text: 'Follow-up sent', tone: 'done' };
     case 'ig_dm_queued':
-      // Extension has been handed the DM and is driving Instagram's DM composer.
-      return { text: 'Instagram DM queued', tone: 'active' };
+      // Extension has been handed the DM and is driving the platform's DM
+      // composer (Instagram, or TikTok when detail.platform says so).
+      return { text: `${dmPlatformLabel(d)} DM queued`, tone: 'active' };
     case 'ig_dm_sent':
-      return { text: 'Instagram DM sent (priority)', tone: 'done' };
+      return { text: d.platform === 'tiktok' ? 'TikTok DM sent' : 'Instagram DM sent (priority)', tone: 'done' };
     case 'ig_dm_failed':
-      return { text: d.error ? `Instagram DM failed — ${d.error}` : 'Instagram DM failed', tone: 'muted' };
+      return { text: d.error ? `${dmPlatformLabel(d)} DM failed — ${d.error}` : `${dmPlatformLabel(d)} DM failed`, tone: 'muted' };
     case 'replied': {
       // Never a bare "Creator replied" — surface a recap of what the creator
       // actually wrote: the Claude summary of the whole email when we have one,
@@ -1382,13 +1392,19 @@ router.post('/bulk/delete', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// --- Instagram DM queue ---------------------------------------------------
-// For creators without an email, we send the outreach as an Instagram Direct
-// Message instead. The Chrome extension does the actual sending (Meta gives no
-// server-side DM API for cold outreach), so these endpoints just render the
-// per-campaign IG DM template, mark the creator as queued, and return the queue
-// for the extension to drive. Result reporting flows back through the
-// /:id/ig-dm-result and /bulk/ig-dm-result endpoints below.
+// --- Social DM queue (Instagram + TikTok) ----------------------------------
+// For creators without an email, we send the outreach as a Direct Message on
+// their own platform instead: an Instagram Priority Message Request, or a
+// TikTok message. The Chrome extension does the actual sending (neither Meta
+// nor TikTok offers a server-side DM API for cold outreach), so these
+// endpoints just render the per-campaign DM template, mark the creator as
+// queued, and return the queue for the extension to drive. Result reporting
+// flows back through /:id/ig-dm-result below.
+//
+// The columns / endpoints / event types keep their original "ig_dm" names;
+// each job and event carries `platform` so the extension and the timeline know
+// which site it was. YouTube has no DMs, so YouTube creators are never queued.
+
 
 const IG_DM_ELIGIBLE_STATUSES = new Set([
   'no_email',
@@ -1403,9 +1419,9 @@ async function loadCampaignForIgDm(campaignId) {
   );
 }
 
-// Vars available inside the IG DM template. Kept in sync with the email
+// Vars available inside the DM template. Kept in sync with the email
 // templates' placeholders so an admin who copies from one to the other doesn't
-// have to relearn the syntax. firstName falls back to the IG @handle so a
+// have to relearn the syntax. firstName falls back to the @handle so a
 // missing name doesn't render "Hi ,".
 function igDmVars(creator, campaign) {
   const firstName =
@@ -1427,13 +1443,17 @@ function buildIgDmJob(creator, campaign) {
   if (!creator.instagram_username && !creator.instagram_url) {
     return { skip: 'no_instagram_handle' };
   }
-  // TikTok / YouTube creators have no Instagram profile to DM.
-  if (platformOf(creator) !== 'instagram') return { skip: 'no_instagram_handle' };
+  // Only Instagram and TikTok have DMs the extension can send.
+  const platform = platformOf(creator);
+  if (!DM_PLATFORMS.includes(platform)) return { skip: 'no_instagram_handle' };
   const body = renderIgDm(campaign.ig_dm_body, igDmVars(creator, campaign));
   if (!body) return { skip: 'no_template' };
   return {
     job: {
       id: creator.id,
+      platform,
+      // Field names predate TikTok: for a TikTok job these hold the TikTok
+      // profile URL and handle.
       instagramUrl: creator.instagram_url,
       instagramUsername: creator.instagram_username,
       firstName: creator.first_name || null,
@@ -1454,7 +1474,7 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
     if (!campaign) return res.status(404).json({ error: 'campaign not found' });
     if (!campaign.ig_dm_body || !String(campaign.ig_dm_body).trim()) {
       return res.status(400).json({
-        error: 'This campaign has no Instagram DM template. Add one on the campaign page first.',
+        error: 'This campaign has no DM template. Add one on the campaign page first.',
       });
     }
 
@@ -1468,11 +1488,11 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
       if (!scoped.length) return res.json({ ok: true, queued: 0, jobs: [] });
     }
 
-    const params = [campaign_id, [...IG_DM_ELIGIBLE_STATUSES]];
+    const params = [campaign_id, [...IG_DM_ELIGIBLE_STATUSES], DM_PLATFORMS];
     let where = `campaign_id = $1
          AND (email IS NULL OR email = '')
          AND ig_dm_sent_at IS NULL
-         AND platform = 'instagram'
+         AND platform = ANY($3::text[])
          AND status = ANY($2::text[])`;
     if (scoped) {
       // Row-level "Send DM" is the manual path — bypass the dormant-reel filter
@@ -1503,7 +1523,7 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
       );
       await db.query(
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_queued', $2)`,
-        [creator.id, { username: creator.instagram_username || null }],
+        [creator.id, { username: creator.instagram_username || null, platform: built.job.platform }],
       );
       jobs.push(built.job);
     }
@@ -1540,11 +1560,11 @@ router.post('/:id/queue-ig-dm', async (req, res, next) => {
     const built = buildIgDmJob(creator, campaign);
     if (built.skip === 'no_template') {
       return res.status(400).json({
-        error: 'This campaign has no Instagram DM template. Add one on the campaign page first.',
+        error: 'This campaign has no DM template. Add one on the campaign page first.',
       });
     }
     if (built.skip === 'no_instagram_handle') {
-      return res.status(400).json({ error: 'creator has no Instagram handle to DM' });
+      return res.status(400).json({ error: 'creator has no Instagram or TikTok handle to DM' });
     }
 
     const updated = await db.one(
@@ -1559,7 +1579,7 @@ router.post('/:id/queue-ig-dm', async (req, res, next) => {
     );
     await db.query(
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_queued', $2)`,
-      [creator.id, { username: creator.instagram_username || null }],
+      [creator.id, { username: creator.instagram_username || null, platform: built.job.platform }],
     );
     res.json({ ok: true, creator: updated, job: built.job });
   } catch (err) { next(err); }
@@ -1586,7 +1606,7 @@ router.post('/:id/ig-dm-result', async (req, res, next) => {
       );
       await db.query(
         `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_sent', $2)`,
-        [creator.id, { username: creator.instagram_username || null }],
+        [creator.id, { username: creator.instagram_username || null, platform: platformOf(creator) }],
       );
       return res.json({ ok: true, creator: updated });
     }
@@ -1602,7 +1622,7 @@ router.post('/:id/ig-dm-result', async (req, res, next) => {
     );
     await db.query(
       `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'ig_dm_failed', $2)`,
-      [creator.id, { error: errMsg, username: creator.instagram_username || null }],
+      [creator.id, { error: errMsg, username: creator.instagram_username || null, platform: platformOf(creator) }],
     );
     res.json({ ok: false, creator: updated });
   } catch (err) { next(err); }

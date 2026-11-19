@@ -427,6 +427,70 @@ async function emitIgDmProgress(senderTabId, payload) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// TikTok DM driver (tiktok-dm.js does the in-page work). Clicking "Message" on
+// a TikTok profile moves the tab to /messages — often a full page load that
+// restarts the content script — so the send is split in two messages:
+//   1. on the profile: tiktokOpenDm  (click Message)
+//   2. once the tab is on /messages: tiktokSendDm (type, send, confirm)
+// `onTab` hands the opened tab id back so the caller can close it.
+// ---------------------------------------------------------------------------
+
+function tabUrl(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.get(tabId, (tab) => resolve(chrome.runtime.lastError || !tab ? '' : tab.url || ''));
+  });
+}
+
+// Send a message to the tab's content script, retrying while the script isn't
+// there yet (the page is still loading after a navigation).
+async function sendToTabWhenReady(tabId, message, { timeoutMs, readyWithinMs = 15000 }) {
+  const deadline = Date.now() + readyWithinMs;
+  let lastErr = null;
+  while (Date.now() < deadline) {
+    try {
+      return await sendMessageToTab(tabId, message, timeoutMs);
+    } catch (err) {
+      lastErr = err;
+      if (!/receiving end|could not establish|message port closed/i.test(err.message)) throw err;
+      await sleep(700);
+    }
+  }
+  throw lastErr || new Error('TikTok page never became ready');
+}
+
+async function sendTikTokDm(job, onTab) {
+  const handle = job.instagramUsername ? String(job.instagramUsername).replace(/^@/, '') : null;
+  const url = (job.instagramUrl || (handle ? `https://www.tiktok.com/@${handle}` : '')).split(/[?#]/)[0];
+  if (!url) throw new Error('no TikTok profile url');
+
+  // Foreground tab, like Instagram: TikTok throttles hidden tabs.
+  const tab = await chrome.tabs.create({ url, active: true });
+  onTab(tab.id);
+  await waitForTabComplete(tab.id, 30000);
+  await sleep(jittered(2000, 1200));
+
+  const opened = await sendToTabWhenReady(tab.id, { action: 'tiktokOpenDm', username: handle }, { timeoutMs: 25000 });
+  if (!opened || !opened.ok) return opened || { ok: false, error: 'TikTok profile page did not respond' };
+
+  // Wait for TikTok to land on its messages page.
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline && !/tiktok\.com\/messages/i.test(await tabUrl(tab.id))) {
+    await sleep(400);
+  }
+  if (!/tiktok\.com\/messages/i.test(await tabUrl(tab.id))) {
+    return { ok: false, error: 'TikTok did not open the messages page after clicking Message' };
+  }
+  try { await waitForTabComplete(tab.id, 20000); } catch { /* SPA navigation — no load event */ }
+  await sleep(jittered(1500, 1000));
+
+  return sendToTabWhenReady(
+    tab.id,
+    { action: 'tiktokSendDm', body: job.body, username: handle },
+    { timeoutMs: 60000, readyWithinMs: 20000 },
+  );
+}
+
 async function runIgDmQueue(payload, sender) {
   const { apiBase, jobs, pacingMs } = payload;
   const senderTabId = sender && sender.tab && sender.tab.id;
@@ -468,36 +532,43 @@ async function runIgDmQueue(payload, sender) {
       let error = null;
 
       try {
-        const baseUrl =
-          job.instagramUrl ||
-          (job.instagramUsername
-            ? `https://www.instagram.com/${job.instagramUsername}/`
-            : null);
-        if (!baseUrl) throw new Error('no instagram url');
-        // Foreground tab: Instagram's Direct composer is heavy and IntersectionObserver-
-        // driven. Chrome throttles hidden tabs, and the composer will simply not
-        // hydrate when the tab is occluded. Keep the window focused during the run.
-        const tab = await chrome.tabs.create({ url: baseUrl, active: true });
-        tabId = tab.id;
-        await waitForTabComplete(tabId, 30000);
-        // Settle: Instagram's SPA hydration + the "Message" button aren't in the
-        // DOM at document_idle. A short pause lets the profile header render.
-        await sleep(jittered(1800, 1200));
-
-        const resp = await sendMessageToTab(
-          tabId,
-          {
-            action: 'sendInstagramDm',
-            body: job.body,
-            username: job.instagramUsername,
-          },
-          90000, // Instagram's DM composer can take a while to open + settle.
-        );
-        if (resp && resp.ok) {
-          outcome = 'sent';
+        if (creatorPlatformOf(job) === 'tiktok') {
+          // TikTok: separate two-step driver (profile → /messages page).
+          const res = await sendTikTokDm(job, (id) => { tabId = id; });
+          if (res && res.ok) outcome = 'sent';
+          else throw new Error((res && res.error) || 'TikTok DM returned no result');
         } else {
-          error = (resp && resp.error) || 'content-script returned no result';
-          outcome = 'error';
+          const baseUrl =
+            job.instagramUrl ||
+            (job.instagramUsername
+              ? `https://www.instagram.com/${job.instagramUsername}/`
+              : null);
+          if (!baseUrl) throw new Error('no instagram url');
+          // Foreground tab: Instagram's Direct composer is heavy and IntersectionObserver-
+          // driven. Chrome throttles hidden tabs, and the composer will simply not
+          // hydrate when the tab is occluded. Keep the window focused during the run.
+          const tab = await chrome.tabs.create({ url: baseUrl, active: true });
+          tabId = tab.id;
+          await waitForTabComplete(tabId, 30000);
+          // Settle: Instagram's SPA hydration + the "Message" button aren't in the
+          // DOM at document_idle. A short pause lets the profile header render.
+          await sleep(jittered(1800, 1200));
+
+          const resp = await sendMessageToTab(
+            tabId,
+            {
+              action: 'sendInstagramDm',
+              body: job.body,
+              username: job.instagramUsername,
+            },
+            90000, // Instagram's DM composer can take a while to open + settle.
+          );
+          if (resp && resp.ok) {
+            outcome = 'sent';
+          } else {
+            error = (resp && resp.error) || 'content-script returned no result';
+            outcome = 'error';
+          }
         }
       } catch (err) {
         error = err.message;

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Influence Outreach Automator",
-  "version": "1.3.0",
-  "description": "Influence Outreach: scrape Instagram, TikTok and YouTube profiles into the dashboard, decide creator offers from a panel on their Instagram profile, and send Priority DM outreach to creators without an email.",
+  "version": "1.4.0",
+  "description": "Influence Outreach: scrape Instagram, TikTok and YouTube profiles into the dashboard, decide creator offers from a panel on their Instagram profile, and send DM outreach (Instagram Priority DMs and TikTok messages) to creators without an email.",
   "permissions": [
     "tabs",
     "storage",
@@ -23,7 +23,7 @@
     },
     {
       "matches": ["https://www.tiktok.com/*"],
-      "js": ["scrape-common.js", "tiktok-content.js"],
+      "js": ["scrape-common.js", "tiktok-content.js", "tiktok-dm.js"],
       "run_at": "document_idle"
     },
     {

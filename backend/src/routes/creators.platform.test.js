@@ -108,22 +108,105 @@ test('POST /api/creators rejects a platform URL that is not a profile', async ()
   }
 });
 
-test('IG DM queue refuses a TikTok creator', async () => {
-  db.one = async (sql) => {
-    if (/SELECT \* FROM creators WHERE id = \$1/.test(sql)) {
-      return { id: 3, campaign_id: 'c1', platform: 'tiktok', instagram_url: 'https://www.tiktok.com/@a', instagram_username: 'a', status: 'no_email' };
-    }
-    return { id: 'c1', ig_dm_body: 'Hi {firstName}', name: 'Camp', brand_name: 'Brand' };
+// DM queue: Instagram and TikTok creators without an email get a DM job
+// carrying their platform; YouTube (no DMs) is refused.
+function installDmStub(creator) {
+  const writes = [];
+  db.one = async (sql, params) => {
+    if (/SELECT \* FROM creators WHERE id = \$1/.test(sql)) return creator;
+    if (/FROM campaigns WHERE id = \$1/.test(sql)) return { id: 'c1', ig_dm_body: 'Hi {firstName}!', name: 'Camp', brand_name: 'Brand' };
+    if (/^\s*UPDATE creators/i.test(sql)) return { ...creator, ig_dm_queued_at: 'now', ig_dm_body: params[1] };
+    return null;
   };
-  db.many = async () => [];
-  db.query = async () => ({ rows: [], rowCount: 1 });
+  db.many = async () => [creator];
+  db.query = async (sql, params) => {
+    writes.push({ sql, params });
+    return { rows: [], rowCount: 1 };
+  };
+  return writes;
+}
+
+test('DM queue builds a TikTok job for a TikTok creator without an email', async () => {
+  const writes = installDmStub({
+    id: 3, campaign_id: 'c1', platform: 'tiktok', instagram_url: 'https://www.tiktok.com/@jane',
+    instagram_username: 'jane', first_name: 'Jane', status: 'no_email',
+  });
   try {
     const res = await call('POST', '/3/queue-ig-dm');
-    assert.strictEqual(res.status, 400);
-    assert.match(res.body.error, /Instagram handle/);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(
+      { platform: res.body.job.platform, url: res.body.job.instagramUrl, handle: res.body.job.instagramUsername, body: res.body.job.body },
+      { platform: 'tiktok', url: 'https://www.tiktok.com/@jane', handle: 'jane', body: 'Hi Jane!' },
+    );
+    const ev = writes.find((w) => /'ig_dm_queued'/.test(w.sql));
+    assert.strictEqual(ev.params[1].platform, 'tiktok');
   } finally {
     restore();
   }
+});
+
+test('DM queue still builds Instagram jobs', async () => {
+  installDmStub({
+    id: 5, campaign_id: 'c1', platform: 'instagram', instagram_url: 'https://www.instagram.com/sam/',
+    instagram_username: 'sam', first_name: 'Sam', status: 'no_email',
+  });
+  try {
+    const res = await call('POST', '/5/queue-ig-dm');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.job.platform, 'instagram');
+  } finally {
+    restore();
+  }
+});
+
+test('DM queue refuses a YouTube creator (YouTube has no DMs)', async () => {
+  installDmStub({
+    id: 6, campaign_id: 'c1', platform: 'youtube', instagram_url: 'https://www.youtube.com/@a',
+    instagram_username: 'a', status: 'no_email',
+  });
+  try {
+    const res = await call('POST', '/6/queue-ig-dm');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /Instagram or TikTok/);
+  } finally {
+    restore();
+  }
+});
+
+test('bulk DM queue covers Instagram + TikTok only', async () => {
+  let selectSql = null;
+  let selectParams = null;
+  installDmStub({
+    id: 3, campaign_id: 'c1', platform: 'tiktok', instagram_url: 'https://www.tiktok.com/@jane',
+    instagram_username: 'jane', first_name: 'Jane', status: 'no_email',
+  });
+  const many = db.many;
+  db.many = async (sql, params) => {
+    selectSql = sql;
+    selectParams = params;
+    return many(sql, params);
+  };
+  try {
+    const res = await call('POST', '/bulk/queue-ig-dm', { campaign_id: 'c1' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.queued, 1);
+    assert.strictEqual(res.body.jobs[0].platform, 'tiktok');
+    assert.match(selectSql, /platform = ANY\(\$3::text\[\]\)/);
+    assert.deepStrictEqual(selectParams[2], ['instagram', 'tiktok']);
+  } finally {
+    restore();
+  }
+});
+
+test('timeline names the DM platform', () => {
+  assert.strictEqual(router.rateLogEntry('ig_dm_sent', { platform: 'tiktok' }).text, 'TikTok DM sent');
+  assert.strictEqual(router.rateLogEntry('ig_dm_queued', { platform: 'tiktok' }).text, 'TikTok DM queued');
+  assert.strictEqual(
+    router.rateLogEntry('ig_dm_failed', { platform: 'tiktok', error: 'not signed in to TikTok' }).text,
+    'TikTok DM failed — not signed in to TikTok',
+  );
+  // Older events carry no platform: Instagram.
+  assert.strictEqual(router.rateLogEntry('ig_dm_sent', {}).text, 'Instagram DM sent (priority)');
 });
 
 test('server-side fetch-email refuses a YouTube creator (the extension scrapes it)', async () => {
