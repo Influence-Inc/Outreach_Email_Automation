@@ -17,6 +17,14 @@ const offerWhatsapp = require('../services/offerPortal/whatsapp');
 
 const api = express.Router();
 
+// A contract carries the creator's name, email and pay, and the submit carries
+// their bank details: nothing under this router may be kept by the browser's
+// cache or a shared proxy, so a shared or borrowed device can't replay it.
+api.use((_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 // The "message us on WhatsApp" opt-in shown under the signed confirmation.
 //
 // Subscribing is what lets us reach the creator directly from then on — for
