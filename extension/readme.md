@@ -41,9 +41,10 @@ Requirements and limits:
 
 YouTube has no DMs, so a YouTube creator without an email is messaged on the Instagram or TikTok account their channel links to. Instagram is preferred, because it gets a Priority DM. The YouTube scrape collects the channel's links from the header, the full **About** panel and the description, with Instagram and TikTok profile links listed first. The DM queue then sends the campaign DM to that account through the same Instagram or TikTok flow as above. The timeline reads e.g. "Instagram DM sent (priority) to @MKBHD (linked from YouTube)".
 
+- **Instagram first.** If a channel links only a TikTok account, the scrape also looks for an Instagram through that TikTok profile before settling for TikTok. It checks the TikTok bio link, an Instagram handle written in the bio ("IG: @name", "insta - name", "📸 @name"), and, when the bio link is a link-in-bio page such as Linktree, Beacons or Stan, that page's links. An Instagram found this way is listed first in the creator's links, so they're DM'd on Instagram and counted under **Send Instagram DMs**. The service-worker console logs where it was found.
 - A channel that links neither account can't be DM'd. The per-row button explains why, and the bulk run skips it.
 - If the linked account is already in the campaign as its own Instagram or TikTok creator, that row handles the outreach, and the YouTube row isn't DM'd too.
-- YouTube creators scraped before extension 1.5.0 only have their header link on file. Re-scrape them to pick up the full About-panel links.
+- YouTube creators scraped before extension 1.5.0 only have their header link on file, and those scraped before 1.6.0 haven't had the TikTok-bio lookup. Re-scrape them to pick up both.
 
 ## Decide-offer panel
 
