@@ -220,6 +220,147 @@ function scrapeTargetFor(creator) {
   return { platform, url: base.replace(/\/+$/, '') + '/reels/', action: 'extractInstagramData', timeoutMs: 20000 };
 }
 
+// ---------------------------------------------------------------------------
+// YouTube → Instagram via TikTok. YouTube has no DMs, so a YouTube creator
+// without an email is DM'd on the account their channel links to — Instagram
+// preferred (Priority DM), TikTok only when the channel links no Instagram.
+// For those TikTok-only channels we look one hop further: the linked TikTok
+// profile's bio, its bio link, and (when that's a link-in-bio page such as
+// Linktree) that page's links. An Instagram account found there is added to the
+// creator's links, so the dashboard DMs them on Instagram instead.
+// Runs here in the service worker: it can fetch any site with the user's own
+// session (host_permissions), with no page CORS in the way.
+// ---------------------------------------------------------------------------
+
+const IG_RESERVED = new Set(['p', 'reel', 'reels', 'tv', 'explore', 'stories', 'accounts', 'direct', 'about', 'legal', 'developer']);
+const LINK_HUB_HOSTS = /(^|\.)(linktr\.ee|beacons\.ai|stan\.store|bio\.link|lnk\.bio|linkin\.bio|campsite\.bio|tap\.bio|solo\.to|hoo\.be|snipfeed\.co|msha\.ke|allmylinks\.com|linkfly\.to|komi\.io|carrd\.co|linkbio\.co|taplink\.cc|flow\.page|direct\.me|koji\.to|withkoji\.com|later\.com|linkpop\.com|shor\.by|biosites\.com)$/i;
+
+function toUrlLoose(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  try {
+    return new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+  } catch {
+    return null;
+  }
+}
+
+// "https://www.instagram.com/<handle>/" for an Instagram PROFILE link, else null.
+function instagramProfileUrl(raw) {
+  const u = toUrlLoose(raw);
+  if (!u) return null;
+  const host = u.hostname.toLowerCase().replace(/^(www|m)\./, '');
+  if (host !== 'instagram.com' && host !== 'instagr.am') return null;
+  const handle = u.pathname.split('/').filter(Boolean)[0];
+  if (!handle || !/^[A-Za-z0-9._]{1,30}$/.test(handle) || IG_RESERVED.has(handle.toLowerCase())) return null;
+  return `https://www.instagram.com/${handle}/`;
+}
+
+function isTikTokProfileUrl(raw) {
+  const u = toUrlLoose(raw);
+  return !!u && /(^|\.)tiktok\.com$/i.test(u.hostname) && /^\/@[^/]+/.test(u.pathname);
+}
+
+// Every Instagram profile URL written in some text / HTML (handles the
+// "/" and "\/" escaping JSON-in-HTML uses), first one first.
+function instagramProfilesIn(text) {
+  const s = String(text || '').replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
+  const out = [];
+  for (const m of s.matchAll(/(?:https?:\/\/)?(?:www\.|m\.)?instagram\.com\/[A-Za-z0-9._]+/gi)) {
+    const url = instagramProfileUrl(m[0]);
+    if (url && !out.includes(url)) out.push(url);
+  }
+  return out;
+}
+
+// An Instagram handle written into a bio: "IG: @name", "insta - name",
+// "Instagram @name", "📸 @name".
+function instagramHandleInBio(text) {
+  const m = String(text || '').match(/(?:\b(?:ig|insta|instagram)\b|📸|📷)\s*[:\-–—|]?\s*@?([A-Za-z0-9._]{2,30})\b/i);
+  if (!m) return null;
+  const handle = m[1].replace(/\.+$/, '');
+  if (/^(dm|link|below|bio|here|account|page|me|too)$/i.test(handle)) return null;
+  return `https://www.instagram.com/${handle}/`;
+}
+
+async function fetchText(url, timeoutMs = 10000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      credentials: 'include',
+      signal: ctrl.signal,
+      headers: { Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'en-US,en;q=0.9' },
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The TikTok profile's { signature, bioLink } from its server-rendered JSON.
+function tiktokUserFromHtml(html) {
+  const m = String(html || '').match(/<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
+  if (!m) return null;
+  try {
+    const data = JSON.parse(m[1]);
+    const user = data && data.__DEFAULT_SCOPE__ && data.__DEFAULT_SCOPE__['webapp.user-detail']
+      && data.__DEFAULT_SCOPE__['webapp.user-detail'].userInfo
+      && data.__DEFAULT_SCOPE__['webapp.user-detail'].userInfo.user;
+    return user ? { signature: user.signature || '', bioLink: (user.bioLink && user.bioLink.link) || '' } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Instagram profile reachable from a TikTok profile, or null:
+//   { url, source: 'tiktok_bio_link' | 'tiktok_bio' | 'link_hub', from }
+async function instagramViaTikTok(tiktokUrl) {
+  const u = toUrlLoose(tiktokUrl);
+  if (!u) return null;
+  const html = await fetchText(`https://www.tiktok.com${u.pathname.split('/').slice(0, 2).join('/')}`);
+  const user = tiktokUserFromHtml(html);
+  if (!user) return null;
+
+  const direct = instagramProfileUrl(user.bioLink);
+  if (direct) return { url: direct, source: 'tiktok_bio_link', from: tiktokUrl };
+  const inText = instagramProfilesIn(user.signature)[0] || instagramHandleInBio(user.signature);
+  if (inText) return { url: inText, source: 'tiktok_bio', from: tiktokUrl };
+
+  const hub = toUrlLoose(user.bioLink);
+  if (hub && LINK_HUB_HOSTS.test(hub.hostname.toLowerCase().replace(/^www\./, ''))) {
+    try {
+      const page = await fetchText(hub.href);
+      const fromHub = instagramProfilesIn(page)[0];
+      if (fromHub) return { url: fromHub, source: 'link_hub', from: hub.href };
+    } catch (e) {
+      console.warn(`[OEA] link-in-bio page ${hub.href} unavailable:`, e.message);
+    }
+  }
+  return null;
+}
+
+// For a scraped YouTube channel that links a TikTok account but no Instagram:
+// look for the Instagram through that TikTok profile, and put it first in the
+// creator's links. Best-effort — any failure just leaves the links as they are.
+async function addInstagramViaTikTok(scraped) {
+  const links = Array.isArray(scraped && scraped.bioLinks) ? scraped.bioLinks : [];
+  if (!links.length || links.some((l) => instagramProfileUrl(l))) return null;
+  const tiktok = links.find(isTikTokProfileUrl);
+  if (!tiktok) return null;
+  try {
+    const found = await instagramViaTikTok(tiktok);
+    if (!found) return null;
+    scraped.bioLinks = [found.url, ...links];
+    console.log(`[OEA] YouTube @${scraped.username}: found Instagram ${found.url} via ${found.source} (${found.from})`);
+    return found;
+  } catch (e) {
+    console.warn(`[OEA] YouTube @${scraped && scraped.username}: TikTok bio lookup failed:`, e.message);
+    return null;
+  }
+}
+
 async function runScrapeQueue(payload, sender) {
   const { apiBase, creators, pacingMs } = payload;
   const senderTabId = sender && sender.tab && sender.tab.id;
@@ -291,6 +432,12 @@ async function runScrapeQueue(payload, sender) {
         if (tabId != null) {
           try { await chrome.tabs.remove(tabId); } catch {}
         }
+      }
+
+      // YouTube channel linking a TikTok but no Instagram: find the Instagram
+      // through the TikTok profile so the DM goes out on Instagram.
+      if (!error && scraped && creatorPlatformOf(creator) === 'youtube') {
+        await addInstagramViaTikTok(scraped);
       }
 
       // Only send clean, positive numbers — the backend drops anything else,
