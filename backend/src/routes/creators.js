@@ -1510,6 +1510,13 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
   try {
     const { campaign_id, creator_ids } = req.body || {};
     if (!campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+    // Optional: only the DMs that go out on one platform — the dashboard's
+    // "Send Instagram DMs" / "Send TikTok DMs" buttons. A YouTube creator counts
+    // toward the platform of the account their channel links (dmTargetFor).
+    const dmPlatform = req.body && req.body.dm_platform != null ? String(req.body.dm_platform) : null;
+    if (dmPlatform && !DM_PLATFORMS.includes(dmPlatform)) {
+      return res.status(400).json({ error: `dm_platform must be one of ${DM_PLATFORMS.join(', ')}` });
+    }
     const campaign = await loadCampaignForIgDm(campaign_id);
     if (!campaign) return res.status(404).json({ error: 'campaign not found' });
     if (!campaign.ig_dm_body || !String(campaign.ig_dm_body).trim()) {
@@ -1530,7 +1537,7 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
 
     // YouTube rows are fetched too: buildIgDmJob DMs their linked Instagram /
     // TikTok account, and skips a channel that links neither.
-    const params = [campaign_id, [...IG_DM_ELIGIBLE_STATUSES], [...DM_PLATFORMS, 'youtube']];
+    const params = [campaign_id, [...IG_DM_ELIGIBLE_STATUSES], dmPlatform ? [dmPlatform, 'youtube'] : [...DM_PLATFORMS, 'youtube']];
     let where = `campaign_id = $1
          AND (email IS NULL OR email = '')
          AND ig_dm_sent_at IS NULL
@@ -1555,6 +1562,9 @@ router.post('/bulk/queue-ig-dm', async (req, res) => {
     for (const creator of targets) {
       const built = buildIgDmJob(creator, campaign);
       if (built.skip) { skipped += 1; continue; }
+      // A YouTube creator whose linked account is on the other platform belongs
+      // to the other button — not a skip, just not this batch.
+      if (dmPlatform && built.job.platform !== dmPlatform) continue;
       const key = `${built.job.platform}:${String(built.job.instagramUsername || '').toLowerCase()}`;
       if (dmed.has(key) || (await linkedAccountRow(creator, built.job))) { skipped += 1; continue; }
       dmed.add(key);

@@ -553,15 +553,15 @@ function syncSendEmailsBtn(c) {
   btn.textContent = count ? `Send emails (${count})` : 'Send emails';
 }
 
-// Render the IG DM template card + Send-IG-DMs button state for a campaign.
-// The button hides entirely when the campaign has no template (there is
-// nothing to send yet); the card's summary hint also swaps between "not set"
-// and "N queued" so the operator sees at a glance whether it's ready.
+// Render the DM template card + the Send Instagram DMs / Send TikTok DMs
+// buttons for a campaign. The buttons hide entirely when the campaign has no
+// template (there is nothing to send yet); the card's summary hint also swaps
+// between "not set" and "N to DM" so the operator sees at a glance whether
+// it's ready.
 function syncIgDmTemplateUI(c) {
   const card = el('ig-dm-template-card');
   const text = el('ig-dm-template-text');
   const hint = el('ig-dm-template-hint');
-  const btn = el('send-ig-dms-btn');
   card.hidden = false;
   text.value = c.ig_dm_body || '';
   el('ig-dm-template-status').textContent = '';
@@ -572,37 +572,48 @@ function syncIgDmTemplateUI(c) {
     // Open the card automatically when the template is empty so the operator
     // sees the empty textarea instead of having to expand it themselves.
     card.open = true;
-    btn.hidden = true;
+    el('send-ig-dms-btn').hidden = true;
+    el('send-tiktok-dms-btn').hidden = true;
   } else {
     card.open = false;
-    btn.disabled = false;
+    el('send-ig-dms-btn').disabled = false;
+    el('send-tiktok-dms-btn').disabled = false;
     syncIgDmCounts(c);
   }
 }
 
-// The count-driven bits of the IG DM card (summary hint + Send button), safe to
-// re-run when fresher counts arrive without touching the template textarea.
+// The count-driven bits of the DM card (summary hint + the two Send buttons),
+// safe to re-run when fresher counts arrive without touching the textarea.
+// Each button covers the DMs that go out on its platform: the platform's own
+// creators plus YouTube creators whose channel links an account there.
+//   "Send Instagram DMs (12 IG · 2 via YouTube)"
+//   "Send TikTok DMs (18 TikTok · 1 via YouTube)"
+const DM_BUTTONS = {
+  instagram: { id: 'send-ig-dms-btn', name: 'Instagram', short: 'IG' },
+  tiktok: { id: 'send-tiktok-dms-btn', name: 'TikTok', short: 'TikTok' },
+};
+function dmQueueCounts(c, platform) {
+  const total = (c && c[`ig_dm_queue_${platform}_count`]) || 0;
+  const viaYoutube = (c && c[`ig_dm_queue_${platform}_via_youtube_count`]) || 0;
+  return { total, viaYoutube, own: total - viaYoutube };
+}
 function syncIgDmCounts(c) {
   if (!c.ig_dm_body) return;
   const hint = el('ig-dm-template-hint');
-  const btn = el('send-ig-dms-btn');
   const queueCount = c.ig_dm_queue_count || 0;
   const sentCount = c.ig_dm_sent_count || 0;
   const bits = [];
   if (queueCount) bits.push(`${queueCount} to DM`);
   if (sentCount) bits.push(`${sentCount} sent`);
   hint.textContent = bits.join(' · ') || 'ready';
-  btn.hidden = queueCount === 0;
-  const tiktokCount = c.ig_dm_queue_tiktok_count || 0;
-  const youtubeCount = c.ig_dm_queue_youtube_count || 0;
-  const igCount = queueCount - tiktokCount - youtubeCount;
-  btn.textContent = tiktokCount || youtubeCount
-    ? `Send DMs (${[
-        igCount ? `${igCount} IG` : '',
-        tiktokCount ? `${tiktokCount} TikTok` : '',
-        youtubeCount ? `${youtubeCount} YouTube via linked IG/TikTok` : '',
-      ].filter(Boolean).join(' · ')})`
-    : `Send Instagram DMs (${queueCount})`;
+  for (const [platform, b] of Object.entries(DM_BUTTONS)) {
+    const btn = el(b.id);
+    const n = dmQueueCounts(c, platform);
+    btn.hidden = n.total === 0;
+    btn.textContent = n.viaYoutube
+      ? `Send ${b.name} DMs (${[n.own ? `${n.own} ${b.short}` : '', `${n.viaYoutube} via YouTube`].filter(Boolean).join(' · ')})`
+      : `Send ${b.name} DMs (${n.total})`;
+  }
 }
 
 // Render the WhatsApp/iMessage brief card for a campaign. Unlike the IG DM
@@ -4655,30 +4666,37 @@ el('reset-reply1-template-btn').addEventListener('click', async () => {
   el('reply1-template-status').textContent = 'Default loaded — press Save to apply.';
 });
 
-el('send-ig-dms-btn').addEventListener('click', async () => {
+// "Send Instagram DMs" / "Send TikTok DMs": queue the DMs that go out on that
+// platform (its own creators + YouTube creators linking an account there) and
+// hand them to the extension.
+async function sendBulkDms(platform) {
   if (!state.selectedCampaignId) return;
+  const b = DM_BUTTONS[platform];
   const c = state.campaigns.find((x) => x.id === state.selectedCampaignId);
-  const queueCount = c ? c.ig_dm_queue_count : 0;
-  if (!queueCount) { toast('Nothing to send — every creator either has an email or has already been DM’d.', 'info'); return; }
+  const n = dmQueueCounts(c, platform);
+  if (!n.total) { toast(`Nothing to send on ${b.name} — every creator either has an email or has already been DM’d.`, 'info'); return; }
+  const who = n.viaYoutube
+    ? `${n.total} creator(s) — ${[n.own ? `${n.own} ${b.name}` : '', `${n.viaYoutube} YouTube via their linked ${b.name}`].filter(Boolean).join(', ')}`
+    : `${n.total} creator(s)`;
   const okDms = await confirmDialog({
-    title: (c && (c.ig_dm_queue_tiktok_count || c.ig_dm_queue_youtube_count))
-      ? `Send DMs to ${queueCount} creator(s) on Instagram and TikTok?`
-      : `Send Instagram DMs to ${queueCount} creator(s) as Priority Message Requests?`,
+    title: platform === 'instagram'
+      ? `Send Instagram DMs to ${who} as Priority Message Requests?`
+      : `Send TikTok DMs to ${who}?`,
     message:
-      'The Chrome extension will drive Instagram (Priority Message Requests) and TikTok — ' +
-      "stay signed in to both, keep the browser window focused and don't switch away while it runs.",
-    confirmLabel: 'Send DMs',
+      `The Chrome extension will drive ${b.name} — stay signed in to ${b.name}, ` +
+      "keep the browser window focused and don't switch away while it runs.",
+    confirmLabel: `Send ${b.name} DMs`,
   });
   if (!okDms) return;
-  const btn = el('send-ig-dms-btn');
+  const btn = el(b.id);
   btn.disabled = true;
   try {
     const result = await api('/api/creators/bulk/queue-ig-dm', {
       method: 'POST',
-      body: JSON.stringify({ campaign_id: state.selectedCampaignId }),
+      body: JSON.stringify({ campaign_id: state.selectedCampaignId, dm_platform: platform }),
     });
     if (!result.queued) {
-      showIgDmProgress(`Nothing to send (${result.skipped || 0} skipped — no Instagram or TikTok handle).`);
+      showIgDmProgress(`Nothing to send on ${b.name} (${result.skipped || 0} skipped).`);
       el('ig-dm-cancel-btn').textContent = 'Hide';
       await refreshCreators();
       await refreshCampaigns();
@@ -4690,7 +4708,9 @@ el('send-ig-dms-btn').addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
   }
-});
+}
+el('send-ig-dms-btn').addEventListener('click', () => sendBulkDms('instagram'));
+el('send-tiktok-dms-btn').addEventListener('click', () => sendBulkDms('tiktok'));
 
 // --- Extension bridge ----------------------------------------------------
 // The Chrome extension content script announces itself on load with a

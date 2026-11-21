@@ -285,3 +285,37 @@ test('server-side fetch-email refuses a YouTube creator (the extension scrapes i
     restore();
   }
 });
+
+test('bulk DM queue scoped to one platform: Send TikTok DMs takes TikTok + YouTube→TikTok only', async () => {
+  const rows = [
+    { id: 1, campaign_id: 'c1', platform: 'tiktok', instagram_url: 'https://www.tiktok.com/@t1', instagram_username: 't1', status: 'no_email' },
+    { id: 2, campaign_id: 'c1', platform: 'youtube', instagram_url: 'https://www.youtube.com/@y1', instagram_username: 'y1', status: 'no_email', bio_links: ['https://www.tiktok.com/@y1tt'] },
+    { id: 3, campaign_id: 'c1', platform: 'youtube', instagram_url: 'https://www.youtube.com/@y2', instagram_username: 'y2', status: 'no_email', bio_links: ['https://www.tiktok.com/@y2tt', 'https://instagram.com/y2ig'] },
+  ];
+  installDmStub(rows[0]);
+  let selectParams = null;
+  db.many = async (sql, params) => {
+    selectParams = params;
+    return rows;
+  };
+  try {
+    const res = await call('POST', '/bulk/queue-ig-dm', { campaign_id: 'c1', dm_platform: 'tiktok' });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(selectParams[2], ['tiktok', 'youtube']);
+    // y2 links an Instagram too, so it belongs to the Instagram button.
+    assert.deepStrictEqual(res.body.jobs.map((j) => [j.id, j.platform, j.via]), [[1, 'tiktok', null], [2, 'tiktok', 'youtube']]);
+    assert.strictEqual(res.body.skipped, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('bulk DM queue rejects an unknown dm_platform', async () => {
+  installDmStub({ id: 1, campaign_id: 'c1', platform: 'tiktok', status: 'no_email' });
+  try {
+    const res = await call('POST', '/bulk/queue-ig-dm', { campaign_id: 'c1', dm_platform: 'youtube' });
+    assert.strictEqual(res.status, 400);
+  } finally {
+    restore();
+  }
+});

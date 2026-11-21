@@ -116,27 +116,43 @@ function dmTargetFor(row) {
   return pick ? { ...pick, via: 'youtube' } : null;
 }
 
-// SQL condition: a YouTube row (alias prefix `p`, e.g. 'cr.') whose scraped
-// links include an Instagram or TikTok profile — i.e. dmTargetFor() finds a
-// target — and none of whose linked accounts is already in the campaign as
-// its own creator row (the DM queue skips those: that row reaches them). The
-// JS above is the exact check; this mirrors it for the campaign's "N to DM"
-// count so the button number matches what the queue sends.
-function linkedSocialSql(p = '') {
-  return `(${p}platform = 'youtube' AND jsonb_typeof(${p}bio_links) = 'array' AND EXISTS (
-    SELECT 1 FROM jsonb_array_elements_text(${p}bio_links) AS l(url)
-     WHERE l.url ~* '^https?://([a-z]+\\.)?(instagram\\.com/[A-Za-z0-9._]+/?($|[?#])|tiktok\\.com/@)'
-       AND l.url !~* 'instagram\\.com/(p|reel|reels|tv|explore|stories|accounts|direct)/?($|[?#])'
-  ) AND NOT EXISTS (
-    SELECT 1 FROM jsonb_array_elements_text(${p}bio_links) AS l(url), creators o
+// SQL for the handle of the FIRST Instagram / TikTok profile link in a row's
+// bio_links (alias prefix `p`, e.g. 'cr.'), or NULL. Mirrors parseProfileUrl:
+// Instagram post / reel / … links aren't profiles.
+function firstLinkedHandleSql(p, platform) {
+  const re = platform === 'instagram'
+    ? `'^https?://([a-z]+\\.)?instagram\\.com/([A-Za-z0-9._]+)'`
+    : `'^https?://([a-z]+\\.)?tiktok\\.com/@([A-Za-z0-9._]+)'`;
+  const notReserved = platform === 'instagram'
+    ? `AND LOWER((regexp_match(l.url, ${re}, 'i'))[2]) NOT IN ('p','reel','reels','tv','explore','stories','accounts','direct')`
+    : '';
+  return `(SELECT (regexp_match(l.url, ${re}, 'i'))[2]
+             FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(${p}bio_links) = 'array' THEN ${p}bio_links ELSE '[]'::jsonb END)
+                  WITH ORDINALITY AS l(url, n)
+            WHERE l.url ~* ${re} ${notReserved}
+            ORDER BY l.n LIMIT 1)`;
+}
+
+// SQL condition: a YouTube row (alias prefix `p`) that the DM queue sends to
+// its linked `platform` account — the SQL twin of dmTargetFor + the queue's
+// "already its own row in the campaign" skip, so the campaign's per-platform
+// "to DM" counts match what each Send button actually sends.
+//   instagram: the channel links an Instagram profile (preferred target).
+//   tiktok:    it links a TikTok profile and NO Instagram profile.
+function youtubeDmTargetSql(p = '', platform = 'instagram') {
+  const ig = firstLinkedHandleSql(p, 'instagram');
+  const tt = firstLinkedHandleSql(p, 'tiktok');
+  const target = platform === 'instagram' ? ig : tt;
+  const pick = platform === 'instagram'
+    ? `${ig} IS NOT NULL`
+    : `${ig} IS NULL AND ${tt} IS NOT NULL`;
+  return `(${p}platform = 'youtube' AND ${pick} AND NOT EXISTS (
+    SELECT 1 FROM creators o
      WHERE o.campaign_id = ${p}campaign_id AND o.id <> ${p}id AND o.status <> 'duplicate'
-       AND (
-         (o.platform = 'instagram' AND LOWER(o.instagram_username) = LOWER(substring(l.url from 'instagram\\.com/([A-Za-z0-9._]+)')))
-         OR (o.platform = 'tiktok' AND LOWER(o.instagram_username) = LOWER(substring(l.url from 'tiktok\\.com/@([A-Za-z0-9._]+)')))
-       )
+       AND o.platform = '${platform}' AND LOWER(o.instagram_username) = LOWER(${target})
   ))`;
 }
 
 module.exports = {
-  PLATFORMS, PLATFORM_LABELS, DM_PLATFORMS, detectPlatform, parseProfileUrl, platformOf, dmTargetFor, linkedSocialSql,
+  PLATFORMS, PLATFORM_LABELS, DM_PLATFORMS, detectPlatform, parseProfileUrl, platformOf, dmTargetFor, youtubeDmTargetSql,
 };

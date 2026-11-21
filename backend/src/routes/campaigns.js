@@ -5,7 +5,7 @@ const { computeOffers } = require('../services/pricing');
 const { dealCpmFor } = require('../services/cpmEstimate');
 const { flagDismissedSql } = require('../db/flagFingerprint');
 const { recentReelSql } = require('../db/reelFreshness');
-const { linkedSocialSql } = require('../services/creatorPlatform');
+const { youtubeDmTargetSql } = require('../services/creatorPlatform');
 
 const router = express.Router();
 
@@ -30,36 +30,45 @@ router.get('/', async (_req, res, next) => {
        stats AS (
          SELECT cr.campaign_id,
                 COUNT(cr.id)::int AS creator_count,
-                -- ig_dm_queue_count feeds the "Send DMs" button: Instagram and
-                -- TikTok creators without an email who haven't been DM'd yet AND
-                -- whose newest reel / video is inside the recency window (dormant
-                -- accounts are excluded from bulk sends — the admin can still DM
-                -- them by hand from the row menu). ig_dm_queue_tiktok_count is
-                -- the TikTok share of it. Keep in sync with routes/creators.js:
-                -- POST /bulk/queue-ig-dm.
+                -- The two "Send DMs" buttons: creators without an email who haven't
+                -- been DM'd yet AND whose newest reel / video is inside the
+                -- recency window (dormant accounts are excluded from bulk sends —
+                -- the admin can still DM them by hand from the row menu), split by
+                -- the platform the DM goes out on:
+                --   Instagram = Instagram creators + YouTube creators whose
+                --               channel links an Instagram account
+                --   TikTok    = TikTok creators + YouTube creators whose channel
+                --               links a TikTok account (and no Instagram)
+                -- The *_via_youtube counts are the YouTube share of each. Keep in
+                -- sync with routes/creators.js: POST /bulk/queue-ig-dm.
                 COUNT(cr.id) FILTER (
                   WHERE (cr.email IS NULL OR cr.email = '')
                     AND cr.ig_dm_sent_at IS NULL
-                    AND (cr.platform IN ('instagram','tiktok') OR ${linkedSocialSql('cr.')})
                     AND cr.status IN ('no_email','pending_extraction','invalid_email')
                     AND ${recentReelSql('cr.')}
-                )::int AS ig_dm_queue_count,
-                -- YouTube creators reached through the Instagram / TikTok
-                -- account their channel links (YouTube has no DMs).
+                    AND (cr.platform = 'instagram' OR ${youtubeDmTargetSql('cr.', 'instagram')})
+                )::int AS ig_dm_queue_instagram_count,
                 COUNT(cr.id) FILTER (
                   WHERE (cr.email IS NULL OR cr.email = '')
                     AND cr.ig_dm_sent_at IS NULL
-                    AND ${linkedSocialSql('cr.')}
                     AND cr.status IN ('no_email','pending_extraction','invalid_email')
                     AND ${recentReelSql('cr.')}
-                )::int AS ig_dm_queue_youtube_count,
+                    AND ${youtubeDmTargetSql('cr.', 'instagram')}
+                )::int AS ig_dm_queue_instagram_via_youtube_count,
                 COUNT(cr.id) FILTER (
                   WHERE (cr.email IS NULL OR cr.email = '')
                     AND cr.ig_dm_sent_at IS NULL
-                    AND cr.platform = 'tiktok'
                     AND cr.status IN ('no_email','pending_extraction','invalid_email')
                     AND ${recentReelSql('cr.')}
+                    AND (cr.platform = 'tiktok' OR ${youtubeDmTargetSql('cr.', 'tiktok')})
                 )::int AS ig_dm_queue_tiktok_count,
+                COUNT(cr.id) FILTER (
+                  WHERE (cr.email IS NULL OR cr.email = '')
+                    AND cr.ig_dm_sent_at IS NULL
+                    AND cr.status IN ('no_email','pending_extraction','invalid_email')
+                    AND ${recentReelSql('cr.')}
+                    AND ${youtubeDmTargetSql('cr.', 'tiktok')}
+                )::int AS ig_dm_queue_tiktok_via_youtube_count,
                 COUNT(cr.id) FILTER (WHERE cr.ig_dm_sent_at IS NOT NULL)::int AS ig_dm_sent_count,
                 -- email_found_count feeds the "Send outreach" confirmation dialog
                 -- (creators with an email but no outreach yet); not shown as a
@@ -128,9 +137,12 @@ router.get('/', async (_req, res, next) => {
               c.ig_dm_body, c.messaging_brief, c.content_brief, c.reply1_template, c.sourcing_defaults,
               c.deadline_date,
               COALESCE(s.creator_count, 0) AS creator_count,
-              COALESCE(s.ig_dm_queue_count, 0) AS ig_dm_queue_count,
+              -- Total to DM across both buttons (Instagram + TikTok).
+              COALESCE(s.ig_dm_queue_instagram_count, 0) + COALESCE(s.ig_dm_queue_tiktok_count, 0) AS ig_dm_queue_count,
+              COALESCE(s.ig_dm_queue_instagram_count, 0) AS ig_dm_queue_instagram_count,
+              COALESCE(s.ig_dm_queue_instagram_via_youtube_count, 0) AS ig_dm_queue_instagram_via_youtube_count,
               COALESCE(s.ig_dm_queue_tiktok_count, 0) AS ig_dm_queue_tiktok_count,
-              COALESCE(s.ig_dm_queue_youtube_count, 0) AS ig_dm_queue_youtube_count,
+              COALESCE(s.ig_dm_queue_tiktok_via_youtube_count, 0) AS ig_dm_queue_tiktok_via_youtube_count,
               COALESCE(s.ig_dm_sent_count, 0) AS ig_dm_sent_count,
               COALESCE(s.email_found_count, 0) AS email_found_count,
               COALESCE(s.outreach_sent_count, 0) AS outreach_sent_count,
