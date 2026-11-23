@@ -141,6 +141,12 @@
   function statesCount(text) {
     return /(^|[^A-Za-z0-9])\d+\s*(x\s*)?([A-Za-z-]+\s+){0,2}(videos?|reels?|posts?|tiktoks?|shorts|stories|story|deliverables?|uploads?|clips?)\b/i.test(String(text || ''));
   }
+  // A commission-only deal may have open-ended or no deliverables (see
+  // deliverablesModePatch in backend/src/services/contracts.js); every other
+  // contract is 'fixed' — set videos by a deadline.
+  function deliverablesModeOf(d) {
+    return d && (d.deliverablesMode === 'open' || d.deliverablesMode === 'none') ? d.deliverablesMode : 'fixed';
+  }
   // "N short-form videos" when the deliverables text doesn't say how many.
   function deliverableHeadline(d) {
     var text = stripCadenceFromDeliverables(String(d.deliverables || ''));
@@ -345,7 +351,12 @@
     // The facts beneath it. [label, value, sub-line, wide-on-phones]
     var cells = [];
     var views = d.minTotalViews != null ? d.minTotalViews : d.guaranteedViews;
-    if (d.offerType === 'view_based' && views) {
+    var mode = deliverablesModeOf(d);
+    if (mode === 'open') {
+      cells.push(['Deliverable', 'Open-ended', 'No minimum, no deadline']);
+    } else if (mode === 'none') {
+      cells.push(['Deliverable', 'None', 'Nothing to post']);
+    } else if (d.offerType === 'view_based' && views) {
       cells.push(['Deliverable', fmtNum(views) + ' views', 'Guaranteed, across your posts']);
     } else if (d.deliverables) {
       cells.push(['Deliverable', deliverableHeadline(d)]);
@@ -420,6 +431,9 @@
     var deliverablesText = stripCadenceFromDeliverables(String(d.deliverables || ''));
     d.deliverables = deliverablesText;
     var deliverablesHasCount = statesCount(deliverablesText);
+    // Open-ended / no deliverables (commission-only deals): no count, no
+    // deadline, and with none, no content rights. Mirrors contractTerms.js.
+    var mode = deliverablesModeOf(d);
     // View-based deals are priced by a guaranteed TOTAL Instagram view count
     // aggregated across every post the creator publishes on Instagram — the
     // fee doesn't buy a fixed number of videos, it buys that view total. The
@@ -451,7 +465,7 @@
       row('Campaign', d.campaignName) +
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
       row('Deliverables', d.deliverables) +
-      (isViewBased || deliverablesHasCount
+      (isViewBased || deliverablesHasCount || mode !== 'fixed'
         ? ''
         : row('Number of deliverables', fmtNum(d.numberOfDeliverables || d.numberOfVideos))) +
       // Minimum-video floor: only shown for a view-based deal that actually set
@@ -482,7 +496,9 @@
       // row below, so it isn't repeated here.
       (isViewBased && minViews
         ? row('View counting window', countingWindowText)
-        : '')
+        : '') +
+      // Open-ended deal: no minimum and no deadline, said in so many words.
+      (mode === 'open' && d.postingCommitment ? row('Posting commitment', d.postingCommitment) : '')
       // The performance bonus is a payment term — it renders in full (with the
       // base / bonus / total breakdown) in the Compensation & Payment section
       // below, so it's intentionally NOT repeated here.
@@ -492,10 +508,13 @@
     // A single-video deal has one drop date, not a rhythm.
     var deliverableCount = Number(d.numberOfDeliverables != null ? d.numberOfDeliverables : d.numberOfVideos);
     var showCadence = !(Number.isFinite(deliverableCount) && deliverableCount <= 1);
-    html += section('Timeline', rowsWrap(
-      (showCadence ? row('Cadence', d.timeline) : '') +
-      row('Deadline', d.postingDeadline || d.deadline)
-    ));
+    // Open-ended / no deliverables: nothing is due, so there's no timeline.
+    if (mode === 'fixed') {
+      html += section('Timeline', rowsWrap(
+        (showCadence ? row('Cadence', d.timeline) : '') +
+        row('Deadline', d.postingDeadline || d.deadline)
+      ));
+    }
 
     // On a video+bonus deal the stored `compensation` is the GUARANTEED BASE and
     // the performance bonus is paid ON TOP, so the total incl. bonus is base +
@@ -547,7 +566,9 @@
     // "Included / Not included" rather than a long sentence. Derived from
     // paidAdsIncluded (not the stored prose) so it stays correct for every
     // contract, old or new. No separate Scope row.
-    html += section('Usage Rights & Exclusivity', rowsWrap(
+    // No deliverables: no content to grant rights over or keep live.
+    if (mode === 'none') html += section('Exclusivity', rowsWrap(row('Exclusivity', copyFor(d).exclusivity(d.exclusivity))));
+    else html += section('Usage Rights & Exclusivity', rowsWrap(
       row('Usage rights', copyFor(d).usageRights(!!d.paidAdsIncluded)) +
       row('Paid ads', copyFor(d).paidAds(!!d.paidAdsIncluded)) +
       row('Exclusivity', copyFor(d).exclusivity(d.exclusivity)) +
@@ -918,6 +939,23 @@
     page1.hidden = false;
   }
 
+  // "What happens next" after signing. The default steps (a content brief,
+  // then post and get paid) describe set deliverables; an open-ended or
+  // no-deliverables commission deal has no brief and nothing due.
+  function renderNextSteps(d) {
+    var mode = deliverablesModeOf(d);
+    if (mode === 'fixed' || !$('next2-title')) return;
+    var referral = !!(d.commission && d.commission.basis === 'referral');
+    $('next2-title').textContent = referral ? 'Start referring' : 'Start sharing';
+    $('next2-desc').textContent = referral
+      ? 'Referrals count from the moment you sign. Bring brands in whenever it suits you.'
+      : 'Sales credited to you count toward your commission from the moment you sign.';
+    $('next3-title').textContent = 'Earn every month';
+    $('next3-desc').textContent = mode === 'none'
+      ? 'Nothing to post. Share your link however you like and get paid monthly on what you bring in.'
+      : 'Post whenever and however you like. Get paid monthly on what you bring in.';
+  }
+
   // ── Load contract ──────────────────────────────────────────────────────
   function load() {
     if (!token) { $('loading').hidden = true; $('notfound').hidden = false; return; }
@@ -929,6 +967,7 @@
         $('subhead').textContent = d.creatorName ? 'Prepared for ' + d.creatorName : '';
         renderSummary(d);
         renderSections(d, c.combinedTerms);
+        renderNextSteps(d);
 
 
         // Populate the country dropdown.

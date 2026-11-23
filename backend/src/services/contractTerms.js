@@ -179,6 +179,10 @@ function contractSections(data) {
   const hasMinVideos = isViewBased && Number.isFinite(minVideos) && minVideos > 0;
   const deliverablesText = stripCadenceFromDeliverables(String(d.deliverables || ''));
   const deliverablesHasCount = statesCount(deliverablesText);
+  // A commission-only deal may have open-ended or no deliverables
+  // (contracts.deliverablesModePatch): no count, no deadline, and with none, no
+  // content rights either. Its sentences are stored on the contract.
+  const mode = d.deliverablesMode === 'open' || d.deliverablesMode === 'none' ? d.deliverablesMode : 'fixed';
   const guaranteedViewsLabel = isViewBased ? 'Guaranteed total views' : 'Min. guaranteed views';
   const guaranteedViewsValue =
     isViewBased && minViews
@@ -200,7 +204,7 @@ function contractSections(data) {
       { label: 'Campaign', value: d.campaignName },
       { label: 'Platforms', value: platforms.length ? platforms.join(', ') : null },
       { label: 'Deliverables', value: deliverablesText },
-      isViewBased || deliverablesHasCount
+      isViewBased || deliverablesHasCount || mode !== 'fixed'
         ? null
         : {
             label: 'Number of deliverables',
@@ -227,6 +231,9 @@ function contractSections(data) {
       isViewBased && minViews
         ? { label: 'View counting window', value: countingWindowText }
         : null,
+      mode === 'open' && d.postingCommitment
+        ? { label: 'Posting commitment', value: d.postingCommitment }
+        : null,
     ]),
   });
 
@@ -234,13 +241,16 @@ function contractSections(data) {
     d.numberOfDeliverables != null ? d.numberOfDeliverables : d.numberOfVideos,
   );
   const showCadence = !(Number.isFinite(deliverableCount) && deliverableCount <= 1);
-  sections.push({
-    title: 'Timeline',
-    rows: rows([
-      showCadence ? { label: 'Cadence', value: d.timeline } : null,
-      { label: 'Deadline', value: d.postingDeadline || d.deadline },
-    ]),
-  });
+  // Open-ended / no deliverables: nothing is due, so there's no timeline.
+  if (mode === 'fixed') {
+    sections.push({
+      title: 'Timeline',
+      rows: rows([
+        showCadence ? { label: 'Cadence', value: d.timeline } : null,
+        { label: 'Deadline', value: d.postingDeadline || d.deadline },
+      ]),
+    });
+  }
 
   // On a video+bonus deal `compensation` is the guaranteed base and the bonus
   // is paid on top, so the total is base + bonus. Read the base directly rather
@@ -293,15 +303,20 @@ function contractSections(data) {
     ]),
   });
 
-  sections.push({
-    title: 'Usage Rights & Exclusivity',
-    rows: rows([
-      { label: 'Usage rights', value: copy.usageRights(!!d.paidAdsIncluded) },
-      { label: 'Paid ads', value: copy.paidAds(!!d.paidAdsIncluded) },
-      { label: 'Exclusivity', value: copy.exclusivity(d.exclusivity) },
-      { label: 'Posts remain live for', value: `${d.postLiveMonths || 6} months` },
-    ]),
-  });
+  // No deliverables: no content to grant rights over or keep live.
+  sections.push(
+    mode === 'none'
+      ? { title: 'Exclusivity', rows: rows([{ label: 'Exclusivity', value: copy.exclusivity(d.exclusivity) }]) }
+      : {
+          title: 'Usage Rights & Exclusivity',
+          rows: rows([
+            { label: 'Usage rights', value: copy.usageRights(!!d.paidAdsIncluded) },
+            { label: 'Paid ads', value: copy.paidAds(!!d.paidAdsIncluded) },
+            { label: 'Exclusivity', value: copy.exclusivity(d.exclusivity) },
+            { label: 'Posts remain live for', value: `${d.postLiveMonths || 6} months` },
+          ]),
+        },
+  );
 
   const bullets = combinedAdditionalTerms(d).map(sentence);
   if (bullets.length) sections.push({ title: 'Additional Terms', bullets });

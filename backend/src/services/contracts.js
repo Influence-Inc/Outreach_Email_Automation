@@ -1445,7 +1445,11 @@ function callContractOffer(input) {
     flat_fee: t.fee,
     note: 'Agreed with the creator on a call and entered by our team.',
   };
-  if (input.shape === 'view_based') {
+  if (input.deliverablesMode && input.deliverablesMode !== 'fixed') {
+    // Open-ended / no deliverables: no video count to book.
+    offer.deliverables_mode = input.deliverablesMode;
+    if (input.deliverablesNote) offer.deliverables_note = input.deliverablesNote;
+  } else if (input.shape === 'view_based') {
     offer.view_guarantee = input.minTotalViews;
     offer.min_videos = input.minVideos || null;
     offer.view_counting_days = input.viewCountingDays;
@@ -1501,6 +1505,82 @@ function humanDeadline(isoDate) {
   });
 }
 
+// ── What a commission-only deal asks the creator to post ───────────────────
+// Every deal used to name a set number of videos by a deadline. A commission-
+// only deal doesn't have to: the creator is paid on what they bring in, not on
+// what they post, so it may be
+//   'fixed'  set videos by a deadline — every deal before this (and the default:
+//            older contracts carry no deliverablesMode at all)
+//   'open'   open-ended: the creator promotes as and when they choose — no
+//            minimum number of posts, no deadline
+//   'none'   no deliverables: nothing to make or post; they earn on referrals /
+//            sales alone
+// Only a commission-only deal can be open or none: a fee or a product pays FOR
+// set content (and its payment clause is anchored to delivering it).
+const DELIVERABLES_MODES = ['fixed', 'open', 'none'];
+const DELIVERABLES_NOTE_MAX = 300;
+
+function deliverablesModeOf(data) {
+  const m = data && data.deliverablesMode;
+  return m === 'open' || m === 'none' ? m : 'fixed';
+}
+
+// The contract fields a deliverables mode sets. The sentences are stored on the
+// contract (not composed at render time), so the signing page and the PDF read
+// the same words and a signed contract never changes wording. `note` is the
+// team's own description of an open-ended deal ("Referral link in bio, plus
+// stories when it fits"). Switching back to 'fixed' gives one video due three
+// weeks out — the same defaults as a new contract — for the team to adjust.
+function deliverablesModePatch(mode, { referral = false, brandName = null, note = null, platforms = null, now = new Date() } = {}) {
+  const cleared = {
+    numberOfVideos: null,
+    numberOfDeliverables: null,
+    minTotalViews: null,
+    guaranteedViews: null,
+    minVideos: null,
+    timeline: null,
+    postingDeadline: null,
+    deadline: null,
+    postingWindows: [],
+  };
+  const earnsOn = referral ? 'the brands they refer' : 'the sales they drive';
+  if (mode === 'none') {
+    return {
+      ...cleared,
+      deliverablesMode: 'none',
+      deliverables: `None — this agreement asks for no content. The creator earns commission on ${earnsOn} alone.`,
+      postingCommitment: null,
+      platforms: [],
+      ...usageRightsFor('no_rights'),
+    };
+  }
+  if (mode === 'open') {
+    const subject = referral ? dealTerms.platformName() : brandName || 'the brand';
+    const typed = String(note == null ? '' : note).replace(/\s+/g, ' ').trim();
+    return {
+      ...cleared,
+      deliverablesMode: 'open',
+      deliverables: typed || `Open-ended — the creator promotes ${subject} in their own content, in whatever format suits them.`,
+      postingCommitment:
+        'There is no minimum number of posts and no posting deadline — the creator posts as often as they choose.',
+    };
+  }
+  const due = new Date(now.getTime() + 21 * 24 * 3600 * 1000);
+  const dueHuman = humanDeadline(due.toISOString().slice(0, 10));
+  return {
+    deliverablesMode: 'fixed',
+    postingCommitment: null,
+    deliverables: deliverablesFor('video_based', 1),
+    numberOfVideos: 1,
+    numberOfDeliverables: 1,
+    timeline: null,
+    postingDeadline: dueHuman,
+    deadline: dueHuman,
+    postingWindows: suggestPostingWindows(1, due),
+    platforms: Array.isArray(platforms) && platforms.length ? platforms.slice() : ['Instagram', 'TikTok', 'YouTube Shorts'],
+  };
+}
+
 // The full contract data for a call-agreed deal. Pure: `creator` is the row
 // loadCreator returns (with the campaign's brand + usage_rights_policy joined).
 function buildCallContractData(creator, input, { now = new Date() } = {}) {
@@ -1518,12 +1598,14 @@ function buildCallContractData(creator, input, { now = new Date() } = {}) {
     data.guaranteedViews = null;
   }
 
-  const deadlineDate = new Date(`${input.postingDeadline}T12:00:00Z`);
-  data.postingDeadline = humanDeadline(input.postingDeadline);
-  data.deadline = data.postingDeadline;
-  data.postingWindows = input.shape === 'view_based'
-    ? []
-    : suggestPostingWindows(input.numberOfVideos, deadlineDate);
+  if (input.postingDeadline) {
+    const deadlineDate = new Date(`${input.postingDeadline}T12:00:00Z`);
+    data.postingDeadline = humanDeadline(input.postingDeadline);
+    data.deadline = data.postingDeadline;
+    data.postingWindows = input.shape === 'view_based'
+      ? []
+      : suggestPostingWindows(input.numberOfVideos, deadlineDate);
+  }
 
   // Paid-ad rights are whatever was agreed on the call. Keep the policy's own
   // wording when the campaign REQUIRES them, else the "included at no extra
@@ -1541,6 +1623,21 @@ function buildCallContractData(creator, input, { now = new Date() } = {}) {
   Object.assign(data, paymentScheduleFor(upfront, input.upfrontPercent));
   if (terms.model === 'flat' || terms.model === 'hybrid') {
     data.paymentTerms = paymentTermsFor(data.paymentTermsDays, { hasSchedule: upfront });
+  }
+
+  // A commission-only deal with open-ended or no deliverables: no video count,
+  // no deadline (and, with none, no platforms or content rights either).
+  const mode = input.deliverablesMode || 'fixed';
+  if (mode !== 'fixed') {
+    Object.assign(
+      data,
+      deliverablesModePatch(mode, {
+        referral: dealTerms.isReferral(terms),
+        brandName: data.brandName,
+        note: input.deliverablesNote,
+      }),
+    );
+    if (mode === 'open') data.platforms = input.platforms.slice();
   }
 
   data.manualTerms = input.manualTerms.slice();
@@ -1714,6 +1811,8 @@ const EDITABLE_CONTRACT_FIELDS = [
   'exclusivity',
   'upfrontPayment',
   'manualTerms',
+  'deliverablesMode',
+  'deliverablesNote',
 ];
 
 // Deliverables strings the base extraction uses; kept identical here so a
@@ -1834,7 +1933,36 @@ function coerceContractPatch(patch, existing = {}) {
       out.minVideos = null;
     }
   }
-  if (has('numberOfVideos')) {
+  // Deliverables mode — set videos / open-ended / none — on a commission-only
+  // deal (see deliverablesModePatch). Anything else pays for set content, so the
+  // switch is ignored there. Applied before the per-field edits below, which
+  // then skip the fields an open / none deal doesn't have.
+  const commissionOnly = existingData.compensationModel === 'commission';
+  const referral = !!(existingData.commission && existingData.commission.basis === 'referral');
+  if (has('deliverablesMode') && commissionOnly) {
+    const mode = String(patch.deliverablesMode || '').trim().toLowerCase();
+    if (DELIVERABLES_MODES.includes(mode) && mode !== deliverablesModeOf(existingData)) {
+      Object.assign(
+        out,
+        deliverablesModePatch(mode, {
+          referral,
+          brandName: existingData.brandName,
+          note: has('deliverablesNote') ? patch.deliverablesNote : null,
+          platforms: existingData.platforms,
+        }),
+      );
+    }
+  }
+  const effectiveMode = out.deliverablesMode || deliverablesModeOf(existingData);
+  if (has('deliverablesNote') && effectiveMode === 'open' && !('deliverables' in out)) {
+    const note = String(patch.deliverablesNote == null ? '' : patch.deliverablesNote).replace(/\s+/g, ' ').trim();
+    out.deliverables = deliverablesModePatch('open', {
+      referral,
+      brandName: existingData.brandName,
+      note: note.slice(0, DELIVERABLES_NOTE_MAX),
+    }).deliverables;
+  }
+  if (has('numberOfVideos') && effectiveMode === 'fixed') {
     const raw = patch.numberOfVideos;
     const n = raw == null || raw === '' ? null : Math.round(Number(raw));
     const val = Number.isFinite(n) && n >= 0 ? n : null;
@@ -1901,13 +2029,13 @@ function coerceContractPatch(patch, existing = {}) {
     const n = raw == null || raw === '' ? null : Math.round(Number(raw));
     out.bonusThresholdViews = Number.isFinite(n) && n > 0 ? n : null;
   }
-  if (has('platforms')) {
+  if (has('platforms') && effectiveMode !== 'none') {
     const arr = Array.isArray(patch.platforms)
       ? patch.platforms
       : String(patch.platforms || '').split(',');
     out.platforms = arr.map((s) => String(s).trim()).filter(Boolean);
   }
-  if (has('postingDeadline')) {
+  if (has('postingDeadline') && effectiveMode === 'fixed') {
     // A date typed in the Deals column ("2027-01-15", "Jan 15 2027",
     // "15 January 2027") reads on the contract the way a generated one does —
     // "Friday, January 15, 2027". Anything that isn't a full date ("end of
@@ -1917,7 +2045,7 @@ function coerceContractPatch(patch, existing = {}) {
     out.postingDeadline = v;
     out.deadline = v;
   }
-  if (has('paidAdsIncluded')) {
+  if (has('paidAdsIncluded') && effectiveMode !== 'none') {
     // usageRightsFor keeps the "Usage rights" wording and the "Paid ads" chip in
     // lockstep: included -> the free_only "included at no cost" phrasing;
     // excluded -> the no_rights "organic only" phrasing.
@@ -2422,6 +2550,10 @@ module.exports = {
   getByToken,
   callContractOffer,
   buildCallContractData,
+  DELIVERABLES_MODES,
+  DELIVERABLES_NOTE_MAX,
+  deliverablesModeOf,
+  deliverablesModePatch,
   isHandEnteredContract,
   humanDeadline,
   suggestPostingWindows,

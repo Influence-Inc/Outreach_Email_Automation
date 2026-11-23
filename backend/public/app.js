@@ -1188,6 +1188,10 @@ function dealSummaryItems(data) {
   // Offer type first, as a coloured badge. Makes the shape of the accepted
   // deal legible at a glance without having to parse the details below.
   if (data.offerLabel) items.push({ kind: 'badge', text: data.offerLabel });
+  // A commission-only deal with open-ended or no deliverables has no video
+  // count or deadline to list — say which it is instead.
+  if (data.deliverablesMode === 'open') items.push({ label: 'CONTENT', value: 'Open-ended · no deadline' });
+  else if (data.deliverablesMode === 'none') items.push({ label: 'CONTENT', value: 'No deliverables' });
 
   const isViewBased = data.offerType === 'view_based';
   const isVideoBased = data.offerType === 'video_based';
@@ -1559,7 +1563,47 @@ function renderEditableDeal(cell, r, data) {
   typeLine.appendChild(typeVal);
   cell.appendChild(typeLine);
 
-  if (!isViewBased) {
+  // What a commission-only deal asks them to post: set videos by a deadline,
+  // open-ended (no minimum, no deadline) or nothing. Click to cycle; a fee or
+  // product deal always pays for set videos, so it has no such toggle.
+  const contentMode = data.deliverablesMode === 'open' || data.deliverablesMode === 'none' ? data.deliverablesMode : 'fixed';
+  if (data.compensationModel === 'commission') {
+    const MODE_CYCLE = ['fixed', 'open', 'none'];
+    const MODE_LABELS = { fixed: 'Set videos', open: 'Open-ended', none: 'No deliverables' };
+    const nextMode = MODE_CYCLE[(MODE_CYCLE.indexOf(contentMode) + 1) % MODE_CYCLE.length];
+    const modeLine = document.createElement('div');
+    modeLine.className = 'deal-line';
+    const modeTag = document.createElement('span');
+    modeTag.className = 'deal-tag';
+    modeTag.textContent = 'CONTENT';
+    const modeVal = document.createElement('span');
+    modeVal.className = 'deal-val deal-toggle';
+    modeVal.textContent = MODE_LABELS[contentMode];
+    modeVal.classList.toggle('on', contentMode === 'fixed');
+    modeVal.title = `Click to change to ${MODE_LABELS[nextMode].toLowerCase()} (set videos → open-ended → no deliverables)`;
+    modeVal.onclick = async () => {
+      try {
+        await saveContractField(r, { deliverablesMode: nextMode });
+      } catch (err) {
+        toast(err.message);
+      }
+      await refreshCreators();
+      await refreshCampaigns();
+    };
+    modeLine.appendChild(modeTag);
+    modeLine.appendChild(modeVal);
+    cell.appendChild(modeLine);
+    if (contentMode === 'open') {
+      appendEditableDealLine(cell, r, {
+        label: 'WHAT',
+        value: data.deliverables || '',
+        placeholder: 'What they’ll do · blank for the standard line',
+        onSave: (v) => saveContractField(r, { deliverablesNote: v }),
+      });
+    }
+  }
+
+  if (!isViewBased && contentMode === 'fixed') {
     appendEditableDealLine(cell, r, {
       label: 'VIDEOS',
       value: data.numberOfVideos != null ? Number(data.numberOfVideos) : '',
@@ -1587,18 +1631,22 @@ function renderEditableDeal(cell, r, data) {
       onSave: (v) => saveContractField(r, { minVideos: parseVideosInput(v) }),
     });
   }
-  appendEditableDealLine(cell, r, {
-    label: 'PLATFORMS',
-    value: Array.isArray(data.platforms) ? data.platforms.join(', ') : '',
-    placeholder: 'Instagram, TikTok…',
-    onSave: (v) => saveContractField(r, { platforms: v }),
-  });
-  appendEditableDealLine(cell, r, {
-    label: 'DUE',
-    value: (data.postingDeadline || data.deadline || '').replace(/^[A-Za-z]+day,\s*/, ''),
-    placeholder: 'e.g. April 20, 2026',
-    onSave: (v) => saveContractField(r, { postingDeadline: v }),
-  });
+  if (contentMode !== 'none') {
+    appendEditableDealLine(cell, r, {
+      label: 'PLATFORMS',
+      value: Array.isArray(data.platforms) ? data.platforms.join(', ') : '',
+      placeholder: contentMode === 'open' ? 'optional · Instagram, TikTok…' : 'Instagram, TikTok…',
+      onSave: (v) => saveContractField(r, { platforms: v }),
+    });
+  }
+  if (contentMode === 'fixed') {
+    appendEditableDealLine(cell, r, {
+      label: 'DUE',
+      value: (data.postingDeadline || data.deadline || '').replace(/^[A-Za-z]+day,\s*/, ''),
+      placeholder: 'e.g. April 20, 2026',
+      onSave: (v) => saveContractField(r, { postingDeadline: v }),
+    });
+  }
 
   // Paid ads is a boolean, so it's a click-to-toggle chip rather than a text
   // field — this is the control that fixes the reported "usage rights missing".
@@ -1624,7 +1672,8 @@ function renderEditableDeal(cell, r, data) {
   };
   paidLine.appendChild(paidTag);
   paidLine.appendChild(paidVal);
-  cell.appendChild(paidLine);
+  // No deliverables: no content to grant ad rights over.
+  if (contentMode !== 'none') cell.appendChild(paidLine);
 
   appendEditableDealLine(cell, r, {
     label: 'EXCLUSIVITY',
