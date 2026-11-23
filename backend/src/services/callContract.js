@@ -84,9 +84,25 @@ function normalizeCallContractInput(raw, { now = new Date() } = {}) {
   let shape = SHAPES.includes(body.shape) ? body.shape : 'video_based';
   if (terms.model !== 'flat') shape = 'video_based';
 
+  // What they post: set videos by a deadline, or — on a commission-only deal,
+  // where the creator is paid on what they bring in rather than what they post —
+  // open-ended (no minimum, no deadline) or nothing at all.
+  const mode = body.deliverablesMode == null || body.deliverablesMode === '' ? 'fixed' : String(body.deliverablesMode);
+  if (!contracts.DELIVERABLES_MODES.includes(mode)) throw httpError(400, 'Choose what the creator posts.');
+  if (mode !== 'fixed' && terms.model !== 'commission') {
+    throw httpError(
+      400,
+      'Only a commission-only deal can have open-ended or no deliverables — a fee or product pays for set videos.',
+    );
+  }
+  const open = mode === 'open';
+  const fixed = mode === 'fixed';
+
   const out = {
     terms,
     shape,
+    deliverablesMode: mode,
+    deliverablesNote: null,
     numberOfVideos: null,
     minTotalViews: null,
     minVideos: null,
@@ -95,7 +111,17 @@ function normalizeCallContractInput(raw, { now = new Date() } = {}) {
     viewCountingDays: null,
   };
 
-  if (shape === 'view_based') {
+  if (open) {
+    const note = String(body.deliverablesNote == null ? '' : body.deliverablesNote).replace(/\s+/g, ' ').trim();
+    if (note.length > contracts.DELIVERABLES_NOTE_MAX) {
+      throw httpError(400, `Keep what they’ll post under ${contracts.DELIVERABLES_NOTE_MAX} characters.`);
+    }
+    out.deliverablesNote = note || null;
+  }
+
+  if (!fixed) {
+    // No video count or view numbers to read.
+  } else if (shape === 'view_based') {
     out.minTotalViews = wholeNumber(body.minTotalViews, {
       min: 1000, max: 1e9, label: 'the guaranteed total views', required: true,
     });
@@ -105,19 +131,21 @@ function normalizeCallContractInput(raw, { now = new Date() } = {}) {
       min: 1, max: 50, label: 'the number of videos', required: true,
     });
   }
-  if (shape === 'video_bonus') {
+  if (fixed && shape === 'video_bonus') {
     out.bonusAmount = wholeNumber(body.bonusAmount, { min: 1, max: 1e7, label: 'the bonus amount', required: true });
     out.bonusThresholdViews = wholeNumber(body.bonusThresholdViews, {
       min: 1000, max: 1e9, label: 'the views that unlock the bonus', required: true,
     });
   }
-  if (shape !== 'video_based') {
+  if (fixed && shape !== 'video_based') {
     out.viewCountingDays = wholeNumber(body.viewCountingDays, {
       min: 1, max: 365, label: 'the view-counting window (days)',
     }) || 30;
   }
 
-  const platforms = (Array.isArray(body.platforms) ? body.platforms : [])
+  // Platforms: required for set videos, optional for open-ended (where they'll
+  // promote, if agreed), and none at all when there's nothing to post.
+  const platforms = (mode === 'none' || !Array.isArray(body.platforms) ? [] : body.platforms)
     .map((p) => String(p == null ? '' : p).replace(/\s+/g, ' ').trim())
     .filter(Boolean);
   const seen = new Set();
@@ -127,26 +155,31 @@ function normalizeCallContractInput(raw, { now = new Date() } = {}) {
     seen.add(k);
     return true;
   });
-  if (!out.platforms.length) throw httpError(400, 'Pick at least one platform they will post on.');
+  if (fixed && !out.platforms.length) throw httpError(400, 'Pick at least one platform they will post on.');
   if (out.platforms.length > 8 || out.platforms.some((p) => p.length > 40)) {
     throw httpError(400, 'Keep platforms to a short list of names.');
   }
 
-  const deadline = String(body.postingDeadline || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline) || Number.isNaN(new Date(`${deadline}T12:00:00Z`).getTime())) {
-    throw httpError(400, 'Pick the posting deadline.');
+  // A posting deadline only applies to set videos.
+  out.postingDeadline = null;
+  if (fixed) {
+    const deadline = String(body.postingDeadline || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline) || Number.isNaN(new Date(`${deadline}T12:00:00Z`).getTime())) {
+      throw httpError(400, 'Pick the posting deadline.');
+    }
+    // Yesterday is still allowed so a deadline entered late at night in a
+    // timezone behind the server's isn't refused.
+    if (deadline < isoDay(new Date(now.getTime() - DAY_MS))) {
+      throw httpError(400, 'The posting deadline is in the past.');
+    }
+    if (deadline > isoDay(new Date(now.getTime() + 2 * 365 * DAY_MS))) {
+      throw httpError(400, 'The posting deadline is more than two years out — check the date.');
+    }
+    out.postingDeadline = deadline;
   }
-  // Yesterday is still allowed so a deadline entered late at night in a
-  // timezone behind the server's isn't refused.
-  if (deadline < isoDay(new Date(now.getTime() - DAY_MS))) {
-    throw httpError(400, 'The posting deadline is in the past.');
-  }
-  if (deadline > isoDay(new Date(now.getTime() + 2 * 365 * DAY_MS))) {
-    throw httpError(400, 'The posting deadline is more than two years out — check the date.');
-  }
-  out.postingDeadline = deadline;
 
-  out.paidAdsIncluded = body.paidAdsIncluded === true;
+  // No content, so no rights to grant over it.
+  out.paidAdsIncluded = mode !== 'none' && body.paidAdsIncluded === true;
 
   out.upfrontPercent = null;
   if (body.upfrontPayment === true) {
@@ -250,6 +283,8 @@ async function callContractDefaults(creatorId, { now = new Date() } = {}) {
     campaignName: creator.campaign_name || null,
     terms: prefillTerms(creator),
     shape,
+    deliverablesMode: contracts.DELIVERABLES_MODES.includes(offer.deliverables_mode) ? offer.deliverables_mode : 'fixed',
+    deliverablesNote: offer.deliverables_note || '',
     numberOfVideos: Number.isFinite(n) && n > 0 ? Math.round(n) : 1,
     minTotalViews: num(offer.view_guarantee) || null,
     minVideos: num(offer.min_videos) || null,

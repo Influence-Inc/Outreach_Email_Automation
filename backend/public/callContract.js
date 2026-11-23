@@ -18,6 +18,13 @@
     { id: 'view_based', label: 'Guaranteed views' },
     { id: 'video_bonus', label: 'Videos + views bonus' },
   ];
+  // What a commission-only deal asks them to post. Any other pay model pays for
+  // set videos, so these only show when "Commission" is picked.
+  const MODES = [
+    { id: 'fixed', label: 'Set videos' },
+    { id: 'open', label: 'Open-ended' },
+    { id: 'none', label: 'No deliverables' },
+  ];
   const POLICY_HINT = {
     required: 'This campaign requires paid ad rights.',
     free_only: 'This campaign includes them by default.',
@@ -92,8 +99,16 @@
         <div class="cc-shape tp-models" role="radiogroup" aria-label="Deal shape">
           ${SHAPES.map((s) => `<button type="button" class="tp-model" role="radio" data-shape="${s.id}">${s.label}</button>`).join('')}
         </div>
+        <div class="cc-mode tp-models" role="radiogroup" aria-label="What they post" hidden>
+          ${MODES.map((x) => `<button type="button" class="tp-model" role="radio" data-mode="${x.id}">${x.label}</button>`).join('')}
+        </div>
         <div class="cc-well">
-          <div class="tp-row">
+          <div class="tp-row cc-if-open">
+            <label class="tp-field tp-wide"><span class="tp-flabel">What they’ll do <span class="tp-opt">optional · shown as the Deliverables line</span></span>
+              <input type="text" class="tp-input cc-note" maxlength="300" autocomplete="off"></label>
+          </div>
+          <div class="cc-none-note cc-sub cc-if-none"></div>
+          <div class="tp-row cc-if-fixed">
             <label class="tp-field tp-narrow cc-if-videos"><span class="tp-flabel">Videos</span>
               <input type="number" min="1" max="50" class="tp-input cc-videos" inputmode="numeric"></label>
             <label class="tp-field cc-if-views"><span class="tp-flabel">Guaranteed total views</span>
@@ -107,12 +122,12 @@
             <label class="tp-field tp-narrow cc-if-window"><span class="tp-flabel">Views counted for</span>
               <span class="tp-money"><input type="number" min="1" max="365" class="tp-input cc-window" inputmode="numeric"><span class="tp-affix tp-affix-r">days</span></span></label>
           </div>
-          <div class="tp-row">
-            <div class="tp-field tp-wide"><span class="tp-flabel">Platforms</span>
+          <div class="tp-row cc-if-platforms">
+            <div class="tp-field tp-wide"><span class="tp-flabel">Platforms <span class="tp-opt cc-if-open">optional · where they’ll promote</span></span>
               <div class="cc-chips">${platformChips}</div></div>
           </div>
-          <div class="tp-row">
-            <label class="tp-field tp-narrow"><span class="tp-flabel">Posting deadline</span>
+          <div class="tp-row cc-if-platforms">
+            <label class="tp-field tp-narrow cc-if-fixed"><span class="tp-flabel">Posting deadline</span>
               <input type="date" class="tp-input cc-deadline"></label>
             <div class="tp-field cc-shape-note"></div>
           </div>
@@ -122,7 +137,7 @@
       <section class="cc-section">
         <div class="tp-label">Terms</div>
         <div class="cc-well">
-          <label class="cc-toggle"><input type="checkbox" class="cc-ads">
+          <label class="cc-toggle cc-ads-row"><input type="checkbox" class="cc-ads">
             <span><b>Paid ad rights included</b> <span class="cc-sub">${esc(POLICY_HINT[d.usageRightsPolicy] || '')}</span></span></label>
           <label class="cc-toggle cc-upfront-row"><input type="checkbox" class="cc-upfront">
             <span><b>Part of the fee upfront</b> <span class="cc-sub cc-upfront-sub">Paid on the first video draft, the rest on completion.</span></span>
@@ -168,7 +183,7 @@
       videos: q('.cc-videos'), views: q('.cc-views'), minVideos: q('.cc-min-videos'),
       bonus: q('.cc-bonus'), bonusViews: q('.cc-bonus-views'), window: q('.cc-window'),
       deadline: q('.cc-deadline'), ads: q('.cc-ads'), upfront: q('.cc-upfront'), pct: q('.cc-pct'),
-      excl: q('.cc-excl'), extra: q('.cc-extra'), to: q('.cc-to'), notes: q('.cc-notes'),
+      excl: q('.cc-excl'), extra: q('.cc-extra'), to: q('.cc-to'), notes: q('.cc-notes'), note: q('.cc-note'),
       stopRow: q('.cc-stop'), stopBox: q('.cc-stop-box'), status: q('.delegate-status'), submit: q('.cc-submit'),
     };
 
@@ -183,6 +198,8 @@
     // Initial values from the server's defaults (the deal on the table, the
     // campaign's usage-rights policy, three weeks out).
     let shape = d.shape;
+    let mode = d.deliverablesMode || 'fixed';
+    els.note.value = d.deliverablesNote || '';
     els.videos.value = d.numberOfVideos || 1;
     if (d.minTotalViews) els.views.value = d.minTotalViews;
     if (d.minVideos) els.minVideos.value = d.minVideos;
@@ -219,27 +236,59 @@
 
     const method = () => (radios.find((x) => x.checked) || {}).value || 'none';
     const isFlat = () => picker.getModel() === 'flat';
+    // Only a commission-only deal can be open-ended or have no deliverables:
+    // a fee or product pays for set videos.
+    const isCommissionOnly = () => picker.getModel() === 'commission';
+    const isReferral = () => {
+      const t = picker.read().terms;
+      return !!(t && t.commission && t.commission.basis === 'referral');
+    };
+    const effectiveMode = () => (isCommissionOnly() ? mode : 'fixed');
 
     function render() {
       // Guaranteed-views and bonus deals are priced on a cash fee, so any
       // other pay model is a plain per-video deal.
       if (!isFlat()) shape = 'video_based';
+      const md = effectiveMode();
+      // A commission-only deal picks what they post (set videos / open-ended /
+      // none) instead of a deal shape — the other shapes need a cash fee.
+      q('.cc-shape').hidden = isCommissionOnly();
+      q('.cc-mode').hidden = !isCommissionOnly();
       form.querySelectorAll('.cc-shape .tp-model').forEach((b) => {
         const on = b.dataset.shape === shape;
         b.classList.toggle('is-on', on);
         b.setAttribute('aria-checked', on ? 'true' : 'false');
         b.disabled = !isFlat() && b.dataset.shape !== 'video_based';
       });
+      form.querySelectorAll('.cc-mode .tp-model').forEach((b) => {
+        const on = b.dataset.mode === md;
+        b.classList.toggle('is-on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
       const show = (cls, on) => form.querySelectorAll(cls).forEach((el) => { el.hidden = !on; });
-      show('.cc-if-videos', shape !== 'view_based');
-      show('.cc-if-views', shape === 'view_based');
-      show('.cc-if-bonus', shape === 'video_bonus');
-      show('.cc-if-window', shape !== 'video_based');
-      q('.cc-shape-note').textContent = shape === 'video_bonus'
-        ? 'The fee above is the guaranteed base; the bonus is paid on top.'
-        : shape === 'view_based'
-          ? 'They post as many videos as it takes to reach the total.'
-          : '';
+      show('.cc-if-fixed', md === 'fixed');
+      show('.cc-if-open', md === 'open');
+      show('.cc-if-none', md === 'none');
+      show('.cc-if-platforms', md !== 'none');
+      show('.cc-if-videos', md === 'fixed' && shape !== 'view_based');
+      show('.cc-if-views', md === 'fixed' && shape === 'view_based');
+      show('.cc-if-bonus', md === 'fixed' && shape === 'video_bonus');
+      show('.cc-if-window', md === 'fixed' && shape !== 'video_based');
+      els.note.placeholder = isReferral()
+        ? 'e.g. Referral link in bio, plus a mention in stories when it fits'
+        : 'e.g. Link in bio, plus a mention in stories when it fits';
+      q('.cc-none-note').textContent = isReferral()
+        ? 'Nothing to post. They earn on the brands they refer alone — the contract says so, with no deadline and no content rights.'
+        : 'Nothing to post. They earn on the sales they drive alone — the contract says so, with no deadline and no content rights.';
+      q('.cc-shape-note').textContent = md === 'open'
+        ? 'No minimum number of posts and no deadline — the contract says so.'
+        : shape === 'video_bonus'
+          ? 'The fee above is the guaranteed base; the bonus is paid on top.'
+          : shape === 'view_based'
+            ? 'They post as many videos as it takes to reach the total.'
+            : '';
+      // No deliverables: no content, so no ad rights to grant over it.
+      q('.cc-ads-row').hidden = md === 'none';
 
       const model = picker.getModel();
       const hasFee = model === 'flat' || model === 'hybrid';
@@ -254,6 +303,14 @@
       els.submit.textContent = m === 'none' ? 'Create contract' : 'Create & send contract';
     }
 
+    form.querySelectorAll('.cc-mode .tp-model').forEach((b) => {
+      b.addEventListener('click', () => {
+        mode = b.dataset.mode;
+        render();
+        if (mode === 'open' && !els.note.value) els.note.focus();
+        else if (mode === 'fixed' && !els.videos.value) els.videos.focus();
+      });
+    });
     form.querySelectorAll('.cc-shape .tp-model').forEach((b) => {
       b.addEventListener('click', () => {
         if (b.disabled) return;
@@ -277,12 +334,14 @@
     function read() {
       const pay = picker.read();
       if (pay.error) return fail(pay.error, pay.el);
+      const md = effectiveMode();
       const body = {
         terms: pay.terms,
         shape,
-        platforms: [...form.querySelectorAll('.cc-chips input:checked')].map((x) => x.value),
-        postingDeadline: els.deadline.value,
-        paidAdsIncluded: els.ads.checked,
+        deliverablesMode: md,
+        platforms: md === 'none' ? [] : [...form.querySelectorAll('.cc-chips input:checked')].map((x) => x.value),
+        postingDeadline: md === 'fixed' ? els.deadline.value : null,
+        paidAdsIncluded: md !== 'none' && els.ads.checked,
         upfrontPayment: els.upfront.checked,
         upfrontPercent: numOrNull(els.pct.value),
         exclusivity: els.excl.value.trim(),
@@ -291,7 +350,10 @@
         delivery: { method: method(), to: els.to.value.trim() },
         stopOutreach: d.outreachInFlight && els.stopBox.checked,
       };
-      if (shape === 'view_based') {
+      if (md === 'open') body.deliverablesNote = els.note.value.trim();
+      if (md !== 'fixed') {
+        // Open-ended / none: no count, views or deadline to check.
+      } else if (shape === 'view_based') {
         body.minTotalViews = numOrNull(els.views.value);
         body.minVideos = numOrNull(els.minVideos.value);
         if (!body.minTotalViews) return fail('Enter the guaranteed total views.', els.views);
@@ -299,15 +361,15 @@
         body.numberOfVideos = numOrNull(els.videos.value);
         if (!body.numberOfVideos || body.numberOfVideos < 1) return fail('Enter the number of videos.', els.videos);
       }
-      if (shape === 'video_bonus') {
+      if (md === 'fixed' && shape === 'video_bonus') {
         body.bonusAmount = numOrNull(els.bonus.value);
         body.bonusThresholdViews = numOrNull(els.bonusViews.value);
         if (!body.bonusAmount) return fail('Enter the bonus amount.', els.bonus);
         if (!body.bonusThresholdViews) return fail('Enter the views that unlock the bonus.', els.bonusViews);
       }
-      if (shape !== 'video_based') body.viewCountingDays = numOrNull(els.window.value);
-      if (!body.platforms.length) return fail('Pick at least one platform.', form.querySelector('.cc-chips input'));
-      if (!body.postingDeadline) return fail('Pick the posting deadline.', els.deadline);
+      if (md === 'fixed' && shape !== 'video_based') body.viewCountingDays = numOrNull(els.window.value);
+      if (md === 'fixed' && !body.platforms.length) return fail('Pick at least one platform.', form.querySelector('.cc-chips input'));
+      if (md === 'fixed' && !body.postingDeadline) return fail('Pick the posting deadline.', els.deadline);
       if (body.delivery.method === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.delivery.to)) {
         return fail('Enter the email address to send it to.', els.to);
       }
@@ -317,9 +379,13 @@
     // One line naming the deal, for the confirm dialog.
     function dealLine(b) {
       const pay = window.EmailComposer.describeTerms(b.terms);
-      const what = b.shape === 'view_based'
-        ? `${fmtNum(b.minTotalViews)} guaranteed views`
-        : `${b.numberOfVideos} video${b.numberOfVideos === 1 ? '' : 's'}`;
+      const what = b.deliverablesMode === 'open'
+        ? 'open-ended content'
+        : b.deliverablesMode === 'none'
+          ? 'no deliverables'
+          : b.shape === 'view_based'
+            ? `${fmtNum(b.minTotalViews)} guaranteed views`
+            : `${b.numberOfVideos} video${b.numberOfVideos === 1 ? '' : 's'}`;
       const bonus = b.shape === 'video_bonus' ? ` + $${fmtNum(b.bonusAmount)} bonus` : '';
       return `${pay}${bonus} · ${what}`;
     }
