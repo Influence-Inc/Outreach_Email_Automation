@@ -1640,6 +1640,7 @@ async function sendDelegateReply(creatorId, { subject, body, html = null }) {
       [creatorId, {}],
     );
   }
+  await logContractLinkShared(creatorId, `${text}\n${html || ''}`);
 
   // Learn from the human's answer: label the (creator question → admin reply)
   // pair and add it to the example bank, so the next creator with the same
@@ -1672,6 +1673,26 @@ async function sendDelegateReply(creatorId, { subject, body, html = null }) {
     [creatorId, creator.latest_inbound_text],
   );
   return { sent: true };
+}
+
+// A manual reply that carries the creator's unsigned contract link is how the
+// team sends a contract they created without sending ("Don't send — I'll share
+// the link"). Log it as the contract going out so the timeline says so. Never
+// throws: the reply is already sent.
+async function logContractLinkShared(creatorId, sentText) {
+  try {
+    const row = await db.one(
+      `SELECT token FROM contracts WHERE creator_id = $1 AND status = 'pending' LIMIT 1`,
+      [creatorId],
+    );
+    if (!row || !row.token || !String(sentText || '').includes(row.token)) return;
+    await db.query(
+      `INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_sent', $2)`,
+      [creatorId, { url: contracts.contractUrl(row.token), channel: 'email_thread', via: 'manual_reply' }],
+    );
+  } catch (err) {
+    console.error(`[negotiation] contract_sent log failed for creator ${creatorId}:`, err.message);
+  }
 }
 
 // ── "Write your own email" (the fourth option beside the three offers) ────

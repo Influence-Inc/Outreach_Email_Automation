@@ -10,7 +10,7 @@
 //
 // Loaded after app.js and uses its globals: api, ensureInterventionModal,
 // confirmDialog, refreshCreators, refreshCampaigns, closeInterventionModal,
-// escapeHtml, fmtNum.
+// escapeHtml, fmtNum, buildReplyBlock, buildHandoffMessage.
 
 (function () {
   const SHAPES = [
@@ -414,7 +414,7 @@
       try {
         const res = await api(`/api/creators/${r.id}/call-contract`, { method: 'POST', body: JSON.stringify(body) });
         m.bodyEl.innerHTML = '';
-        m.bodyEl.appendChild(buildDone(res));
+        m.bodyEl.appendChild(buildDone(res, r));
         m.bodyEl.scrollTop = 0;
         // Refresh behind the pop-up so the row shows its contract right away.
         Promise.all([refreshCreators(), refreshCampaigns()]).catch(() => {});
@@ -430,7 +430,10 @@
 
   // The result: what happened to the link, plus the link itself — always, so a
   // send that failed (or "I'll share it") leaves the team one click from it.
-  function buildDone(res) {
+  // When the contract didn't go out in their email thread and there is one,
+  // the reply box follows, so the team can answer the creator there — with the
+  // link, or a parked hand-off that's still waiting on us.
+  function buildDone(res, r) {
     const wrap = document.createElement('div');
     wrap.className = 'cc-done';
     const dl = res.delivery || {};
@@ -474,6 +477,44 @@
     };
     wrap.querySelector('.cc-link').addEventListener('focus', (ev) => ev.target.select());
     wrap.querySelector('.cc-close').onclick = () => closeInterventionModal();
+    if (res.canReplyInThread && !(dl.sent && dl.method === 'thread')) {
+      const close = wrap.querySelector('.cc-close');
+      wrap.insertBefore(buildThreadReply(res, r), close.closest('.delegate-reply-foot'));
+      // Send reply is the primary action now; Done just closes without one.
+      close.className = 'ghost cc-close';
+      close.textContent = 'Close without replying';
+    }
     return wrap;
+  }
+
+  function buildThreadReply(res, r) {
+    const dl = res.delivery || {};
+    const section = document.createElement('section');
+    section.className = 'cc-section cc-reply';
+    const head = document.createElement('div');
+    head.className = 'tp-label';
+    head.textContent = 'Reply in their email thread';
+    const sub = document.createElement('div');
+    sub.className = 'cc-sub';
+    sub.textContent = res.handoffOpen
+      ? 'Their last message is still waiting on a reply — answer it here. It stays flagged on the row until you reply or dismiss it.'
+      : 'Optional — send the link in your own words.';
+    section.append(head, sub);
+    if (res.handoffOpen) {
+      const msg = buildHandoffMessage(r);
+      if (msg) section.appendChild(msg);
+    }
+    // Nothing reached them yet: start the reply with the link. If it was
+    // emailed directly, leave the box empty and the link one click away.
+    const link = `<a href="${esc(res.url)}">${esc(res.url)}</a>`;
+    const start = dl.sent ? null : `<p>Here’s the contract for what we agreed — you can review and sign it here:</p><p>${link}</p>`;
+    section.appendChild(
+      buildReplyBlock(r, {
+        dismissible: !!res.handoffOpen,
+        initialHtml: start,
+        insertLink: { url: res.url, label: '+ Signing link' },
+      }),
+    );
+    return section;
   }
 })();
