@@ -38,13 +38,28 @@ const offerRemindersSweepMs = () => Number(process.env.OFFER_REMINDERS_SWEEP_MIN
 // they're waiting on to post — not housekeeping.
 const creatorUpdatesSweepMs = () => Number(process.env.CREATOR_UPDATES_SWEEP_MINUTES || 15) * 60 * 1000;
 
+// How often the reply dispatcher sends paced automated replies that have come
+// due (see replyPacing.js). Kept short — and separate from the 5-minute
+// negotiation poll — so a reply leaves within seconds of its send time and the
+// 5–60 minute window holds.
+const replyDispatchMs = () => Math.max(Number(process.env.REPLY_DISPATCH_SECONDS || 30), 5) * 1000;
+
 let timer = null;
+let replyTimer = null;
 let negRunning = false;
 let lastSegmentSweep = 0;
 let lastGraduationSweep = 0;
 let lastSourcingSweep = 0;
 let lastCreatorUpdatesSweep = 0;
 let lastOfferRemindersSweep = 0;
+
+// Send the paced automated replies whose send time has come.
+async function dispatchReplies() {
+  const r = await negotiation.dispatchDueReplies();
+  if (r && (r.sent || r.cancelled || r.failed)) {
+    console.log(`[reply-pacing] dispatched: sent=${r.sent} dropped=${r.cancelled} failed=${r.failed}`);
+  }
+}
 
 // Outreach and follow-up sending is now handled by Instantly.ai.
 // Reply detection arrives via the /webhook/instantly endpoint (reply_received event).
@@ -64,7 +79,7 @@ async function pollNegotiations() {
     );
     for (const c of fresh) {
       try {
-        await negotiation.processReply(c.id);
+        await negotiation.processReply(c.id, { pace: true });
       } catch (err) {
         console.error(`negotiation first-reply failed for creator ${c.id}:`, err.message);
       }
@@ -82,7 +97,7 @@ async function pollNegotiations() {
     );
     for (const c of ongoing) {
       try {
-        await negotiation.processReply(c.id);
+        await negotiation.processReply(c.id, { pace: true });
       } catch (err) {
         console.error(`negotiation reply poll failed for creator ${c.id}:`, err.message);
       }
@@ -193,7 +208,7 @@ async function pollNegotiations() {
     );
     for (const c of acceptedWithReply) {
       try {
-        await negotiation.handleAcceptedReply(c.id);
+        await negotiation.handleAcceptedReply(c.id, { pace: true });
       } catch (err) {
         console.error(`post-acceptance reply handling failed for creator ${c.id}:`, err.message);
       }
@@ -377,6 +392,7 @@ function start() {
   console.log(
     `Scheduler started: every ${process.env.SCHEDULER_INTERVAL_MINUTES || 5} min (negotiation only — outreach/follow-ups via Instantly.ai); ` +
       `negotiation follow-up idle ${negotiationFollowupDays()}d; ` +
+      `automated replies paced 5–60 min after the creator's message (dispatch every ${replyDispatchMs() / 1000}s); ` +
       `Claude ${claudeConfigured ? `configured (model=${claudeModel})` : 'NOT configured (ANTHROPIC_API_KEY unset — replies will fall back to static templates)'}; ` +
       `reply learning: delegate capture ${/^(0|false|no)$/i.test(String(process.env.LEARN_FROM_DELEGATE || '')) ? 'OFF' : 'on'}, ` +
       `inbox harvest ${harvestHours > 0 ? `every ${harvestHours}h` : 'OFF'}`,
@@ -384,6 +400,11 @@ function start() {
   timer = setInterval(() => {
     tick();
   }, intervalMs());
+  // Paced replies: persisted send times, so anything that fell due while the
+  // server was down goes out on the first dispatch after boot.
+  replyTimer = setInterval(() => {
+    dispatchReplies().catch((err) => console.error('reply dispatch tick failed:', err));
+  }, replyDispatchMs());
   // Run once on boot, but don't block startup. Load the learned example bank
   // first so the first processed reply already benefits from it.
   setTimeout(() => {
@@ -400,6 +421,7 @@ function start() {
 module.exports = {
   start,
   pollNegotiations,
+  dispatchReplies,
   sendUsedInviteFollowups,
   retryContractCopies,
   maybeCreatorUpdates,

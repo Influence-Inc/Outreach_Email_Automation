@@ -25,6 +25,7 @@ const replyExamples = require('./replyExamples');
 const replyLearning = require('./replyLearning');
 const contracts = require('./contracts');
 const thread = require('./thread');
+const replyPacing = require('./replyPacing');
 const offers = require('./offers');
 const { formatFirstName } = require('./nameFormat');
 const { splitQuotedReply, stripQuotedReply } = require('./emailQuote');
@@ -1887,7 +1888,14 @@ async function recordAgreedTerms(creatorId, rawTerms) {
 // equal to last_negotiation_msg_id is a no-op. Handles the first reply and all
 // subsequent ones. Routes to the human Delegate queue when AI replies are off
 // for the creator's template, or when Claude escalates a reply it can't handle.
-async function processReply(creatorId) {
+//
+// `pace: true` (the scheduler's automation loop) holds the creator-facing
+// email: the reply is still decided and drafted now, but parked in
+// scheduled_replies to go out 5–60 min after the creator's message (see
+// replyPacing.js); everything that isn't an automated send — hand-offs, rate
+// bookkeeping, routing to the offer configurator — still happens immediately.
+// Without it (direct callers) a reply is sent inline, as before.
+async function processReply(creatorId, { pace = false } = {}) {
   const creator = await loadCreator(creatorId);
   if (!creator) return { skipped: 'no creator' };
 
@@ -1898,6 +1906,11 @@ async function processReply(creatorId) {
     : null;
 
   if (!inbound || !inbound.text) return { skipped: 'no inbound text' };
+
+  // A reply still waiting for its send time answered an OLDER message — this
+  // one supersedes it, whatever happens to it below (another paced reply that
+  // reads the whole thread, or a hand-off a human answers in full).
+  const previousSendAt = await replyPacing.supersedePending(creator.id);
 
   // Resolve, from THIS inbound: who to greet (the sender may be replying on the
   // creator's behalf) and whether they asked to see references. Computed up
@@ -1979,6 +1992,31 @@ async function processReply(creatorId) {
     ...(composedOnTable ? { approvedOffer: composedOnTable } : {}),
     conversation: await conversationContext(creator),
   });
+  // Apply the decided reply — or, when paced and it sends an email, park it
+  // (with the stage it was decided at) for the reply dispatcher. Returns the
+  // scheduled send time, or null when it was applied right away.
+  const deliver = async (decided) => {
+    const out = pace ? replyEmailFor(ctx, decided) : null;
+    if (!out) {
+      await applyReply(creator, ctx, decided);
+      return null;
+    }
+    const row = await replyPacing.scheduleReply({
+      creatorId: creator.id,
+      source: 'negotiation',
+      kind: out.kind,
+      result: { ...decided, email: out.email },
+      stage: creator.negotiation_status || null,
+      inboundText: inbound.text,
+      inboundAt: creator.latest_inbound_at,
+      previousSendAt,
+    });
+    console.log(
+      `[negotiation] creator ${creator.id}: ${out.kind} reply scheduled for ${new Date(row.send_at).toISOString()}`,
+    );
+    return row.send_at;
+  };
+  const withSchedule = (ret, sendAt) => (sendAt ? { ...ret, scheduled_for: sendAt } : ret);
   const result = await handleCreatorReply(creator, inbound.text, ctx);
   // Visibility: surface Claude's classification + a snippet of its understanding
   // so it's obvious from Railway logs whether the model is doing the work.
@@ -2047,14 +2085,14 @@ async function processReply(creatorId) {
       console.log(
         `[negotiation] creator ${creator.id}: reference request after REPLY 1 (stage ${creator.negotiation_status}) — sharing references directly instead of delegating`,
       );
-      await applyReply(creator, ctx, {
+      const sendAt = await deliver({
         action: 'answer_question',
         email: templates.referencesReply(templateVars(ctx)),
         send_now: true,
         quoted_rate: null,
       });
       await markHandled();
-      return { action: 'answer_question', reason: 'shared_references' };
+      return withSchedule({ action: 'answer_question', reason: 'shared_references' }, sendAt);
     }
     console.log(
       `[negotiation] creator ${creator.id}: asking_details returned at stage ${creator.negotiation_status} — delegating instead of re-sending REPLY 1`,
@@ -2112,9 +2150,9 @@ async function processReply(creatorId) {
     return { action: 'delegated', reason: 'request_counter_rate_with_prior_quote' };
   }
 
-  await applyReply(creator, ctx, result);
+  const sendAt = await deliver(result);
   await markHandled();
-  return { action: result.action };
+  return withSchedule({ action: result.action }, sendAt);
 }
 
 // The creator asked us to name a price / make the first offer. Instead of a
@@ -2577,11 +2615,15 @@ async function acceptQuotedRate(creatorId) {
 //      consumed silently.
 // Crucially we do NOT run applyReply here: post-acceptance we never re-quote,
 // re-send REPLY 1, or regress the negotiation stage — we only answer or delegate.
-async function handleAcceptedReply(creatorId) {
+// `pace` holds an automated answer for the reply dispatcher, as processReply.
+async function handleAcceptedReply(creatorId, { pace = false } = {}) {
   const creator = await loadCreator(creatorId);
   if (!creator) return { skipped: 'no creator' };
   const inbound = creator.latest_inbound_text;
   if (!inbound) return { skipped: 'no inbound text' };
+
+  // A newer message supersedes an answer still waiting to go out.
+  const previousSendAt = await replyPacing.supersedePending(creator.id);
 
   // Consume the inbound exactly once, whichever branch handles it, so a later
   // scheduler tick never re-processes the same message. Mirrors processReply's
@@ -2682,6 +2724,20 @@ async function handleAcceptedReply(creatorId) {
   );
 
   if (result.action === 'answer_question' && result.email && result.send_now !== false) {
+    if (pace) {
+      const row = await replyPacing.scheduleReply({
+        creatorId: creator.id,
+        source: 'accepted',
+        kind: 'reply_qa',
+        result: { action: result.action, email: result.email },
+        stage: creator.negotiation_status || null,
+        inboundText: inbound,
+        inboundAt: creator.latest_inbound_at,
+        previousSendAt,
+      });
+      await markHandled();
+      return { action: 'answer_question', scheduled_for: row.send_at };
+    }
     await sendNegotiationEmail(creator, result.email, 'reply_qa');
     await db.query(`UPDATE creators SET updated_at = NOW() WHERE id = $1`, [creator.id]);
     await markHandled();
@@ -2855,8 +2911,36 @@ async function surfaceReopenedReply(creatorId) {
   return { action: 'reopened' };
 }
 
-async function applyReply(creator, ctx, result) {
+// The creator-facing email applyReply sends for `result` — with its template
+// fallbacks — and the kind it's logged under, or null when applying `result`
+// sends nothing (a rate quote / acceptance only moves the deal). The reply
+// pacer resolves the email up front with this so the dispatcher later sends
+// exactly what was decided.
+function replyEmailFor(ctx, result) {
   const v = templateVars(ctx);
+  const reply1 = () =>
+    templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx), template: ctx.reply1Template });
+  switch (result.action) {
+    case 'shared_rate':
+    case 'counter':
+    case 'accepted':
+      return null;
+    case 'declined':
+      return result.send_now ? { email: result.email || templates.declineDelay(v), kind: 'decline' } : null;
+    case 'request_counter_rate':
+      return result.send_now !== false ? { email: result.email || reply1(), kind: 'request_counter_rate' } : null;
+    case 'answer_question':
+      return result.send_now !== false ? { email: result.email || reply1(), kind: 'reply_qa' } : null;
+    default:
+      // asking_details / other
+      return result.send_now !== false
+        ? { email: result.email || reply1(), kind: result.action === 'other' ? 'reply' : 'reply1' }
+        : null;
+  }
+}
+
+async function applyReply(creator, ctx, result) {
+  const out = replyEmailFor(ctx, result);
   switch (result.action) {
     case 'shared_rate':
     case 'counter': {
@@ -2950,7 +3034,7 @@ async function applyReply(creator, ctx, result) {
       return;
     }
     case 'declined': {
-      if (result.send_now) await sendNegotiationEmail(creator, result.email || templates.declineDelay(v), 'decline');
+      if (out) await sendNegotiationEmail(creator, out.email, out.kind);
       await db.query(
         `UPDATE creators SET negotiation_status = 'DECLINED', updated_at = NOW() WHERE id = $1`,
         [creator.id],
@@ -2966,10 +3050,7 @@ async function applyReply(creator, ctx, result) {
       // "what rate would work for you?" reply, move to AWAITING_RATE so the
       // dashboard shows we're waiting on their counter, and log the request
       // on the rate timeline so the admin sees the negotiation re-opened.
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx), template: ctx.reply1Template });
-      if (result.send_now !== false) {
-        await sendNegotiationEmail(creator, email, 'request_counter_rate');
-      }
+      if (out) await sendNegotiationEmail(creator, out.email, out.kind);
       await db.query(
         `UPDATE creators SET negotiation_status = 'AWAITING_RATE', updated_at = NOW() WHERE id = $1`,
         [creator.id],
@@ -2985,10 +3066,7 @@ async function applyReply(creator, ctx, result) {
       // Claude wrote, and PRESERVE the existing negotiation stage — asking a
       // clarifying question shouldn't regress AWAITING_DECISION back to
       // AWAITING_RATE. Only set AWAITING_RATE if there's no stage yet.
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx), template: ctx.reply1Template });
-      if (result.send_now !== false) {
-        await sendNegotiationEmail(creator, email, 'reply_qa');
-      }
+      if (out) await sendNegotiationEmail(creator, out.email, out.kind);
       if (!creator.negotiation_status) {
         await db.query(
           `UPDATE creators SET negotiation_status = 'AWAITING_RATE', updated_at = NOW() WHERE id = $1`,
@@ -3004,10 +3082,7 @@ async function applyReply(creator, ctx, result) {
     }
     default: {
       // asking_details / other
-      const email = result.email || templates.reply1(v, { includeRefs: ctx.includeRefs, includeUsageRights: includeUsageRightsFor(ctx), template: ctx.reply1Template });
-      if (result.send_now !== false) {
-        await sendNegotiationEmail(creator, email, result.action === 'other' ? 'reply' : 'reply1');
-      }
+      if (out) await sendNegotiationEmail(creator, out.email, out.kind);
       // 'other' keeps the existing stage if there is one; otherwise wait for a rate.
       const nextStatus =
         result.action === 'other' && creator.negotiation_status ? creator.negotiation_status : 'AWAITING_RATE';
@@ -3016,6 +3091,93 @@ async function applyReply(creator, ctx, result) {
         [creator.id, nextStatus],
       );
     }
+  }
+}
+
+// ── Paced reply dispatch ───────────────────────────────────────────────────
+// Sends the automated replies processReply / handleAcceptedReply parked in
+// scheduled_replies once their send time comes (replyPacing.js). The scheduler
+// runs this on its own short interval so a reply leaves within ~30s of send_at.
+
+// Send (or drop) one claimed row. Re-checks the creator first: a reply decided
+// against a state that has since moved on — a newer inbound, our own email in
+// between, a stage change, a hand-off, a stopped creator — is cancelled rather
+// than sent stale. Applying the decided result here (not when it was decided)
+// keeps the stage transition and the email together, so a superseded reply
+// leaves no half-applied state behind.
+async function sendScheduledReply(row) {
+  const creator = await loadCreator(row.creator_id);
+  const stale = replyPacing.staleReason(row, creator);
+  if (stale) {
+    await replyPacing.markCancelled(row.id, stale, stale === 'new_inbound' ? 'superseded' : 'cancelled');
+    console.log(`[reply-pacing] scheduled reply ${row.id} for creator ${row.creator_id} dropped: ${stale}`);
+    return { cancelled: stale };
+  }
+  // The AI kill-switch was flipped while the reply waited: don't send it, and
+  // put the creator's message in front of a person (it was consumed already).
+  if (!(await aiRepliesEnabledForCreator(creator))) {
+    await replyPacing.markCancelled(row.id, 'ai_off');
+    await delegate(
+      creator,
+      { text: row.inbound_text || '' },
+      'AI replies were turned off before the scheduled automated reply went out — reply to the creator yourself.',
+    );
+    return { cancelled: 'ai_off' };
+  }
+  const result = row.result || {};
+  try {
+    if (row.source === 'accepted') {
+      await sendNegotiationEmail(creator, result.email, row.kind || 'reply_qa');
+      await db.query(`UPDATE creators SET updated_at = NOW() WHERE id = $1`, [creator.id]);
+    } else {
+      // The email was resolved when the reply was decided, so the context here
+      // is only what applyReply reads for stage bookkeeping.
+      await applyReply(creator, ctxFor(creator), result);
+    }
+  } catch (err) {
+    const retry = await replyPacing.markFailedAttempt(row, err);
+    console.error(
+      `[reply-pacing] scheduled reply ${row.id} for creator ${row.creator_id} failed (attempt ${row.attempts}): ${err.message}` +
+        (retry ? ' — will retry' : ' — handed to a human'),
+    );
+    if (!retry) {
+      await delegate(
+        creator,
+        { text: row.inbound_text || '' },
+        `The automated reply couldn't be sent (${err.message}) — reply to the creator yourself.`,
+      );
+    }
+    return { failed: true, retry };
+  }
+  await replyPacing.markSent(row.id);
+  console.log(`[reply-pacing] sent scheduled ${row.kind || 'reply'} ${row.id} to creator ${row.creator_id}`);
+  return { sent: true };
+}
+
+let dispatching = false;
+async function dispatchDueReplies() {
+  if (dispatching) return { skipped: 'running' };
+  dispatching = true;
+  const summary = { sent: 0, cancelled: 0, failed: 0 };
+  try {
+    const rows = await replyPacing.claimDue();
+    for (const row of rows) {
+      try {
+        const r = await sendScheduledReply(row);
+        if (r.sent) summary.sent++;
+        else if (r.cancelled) summary.cancelled++;
+        else if (r.failed) summary.failed++;
+      } catch (err) {
+        // Unexpected (e.g. the DB blipped loading the creator): count it as a
+        // failed attempt so the row is retried instead of stuck in 'sending'.
+        summary.failed++;
+        console.error(`[reply-pacing] dispatch of scheduled reply ${row.id} errored: ${err.message}`);
+        await replyPacing.markFailedAttempt(row, err).catch(() => {});
+      }
+    }
+    return summary;
+  } finally {
+    dispatching = false;
   }
 }
 
@@ -3352,6 +3514,9 @@ module.exports = {
   approveContract,
   acceptQuotedRate,
   handleAcceptedReply,
+  dispatchDueReplies,
+  sendScheduledReply,
+  replyEmailFor,
   surfaceApprovalReply,
   surfaceReopenedReply,
   REOPENED_HANDOFF_REASON,

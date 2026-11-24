@@ -492,6 +492,7 @@ router.post('/instantly', async (req, res) => {
            instantly_reply_subject = COALESCE($5, instantly_reply_subject),
            instantly_reply_cc = COALESCE($6, instantly_reply_cc),
            latest_inbound_from_email = $7,
+           latest_inbound_at = NOW(),
            updated_at = NOW()
        WHERE id = $1`,
       [
