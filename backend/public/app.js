@@ -1043,6 +1043,15 @@ function statusPillFor(r) {
   // Once a contract exists the pill continues the SAME status flow into the
   // contract stages (no separate column) — contract sent → signed → completed.
   if (contractStatus) {
+    // Created but never sent ("Don't send — I'll share the link", or a send
+    // that failed): say so, rather than claim it went out.
+    if (contractStatus === 'pending' && r.contract.sent === false) {
+      return {
+        cls: 'outreach_sent',
+        text: 'contract not sent',
+        title: 'The contract was created but its link hasn’t been sent by email. Share the link, or use Reply to send it in their thread.',
+      };
+    }
     const contractPill = {
       pending: { cls: 'accepted', text: 'contract sent' },
       signed: { cls: 'accepted', text: 'contract signed' },
@@ -1950,6 +1959,36 @@ function makeInterveneButton(r, { label = 'Reply hand-off', plain = false } = {}
   return btn;
 }
 
+// The signing link of a contract the creator hasn't signed yet, else null.
+function unsignedContractUrl(r) {
+  const c = r.contract;
+  if (!c || !c.url) return null;
+  return c.status === 'signed' || c.status === 'completed' ? null : c.url;
+}
+
+// There's an email thread to reply in (the creator replied to us by email).
+// The server has the last word (it also needs the sending mailbox); a reply it
+// can't thread comes back as an error in the reply box.
+function canReplyInThread(r) {
+  return !!(r.instantly_reply_uuid && r.email);
+}
+
+// Has the signing link gone out to the creator yet? (contract.sent comes from
+// the server: false only when we know it never did.)
+function contractLinkSent(r) {
+  return !(r.contract && r.contract.sent === false);
+}
+
+function makeContractReplyButton(r) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small cr-contract-reply';
+  btn.textContent = 'Reply ▸';
+  btn.title = 'Reply in their email thread — e.g. to send the contract link';
+  btn.onclick = () => openContractReplyModal(r);
+  return btn;
+}
+
 // Instagram and TikTok creators can be DM'd through the extension; YouTube
 // has no DMs. "IG" / "TikTok" names the platform on pills and buttons.
 // YouTube has no DMs: a YouTube creator is DM'd on the Instagram (preferred)
@@ -2269,6 +2308,7 @@ function renderStatusCell(r, cell) {
   // Duplicates carry the "why" in notes — surface it on hover so the reject is
   // explainable at a glance.
   if (r.status === 'duplicate' && r.notes) pillEl.title = r.notes;
+  else if (pill.title) pillEl.title = pill.title;
   left.appendChild(pillEl);
 
   // Contract action — shown once a contract exists, next to the status pill so
@@ -2517,6 +2557,11 @@ function renderStatusCell(r, cell) {
     cell.appendChild(makeInterveneButton(r, { label: 'Send contract' }));
   } else if (isBriefActionable(r)) {
     cell.appendChild(makeInterveneButton(r, { label: 'Brief hand-off' }));
+  } else if (unsignedContractUrl(r) && canReplyInThread(r)) {
+    // An unsigned contract with nothing flagged — typically one created with
+    // "Don't send — I'll share the link". Lets the team reply in the thread
+    // (with the link, or anything else) without a hand-off to hang it on.
+    cell.appendChild(makeContractReplyButton(r));
   }
 
   const log = Array.isArray(r.rate_log) ? r.rate_log : [];
@@ -2793,13 +2838,48 @@ function openInterventionModal(r) {
   } else {
     const msg = buildHandoffMessage(r);
     if (msg) m.bodyEl.appendChild(msg);
-    m.bodyEl.appendChild(buildReplyBlock(r));
+    const url = unsignedContractUrl(r);
+    m.bodyEl.appendChild(buildReplyBlock(r, url ? { insertLink: { url, label: '+ Signing link' } } : {}));
     // A hand-off mid-negotiation (no contract yet) can be closed out by
     // recording terms agreed in the team's own emails.
     if (!(r.contract && r.contract.status) && !['ACCEPTED', 'DECLINED'].includes(r.negotiation_status)) {
       m.bodyEl.appendChild(buildRecordTermsBlock(r));
     }
   }
+  m.bodyEl.scrollTop = 0;
+  m.show();
+}
+
+// "Reply" on a row with an unsigned contract and nothing flagged: the reply box
+// on its own, with the signing link one click away — and already in the reply
+// when the link hasn't been sent to them yet.
+function openContractReplyModal(r) {
+  const m = ensureInterventionModal();
+  m.bodyEl.innerHTML = '';
+  const handle = r.instagram_username ? `@${r.instagram_username}` : r.full_name || 'Creator';
+  m.kicker.textContent = 'Reply';
+  m.subject.textContent = r.first_name ? `${handle} · ${r.first_name}` : handle;
+  m.subject.hidden = false;
+  m.meta.textContent = r.email || 'no email';
+  m.meta.hidden = false;
+  m.dialog.classList.remove('wide', 'cc-modal');
+
+  const url = unsignedContractUrl(r);
+  const sent = contractLinkSent(r);
+  const note = document.createElement('div');
+  note.className = 'delegate-question';
+  note.textContent = sent
+    ? 'Their contract isn’t signed yet. Reply in their email thread.'
+    : 'Their contract isn’t signed yet, and the link hasn’t been sent to them by email. Reply in their thread to share it.';
+  m.bodyEl.appendChild(note);
+  const link = `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`;
+  m.bodyEl.appendChild(
+    buildReplyBlock(r, {
+      dismissible: false,
+      initialHtml: sent ? null : `<p>Here’s the contract for what we agreed — you can review and sign it here:</p><p>${link}</p>`,
+      insertLink: { url, label: '+ Signing link' },
+    }),
+  );
   m.bodyEl.scrollTop = 0;
   m.show();
 }
@@ -5683,8 +5763,12 @@ function buildHandoffMessage(r) {
 }
 
 // The "Your reply" textarea + Dismiss/Send, used by hand-off cards (standalone,
-// and alongside the offer configurator when a creator is both).
-function buildReplyBlock(r) {
+// and alongside the offer configurator when a creator is both), and after a
+// call contract that didn't go out in the thread (callContract.js).
+//   • dismissible — show Dismiss (only meaningful with a parked hand-off)
+//   • initialHtml — starting text when there's no saved draft
+//   • insertLink  — { url, label }: a button that adds that link to the reply
+function buildReplyBlock(r, { dismissible = true, initialHtml = null, insertLink = null } = {}) {
   const block = document.createElement('div');
   block.className = 'delegate-reply-block';
   block.innerHTML = `
@@ -5696,6 +5780,7 @@ function buildReplyBlock(r) {
     <div class="delegate-reply-editor"></div>
     <div class="delegate-reply-foot">
       <span class="delegate-status hint"></span>
+      <button class="ghost small delegate-insert-link" type="button" hidden></button>
       <button class="ghost small delegate-dismiss" type="button">Dismiss</button>
       <button class="btn-primary delegate-send" type="button">Send reply</button>
     </div>`;
@@ -5715,6 +5800,18 @@ function buildReplyBlock(r) {
   block.querySelector('.delegate-reply-editor').appendChild(composer.el);
   const saved = loadComposeDraft(r, 'reply');
   if (saved && saved.html) composer.setHtml(saved.html);
+  else if (initialHtml) composer.setHtml(initialHtml);
+  dismissBtn.hidden = !dismissible;
+  if (insertLink && insertLink.url) {
+    const linkBtn = block.querySelector('.delegate-insert-link');
+    linkBtn.hidden = false;
+    linkBtn.textContent = insertLink.label || '+ Link';
+    linkBtn.onclick = () => {
+      const a = `<a href="${escapeHtml(insertLink.url)}">${escapeHtml(insertLink.url)}</a>`;
+      composer.setHtml(`${composer.isEmpty() ? '' : composer.getHtml()}<p>${a}</p>`);
+      composer.focus();
+    };
+  }
   let persistTimer = null;
   composer.onChange(() => {
     clearTimeout(persistTimer);

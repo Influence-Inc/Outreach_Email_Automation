@@ -421,14 +421,16 @@ async function createContractFromCall(creatorId, rawInput, { now = new Date() } 
     }
     // Book the deal exactly as recordAgreedTerms + approveContract would, in
     // one step: accepted on these terms, brand go-ahead recorded (creating the
-    // contract is the explicit human "send"), any parked hand-off answered.
+    // contract is the explicit human "send"). A parked hand-off is NOT cleared
+    // here — only a contract that goes out as a reply in their thread answers
+    // it (see clearAnsweredHandoff below). Otherwise the creator's message is
+    // still unanswered and the team needs the reply box to answer it.
     await client.query(
       `UPDATE creators
        SET negotiation_status = 'ACCEPTED', offer_approved = TRUE, contract_approved = TRUE,
            selected_offer_id = $2, custom_offer = $3::jsonb,
            quoted_rate = COALESCE($4, quoted_rate),
            email = COALESCE(email, $5),
-           needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
            updated_at = NOW()
        WHERE id = $1`,
       [creator.id, offer.offer_id, JSON.stringify(offer), terms.model === 'flat' ? terms.fee : null, newEmail],
@@ -458,6 +460,12 @@ async function createContractFromCall(creatorId, rawInput, { now = new Date() } 
   if (input.stopOutreach && outreachInFlight(creator)) outreach = await stopOutreachSequence(creator);
 
   const delivery = await deliverContract(sendTo, url, input.delivery);
+  // The contract email in their thread IS our reply to whatever they last
+  // said there, so it answers a parked hand-off. "Don't send", a direct email
+  // from contracts@ or a failed send leave the thread unanswered: the hand-off
+  // stays open so the team can still reply (e.g. with the link they copied).
+  const answered = delivery.sent && delivery.method === 'thread';
+  if (answered) await clearAnsweredHandoff(creator);
   if (delivery.sent) {
     try {
       await db.query(`INSERT INTO email_events (creator_id, type, detail) VALUES ($1, 'contract_sent', $2)`, [
@@ -469,7 +477,38 @@ async function createContractFromCall(creatorId, rawInput, { now = new Date() } 
     }
   }
 
-  return { url, token, status: contract.status, delivery, outreach };
+  return {
+    url,
+    token,
+    status: contract.status,
+    delivery,
+    outreach,
+    // Whether the creator still has a message waiting on a reply from us.
+    handoffOpen: !!creator.needs_human && !answered,
+    // Whether a manual reply can go out in their thread (the dashboard offers
+    // one right after a contract that didn't go there).
+    canReplyInThread: threadAvailable(sendTo),
+  };
+}
+
+// Clear the hand-off flags and consume the inbound the contract answered,
+// guarded on the exact text we loaded so a reply that arrived meanwhile is left
+// for the scheduler. Never throws: the contract is already out.
+async function clearAnsweredHandoff(creator) {
+  try {
+    await db.query(
+      `UPDATE creators
+       SET needs_human = FALSE, delegate_reason = NULL, delegate_question = NULL,
+           latest_inbound_text = CASE
+             WHEN latest_inbound_text IS NOT DISTINCT FROM $2 THEN NULL
+             ELSE latest_inbound_text END,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [creator.id, creator.latest_inbound_text ?? null],
+    );
+  } catch (err) {
+    console.error(`[call-contract] clearing the hand-off failed for creator ${creator.id}:`, err.message);
+  }
 }
 
 module.exports = {

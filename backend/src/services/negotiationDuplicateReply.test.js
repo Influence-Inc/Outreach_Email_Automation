@@ -157,6 +157,40 @@ test('sendDelegateReply consumes the pending inbound (guarded) so no auto-reply 
   }
 });
 
+test('sendDelegateReply that shares the unsigned contract link logs the contract as sent', async () => {
+  const prevDryRun = process.env.DRY_RUN;
+  process.env.DRY_RUN = '1';
+  const token = 'a'.repeat(32);
+  const run = async (body) => {
+    const writes = [];
+    db.one = async (sql) => {
+      if (/FROM creators c JOIN campaigns/i.test(sql)) return { ...baseCreator, negotiation_status: 'ACCEPTED' };
+      if (/FROM contracts WHERE creator_id/i.test(sql)) return { token };
+      return null;
+    };
+    db.query = async (sql, params) => {
+      writes.push({ sql, params });
+      return { rows: [] };
+    };
+    db.many = async () => [];
+    await negotiation.sendDelegateReply(baseCreator.id, { body });
+    return writes.filter((w) => /INSERT INTO email_events/.test(w.sql) && /'contract_sent'/.test(w.sql));
+  };
+  try {
+    const shared = await run(`Here it is: https://app.example.com/contract/${token}`);
+    assert.strictEqual(shared.length, 1);
+    assert.deepStrictEqual(
+      { channel: shared[0].params[1].channel, via: shared[0].params[1].via },
+      { channel: 'email_thread', via: 'manual_reply' },
+    );
+    assert.ok(shared[0].params[1].url.endsWith(`/contract/${token}`));
+    assert.strictEqual((await run('Just checking in about the call.')).length, 0);
+  } finally {
+    process.env.DRY_RUN = prevDryRun;
+    restore();
+  }
+});
+
 // ── 2. processReply never re-sends REPLY 1 once the negotiation has advanced ─
 
 test('processReply does NOT re-send REPLY 1 when asking_details comes back at AWAITING_DECISION', async () => {

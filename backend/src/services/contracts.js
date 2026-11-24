@@ -2511,12 +2511,26 @@ async function markDashboardSynced(token, ok, detail = {}) {
 // deadline, platforms, usage rights) once a contract exists — `data` is only
 // ever generated after the creator accepts (see sendContractOnAcceptance), so
 // its mere presence is already an "accepted" signal for the dashboard.
+// `sent` is false only when we KNOW the link never went out: the contract's
+// 'contract_created' event has no 'contract_sent' after it ("Don't send — I'll
+// share the link", or a send that failed). Contracts from before those events
+// were logged have neither, and count as sent — as they always have.
+const CONTRACT_SENT_SQL = `NOT EXISTS (
+       SELECT 1 FROM email_events ce
+       WHERE ce.creator_id = k.creator_id AND ce.type = 'contract_created'
+         AND ce.detail->>'token' = k.token
+         AND NOT EXISTS (
+           SELECT 1 FROM email_events se
+           WHERE se.creator_id = ce.creator_id AND se.type = 'contract_sent'
+             AND se.created_at >= ce.created_at))`;
+
 async function attachContracts(rows) {
   const ids = (rows || []).map((r) => r.id).filter((x) => x != null);
   if (!ids.length) return rows;
   const contracts = await db.many(
-    `SELECT DISTINCT ON (creator_id) creator_id, token, status, data, pending_change
-     FROM contracts WHERE creator_id = ANY($1::int[])
+    `SELECT DISTINCT ON (creator_id) creator_id, token, status, data, pending_change,
+            ${CONTRACT_SENT_SQL} AS sent
+     FROM contracts k WHERE creator_id = ANY($1::int[])
      ORDER BY creator_id, ${CONTRACT_STATUS_RANK}, created_at DESC`,
     [ids],
   );
@@ -2524,7 +2538,14 @@ async function attachContracts(rows) {
   for (const r of rows) {
     const c = byCreator.get(r.id);
     r.contract = c
-      ? { token: c.token, status: c.status, url: contractUrl(c.token), data: c.data, pendingChange: c.pending_change || null }
+      ? {
+          token: c.token,
+          status: c.status,
+          url: contractUrl(c.token),
+          data: c.data,
+          pendingChange: c.pending_change || null,
+          sent: c.sent !== false,
+        }
       : null;
   }
   return rows;

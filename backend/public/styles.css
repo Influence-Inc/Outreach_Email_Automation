@@ -914,6 +914,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .ghost.small.cr-intervene-btn:hover { background: #fbe4d9; border-color: #ecc3b1; }
 
+/* "Reply" on an unsigned contract — not a flag, so a plain ghost button. */
+.cr-contract-reply { align-self: flex-start; }
+
 /* Offer-actionable row: "Decide offer" + "Configure here" sit side by side
    under the status pill, wrapping if the column gets narrow. ("Dismiss" lives
    up in .cr-status-top, next to the delete icon.) */

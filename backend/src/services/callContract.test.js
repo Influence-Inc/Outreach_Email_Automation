@@ -326,6 +326,47 @@ test('create: stops the Instantly sequence only when asked and still running', a
   assert.strictEqual(res.outreach, null);
 });
 
+test('create: "Don\u2019t send" leaves a parked hand-off open so the team can still reply', async () => {
+  const parked = { ...creator, instantly_reply_uuid: 'uuid-1', status: 'replied', needs_human: true, delegate_question: 'Can we hop on a call?' };
+  process.env.DRY_RUN = '1';
+  for (const delivery of [{ method: 'none' }, { method: 'email', to: 'maya@example.com' }]) {
+    const log = install({ row: parked });
+    const res = await callContract.createContractFromCall(7, form({ delivery }), { now: NOW });
+    assert.strictEqual(res.handoffOpen, true, delivery.method);
+    assert.strictEqual(res.canReplyInThread, true, delivery.method);
+    const all = [...log.txQueries, ...log.queries];
+    assert.ok(!all.some((q) => /needs_human\s*=\s*FALSE/i.test(q.sql)), `${delivery.method}: hand-off not cleared`);
+  }
+});
+
+test('create: a contract sent in the thread answers the parked hand-off', async () => {
+  process.env.DRY_RUN = '1';
+  const parked = { ...creator, instantly_reply_uuid: 'uuid-1', status: 'replied', needs_human: true, latest_inbound_text: 'Sounds good!' };
+  const log = install({ row: parked });
+  const res = await callContract.createContractFromCall(7, form({ delivery: { method: 'thread' } }), { now: NOW });
+  assert.strictEqual(res.handoffOpen, false);
+  assert.ok(!log.txQueries.some((q) => /needs_human/i.test(q.sql)), 'not cleared before the send');
+  const clear = log.queries.find((q) => /needs_human\s*=\s*FALSE/i.test(q.sql));
+  assert.ok(clear, 'cleared after the send');
+  assert.match(clear.sql, /IS NOT DISTINCT FROM/);
+  assert.strictEqual(clear.params[1], 'Sounds good!');
+});
+
+test('create: a failed thread send leaves the hand-off open', async () => {
+  process.env.DRY_RUN = '1';
+  const log = install({ row: { ...creator, instantly_reply_uuid: 'uuid-1', needs_human: true }, sendThrows: 'Instantly 502' });
+  const res = await callContract.createContractFromCall(7, form({ delivery: { method: 'thread' } }), { now: NOW });
+  assert.strictEqual(res.handoffOpen, true);
+  assert.ok(![...log.txQueries, ...log.queries].some((q) => /needs_human\s*=\s*FALSE/i.test(q.sql)));
+});
+
+test('create: no thread to reply in is reported, so no reply box is offered', async () => {
+  install();
+  const res = await callContract.createContractFromCall(7, form(), { now: NOW });
+  assert.strictEqual(res.canReplyInThread, false);
+  assert.strictEqual(res.handoffOpen, false);
+});
+
 test('create: refuses a creator who already has a contract, or a portal deal', async () => {
   install({ hasContract: true });
   await assert.rejects(callContract.createContractFromCall(7, form(), { now: NOW }), (e) => e.status === 409);
@@ -390,4 +431,27 @@ test('the direct contract email names the call and carries the signing link', ()
   assert.match(r.text, /https:\/\/x\.test\/contract\/abc/);
   assert.match(r.html, /href="https:\/\/x\.test\/contract\/abc"/);
   assert.match(r.html, /Reve &lt;Labs&gt;/); // escaped in HTML
+});
+
+test('attachContracts marks a contract that was never sent, and only that one', async () => {
+  const origMany = db.many;
+  let sql = '';
+  db.many = async (q) => {
+    sql = q;
+    return [
+      { creator_id: 1, token: 't1', status: 'pending', data: {}, sent: false },
+      { creator_id: 2, token: 't2', status: 'pending', data: {}, sent: true },
+    ];
+  };
+  try {
+    const rows = [{ id: 1 }, { id: 2 }, { id: 3 }];
+    await contracts.attachContracts(rows);
+    assert.strictEqual(rows[0].contract.sent, false);
+    assert.strictEqual(rows[1].contract.sent, true);
+    assert.strictEqual(rows[2].contract, null);
+    // Unsent = a contract_created for this token with no contract_sent after it.
+    assert.match(sql, /'contract_created'[\s\S]*detail->>'token' = k\.token[\s\S]*'contract_sent'/);
+  } finally {
+    db.many = origMany;
+  }
 });
