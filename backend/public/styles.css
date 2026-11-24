@@ -918,6 +918,15 @@ button:disabled { opacity: 0.5; cursor: default; }
    under the status pill, wrapping if the column gets narrow. ("Dismiss" lives
    up in .cr-status-top, next to the delete icon.) */
 .cr-offer-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Paced automated reply waiting for its send time (renderScheduledReply). */
+.cr-reply-scheduled {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  padding: 2px 8px; border-radius: 999px; font-size: 12px;
+  color: var(--muted); background: var(--accent-faded);
+}
+.cr-reply-scheduled::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-dot);
+}
 
 /* The pop-up reuses the email-modal shell; its body holds the reply/approval
    blocks below and scrolls as normal flow rather than pre-wrapped email text. */

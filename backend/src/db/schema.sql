@@ -1072,3 +1072,38 @@ UPDATE creators SET platform = 'tiktok'
  WHERE platform = 'instagram' AND instagram_url ~* '^https?://([a-z]+\.)?tiktok\.com/';
 UPDATE creators SET platform = 'youtube'
  WHERE platform = 'instagram' AND instagram_url ~* '^https?://([a-z]+\.)?youtube\.com/';
+
+-- Reply pacing. An automated reply that goes out seconds after the creator's
+-- message reads as a bot, so the scheduler no longer sends it inline: the reply
+-- is decided and drafted right away (hand-offs still reach the team at once),
+-- then parked here with a randomized send_at 5–60 minutes after the creator's
+-- message (services/replyPacing.js). The scheduler's reply dispatcher sends due
+-- rows; a newer inbound, a manual send, a stage change or a hand-off before
+-- send_at supersedes / cancels the row instead of sending a stale reply.
+-- Persisted (not an in-memory timer) so a restart never drops or doubles one.
+-- latest_inbound_at stamps when the newest inbound arrived (replied_at only
+-- records the FIRST reply), which is what the delay is measured from.
+ALTER TABLE creators ADD COLUMN IF NOT EXISTS latest_inbound_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS scheduled_replies (
+  id            SERIAL PRIMARY KEY,
+  creator_id    INTEGER NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  source        TEXT NOT NULL,              -- negotiation | accepted
+  kind          TEXT,                       -- reply1 | reply_qa | decline | … (as logged on send)
+  result        JSONB NOT NULL,             -- the decided reply: action + resolved email
+  stage         TEXT,                       -- negotiation_status when decided
+  inbound_text  TEXT,                       -- the message being answered (for a hand-off if it can't go)
+  inbound_at    TIMESTAMPTZ,
+  send_at       TIMESTAMPTZ NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending | sending | sent | superseded | cancelled | failed
+  cancel_reason TEXT,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  last_error    TEXT,
+  sent_at       TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_replies_due
+  ON scheduled_replies(send_at) WHERE status = 'pending';
+-- At most one reply waiting per creator: scheduling supersedes the previous one.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_scheduled_replies_pending
+  ON scheduled_replies(creator_id) WHERE status = 'pending';

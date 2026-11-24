@@ -2125,6 +2125,33 @@ function portalPillFor(p) {
 // The Offer-portal block shown in the Status column for old creators: a portal
 // status pill + rate + copy-link, and a row of per-channel chips (Email /
 // WhatsApp / iMessage sent+replied, plus whether the offer page was viewed).
+// "AI reply queued · sends 2:41 PM (in 23 min)" — shown while an automated
+// reply waits out its pacing delay (services/replyPacing.js). The send time is
+// fixed server-side; the label is relative to when the list was loaded.
+const SCHEDULED_REPLY_LABELS = {
+  reply1: 'Details reply',
+  reply_qa: 'Answer',
+  request_counter_rate: 'Rate ask',
+  decline: 'Decline note',
+  reply: 'Reply',
+};
+function renderScheduledReply(s) {
+  if (!s || !s.send_at) return null;
+  const at = new Date(s.send_at);
+  if (!Number.isFinite(at.getTime())) return null;
+  const mins = Math.round((at.getTime() - Date.now()) / 60000);
+  const when = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const rel = mins >= 1 ? ` (in ${mins} min)` : ' (sending now)';
+  const el = document.createElement('div');
+  el.className = 'cr-reply-scheduled';
+  const what = SCHEDULED_REPLY_LABELS[s.kind] || 'Reply';
+  el.textContent = `AI ${what.toLowerCase()} queued · sends ${when}${rel}`;
+  el.title =
+    'Automated replies wait 5–60 minutes after the creator\'s message so they read as human. ' +
+    'A new message from the creator, or any reply you send first, replaces it.';
+  return el;
+}
+
 function renderPortalOfferBlock(r) {
   const p = r.portal_offer;
   const box = document.createElement('div');
@@ -2449,6 +2476,11 @@ function renderStatusCell(r, cell) {
   // Offer-portal negotiation status (old creators) — portal + WhatsApp/iMessage
   // updates, shown right under the main status pill.
   if (r.portal_offer) cell.appendChild(renderPortalOfferBlock(r));
+
+  // A paced automated reply is drafted and waiting for its send time (5–60 min
+  // after the creator's message, so it doesn't read as an instant bot reply).
+  const scheduledReply = renderScheduledReply(r.scheduled_reply);
+  if (scheduledReply) cell.appendChild(scheduledReply);
 
   // Guard on r.email as well as the status. If a stale row is still tagged
   // 'email_found' but its address has since been cleared (e.g. the operator

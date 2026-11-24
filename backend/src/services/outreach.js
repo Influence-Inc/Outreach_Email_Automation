@@ -6,6 +6,7 @@ const instantly = require('./instantly');
 const offers = require('./offers');
 const creatorUpdates = require('./creatorUpdates');
 const { offerPortalConfigIssues } = require('./offerPortal/config');
+const replyPacing = require('./replyPacing');
 
 // The name that flows into Instantly's {{firstName}} merge tag for the
 // outreach email. The stored first_name is run through formatFirstName so the
@@ -432,6 +433,9 @@ async function markManualReplySent(creatorId, { messageId = null, subject = null
      WHERE id = $1`,
     [creatorId],
   );
+  // ...and drop any automated reply still waiting for its send time: the human
+  // answered first, so the AI's paced reply would now be a second, stale one.
+  await replyPacing.cancelPending(creatorId, 'manual_reply');
   return true;
 }
 

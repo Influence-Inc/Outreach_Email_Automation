@@ -25,6 +25,7 @@ const { summarizeMessage, summarizeAndStore, deliverableForAmount } = require('.
 const { renderIgDm } = require('../services/templates');
 const { flagDismissedSql, flagFingerprintSql } = require('../db/flagFingerprint');
 const { STALE_REEL_MONTHS, recentReelSql } = require('../db/reelFreshness');
+const replyPacing = require('../services/replyPacing');
 
 // Assemble the off-Instagram email-enrichment context for a creator: the links
 // captured by the extension (creators.bio_links) plus anything a fresh scrape
@@ -742,6 +743,7 @@ router.get('/', async (req, res, next) => {
       timed('briefs', () => briefs.attachBriefs(rows)),
       timed('segment', () => attachSegment(rows)),
       timed('categories', () => attachCategories(rows)),
+      timed('replies', () => replyPacing.attachScheduledReplies(rows)),
     ]);
     res.set('Server-Timing', timings.join(', '));
     res.json(rows);
@@ -890,6 +892,7 @@ router.get('/panel', async (req, res, next) => {
       attachRateLog([row]),
       contracts.attachContracts([row]),
       attachCpmEstimate(row),
+      replyPacing.attachScheduledReplies([row]),
     ]);
     res.json(row);
   } catch (err) { next(err); }
