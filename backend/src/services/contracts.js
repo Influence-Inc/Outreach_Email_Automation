@@ -367,7 +367,7 @@ function termsContractFields(terms) {
           termMonths: c.term_months,
           payoutNetDays: c.payout_net_days,
           summary: dealTerms.commissionSentence(terms),
-          // A referral deal (a share of referred brands' campaign spend) adds
+          // A referral deal (a share of referred brands' total campaign budget) adds
           // its limits and the contract rows it renders verbatim; the code and
           // link are filled in once reserved (referrals.applyReferralCode).
           ...(dealTerms.isReferral(terms)
@@ -386,7 +386,7 @@ function termsContractFields(terms) {
   };
   // Payment-method clause for the cash that actually moves.
   if (terms.model === 'commission' && dealTerms.isReferral(terms)) {
-    fields.paymentTerms = `Referral commission is paid to the creator's bank account every month, within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid.`;
+    fields.paymentTerms = `Referral commission is paid to the creator's bank account every month, within ${c.payout_net_days} days of each month's end, on the total campaign budget the brand has paid.`;
   } else if (terms.model === 'commission') {
     fields.paymentTerms = `Commission is paid to the creator's bank account every month, within ${c.payout_net_days} days of each month's end.`;
   } else if (terms.model === 'product') {

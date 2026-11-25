@@ -507,7 +507,9 @@ function referralContractTexts(c, url, { version = dealTerms.CONTRACT_COPY_VERSI
   return {
     tracking,
     reporting: `Each payout comes with ${platform}'s billing records for every referred brand, so the creator can see exactly how their commission was calculated.`,
-    returns: 'The creator earns on campaign spend before tax. Spend later refunded or cancelled is deducted from the next payout.',
+    returns: Number(version) < 3
+      ? 'The creator earns on campaign spend before tax. Spend later refunded or cancelled is deducted from the next payout.'
+      : 'The creator earns on the total campaign budget before tax. Any budget later refunded or cancelled is deducted from the next payout.',
     rules:
       `Once a brand is credited to the creator, the credit is permanent; each brand is credited to one creator only. A valid referral code entered at sign-up takes precedence; ` +
       `otherwise the most recent qualifying referral-link visit within the referral window does. Brands that were already customers of ${platform} or already referred ` +

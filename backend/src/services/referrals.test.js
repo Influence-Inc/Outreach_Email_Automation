@@ -330,7 +330,7 @@ test('the contract carries the referral clause, link and rules once the code is 
   referrals.applyReferralCode(data, terms, 'MAYA');
   assert.strictEqual(data.commission.referralCode, 'MAYA');
   assert.match(data.commission.referralUrl, /\/r\/MAYA$/);
-  assert.match(data.commission.summary, /The creator earns 10% of the campaign spend of every new brand/);
+  assert.match(data.commission.summary, /The creator earns 10% of the total campaign budget of every new brand/);
   assert.match(data.commission.summary, /referral code MAYA/);
   assert.match(data.commission.summary, /first 2 campaigns/);
   assert.match(data.commission.tracking, /\/r\/MAYA/);
