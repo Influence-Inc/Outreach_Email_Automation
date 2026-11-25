@@ -62,11 +62,35 @@ test('currentWordingPatch: a referral contract keeps its code and whether the co
   const c = patch.commission;
   assert.strictEqual(c.referralCode, 'MAYA');
   assert.strictEqual(c.promoCode, null);
-  assert.match(c.summary, /^The creator earns 8% of the campaign spend of every new brand/);
+  assert.match(c.summary, /^The creator earns 8% of the total campaign budget of every new brand/);
+  assert.match(c.summary, /on the total campaign budget the brand has paid\.$/);
+  assert.doesNotMatch(c.summary, /campaign spend/);
+  assert.match(c.returns, /^The creator earns on the total campaign budget before tax\./);
   assert.doesNotMatch(c.summary, /MAYA/);
   assert.strictEqual(c.tracking, "Brands are credited when they sign up through the creator's referral link.");
   assert.match(c.reporting, /^Each payout comes with/);
   assert.match(c.rules, /^Once a brand is credited to the creator/);
+});
+
+test('referral wording: v2 says "campaign spend"; a v2 contract still unsigned moves to "total campaign budget"', () => {
+  const referrals = require('./referrals');
+  const terms = dealTerms.normalizeTerms({ model: 'commission', commission: { basis: 'referral', rate_pct: 8 } });
+  assert.match(dealTerms.commissionSentence(terms, { version: 2 }), /8% of the campaign spend of every new brand/);
+  assert.match(referrals.referralContractTexts(terms.commission, null, { version: 2 }).returns, /^The creator earns on campaign spend before tax/);
+
+  const v2 = {
+    compensationModel: 'commission',
+    currency: 'USD',
+    copyVersion: 2,
+    commission: {
+      basis: 'referral', ratePct: 8, attribution: 'link', cookieDays: 90, termMonths: 12, payoutNetDays: 30,
+      campaignsPerBrand: 2, campaignWindowMonths: 12, summary: 'v2', returns: 'v2',
+    },
+  };
+  const patch = contracts.currentWordingPatch(v2);
+  assert.strictEqual(patch.copyVersion, V);
+  assert.match(patch.commission.summary, /8% of the total campaign budget of every new brand/);
+  assert.match(patch.paymentTerms, /on the total campaign budget the brand has paid\.$/);
 });
 
 test('currentWordingPatch: flat, product and already-current contracts', () => {

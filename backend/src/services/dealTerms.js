@@ -186,8 +186,10 @@ function attributionPhrase(c) {
 // creator earns, then the conditions, in full (see contractTerms.js and
 // public/contract.js). A contract keeps the wording it was created with, so a
 // signed contract never reads differently from what was signed: data without
-// a copyVersion renders the original (v1) wording.
-const CONTRACT_COPY_VERSION = 2;
+// a copyVersion renders the original (v1) wording. Version 3 calls what a
+// referral commission is a share of the "total campaign budget" (v2 said
+// "campaign spend"); nothing else changes.
+const CONTRACT_COPY_VERSION = 3;
 
 // One plain-English sentence of the commission terms — the contract's
 // Commission row, the Creator-DB sync text, and the AI prompt all use it.
@@ -243,13 +245,15 @@ function referralSentence(t, { version = CONTRACT_COPY_VERSION } = {}) {
   const term = c.term_months
     ? `Every brand that signs up within ${c.term_months} month${s(c.term_months)} of signing counts.`
     : 'Every brand that signs up while this agreement is in force counts.';
+  const budget = Number(version) < 3 ? 'campaign spend' : 'total campaign budget';
+  const paidOn = Number(version) < 3 ? 'campaign spend' : 'the total campaign budget';
   // Leads with what the creator earns; every limit stays, stated in full.
   return (
-    `The creator earns ${pct(c.rate_pct)} of the campaign spend of every new brand that signs up to ${platformName()} through ${referralTrackingPhrase(c)},` +
+    `The creator earns ${pct(c.rate_pct)} of the ${budget} of every new brand that signs up to ${platformName()} through ${referralTrackingPhrase(c)},` +
     ` on that brand's first ${n === 1 ? 'campaign' : `${n} campaigns`} started within ${c.campaign_window_months} month${s(c.campaign_window_months)} of its sign-up.` +
     ` There is no limit on how many brands the creator can refer. ${term}` +
     ` A brand that uses the creator's referral link counts if it signs up within ${c.cookie_days} day${s(c.cookie_days)}.` +
-    ` Paid monthly, within ${c.payout_net_days} days of each month's end, on campaign spend the brand has paid.`
+    ` Paid monthly, within ${c.payout_net_days} days of each month's end, on ${paidOn} the brand has paid.`
   );
 }
 
