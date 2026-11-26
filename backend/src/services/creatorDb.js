@@ -103,6 +103,14 @@ const cleanNested = (o) => {
 
 // Plain-text pay terms for a non-flat deal (Creator-DB has no fields for them).
 function payTermsLines(d) {
+  // The short wording (contract copy v4) spreads the pay terms over several
+  // rows — who counts, the rules, refunds, when it's paid — so sync those rows
+  // exactly as the contract shows them.
+  if (Number(d.copyVersion) >= 4 && d.compensationModel && d.compensationModel !== 'flat') {
+    const { contractSections } = require('./contractTerms');
+    const pay = contractSections(d).find((s) => s.title === 'Compensation & Payment');
+    return pay ? pay.rows.filter((r) => r.label !== 'Currency').map((r) => `${r.label}: ${r.value}`) : [];
+  }
   const lines = [];
   const referral = !!(d.commission && d.commission.basis === 'referral');
   if (d.compensationModel === 'commission' && d.commission) {

@@ -477,6 +477,7 @@ async function reserveCode(q, { code, creatorId, contractId }) {
 // PDF exactly as given, so the two can't drift apart).
 function referralContractTexts(c, url, { version = dealTerms.CONTRACT_COPY_VERSION } = {}) {
   const platform = dealTerms.platformName();
+  if (Number(version) >= 4) return referralContractTextsV4(c, url, platform);
   let tracking;
   if (!c.promo_code) {
     // No code on the contract: no code, no link — just how brands come in.
@@ -515,6 +516,36 @@ function referralContractTexts(c, url, { version = dealTerms.CONTRACT_COPY_VERSI
       `otherwise the most recent qualifying referral-link visit within the referral window does. Brands that were already customers of ${platform} or already referred ` +
       `(including through another account of the same company), and businesses the creator owns or works for, are not eligible. ` +
       `Referrals count from the moment this agreement is signed.`,
+  };
+}
+
+// Version 4, the short form. Three rows, each saying one thing:
+//   tracking  "Who counts": how a brand comes in, and until when
+//   rules     "Referral rules": one creator per brand, precedence, exclusions
+//   returns   "Refunds": what the commission is on, and what comes back off it
+// Reporting is folded into the payment row (dealTerms.commissionPaySentence),
+// so it's cleared here — applyReferralCode merges these over the old rows.
+// The referral window bounds a link only: a code is entered at sign-up.
+function referralContractTextsV4(c, url, platform) {
+  const s = (k) => (k === 1 ? '' : 's');
+  const link = `the creator's referral link${url ? ` (${url})` : ''}`;
+  const code = c.promo_code ? `referral code ${c.promo_code}` : "the creator's referral code";
+  const when = c.term_months
+    ? `in the ${c.term_months} month${s(c.term_months)} after this agreement is signed`
+    : 'while this agreement is in force';
+  const window = `A link sign-up must be within ${c.cookie_days} day${s(c.cookie_days)} of using the link.`;
+  let tracking;
+  if (c.attribution === 'code') tracking = `Brands that enter ${code} at sign-up ${when}.`;
+  else if (c.attribution === 'link_and_code' && c.promo_code) {
+    tracking = `Brands that sign up through ${link} or enter ${code} at sign-up, ${when}. ${window}`;
+  } else tracking = `Brands that sign up through ${link} ${when}. ${window.replace('A link sign-up', 'The sign-up')}`;
+  return {
+    tracking,
+    reporting: null,
+    returns: 'Commission is on budget the brand has paid, before tax. Budget later refunded or cancelled is deducted from the next payout.',
+    rules:
+      'Each brand is credited to one creator, permanently. If more than one creator could claim a brand, a code entered at sign-up beats a link; otherwise the most recent link used wins. ' +
+      `Not eligible: existing ${platform} customers, companies already referred under any account, and businesses the creator owns or works for.`,
   };
 }
 

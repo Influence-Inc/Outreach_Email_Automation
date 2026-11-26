@@ -147,7 +147,7 @@ test('contract data for a hybrid deal: upfront fee + commission, extraction cann
   assert.strictEqual(fields.compensation, 500);
   assert.strictEqual(fields.totalPayment, 500);
   assert.strictEqual(fields.commission.ratePct, 15);
-  assert.match(fields.commission.summary, /^The creator earns 15% of net sales on every order/);
+  assert.match(fields.commission.summary, /^15% of net sales on every order/);
   assert.strictEqual(contracts.termsContractFields(null).compensationModel, 'flat');
 });
 
@@ -155,10 +155,13 @@ test('commission-only contract renders no dollar compensation and its own pay ro
   const d = { currency: 'USD', paymentTermsDays: 7, ...contracts.termsContractFields(commissionTerms) };
   const pay = contractSections(d, {}).find((s) => s.title === 'Compensation & Payment');
   const labels = pay.rows.map((r) => r.label);
-  assert.deepStrictEqual(labels, ['Compensation', 'Commission', 'Tracking', 'Reporting', 'Returns', 'Currency', 'Payment terms']);
-  assert.strictEqual(pay.rows[0].value, 'Uncapped commission');
-  assert.match(pay.rows[2].value, /promo code SAM15/);
-  assert.match(pay.rows[6].value, /every month, within 30 days/);
+  // Tracking folds into the Commission row, reporting into Payment terms.
+  assert.deepStrictEqual(labels, ['Compensation', 'Commission', 'Returns', 'Currency', 'Payment terms']);
+  assert.strictEqual(pay.rows[0].value, '15% sales commission');
+  assert.match(pay.rows[1].value, /promo code SAM15/);
+  assert.match(pay.rows[1].value, /No cap on earnings\.$/);
+  assert.match(pay.rows[2].value, /^Net sales exclude taxes, shipping, refunds and returns\./);
+  assert.match(pay.rows[4].value, /^Paid monthly to the creator's bank account, within 30 days of each month's end, with the brand's sales report\.$/);
   assert.doesNotMatch(JSON.stringify(pay), /\$6,000|\$0/);
 });
 
@@ -174,8 +177,9 @@ test('Creator-DB sync: cash part as compensation, terms as the first additional 
   const d = { currency: 'USD', ...contracts.termsContractFields(commissionTerms), additionalTerms: ['30-day exclusivity'] };
   const payload = creatorDb.buildPayload({ data: d, token: 'tok' }, { email: 'sam@example.com' });
   assert.strictEqual(payload.compensation, 0);
-  assert.match(payload.additionalTerms[0], /^Commission only: The creator earns 15% of net sales/);
-  assert.strictEqual(payload.additionalTerms[1], '30-day exclusivity');
+  // The pay rows exactly as the contract shows them, then the extra terms.
+  assert.deepStrictEqual(payload.additionalTerms.map((t) => t.split(':')[0]), ['Compensation', 'Commission', 'Returns', 'Payment terms', '30-day exclusivity']);
+  assert.match(payload.additionalTerms[1], /^Commission: 15% of net sales/);
 });
 
 test('recordAgreedTerms books terms as ACCEPTED without emailing, and refuses once a contract exists', async () => {
@@ -226,7 +230,7 @@ test('the classifier is told the offer is commission-based and to hand off push-
     );
     await negotiation.handleCreatorReply({ id: 11 }, 'Sounds good!', ctx);
     assert.match(system, /The offer on the table is NOT a flat fee/);
-    assert.match(system, /Commission only \(no upfront fee\): The creator earns 15% of net sales/);
+    assert.match(system, /Commission only \(no upfront fee\): 15% of net sales .* Paid monthly/);
     assert.match(system, /use "escalate"/);
   } finally {
     restore();

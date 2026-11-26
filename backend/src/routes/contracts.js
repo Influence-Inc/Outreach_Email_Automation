@@ -8,6 +8,7 @@ const path = require('path');
 const express = require('express');
 const db = require('../db');
 const contracts = require('../services/contracts');
+const dealTerms = require('../services/dealTerms');
 const creatorDb = require('../services/creatorDb');
 const campaignDashboard = require('../services/campaignDashboard');
 const briefs = require('../services/briefs');
@@ -70,6 +71,8 @@ api.get('/:token', async (req, res, next) => {
       // clause the team pasted by hand. Sent ready-to-render so the signing page
       // and the dashboard sync show exactly the same list.
       combinedTerms: contracts.combinedAdditionalTerms(c.data),
+      // Named in the short-form referral payment row (contract copy v4).
+      platformName: dealTerms.platformName(),
       signedAt: c.signed_at,
       signerName: c.signer_name,
     });

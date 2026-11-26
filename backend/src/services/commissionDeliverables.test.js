@@ -105,8 +105,8 @@ test('normalize: only a commission-only deal can drop set deliverables', () => {
 test('open-ended referral deal: no count, no deadline, said in so many words', () => {
   const d = build();
   assert.strictEqual(d.deliverablesMode, 'open');
-  assert.match(d.deliverables, /^Open-ended — the creator promotes INFLUENCE in their own content/);
-  assert.match(d.postingCommitment, /no minimum number of posts and no posting deadline/);
+  assert.strictEqual(d.deliverables, 'Open-ended — the creator promotes INFLUENCE in their own content, in any format.');
+  assert.strictEqual(d.postingCommitment, 'No minimum number of posts and no deadline.');
   assert.strictEqual(d.numberOfVideos, null);
   assert.strictEqual(d.numberOfDeliverables, null);
   assert.strictEqual(d.postingDeadline, null);
@@ -136,7 +136,7 @@ test('no-deliverables deal: nothing to post, no timeline, no content rights', ()
   assert.strictEqual(d.deliverablesMode, 'none');
   assert.strictEqual(
     d.deliverables,
-    'None — this agreement asks for no content. The creator earns commission on the brands they refer alone.',
+    'None — no content is required.',
   );
   assert.deepStrictEqual(d.platforms, []);
   assert.strictEqual(d.paidAdsIncluded, false);
@@ -150,7 +150,7 @@ test('no-deliverables deal: nothing to post, no timeline, no content rights', ()
   // The pay rows are untouched.
   assert.ok(labels(section(d, 'Compensation & Payment')).includes('Referral commission'));
 
-  assert.match(build({ terms: SALES, deliverablesMode: 'none' }).deliverables, /on the sales they drive alone\.$/);
+  assert.strictEqual(build({ terms: SALES, deliverablesMode: 'none' }).deliverables, 'None — no content is required.');
 });
 
 test('the booked offer carries the mode instead of a video count', () => {

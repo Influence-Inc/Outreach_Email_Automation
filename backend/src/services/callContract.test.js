@@ -134,7 +134,7 @@ test('buildCallContractData: a flat video deal carries exactly the entered terms
   assert.strictEqual(data.compensationModel, 'flat');
   assert.deepStrictEqual(data.additionalTerms, []);
   assert.deepStrictEqual(data.manualTerms, ['One extra round of revisions', 'Raw footage delivered with each video']);
-  assert.match(data.paymentTerms, /completing and posting all agreed deliverables/);
+  assert.match(data.paymentTerms, /of posting all agreed deliverables/);
 });
 
 test('buildCallContractData: paid ads follow the call, in the policy wording', () => {
@@ -179,7 +179,7 @@ test('buildCallContractData: commission and hybrid deals carry their terms; upfr
   assert.strictEqual(comm.compensation, null);
   assert.strictEqual(comm.commission.ratePct, 20);
   assert.strictEqual(comm.commission.promoCode, 'MAYA20');
-  assert.match(comm.paymentTerms, /Commission is paid/);
+  assert.match(comm.paymentTerms, /^Paid monthly to the creator's bank account/);
 
   const hybrid = contracts.buildCallContractData(
     creator,

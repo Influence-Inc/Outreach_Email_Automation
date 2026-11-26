@@ -188,8 +188,10 @@ function attributionPhrase(c) {
 // signed contract never reads differently from what was signed: data without
 // a copyVersion renders the original (v1) wording. Version 3 calls what a
 // referral commission is a share of the "total campaign budget" (v2 said
-// "campaign spend"); nothing else changes.
-const CONTRACT_COPY_VERSION = 3;
+// "campaign spend"); nothing else changes. Version 4 is the short form: every
+// term once, numbers first, the row's label naming what the sentence is about —
+// the same terms, about half the words (contractTerms.js has the rows).
+const CONTRACT_COPY_VERSION = 4;
 
 // One plain-English sentence of the commission terms — the contract's
 // Commission row, the Creator-DB sync text, and the AI prompt all use it.
@@ -242,6 +244,15 @@ function referralSentence(t, { version = CONTRACT_COPY_VERSION } = {}) {
   const c = t.commission;
   const n = c.campaigns_per_brand;
   const s = (k) => (k === 1 ? '' : 's');
+  if (Number(version) >= 4) {
+    // What the creator earns and on what. Who counts, the rules and when it's
+    // paid each have their own row (referrals.referralContractTexts).
+    return (
+      `${pct(c.rate_pct)} of the total campaign budget of each new brand the creator refers to ${platformName()},` +
+      ` on the brand's first ${n === 1 ? 'campaign' : `${n} campaigns`} started within ${c.campaign_window_months} month${s(c.campaign_window_months)} of its sign-up.` +
+      ' No limit on how many brands the creator refers.'
+    );
+  }
   const term = c.term_months
     ? `Every brand that signs up within ${c.term_months} month${s(c.term_months)} of signing counts.`
     : 'Every brand that signs up while this agreement is in force counts.';
@@ -262,6 +273,7 @@ function commissionSentence(t, { version = CONTRACT_COPY_VERSION } = {}) {
   if (isReferral(t)) return referralSentence(t, { version });
   const c = t.commission;
   if (Number(version) < 2) return salesSentenceV1(c);
+  if (Number(version) >= 4) return salesSentenceV4(c);
   const term = c.term_months ? `for ${c.term_months} month${c.term_months === 1 ? '' : 's'} from signing` : 'until either party ends this agreement in writing';
   // Leads with what the creator earns. "No cap" is literal: no deal type
   // carries an earnings cap — if one is ever added, this line must change.
@@ -273,13 +285,42 @@ function commissionSentence(t, { version = CONTRACT_COPY_VERSION } = {}) {
   );
 }
 
+// Version 4: how much, on which orders, for how long. Tracking is folded in
+// (it IS which orders count); net sales and returns, and when it's paid, are
+// their own rows. The click window only bounds a link: an order placed with
+// the code is the code use. "No cap" is literal — see above.
+function salesSentenceV4(c) {
+  const s = (k) => (k === 1 ? '' : 's');
+  const code = c.promo_code ? `promo code ${c.promo_code}` : "the creator's personal promo code";
+  const click = `within ${c.cookie_days} day${s(c.cookie_days)} of a click on the creator's tracked link`;
+  const orders = c.attribution === 'code'
+    ? `placed with ${code}`
+    : c.attribution === 'link_and_code'
+      ? `placed with ${code} or ${click}`
+      : `placed ${click}`;
+  const term = c.term_months
+    ? `for ${c.term_months} month${s(c.term_months)} from signing`
+    : 'until either party ends this agreement in writing';
+  return `${pct(c.rate_pct)} of net sales on every order ${orders}, ${term}. No cap on earnings.`;
+}
+
+// When commission is paid, and the record that comes with it (version 4).
+function commissionPaySentence(c, { referral = false } = {}) {
+  const records = referral
+    ? `${platformName()}'s billing records for each referred brand`
+    : "the brand's sales report";
+  return `Paid monthly to the creator's bank account, within ${c.payout_net_days} days of each month's end, with ${records}.`;
+}
+
 // The whole deal in one line, for prompts and plain-text syncs.
 function termsSummary(t) {
   if (!t) return '';
   switch (t.model) {
     case 'flat': return `A flat fee of ${money(t.fee)}.`;
-    case 'commission': return `${isReferral(t) ? 'Referral commission only' : 'Commission only'} (no upfront fee): ${commissionSentence(t)}`;
-    case 'hybrid': return `An upfront fee of ${money(t.fee)}, plus ${isReferral(t) ? 'a referral commission: ' : ''}${commissionSentence(t)}`;
+    // The contract states when commission is paid in its own row, so the
+    // one-liner adds it back.
+    case 'commission': return `${isReferral(t) ? 'Referral commission only' : 'Commission only'} (no upfront fee): ${commissionSentence(t)} ${commissionPaySentence(t.commission, { referral: isReferral(t) })}`;
+    case 'hybrid': return `An upfront fee of ${money(t.fee)}, plus ${isReferral(t) ? 'a referral commission: ' : 'commission: '}${commissionSentence(t)} ${commissionPaySentence(t.commission, { referral: isReferral(t) })}`;
     case 'product': return `Product only, no cash payment: ${t.product}.`;
     default: return '';
   }
@@ -302,5 +343,6 @@ module.exports = {
   describeTerms,
   CONTRACT_COPY_VERSION,
   commissionSentence,
+  commissionPaySentence,
   termsSummary,
 };

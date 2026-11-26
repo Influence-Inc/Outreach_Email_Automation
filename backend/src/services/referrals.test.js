@@ -330,12 +330,14 @@ test('the contract carries the referral clause, link and rules once the code is 
   referrals.applyReferralCode(data, terms, 'MAYA');
   assert.strictEqual(data.commission.referralCode, 'MAYA');
   assert.match(data.commission.referralUrl, /\/r\/MAYA$/);
-  assert.match(data.commission.summary, /The creator earns 10% of the total campaign budget of every new brand/);
-  assert.match(data.commission.summary, /referral code MAYA/);
+  assert.match(data.commission.summary, /^10% of the total campaign budget of each new brand the creator refers/);
   assert.match(data.commission.summary, /first 2 campaigns/);
-  assert.match(data.commission.tracking, /\/r\/MAYA/);
-  assert.match(data.commission.rules, /credited to one creator only/);
-  assert.match(data.commission.rules, /valid referral code entered at sign-up takes precedence/);
+  // How a brand comes in (the link, the code) is the Who counts row.
+  assert.match(data.commission.tracking, /\/r\/MAYA\) or enter referral code MAYA at sign-up/);
+  assert.match(data.commission.rules, /credited to one creator, permanently/);
+  assert.match(data.commission.rules, /a code entered at sign-up beats a link/);
+  // Reporting rides on the payment row in the short wording.
+  assert.strictEqual(data.commission.reporting, null);
   assert.strictEqual(dealTerms.describeTerms(terms), '$500 + 10% referral commission');
 });
 
@@ -374,22 +376,22 @@ test('a code left blank stays off the contract: no code, no link, just the plain
   referrals.applyReferralCode(data, terms, 'MAYAMAKES', { shown: referrals.isTypedCode(terms, 'MAYAMAKES') });
   const c = data.commission;
   assert.strictEqual(c.codeOnContract, false);
-  assert.strictEqual(c.tracking, "Brands are credited when they sign up through the creator's referral link.");
+  assert.strictEqual(c.tracking, "Brands that sign up through the creator's referral link in the 12 months after this agreement is signed. The sign-up must be within 90 days of using the link.");
   assert.strictEqual(c.promoCode, null);
   // Stored for Deal Studio's "Copy link", but never in the contract's wording.
   assert.strictEqual(c.referralCode, 'MAYAMAKES');
   assert.match(c.referralUrl, /\/r\/MAYAMAKES$/);
-  for (const text of [c.summary, c.tracking, c.rules, c.reporting, c.returns, data.paymentTerms]) {
+  for (const text of [c.summary, c.tracking, c.rules, c.returns, data.paymentTerms]) {
     assert.doesNotMatch(text, /MAYAMAKES|\/r\//);
   }
-  assert.match(c.summary, /through the creator's referral link, on that brand's first 2 campaigns/);
+  assert.match(c.summary, /the creator refers to INFLUENCE, on the brand's first 2 campaigns/);
 });
 
 test('code-only tracking with no code on the contract names the code without a value', () => {
   const terms = dealTerms.normalizeTerms({ model: 'commission', commission: { basis: 'referral', rate_pct: 10, attribution: 'code' } });
   const data = contracts.baseContractData({}, null, { offer_type: 'video_based', num_videos: 1 }, terms);
   referrals.applyReferralCode(data, terms, 'REF9', { shown: false });
-  assert.strictEqual(data.commission.tracking, "Brands are credited when they enter the creator's referral code at sign-up.");
+  assert.strictEqual(data.commission.tracking, "Brands that enter the creator's referral code at sign-up in the 12 months after this agreement is signed.");
   assert.doesNotMatch(data.commission.summary, /REF9/);
 });
 
@@ -400,7 +402,7 @@ test('a typed code is named on the contract; isTypedCode tells them apart', () =
   const data = contracts.baseContractData({}, null, { offer_type: 'video_based', num_videos: 1 }, terms);
   referrals.applyReferralCode(data, terms, 'MAYA', { shown: true });
   assert.strictEqual(data.commission.codeOnContract, true);
-  assert.match(data.commission.tracking, /\/r\/MAYA\) or enter the creator's referral code MAYA/);
+  assert.match(data.commission.tracking, /\/r\/MAYA\) or enter referral code MAYA at sign-up/);
 });
 
 test('termsFromContractData rebuilds the terms a stored contract was written from', () => {
