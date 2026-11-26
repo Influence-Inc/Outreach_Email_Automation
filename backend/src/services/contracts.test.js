@@ -1330,7 +1330,7 @@ test('baseContractData: no upfront split by default (paid in full on completion)
   assert.strictEqual(d.upfrontPercent, null);
   assert.strictEqual(d.remainderPercent, null);
   // The standard "pay on completion" terms line stays.
-  assert.match(d.paymentTerms, /completing and posting all agreed deliverables/i);
+  assert.match(d.paymentTerms, /of posting all agreed deliverables/i);
 });
 
 // ── Payment terms (standard method clause) ─────────────────────────────────
@@ -1342,7 +1342,7 @@ test('baseContractData: no upfront split by default (paid in full on completion)
 test('paymentTermsFor: standard bank-transfer clause with the given net days', () => {
   assert.strictEqual(
     contracts.paymentTermsFor(7),
-    'Payment is sent by direct bank transfer within 7 working days of completing and posting all agreed deliverables.',
+    'Bank transfer within 7 working days of posting all agreed deliverables.',
   );
   assert.match(contracts.paymentTermsFor(14), /within 14 working days/);
   // Junk / missing days -> defaults to 7 so the clause is never broken.
@@ -1356,11 +1356,11 @@ test('paymentTermsFor: with a schedule split, anchors to milestones (not complet
   // phrasing would flatly contradict the split — anchor to milestones instead.
   const withSplit = contracts.paymentTermsFor(7, { hasSchedule: true });
   assert.match(withSplit, /each payment milestone/);
-  assert.doesNotMatch(withSplit, /completing and posting/);
-  // No-split path is unchanged.
+  assert.doesNotMatch(withSplit, /posting all agreed deliverables/);
+  // No-split path anchors to delivery.
   assert.match(
     contracts.paymentTermsFor(7, { hasSchedule: false }),
-    /completing and posting all agreed deliverables/,
+    /of posting all agreed deliverables/,
   );
 });
 

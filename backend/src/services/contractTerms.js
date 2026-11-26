@@ -11,6 +11,7 @@
 // that was signed. contractTerms.test.js pins the phrasing on this side.
 
 const { combinedAdditionalTerms, stripCadenceFromDeliverables } = require('./contracts');
+const dealTerms = require('./dealTerms');
 
 function fmtMoney(n, cur) {
   if (n == null || Number.isNaN(Number(n))) return null;
@@ -104,9 +105,32 @@ const COPY = {
     usageRights: (included) => (included ? "Included — the brand can feature the creator's content in its marketing" : 'Retained by the creator'),
     paidAds: (included) => (included ? "Included — the brand can boost the creator's content with paid ads" : "The creator's content stays organic — it won't run as paid ads"),
   },
+  // Version 4, the short form: each term once, numbers first, and the row's
+  // label names what its sentence is about, so the sentence doesn't repeat it.
+  // Tracking and reporting fold into the commission and payment rows; the
+  // view-counting window folds into the row it bounds. Same terms as v2/v3.
+  4: {
+    short: true,
+    returns: 'Net sales exclude taxes, shipping, refunds and returns. Commission on an order later refunded, returned or charged back is deducted from the next payout.',
+    commissionOnly: (referral, c) => {
+      const rate = c && c.ratePct != null ? `${c.ratePct}% ` : '';
+      return referral ? `${rate}referral commission` : `${rate}sales commission`;
+    },
+    productOnly: 'Gifted product — the creator keeps it',
+    productPayment: 'Shipped to the creator before content production begins.',
+    commissionPay: (days, referral) => dealTerms.commissionPaySentence({ payout_net_days: days }, { referral }),
+    feePay: (days, anchor) => `Bank transfer within ${days} working days of ${anchor}.`,
+    feeAnchor: 'posting all agreed deliverables',
+    exclusivity: (v) => (/^\s*(none|no|n\/a|no exclusivity)\.?\s*$/i.test(String(v || '')) ? 'None — the creator can work with any brand' : v),
+    usageRights: (included) => (included ? 'The brand may use the content in its marketing' : 'Retained by the creator'),
+    paidAds: (included) => (included ? 'The brand may run the content as paid ads' : 'Not allowed — the content stays organic'),
+    postLive: (months) => `${months} months from posting`,
+    countingWindow: (days) => `Each post's views count for ${days} days after it goes live.`,
+  },
 };
 function copyFor(d) {
-  return Number(d && d.copyVersion) >= 2 ? COPY[2] : COPY[1];
+  const v = Number(d && d.copyVersion);
+  return v >= 4 ? COPY[4] : v >= 2 ? COPY[2] : COPY[1];
 }
 
 function trackingText(c, copy) {
@@ -125,15 +149,25 @@ function nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct, co
   if (model === 'product') {
     out.push({ label: 'Compensation', value: copy.productOnly, big: true });
     out.push({ label: 'Product', value: d.productDescription || 'As agreed in writing' });
-    out.push({ label: 'Payment terms', value: sentence(d.paymentTerms || copy.productPayment) });
+    out.push({ label: copy.short ? 'Delivery' : 'Payment terms', value: sentence(d.paymentTerms || copy.productPayment) });
     return out;
   }
   if (model === 'hybrid') {
     out.push({ label: 'Upfront fee', value: fmtMoney(d.compensation, d.currency), big: true });
   } else {
-    out.push({ label: 'Compensation', value: copy.commissionOnly(!!(c && c.basis === 'referral')), big: true });
+    out.push({ label: 'Compensation', value: copy.commissionOnly(!!(c && c.basis === 'referral'), c), big: true });
   }
-  if (c) {
+  if (c && copy.short) {
+    // The short form: what they earn, who counts and the rules (a referral),
+    // what it's on and what comes back off it. Reporting rides on the payment row.
+    const referral = c.basis === 'referral';
+    out.push({ label: referral ? 'Referral commission' : 'Commission', value: sentence(c.summary) });
+    if (referral) {
+      out.push({ label: 'Who counts', value: sentence(c.tracking) });
+      out.push({ label: 'Referral rules', value: sentence(c.rules) });
+    }
+    out.push({ label: referral ? 'Refunds' : 'Returns', value: sentence(referral ? c.returns : copy.returns) });
+  } else if (c) {
     // Mirrors public/contract.js: a referral deal's rows come from the server.
     const referral = c.basis === 'referral';
     out.push({ label: referral ? 'Referral commission' : 'Commission', value: sentence(c.summary) });
@@ -146,9 +180,9 @@ function nonFlatPayRows(d, { fmtMoney, termsText, hasSchedule, upPct, remPct, co
   if (model === 'hybrid') {
     out.push({ label: 'Upfront fee payment', value: sentence(termsText) });
     if (hasSchedule) out.push({ label: 'Payment schedule', value: `${upPct}% upfront, ${remPct}% ${d.remainderTrigger || 'on completion'}` });
-    if (c) out.push({ label: 'Commission payment', value: copy.commissionPay(c.payoutNetDays) });
+    if (c) out.push({ label: 'Commission payment', value: copy.commissionPay(c.payoutNetDays, c.basis === 'referral') });
   } else {
-    out.push({ label: 'Payment terms', value: sentence(d.paymentTerms || (c ? copy.commissionPay(c.payoutNetDays) : '')) });
+    out.push({ label: 'Payment terms', value: sentence(d.paymentTerms || (c ? copy.commissionPay(c.payoutNetDays, c.basis === 'referral') : '')) });
   }
   return out;
 }
@@ -186,7 +220,9 @@ function contractSections(data) {
   const guaranteedViewsLabel = isViewBased ? 'Guaranteed total views' : 'Min. guaranteed views';
   const guaranteedViewsValue =
     isViewBased && minViews
-      ? `${fmtNum(minViews)} — combined across all posts on Instagram`
+      ? copy.short
+        ? `${fmtNum(minViews)}, combined across all the creator's Instagram posts`
+        : `${fmtNum(minViews)} — combined across all posts on Instagram`
       : minViews
         ? fmtNum(minViews)
         : null;
@@ -196,7 +232,9 @@ function contractSections(data) {
       : d.bonusWindowDays != null
         ? Number(d.bonusWindowDays)
         : 30;
-  const countingWindowText = `Views for each post are counted for ${viewDays} days from the day it is posted.`;
+  const countingWindowText = copy.short
+    ? copy.countingWindow(viewDays)
+    : `Views for each post are counted for ${viewDays} days from the day it is posted.`;
 
   sections.push({
     title: 'Campaign & Deliverables',
@@ -222,13 +260,15 @@ function contractSections(data) {
       isViewBased && minViews
         ? {
             label: 'Posting commitment',
-            value:
-              'The creator keeps posting short-form videos on Instagram until the combined views ' +
-              `across all their posts reach at least ${fmtNum(minViews)}. The deliverable is ` +
-              'complete only once that combined total is reached.',
+            // The short form folds the counting window into the commitment it bounds.
+            value: copy.short
+              ? `The creator keeps posting short-form videos on Instagram until combined views reach ${fmtNum(minViews)}. ${countingWindowText}`
+              : 'The creator keeps posting short-form videos on Instagram until the combined views ' +
+                `across all their posts reach at least ${fmtNum(minViews)}. The deliverable is ` +
+                'complete only once that combined total is reached.',
           }
         : null,
-      isViewBased && minViews
+      isViewBased && minViews && !copy.short
         ? { label: 'View counting window', value: countingWindowText }
         : null,
       mode === 'open' && d.postingCommitment
@@ -269,7 +309,7 @@ function contractSections(data) {
   const daysN = Number.isFinite(days) && days > 0 ? days : 7;
   const termsAnchor = hasSchedule
     ? 'each payment milestone'
-    : 'completing and posting all agreed deliverables';
+    : copy.feeAnchor || 'completing and posting all agreed deliverables';
   const termsText = copy.feePay(daysN, termsAnchor);
   const hasBonus = !!(d.bonusAmount && d.bonusThresholdViews);
   const totalIncl = hasBonus && baseComp != null ? baseComp + Number(d.bonusAmount) : baseComp;
@@ -287,7 +327,7 @@ function contractSections(data) {
         ? {
             label: 'Performance bonus',
             value:
-              `${fmtMoney(d.bonusAmount, d.currency)} if total views reach ` +
+              `${fmtMoney(d.bonusAmount, d.currency)} ${copy.short ? 'more ' : ''}if total views reach ` +
               `${fmtNum(d.bonusThresholdViews)}. ${countingWindowText}`,
           }
         : null,
@@ -313,7 +353,10 @@ function contractSections(data) {
             { label: 'Usage rights', value: copy.usageRights(!!d.paidAdsIncluded) },
             { label: 'Paid ads', value: copy.paidAds(!!d.paidAdsIncluded) },
             { label: 'Exclusivity', value: copy.exclusivity(d.exclusivity) },
-            { label: 'Posts remain live for', value: `${d.postLiveMonths || 6} months` },
+            {
+              label: 'Posts remain live for',
+              value: copy.postLive ? copy.postLive(d.postLiveMonths || 6) : `${d.postLiveMonths || 6} months`,
+            },
           ]),
         },
   );

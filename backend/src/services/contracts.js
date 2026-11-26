@@ -280,8 +280,8 @@ function paymentTermsFor(days, opts) {
   const hasSchedule = !!(opts && opts.hasSchedule);
   const anchor = hasSchedule
     ? 'each payment milestone'
-    : 'completing and posting all agreed deliverables';
-  return `Payment is sent by direct bank transfer within ${d} working days of ${anchor}.`;
+    : 'posting all agreed deliverables';
+  return `Bank transfer within ${d} working days of ${anchor}.`;
 }
 
 // Payment schedule fields for the contract. The upfront/remainder split is
@@ -385,17 +385,43 @@ function termsContractFields(terms) {
     productDescription: terms.product || null,
   };
   // Payment-method clause for the cash that actually moves.
-  if (terms.model === 'commission' && dealTerms.isReferral(terms)) {
-    fields.paymentTerms = `Referral commission is paid to the creator's bank account every month, within ${c.payout_net_days} days of each month's end, on the total campaign budget the brand has paid.`;
-  } else if (terms.model === 'commission') {
-    fields.paymentTerms = `Commission is paid to the creator's bank account every month, within ${c.payout_net_days} days of each month's end.`;
+  if (terms.model === 'commission') {
+    fields.paymentTerms = dealTerms.commissionPaySentence(c, { referral: dealTerms.isReferral(terms) });
   } else if (terms.model === 'product') {
     fields.paymentTerms = PRODUCT_PAYMENT_TERMS;
   }
   return fields;
 }
 
-const PRODUCT_PAYMENT_TERMS = 'The product ships to the creator before content production begins.';
+const PRODUCT_PAYMENT_TERMS = 'Shipped to the creator before content production begins.';
+
+// The defaults deliverablesModePatch wrote before the short wording (v4), so a
+// contract still unsigned that carries one word-for-word moves to the new one.
+// Anything the team typed instead is left exactly as it is.
+const OLD_MODE_TEXTS = {
+  noneDeliverables: /^None — this agreement asks for no content\. The creator earns commission on (the brands they refer|the sales they drive) alone\.$/,
+  openDeliverables: /^Open-ended — the creator promotes (.+) in their own content, in whatever format suits them\.$/,
+  openCommitment: 'There is no minimum number of posts and no posting deadline — the creator posts as often as they choose.',
+};
+const MODE_TEXTS = {
+  noneDeliverables: 'None — no content is required.',
+  openDeliverables: (subject) => `Open-ended — the creator promotes ${subject} in their own content, in any format.`,
+  openCommitment: 'No minimum number of posts and no deadline.',
+};
+
+function modeTextsPatch(d) {
+  const out = {};
+  const del = String(d.deliverables || '');
+  if (d.deliverablesMode === 'none' && OLD_MODE_TEXTS.noneDeliverables.test(del)) {
+    out.deliverables = MODE_TEXTS.noneDeliverables;
+  }
+  if (d.deliverablesMode === 'open') {
+    const m = del.match(OLD_MODE_TEXTS.openDeliverables);
+    if (m) out.deliverables = MODE_TEXTS.openDeliverables(m[1]);
+    if (d.postingCommitment === OLD_MODE_TEXTS.openCommitment) out.postingCommitment = MODE_TEXTS.openCommitment;
+  }
+  return out;
+}
 
 // The stored wording of a contract, brought up to the current contract copy
 // (dealTerms.CONTRACT_COPY_VERSION) without changing a single term: the money,
@@ -452,6 +478,7 @@ function currentWordingPatch(data) {
       const hasSchedule = Number(d.upfrontPercent) > 0 && Number(d.remainderPercent) > 0;
       patch.paymentTerms = paymentTermsFor(d.paymentTermsDays, { hasSchedule });
     }
+    Object.assign(patch, modeTextsPatch(d));
   } catch {
     return null;
   }
@@ -1543,12 +1570,11 @@ function deliverablesModePatch(mode, { referral = false, brandName = null, note 
     deadline: null,
     postingWindows: [],
   };
-  const earnsOn = referral ? 'the brands they refer' : 'the sales they drive';
   if (mode === 'none') {
     return {
       ...cleared,
       deliverablesMode: 'none',
-      deliverables: `None — this agreement asks for no content. The creator earns commission on ${earnsOn} alone.`,
+      deliverables: MODE_TEXTS.noneDeliverables,
       postingCommitment: null,
       platforms: [],
       ...usageRightsFor('no_rights'),
@@ -1560,9 +1586,8 @@ function deliverablesModePatch(mode, { referral = false, brandName = null, note 
     return {
       ...cleared,
       deliverablesMode: 'open',
-      deliverables: typed || `Open-ended — the creator promotes ${subject} in their own content, in whatever format suits them.`,
-      postingCommitment:
-        'There is no minimum number of posts and no posting deadline — the creator posts as often as they choose.',
+      deliverables: typed || MODE_TEXTS.openDeliverables(subject),
+      postingCommitment: MODE_TEXTS.openCommitment,
     };
   }
   const due = new Date(now.getTime() + 21 * 24 * 3600 * 1000);

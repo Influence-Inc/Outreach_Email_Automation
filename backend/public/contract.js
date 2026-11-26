@@ -252,9 +252,42 @@
       paidAds: function (included) {
         return included ? "Included — the brand can boost the creator's content with paid ads" : "The creator's content stays organic — it won't run as paid ads";
       }
+    },
+    // Version 4, the short form: each term once, numbers first, and the row's
+    // label names what its sentence is about. Tracking and reporting fold into
+    // the commission and payment rows; the view-counting window folds into the
+    // row it bounds. Same terms as v2/v3. Mirrors COPY[4] in contractTerms.js.
+    4: {
+      short: true,
+      returns: 'Net sales exclude taxes, shipping, refunds and returns. Commission on an order later refunded, returned or charged back is deducted from the next payout.',
+      commissionOnly: function (referral, c) {
+        var rate = c && c.ratePct != null ? c.ratePct + '% ' : '';
+        return referral ? rate + 'referral commission' : rate + 'sales commission';
+      },
+      productOnly: 'Gifted product — the creator keeps it',
+      productPayment: 'Shipped to the creator before content production begins.',
+      // Mirrors dealTerms.commissionPaySentence.
+      commissionPay: function (days, referral) {
+        var records = referral ? platformName + "'s billing records for each referred brand" : "the brand's sales report";
+        return "Paid monthly to the creator's bank account, within " + days + " days of each month's end, with " + records + '.';
+      },
+      feePay: function (days, anchor) { return 'Bank transfer within ' + days + ' working days of ' + anchor + '.'; },
+      feeAnchor: 'posting all agreed deliverables',
+      exclusivity: function (v) {
+        return /^\s*(none|no|n\/a|no exclusivity)\.?\s*$/i.test(String(v || '')) ? 'None — the creator can work with any brand' : v;
+      },
+      usageRights: function (included) { return included ? 'The brand may use the content in its marketing' : 'Retained by the creator'; },
+      paidAds: function (included) { return included ? 'The brand may run the content as paid ads' : 'Not allowed — the content stays organic'; },
+      postLive: function (months) { return months + ' months from posting'; },
+      countingWindow: function (days) { return "Each post's views count for " + days + ' days after it goes live.'; }
     }
   };
-  function copyFor(d) { return Number(d && d.copyVersion) >= 2 ? COPY[2] : COPY[1]; }
+  // Named in the short-form referral payment row; sent with the contract.
+  var platformName = 'INFLUENCE';
+  function copyFor(d) {
+    var v = Number(d && d.copyVersion);
+    return v >= 4 ? COPY[4] : v >= 2 ? COPY[2] : COPY[1];
+  }
 
   function trackingText(c, copy) {
     var code = c.promoCode ? 'promo code ' + c.promoCode : 'personal promo code (provided by us)';
@@ -271,12 +304,19 @@
     if (model === 'product') {
       return row('Compensation', copy.productOnly, { big: true }) +
         row('Product', d.productDescription || 'As agreed in writing') +
-        row('Payment terms', sentence(d.paymentTerms || copy.productPayment));
+        row(copy.short ? 'Delivery' : 'Payment terms', sentence(d.paymentTerms || copy.productPayment));
     }
     html += model === 'hybrid'
       ? row('Upfront fee', fmtMoney(d.compensation, d.currency), { big: true })
-      : row('Compensation', copy.commissionOnly(!!(c && c.basis === 'referral')), { big: true });
-    if (c) {
+      : row('Compensation', copy.commissionOnly(!!(c && c.basis === 'referral'), c), { big: true });
+    if (c && copy.short) {
+      // The short form: what they earn, who counts and the rules (a referral),
+      // what it's on and what comes back off it. Reporting rides on the payment row.
+      var ref = c.basis === 'referral';
+      html += row(ref ? 'Referral commission' : 'Commission', sentence(c.summary)) +
+        (ref ? row('Who counts', sentence(c.tracking)) + row('Referral rules', sentence(c.rules)) : '') +
+        row(ref ? 'Refunds' : 'Returns', sentence(ref ? c.returns : copy.returns));
+    } else if (c) {
       // A referral deal ships its own rows (tracking, reporting, refunds and
       // the referral rules) from the server; a sales commission uses these.
       html += row(c.basis === 'referral' ? 'Referral commission' : 'Commission', sentence(c.summary)) +
@@ -286,7 +326,7 @@
       if (c.rules) html += row('Referral rules', sentence(c.rules));
     }
     html += row('Currency', d.currency);
-    var commissionPay = c ? copy.commissionPay(c.payoutNetDays) : '';
+    var commissionPay = c ? copy.commissionPay(c.payoutNetDays, c.basis === 'referral') : '';
     if (model === 'hybrid') {
       html += row('Upfront fee payment', sentence(termsText));
       if (hasSchedule) html += row('Payment schedule', upPct + '% upfront, ' + remPct + '% ' + (d.remainderTrigger || 'on completion'));
@@ -313,7 +353,7 @@
     var referral = !!(c && c.basis === 'referral');
     var perBrand = c && Number(c.campaignsPerBrand) > 0 ? Number(c.campaignsPerBrand) : null;
     var commissionHead = rate ? (referral ? rate + ' on every brand you refer' : rate + ' uncapped commission') : null;
-    var current = copyFor(d) === COPY[2];
+    var current = copyFor(d) !== COPY[1];
     if (!current && model === 'product') {
       // Created before the current wording: the card reads as it always did.
       pay = ['Your pay', 'Product only', d.productDescription || null, true];
@@ -443,8 +483,11 @@
     // obligation phrasing rather than a static "floor") and label the number
     // itself so it can't be misread as a per-post minimum.
     var guaranteedViewsLabel = isViewBased ? 'Guaranteed total views' : 'Min. guaranteed views';
+    var copy = copyFor(d);
     var guaranteedViewsValue = isViewBased && minViews
-      ? fmtNum(minViews) + ' — combined across all posts on Instagram'
+      ? (copy.short
+        ? fmtNum(minViews) + ", combined across all the creator's Instagram posts"
+        : fmtNum(minViews) + ' — combined across all posts on Instagram')
       : (minViews ? fmtNum(minViews) : null);
     // View-counting window: how many days from each post's publish date its
     // views count toward the deal's view target / bonus. Legacy contracts carry
@@ -459,8 +502,9 @@
     // "in 14 days" sounds like 14 days total). Reused verbatim as the view-based
     // counting-window row and as the second sentence of the bonus row, so it
     // starts with a capital and reads correctly in either place.
-    var countingWindowText =
-      'Views for each post are counted for ' + viewDays + ' days from the day it is posted.';
+    var countingWindowText = copy.short
+      ? copy.countingWindow(viewDays)
+      : 'Views for each post are counted for ' + viewDays + ' days from the day it is posted.';
     html += section('Campaign & Deliverables', rowsWrap(
       row('Campaign', d.campaignName) +
       (platforms ? '<div class="k">Platforms</div><div class="v">' + platforms + '</div>' : '') +
@@ -485,16 +529,19 @@
       (isViewBased && minViews
         ? row(
             'Posting commitment',
-            'The creator keeps posting short-form videos on Instagram until the combined views across all their posts reach at least ' +
-              fmtNum(minViews) +
-              '. The deliverable is complete only once that combined total is reached.'
+            // The short form folds the counting window into the commitment it bounds.
+            copy.short
+              ? 'The creator keeps posting short-form videos on Instagram until combined views reach ' + fmtNum(minViews) + '. ' + countingWindowText
+              : 'The creator keeps posting short-form videos on Instagram until the combined views across all their posts reach at least ' +
+                fmtNum(minViews) +
+                '. The deliverable is complete only once that combined total is reached.'
           )
         : '') +
       // View-counting window for a view-based deal: the time bound on the views
       // above — each post's views count for this many days from when it goes
       // live. A bonus deal shows the same window inline in its Performance bonus
       // row below, so it isn't repeated here.
-      (isViewBased && minViews
+      (isViewBased && minViews && !copy.short
         ? row('View counting window', countingWindowText)
         : '') +
       // Open-ended deal: no minimum and no deadline, said in so many words.
@@ -539,8 +586,8 @@
     var daysN = Number.isFinite(days) && days > 0 ? days : 7;
     var termsAnchor = hasSchedule
       ? 'each payment milestone'
-      : 'completing and posting all agreed deliverables';
-    var termsText = copyFor(d).feePay(daysN, termsAnchor);
+      : copy.feeAnchor || 'completing and posting all agreed deliverables';
+    var termsText = copy.feePay(daysN, termsAnchor);
     var hasBonus = d.bonusAmount && d.bonusThresholdViews;
     var totalIncl = hasBonus && baseComp != null ? baseComp + Number(d.bonusAmount) : baseComp;
     // Commission / fee + commission / product deals have their own pay rows
@@ -550,7 +597,7 @@
     else html += section('Compensation & Payment', rowsWrap(
       row('Compensation', fmtMoney(baseComp, d.currency), { big: true }) +
       (hasBonus
-        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + ' if total views reach ' + fmtNum(d.bonusThresholdViews) + '. ' + countingWindowText)
+        ? row('Performance bonus', fmtMoney(d.bonusAmount, d.currency) + (copy.short ? ' more' : '') + ' if total views reach ' + fmtNum(d.bonusThresholdViews) + '. ' + countingWindowText)
         : '') +
       (hasBonus
         ? row('Total (incl. bonus)', fmtMoney(totalIncl, d.currency))
@@ -574,7 +621,7 @@
       row('Exclusivity', copyFor(d).exclusivity(d.exclusivity)) +
       // Standard on every contract — defaults to 6 months, never conditional,
       // so it's never silently dropped if a field comes back empty.
-      row('Posts remain live for', (d.postLiveMonths || 6) + ' months')
+      row('Posts remain live for', copy.postLive ? copy.postLive(d.postLiveMonths || 6) : (d.postLiveMonths || 6) + ' months')
     ));
 
     // Additional terms — any extra points on THIS contract: the terms the
@@ -963,6 +1010,7 @@
       .then(function (r) { if (!r.ok) throw new Error('not found'); return r.json(); })
       .then(function (c) {
         var d = c.data || {};
+        if (c.platformName) platformName = c.platformName;
         $('eyebrow').textContent = [d.brandName, d.campaignName].filter(Boolean).join(' · ') || 'Collaboration';
         $('subhead').textContent = d.creatorName ? 'Prepared for ' + d.creatorName : '';
         renderSummary(d);

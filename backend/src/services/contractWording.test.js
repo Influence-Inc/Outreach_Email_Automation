@@ -36,15 +36,17 @@ test('currentWordingPatch: a sales-commission contract is re-worded with every t
   const data = oldSales();
   const patch = contracts.currentWordingPatch(data);
   assert.strictEqual(patch.copyVersion, V);
-  assert.match(patch.commission.summary, /^The creator earns 15% of net sales on every order placed through the creator's promo code DEV15, up to 30 days after a click or code use, for 6 months from signing/);
-  assert.strictEqual(patch.paymentTerms, "Commission is paid to the creator's bank account every month, within 30 days of each month's end.");
+  assert.strictEqual(patch.commission.summary, '15% of net sales on every order placed with promo code DEV15, for 6 months from signing. No cap on earnings.');
+  assert.strictEqual(patch.paymentTerms, "Paid monthly to the creator's bank account, within 30 days of each month's end, with the brand's sales report.");
   // The numbers and the code are the stored ones.
   for (const k of ['ratePct', 'attribution', 'promoCode', 'cookieDays', 'termMonths', 'payoutNetDays']) {
     assert.strictEqual(patch.commission[k], data.commission[k], k);
   }
   const rows = rowsOf({ ...data, ...patch });
-  assert.strictEqual(rows.Compensation, 'Uncapped commission');
+  assert.strictEqual(rows.Compensation, '15% sales commission');
   assert.strictEqual(rows['Usage rights'], 'Retained by the creator');
+  assert.strictEqual(rows.Tracking, undefined, 'tracking is part of the Commission row');
+  assert.strictEqual(rows.Reporting, undefined, 'reporting is part of the Payment terms row');
 });
 
 test('currentWordingPatch: a referral contract keeps its code and whether the code is shown', () => {
@@ -62,17 +64,18 @@ test('currentWordingPatch: a referral contract keeps its code and whether the co
   const c = patch.commission;
   assert.strictEqual(c.referralCode, 'MAYA');
   assert.strictEqual(c.promoCode, null);
-  assert.match(c.summary, /^The creator earns 8% of the total campaign budget of every new brand/);
-  assert.match(c.summary, /on the total campaign budget the brand has paid\.$/);
+  assert.strictEqual(c.summary, "8% of the total campaign budget of each new brand the creator refers to INFLUENCE, on the brand's first 2 campaigns started within 12 months of its sign-up. No limit on how many brands the creator refers.");
   assert.doesNotMatch(c.summary, /campaign spend/);
-  assert.match(c.returns, /^The creator earns on the total campaign budget before tax\./);
+  assert.strictEqual(c.returns, 'Commission is on budget the brand has paid, before tax. Budget later refunded or cancelled is deducted from the next payout.');
   assert.doesNotMatch(c.summary, /MAYA/);
-  assert.strictEqual(c.tracking, "Brands are credited when they sign up through the creator's referral link.");
-  assert.match(c.reporting, /^Each payout comes with/);
-  assert.match(c.rules, /^Once a brand is credited to the creator/);
+  assert.strictEqual(c.tracking, "Brands that sign up through the creator's referral link in the 12 months after this agreement is signed. The sign-up must be within 90 days of using the link.");
+  assert.strictEqual(c.reporting, null);
+  assert.match(c.rules, /^Each brand is credited to one creator, permanently\./);
+  assert.match(c.rules, /Not eligible: existing INFLUENCE customers, companies already referred under any account, and businesses the creator owns or works for\.$/);
+  assert.strictEqual(patch.paymentTerms, "Paid monthly to the creator's bank account, within 30 days of each month's end, with INFLUENCE's billing records for each referred brand.");
 });
 
-test('referral wording: v2 says "campaign spend"; a v2 contract still unsigned moves to "total campaign budget"', () => {
+test('referral wording: v2 says "campaign spend"; a v2 contract still unsigned moves to the current wording', () => {
   const referrals = require('./referrals');
   const terms = dealTerms.normalizeTerms({ model: 'commission', commission: { basis: 'referral', rate_pct: 8 } });
   assert.match(dealTerms.commissionSentence(terms, { version: 2 }), /8% of the campaign spend of every new brand/);
@@ -89,15 +92,15 @@ test('referral wording: v2 says "campaign spend"; a v2 contract still unsigned m
   };
   const patch = contracts.currentWordingPatch(v2);
   assert.strictEqual(patch.copyVersion, V);
-  assert.match(patch.commission.summary, /8% of the total campaign budget of every new brand/);
-  assert.match(patch.paymentTerms, /on the total campaign budget the brand has paid\.$/);
+  assert.match(patch.commission.summary, /^8% of the total campaign budget of each new brand/);
+  assert.match(patch.commission.returns, /^Commission is on budget the brand has paid, before tax\./);
 });
 
 test('currentWordingPatch: flat, product and already-current contracts', () => {
   const flat = contracts.currentWordingPatch({ compensationModel: 'flat', compensation: 900, paymentTermsDays: 7, upfrontPercent: 30, remainderPercent: 70 });
-  assert.strictEqual(flat.paymentTerms, 'Payment is sent by direct bank transfer within 7 working days of each payment milestone.');
+  assert.strictEqual(flat.paymentTerms, 'Bank transfer within 7 working days of each payment milestone.');
   const product = contracts.currentWordingPatch({ compensationModel: 'product', productDescription: 'Kit' });
-  assert.strictEqual(product.paymentTerms, 'The product ships to the creator before content production begins.');
+  assert.strictEqual(product.paymentTerms, 'Shipped to the creator before content production begins.');
   assert.strictEqual(contracts.currentWordingPatch({ compensationModel: 'flat', copyVersion: V }), null);
   // Terms that can't be read back keep the original wording whole.
   assert.strictEqual(contracts.currentWordingPatch({ compensationModel: 'commission', commission: { ratePct: 0 } }), null);
@@ -132,12 +135,18 @@ test('usage rights rows: same grant, said from the creator\'s side', () => {
   const v1 = rowsOf({ paidAdsIncluded: false });
   assert.strictEqual(v1['Usage rights'], 'Not included');
   assert.strictEqual(v1['Paid ads'], 'Not included');
+  const v2no = rowsOf({ copyVersion: 2, paidAdsIncluded: false });
+  assert.strictEqual(v2no['Usage rights'], 'Retained by the creator');
+  assert.strictEqual(v2no['Paid ads'], "The creator's content stays organic — it won't run as paid ads");
+  const v2yes = rowsOf({ copyVersion: 3, paidAdsIncluded: true });
+  assert.strictEqual(v2yes['Usage rights'], "Included — the brand can feature the creator's content in its marketing");
+  assert.strictEqual(v2yes['Paid ads'], "Included — the brand can boost the creator's content with paid ads");
   const no = rowsOf({ copyVersion: V, paidAdsIncluded: false });
   assert.strictEqual(no['Usage rights'], 'Retained by the creator');
-  assert.strictEqual(no['Paid ads'], "The creator's content stays organic — it won't run as paid ads");
+  assert.strictEqual(no['Paid ads'], 'Not allowed — the content stays organic');
   const yes = rowsOf({ copyVersion: V, paidAdsIncluded: true });
-  assert.strictEqual(yes['Usage rights'], "Included — the brand can feature the creator's content in its marketing");
-  assert.strictEqual(yes['Paid ads'], "Included — the brand can boost the creator's content with paid ads");
+  assert.strictEqual(yes['Usage rights'], 'The brand may use the content in its marketing');
+  assert.strictEqual(yes['Paid ads'], 'The brand may run the content as paid ads');
 });
 
 test('a new referral code on a signed, original-wording contract changes the code and nothing else', () => {
@@ -163,8 +172,94 @@ test('a new referral code on a signed, original-wording contract changes the cod
   const current = { ...data, copyVersion: V, commission: { ...data.commission } };
   referrals.applyReferralCode(current, terms, 'OMAR2', { shown: true });
   assert.strictEqual(current.copyVersion, V);
-  assert.match(current.commission.summary, /^The creator earns 10%/);
-  assert.match(current.commission.rules, /^Once a brand is credited to the creator/);
+  assert.match(current.commission.summary, /^10% of the total campaign budget/);
+  assert.match(current.commission.tracking, /\/r\/OMAR2\) or enter referral code OMAR2 at sign-up/);
+  assert.match(current.commission.rules, /^Each brand is credited to one creator, permanently/);
+
+  // A signed v3 contract keeps v3's words through a code change too.
+  const v3 = { ...data, copyVersion: 3, commission: { ...data.commission } };
+  referrals.applyReferralCode(v3, terms, 'OMAR3', { shown: true });
+  assert.strictEqual(v3.copyVersion, 3);
+  assert.match(v3.commission.summary, /^The creator earns 10% of the total campaign budget of every new brand/);
+  assert.match(v3.commission.rules, /^Once a brand is credited to the creator/);
+});
+
+// ── The short wording (v4) ─────────────────────────────────────────────────
+
+test('short wording: the referral pay section states each term once', () => {
+  const referrals = require('./referrals');
+  const terms = dealTerms.normalizeTerms({ model: 'commission', commission: { basis: 'referral', rate_pct: 5, cookie_days: 180, payout_net_days: 14 } });
+  const data = { currency: 'USD', ...contracts.termsContractFields(terms) };
+  referrals.applyReferralCode(data, terms, 'MAYA', { shown: false });
+  const pay = contractSections(data).find((s) => s.title === 'Compensation & Payment');
+  assert.deepStrictEqual(pay.rows.map((r) => [r.label, r.value]), [
+    ['Compensation', '5% referral commission'],
+    ['Referral commission', "5% of the total campaign budget of each new brand the creator refers to INFLUENCE, on the brand's first 2 campaigns started within 12 months of its sign-up. No limit on how many brands the creator refers."],
+    ['Who counts', "Brands that sign up through the creator's referral link in the 12 months after this agreement is signed. The sign-up must be within 180 days of using the link."],
+    ['Referral rules', 'Each brand is credited to one creator, permanently. If more than one creator could claim a brand, a code entered at sign-up beats a link; otherwise the most recent link used wins. Not eligible: existing INFLUENCE customers, companies already referred under any account, and businesses the creator owns or works for.'],
+    ['Refunds', 'Commission is on budget the brand has paid, before tax. Budget later refunded or cancelled is deducted from the next payout.'],
+    ['Currency', 'USD'],
+    ['Payment terms', "Paid monthly to the creator's bank account, within 14 days of each month's end, with INFLUENCE's billing records for each referred brand."],
+  ]);
+  // Each fact once: when it's paid, the limit on brands, the 12-month windows.
+  const all = pay.rows.map((r) => r.value).join(' ');
+  assert.strictEqual(all.match(/each month's end/g).length, 1);
+  assert.strictEqual(all.match(/[Nn]o limit/g).length, 1);
+});
+
+test('short wording: every way a referral brand comes in', () => {
+  const referrals = require('./referrals');
+  const texts = (commission, url) => referrals.referralContractTexts(dealTerms.normalizeTerms({ model: 'commission', commission: { basis: 'referral', rate_pct: 5, ...commission } }).commission, url);
+  assert.strictEqual(texts({ attribution: 'code', promo_code: 'OMAR' }).tracking, 'Brands that enter referral code OMAR at sign-up in the 12 months after this agreement is signed.');
+  assert.strictEqual(
+    texts({ attribution: 'link_and_code', promo_code: 'OMAR', term_months: null }, 'https://x/r/OMAR').tracking,
+    "Brands that sign up through the creator's referral link (https://x/r/OMAR) or enter referral code OMAR at sign-up, while this agreement is in force. A link sign-up must be within 90 days of using the link.",
+  );
+  assert.match(texts({ attribution: 'link', term_months: 1 }).tracking, /in the 1 month after this agreement is signed\. The sign-up must be within 90 days/);
+});
+
+test('short wording: a sales commission names its orders by how they are tracked', () => {
+  const s = (commission) => dealTerms.commissionSentence(dealTerms.normalizeTerms({ model: 'commission', commission: { rate_pct: 10, ...commission } }));
+  assert.strictEqual(s({ attribution: 'link' }), "10% of net sales on every order placed within 30 days of a click on the creator's tracked link, for 6 months from signing. No cap on earnings.");
+  assert.strictEqual(s({ attribution: 'code' }), "10% of net sales on every order placed with the creator's personal promo code, for 6 months from signing. No cap on earnings.");
+  assert.strictEqual(s({ attribution: 'link_and_code', promo_code: 'KAI', term_months: null, cookie_days: 1 }), "10% of net sales on every order placed with promo code KAI or within 1 day of a click on the creator's tracked link, until either party ends this agreement in writing. No cap on earnings.");
+});
+
+test('short wording: flat, bonus, view-based, product and hybrid rows', () => {
+  const view = rowsOf({ copyVersion: V, offerType: 'view_based', minTotalViews: 750000, viewCountingDays: 14, compensation: 3000, currency: 'USD', paymentTermsDays: 7, postLiveMonths: 6, exclusivity: 'None' });
+  assert.strictEqual(view['Guaranteed total views'], "750,000, combined across all the creator's Instagram posts");
+  assert.strictEqual(view['Posting commitment'], "The creator keeps posting short-form videos on Instagram until combined views reach 750,000. Each post's views count for 14 days after it goes live.");
+  assert.strictEqual(view['View counting window'], undefined, 'the window is part of the posting commitment');
+  assert.strictEqual(view['Payment terms'], 'Bank transfer within 7 working days of posting all agreed deliverables.');
+  assert.strictEqual(view['Posts remain live for'], '6 months from posting');
+  assert.strictEqual(view.Exclusivity, 'None — the creator can work with any brand');
+
+  const bonus = rowsOf({ copyVersion: V, compensation: 1000, bonusAmount: 500, bonusThresholdViews: 100000, viewCountingDays: 30, currency: 'USD', upfrontPercent: 30, remainderPercent: 70 });
+  assert.strictEqual(bonus['Performance bonus'], "$500 more if total views reach 100,000. Each post's views count for 30 days after it goes live.");
+  assert.strictEqual(bonus['Payment terms'], 'Bank transfer within 7 working days of each payment milestone.');
+
+  const product = rowsOf({ ...contracts.termsContractFields(dealTerms.normalizeTerms({ model: 'product', product: 'Kit' })), currency: 'USD' });
+  assert.strictEqual(product.Delivery, 'Shipped to the creator before content production begins.');
+  assert.strictEqual(product['Payment terms'], undefined);
+
+  const referral = dealTerms.normalizeTerms({ model: 'hybrid', fee: 300, commission: { basis: 'referral', rate_pct: 8 } });
+  const hybrid = rowsOf({ currency: 'USD', ...contracts.termsContractFields(referral) });
+  assert.strictEqual(hybrid['Upfront fee'], '$300');
+  assert.strictEqual(hybrid['Commission payment'], "Paid monthly to the creator's bank account, within 30 days of each month's end, with INFLUENCE's billing records for each referred brand.");
+});
+
+test('short wording: the standard open / no-deliverables lines of an unsigned contract move too; typed ones stay', () => {
+  const none = contracts.currentWordingPatch({ copyVersion: 3, compensationModel: 'product', productDescription: 'Kit', deliverablesMode: 'none',
+    deliverables: 'None — this agreement asks for no content. The creator earns commission on the sales they drive alone.' });
+  assert.strictEqual(none.deliverables, 'None — no content is required.');
+  const open = contracts.currentWordingPatch({ copyVersion: 3, compensationModel: 'product', productDescription: 'Kit', deliverablesMode: 'open',
+    deliverables: 'Open-ended — the creator promotes Reve in their own content, in whatever format suits them.',
+    postingCommitment: 'There is no minimum number of posts and no posting deadline — the creator posts as often as they choose.' });
+  assert.strictEqual(open.deliverables, 'Open-ended — the creator promotes Reve in their own content, in any format.');
+  assert.strictEqual(open.postingCommitment, 'No minimum number of posts and no deadline.');
+  const typed = contracts.currentWordingPatch({ copyVersion: 3, compensationModel: 'product', productDescription: 'Kit', deliverablesMode: 'open',
+    deliverables: 'Referral link in bio, plus stories when it fits', postingCommitment: 'There is no minimum number of posts and no posting deadline — the creator posts as often as they choose.' });
+  assert.strictEqual(typed.deliverables, undefined);
 });
 
 test('Deals column deadline: a typed date reads the way a generated contract does', () => {

@@ -30,7 +30,11 @@ test('commission only: defaults filled, no fee, link attribution drops any code'
     rate_pct: 15, attribution: 'link', promo_code: null, cookie_days: 30, term_months: 6, payout_net_days: 30,
   });
   assert.strictEqual(dt.describeTerms(t), '15% commission');
-  assert.match(dt.termsSummary(t), /^Commission only \(no upfront fee\): The creator earns 15% of net sales/);
+  // The one-liner carries when it's paid (the contract has its own row for it).
+  assert.strictEqual(
+    dt.termsSummary(t),
+    "Commission only (no upfront fee): 15% of net sales on every order placed within 30 days of a click on the creator's tracked link, for 6 months from signing. No cap on earnings. Paid monthly to the creator's bank account, within 30 days of each month's end, with the brand's sales report.",
+  );
 });
 
 test('hybrid needs both a fee and a rate; codes are upper-cased and validated', () => {
@@ -41,7 +45,9 @@ test('hybrid needs both a fee and a rate; codes are upper-cased and validated', 
   assert.strictEqual(t.commission.promo_code, 'SAM15');
   assert.strictEqual(t.commission.term_months, null, 'explicit null = ongoing');
   assert.strictEqual(dt.describeTerms(t), '$500 + 12.5% commission');
-  assert.match(dt.commissionSentence(t), /tracked link or promo code SAM15, up to 14 days after a click or code use/);
+  assert.match(dt.commissionSentence(t), /placed with promo code SAM15 or within 14 days of a click on the creator's tracked link/);
+  // The earlier wordings are kept for the contracts signed with them.
+  assert.match(dt.commissionSentence(t, { version: 3 }), /tracked link or promo code SAM15, up to 14 days after a click or code use/);
   assert.match(dt.commissionSentence(t), /until either party ends this agreement in writing/);
   assert.throws(() => dt.normalizeTerms({ model: 'hybrid', commission: { rate_pct: 10 } }), /upfront fee/);
   assert.throws(() => dt.normalizeTerms({ model: 'commission', commission: { rate_pct: 0 } }), /commission rate/);
